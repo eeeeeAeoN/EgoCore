@@ -4,6 +4,7 @@
 #include "BBMParser.h"
 #include "AnimParser.h"
 #include "AnimProperties.h"
+#include "TextureParser.h"
 #include <fstream>
 #include <vector>
 #include <string>
@@ -64,6 +65,7 @@ static std::map<int, std::vector<uint8_t>> g_SubheaderCache;
 
 static C3DMeshContent g_ActiveMeshContent;
 static CBBMParser g_BBMParser;
+static CTextureParser g_TextureParser;
 
 static int g_SelectedLOD = 0;
 static std::vector<uint8_t> g_CurrentEntryRawData;
@@ -228,11 +230,13 @@ inline void InitializeBank() {
 
     case EBankType::Textures:
         g_BankStatus = "Textures Bank Identified.";
-        for (int i = 0; i < g_CurrentBank.SubBanks.size(); i++) {
-            if (g_CurrentBank.SubBanks[i].Name == "GBANK_MAIN_PC") {
-                LoadSubBankEntries(i);
-                break;
+        {
+            int targetIdx = -1;
+            for (int i = 0; i < (int)g_CurrentBank.SubBanks.size(); i++) {
+                if (g_CurrentBank.SubBanks[i].Name == "GBANK_MAIN_PC") { targetIdx = i; break; }
+                if (g_CurrentBank.SubBanks[i].Name == "GBANK_GUI_PC") { targetIdx = i; }
             }
+            if (targetIdx != -1) LoadSubBankEntries(targetIdx);
         }
         break;
 
@@ -275,9 +279,9 @@ inline void InitializeBank() {
 }
 
 inline void LoadBank(const std::string& path) {
-
     if (g_BankStream.is_open()) g_BankStream.close();
 
+    // Reset all global states for the new file
     g_CurrentBank = LoadedBank();
     g_SelectedEntryIndex = -1;
     g_SubheaderCache.clear();
@@ -285,10 +289,24 @@ inline void LoadBank(const std::string& path) {
     g_ActiveMeshContent = C3DMeshContent();
     g_BBMParser.IsParsed = false;
     g_AnimParseSuccess = false;
+    g_TextureParser.IsParsed = false;
 
+    // --- [FIX] CLEAR STREAM & ROBUST OPEN ---
+    g_BankStream.clear();
 
+    // Attempt Read/Write first
     g_BankStream.open(path, std::ios::binary | std::ios::in | std::ios::out);
-    if (!g_BankStream) { g_BankStatus = "Error: Could not open file"; return; }
+
+    if (!g_BankStream) {
+        // Fallback: If write access is denied (file lock/permissions), open as Read-Only
+        g_BankStream.clear();
+        g_BankStream.open(path, std::ios::binary | std::ios::in);
+    }
+
+    if (!g_BankStream) {
+        g_BankStatus = "Error: Could not open file (Check if locked or path is valid)";
+        return;
+    }
 
     g_CurrentBank.FullPath = path;
     g_CurrentBank.FileName = fs::path(path).filename().string();
@@ -300,7 +318,6 @@ inline void LoadBank(const std::string& path) {
     g_BankStream.read((char*)&h, sizeof(h));
 
     g_BankStream.seekg(h.footOff, std::ios::beg);
-
     uint32_t bankCount = 0; g_BankStream.read((char*)&bankCount, 4);
 
     for (uint32_t i = 0; i < bankCount; i++) {
@@ -322,7 +339,7 @@ inline void LoadBank(const std::string& path) {
     }
     catch (const std::exception& e) {
         g_CurrentBank.SubBanks.clear();
-        g_CurrentBank.Entries.clear(); 
+        g_CurrentBank.Entries.clear();
         g_CurrentBank.Type = EBankType::Unknown;
         g_BankStatus = "Error: " + std::string(e.what());
     }

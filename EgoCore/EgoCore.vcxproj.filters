@@ -28,6 +28,9 @@
     <Filter Include="Source Files\Utilities\ImGUI">
       <UniqueIdentifier>{f51cd537-294a-46a7-97b5-9cf4e929d607}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Textures">
+      <UniqueIdentifier>{53146c54-c415-4fec-ace3-f1ec4b85b672}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -86,6 +89,12 @@
     </ClInclude>
     <ClInclude Include="resource.h">
       <Filter>Resource Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureParser.h">
+      <Filter>Source Files\Textures</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureProperties.h">
+      <Filter>Source Files\Textures</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -9,6 +9,15 @@
 #include <iostream>
 
 enum EDataType : int32_t {
+    // Texture Types (labels for textures.big entries)
+    TYPE_GRAPHIC_SINGLE = 0x0,
+    TYPE_GRAPHIC_SEQUENCE = 0x1,
+    TYPE_BUMPMAP = 0x2,
+    TYPE_BUMPMAP_SEQUENCE = 0x3,
+    TYPE_GRAPHIC_VOLUME_TEXTURE = 0x4,
+    TYPE_GRAPHIC_FLAT_SEQUENCE = 0x5,
+
+    // Mesh / Anim Types (labels for graphics.big entries)
     TYPE_STATIC_MESH = 0x1,
     TYPE_STATIC_REPEATED_MESH = 0x2,
     TYPE_STATIC_PHYSICS_MESH = 0x3,
@@ -56,6 +65,7 @@ inline void InitDebugConsole() {
 }
 
 inline void LogHex(const char* label, const uint8_t* data, size_t offset, size_t count) {
+    if (!data) return;
     std::cout << label << " @ 0x" << std::hex << std::setw(4) << std::setfill('0') << offset << ": ";
     for (size_t i = 0; i < count && i < 32; i++) {
         std::cout << std::setw(2) << std::setfill('0') << (int)data[offset + i] << " ";
@@ -228,96 +238,55 @@ LABEL_5:
 }
 
 inline std::vector<uint8_t> DecompressLZO(const uint8_t* data, size_t& cursor, size_t fileSize, size_t expectedSize) {
-    std::vector<uint8_t> result;
+    //
+    std::vector<uint8_t> result(expectedSize, 0);
+    size_t totalDecompressed = 0;
 
-    std::cout << "\n=== DecompressLZO Called ===" << std::endl;
-    std::cout << "  Cursor: 0x" << std::hex << cursor << std::dec << std::endl;
-    std::cout << "  Expected Size: " << expectedSize << " bytes" << std::endl;
+    // Fable's assembly expects 3 bytes to be copied manually at the end
+    size_t lzoTarget = (expectedSize > 3) ? (expectedSize - 3) : 0;
 
-    if (cursor + 2 > fileSize) {
-        std::cout << "  ERROR: Not enough data for header!" << std::endl;
-        return result;
-    }
+    while (totalDecompressed < lzoTarget && cursor + 2 <= fileSize) {
+        uint32_t compSize = *(uint16_t*)(data + cursor);
+        cursor += 2;
 
-    uint16_t compSize = *(uint16_t*)(data + cursor);
-    std::cout << "  Compression Header: 0x" << std::hex << std::setw(4) << std::setfill('0') << compSize << std::dec << std::endl;
-    LogHex("  Raw data", data, cursor, 16);
-
-    cursor += 2;
-
-    if (compSize == 0) {
-        std::cout << "  -> UNCOMPRESSED MODE (header = 0x0000)" << std::endl;
-
-        if (cursor + expectedSize > fileSize) {
-            std::cout << "  ERROR: Not enough data! Need " << expectedSize << " bytes" << std::endl;
-            return result;
+        if (compSize == 0xFFFF) {
+            if (cursor + 4 > fileSize) break;
+            compSize = *(uint32_t*)(data + cursor);
+            cursor += 4;
         }
 
-        result.resize(expectedSize);
-        memcpy(result.data(), data + cursor, expectedSize);
-        cursor += expectedSize;
-
-        std::cout << "  SUCCESS: Read " << expectedSize << " raw bytes" << std::endl;
-        LogHex("  First bytes", result.data(), 0, std::min<size_t>(expectedSize, 32));
-        return result;
-    }
-
-    uint32_t actualCompSize = compSize;
-    if (compSize == 0xFFFF) {
-        std::cout << "  -> LARGE BLOCK MODE (header = 0xFFFF)" << std::endl;
-
-        if (cursor + 4 > fileSize) {
-            std::cout << "  ERROR: Not enough data for 32-bit size!" << std::endl;
-            return result;
+        if (compSize == 0) {
+            size_t remaining = lzoTarget - totalDecompressed;
+            // Shielded std::min to fix C2589
+            size_t toCopy = (std::min)(remaining, fileSize - cursor);
+            memcpy(result.data() + totalDecompressed, data + cursor, toCopy);
+            cursor += toCopy;
+            totalDecompressed += toCopy;
         }
+        else {
+            if (cursor + compSize > fileSize) break;
 
-        actualCompSize = *(uint32_t*)(data + cursor);
-        cursor += 4;
-        std::cout << "  Actual compressed size: " << actualCompSize << " bytes" << std::endl;
+            size_t outLen = 0;
+            //
+            int ret = LZO1X_Decompress(
+                data + cursor,
+                compSize,
+                result.data() + totalDecompressed,
+                &outLen
+            );
+
+            cursor += compSize;
+            totalDecompressed += outLen;
+            if (ret != 0 && outLen == 0) break;
+        }
     }
 
-    std::cout << "  -> LZO COMPRESSED MODE" << std::endl;
-    std::cout << "  Compressed size: " << actualCompSize << " bytes" << std::endl;
-
-    if (cursor + actualCompSize + 3 > fileSize) {
-        std::cout << "  ERROR: Not enough data! Need " << (actualCompSize + 3) << " bytes" << std::endl;
-        std::cout << "  Available: " << (fileSize - cursor) << " bytes" << std::endl;
-        return result;
+    // Mandatory 3-byte trailer from Fable's assembly
+    if (cursor + 3 <= fileSize && expectedSize >= 3) {
+        memcpy(result.data() + (expectedSize - 3), data + cursor, 3);
+        cursor += 3;
     }
 
-    result.resize(expectedSize);
-    size_t decompressedSize = expectedSize;  // Buffer capacity
-
-    std::cout << "  Calling LZO1X_Decompress..." << std::endl;
-    std::cout << "    Input: " << actualCompSize << " bytes" << std::endl;
-    std::cout << "    Expected output: " << (expectedSize - 3) << " bytes" << std::endl;
-
-    int ret = LZO1X_Decompress(
-        data + cursor,
-        actualCompSize,
-        result.data(),
-        &decompressedSize
-    );
-
-    std::cout << "  LZO return code: " << ret << std::endl;
-    std::cout << "  Actual decompressed: " << decompressedSize << " bytes" << std::endl;
-
-    if (ret == 0 && decompressedSize == expectedSize - 3) {
-        // Copy trailing 3 bytes
-        memcpy(result.data() + decompressedSize, data + cursor + actualCompSize, 3);
-        cursor += actualCompSize + 3;
-
-        std::cout << "  SUCCESS: Decompressed + copied 3 trailing bytes" << std::endl;
-        LogHex("  First decompressed bytes", result.data(), 0, std::min<size_t>(expectedSize, 32));
-        return result;
-    }
-
-    // Decompression failed
-    std::cout << "  FAILED: Decompression error or size mismatch" << std::endl;
-    std::cout << "    Expected " << (expectedSize - 3) << " bytes, got " << decompressedSize << std::endl;
-
-    cursor += actualCompSize + 3;
-    result.clear();
     return result;
 }
 
