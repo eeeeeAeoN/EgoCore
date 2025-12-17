@@ -22,64 +22,103 @@ static std::string OpenFileDialog() {
 }
 
 static void DrawBankExplorer() {
+    // --- TOP BAR: File Loading & Folder Selection ---
     if (ImGui::Button("Open .BIG File")) {
         std::string path = OpenFileDialog();
         if (!path.empty()) LoadBank(path);
     }
     ImGui::SameLine();
     ImGui::Text("%s", g_CurrentBank.FileName.c_str());
-    ImGui::TextDisabled("%s", g_BankStatus.c_str());
 
+    // FOLDER SELECTOR (New Update)
+    if (!g_CurrentBank.SubBanks.empty()) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(250);
+
+        // Preview string: Show current folder name or "Select Folder"
+        std::string preview = "Select Folder";
+        if (g_CurrentBank.ActiveSubBankIndex >= 0 && g_CurrentBank.ActiveSubBankIndex < g_CurrentBank.SubBanks.size()) {
+            preview = g_CurrentBank.SubBanks[g_CurrentBank.ActiveSubBankIndex].Name;
+        }
+
+        if (ImGui::BeginCombo("##folder_selector", preview.c_str())) {
+            for (int i = 0; i < g_CurrentBank.SubBanks.size(); i++) {
+                const bool is_selected = (g_CurrentBank.ActiveSubBankIndex == i);
+
+                // Show name and entry count
+                std::string label = g_CurrentBank.SubBanks[i].Name + " (" + std::to_string(g_CurrentBank.SubBanks[i].EntryCount) + ")";
+
+                if (ImGui::Selectable(label.c_str(), is_selected)) {
+                    LoadSubBankEntries(i); // <--- Triggers loading of this folder's entries
+                }
+                if (is_selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    ImGui::TextDisabled("%s", g_BankStatus.c_str());
     ImGui::Separator();
 
-    // --- LEFT PANE ---
+    // --- LEFT PANE: Entry List ---
     ImGui::BeginChild("LeftPane", ImVec2(300, 0), true);
     ImGui::Text("Search:"); ImGui::SameLine();
     if (ImGui::InputText("##filter", g_FilterText, 128)) UpdateFilter();
 
-    for (int idx : g_CurrentBank.FilteredIndices) {
-        const auto& e = g_CurrentBank.Entries[idx];
+    // Display entries from the currently active sub-bank
+    if (!g_CurrentBank.Entries.empty()) {
+        ImGui::BeginChild("EntryListScroll", ImVec2(0, 0), false); // Inner scroll for list
+        for (int idx : g_CurrentBank.FilteredIndices) {
+            const auto& e = g_CurrentBank.Entries[idx];
 
-        if (ImGui::Selectable(e.Name.c_str(), g_SelectedEntryIndex == idx)) {
-            g_SelectedEntryIndex = idx;
-            g_SelectedLOD = 0;
+            if (ImGui::Selectable(e.Name.c_str(), g_SelectedEntryIndex == idx)) {
+                g_SelectedEntryIndex = idx;
+                g_SelectedLOD = 0;
 
-            g_BankStream.clear();
-            g_BankStream.seekg(e.Offset, std::ios::beg);
-            size_t bytesToRead = (e.Size > 20000000) ? 20000000 : e.Size;
-            g_CurrentEntryRawData.resize(bytesToRead);
-            g_BankStream.read((char*)g_CurrentEntryRawData.data(), bytesToRead);
+                // Load raw data for the selected entry
+                g_BankStream.clear();
+                g_BankStream.seekg(e.Offset, std::ios::beg);
+                size_t bytesToRead = (e.Size > 50000000) ? 50000000 : e.Size; // Cap at 50MB safety
+                g_CurrentEntryRawData.resize(bytesToRead);
+                g_BankStream.read((char*)g_CurrentEntryRawData.data(), bytesToRead);
 
-            g_ActiveMeshContent = C3DMeshContent();
-            g_BBMParser.IsParsed = false;
-            g_AnimParseSuccess = false; // Reset Anim state
+                // Reset Parsers
+                g_ActiveMeshContent = C3DMeshContent();
+                g_BBMParser.IsParsed = false;
+                g_AnimParseSuccess = false;
 
-            if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
-                g_BBMParser.Parse(g_CurrentEntryRawData);
-            }
-            else if (IsSupportedMesh(e.Type)) {
-                if (g_SubheaderCache.count(idx)) {
-                    g_ActiveMeshContent.ParseEntryMetadata(g_SubheaderCache[idx]);
+                // Determine Parser Type
+                if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
+                    g_BBMParser.Parse(g_CurrentEntryRawData);
                 }
-                ParseSelectedLOD();
-            }
-            else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
-                if (g_SubheaderCache.count(idx)) {
-                    g_AnimParseSuccess = g_ActiveAnim.Deserialize(g_SubheaderCache[idx]);
+                else if (IsSupportedMesh(e.Type)) {
+                    if (g_SubheaderCache.count(idx)) {
+                        g_ActiveMeshContent.ParseEntryMetadata(g_SubheaderCache[idx]);
+                    }
+                    ParseSelectedLOD();
+                }
+                else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
+                    if (g_SubheaderCache.count(idx)) {
+                        g_AnimParseSuccess = g_ActiveAnim.Deserialize(g_SubheaderCache[idx]);
+                    }
                 }
             }
         }
+        ImGui::EndChild();
+    }
+    else {
+        ImGui::TextDisabled("No entries found in this folder.");
     }
     ImGui::EndChild();
 
     ImGui::SameLine();
 
-    // --- RIGHT PANE ---
+    // --- RIGHT PANE: Properties & Viewports ---
     ImGui::BeginChild("RightPane", ImVec2(0, 0), true);
     if (g_SelectedEntryIndex != -1) {
         const auto& e = g_CurrentBank.Entries[g_SelectedEntryIndex];
         ImGui::Text("Entry: %s (ID: %d)", e.Name.c_str(), e.ID);
-        ImGui::Text("Type: %d | Total Size: %d", e.Type, e.Size);
+        ImGui::Text("Type: %d | Total Size: %d | CRC: %08X", e.Type, e.Size, e.CRC);
 
         // LOD SELECTOR
         if (IsSupportedMesh(e.Type) && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
@@ -116,7 +155,7 @@ static void DrawBankExplorer() {
 
         ImGui::Separator();
 
-        // EXPORT TO GLTF BUTTON (SUPPORTS BOTH TYPES)
+        // EXPORT BUTTONS
         bool canExport = g_ActiveMeshContent.IsParsed || g_BBMParser.IsParsed;
         if (canExport) {
             if (ImGui::Button("EXPORT TO GLTF")) {
@@ -136,14 +175,12 @@ static void DrawBankExplorer() {
 
                 if (GetSaveFileNameA(&ofn) == TRUE) {
                     bool success = false;
-
                     if (g_BBMParser.IsParsed) {
                         success = GltfExporter::ExportBBM(g_BBMParser, ofn.lpstrFile);
                     }
                     else {
                         success = GltfExporter::Export(g_ActiveMeshContent, ofn.lpstrFile);
                     }
-
                     if (success) g_BankStatus = "Exported: " + std::string(ofn.lpstrFile);
                     else g_BankStatus = "Error: Export Failed";
                 }
@@ -153,7 +190,7 @@ static void DrawBankExplorer() {
             ImGui::Separator();
         }
 
-        // PROPERTIES
+        // VIEWPORTS / PROPERTIES
         if (IsSupportedMesh(e.Type)) {
             DrawMeshProperties(SaveEntryChanges);
         }
