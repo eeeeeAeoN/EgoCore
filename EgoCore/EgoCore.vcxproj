@@ -30,7 +30,6 @@
     <ClInclude Include="resource.h" />
     <ClInclude Include="TextureParser.h" />
     <ClInclude Include="TextureProperties.h" />
-    <ClInclude Include="TextureViewport.h" />
     <ClInclude Include="Utilities\GltfExporter.h" />
     <ClInclude Include="Utilities\ImGUI\imconfig.h" />
     <ClInclude Include="Utilities\ImGUI\imgui.h" />

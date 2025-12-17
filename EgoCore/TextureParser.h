@@ -1,11 +1,9 @@
-// Gemini/TextureParser.h
 #pragma once
 #include "Utils.h"
 #include <vector>
 #include <string>
 
 #pragma pack(push, 1)
-// Define this BEFORE CTextureParser uses it
 struct CPixelFormatInit {
     uint8_t Type;
     uint8_t ColourDepth;
@@ -17,7 +15,7 @@ struct CGraphicHeader {
     uint16_t FrameWidth, FrameHeight, FrameCount;
     uint32_t PixelFormatIdx;
     uint8_t  TransparencyType, MipmapLevels, Flags, Padding;
-    uint32_t FrameDataSize, MipSize0;
+    uint32_t FrameDataSize, MipSize0; // MipSize0 is CompressedMipmapSizes[0] from disassembly
 };
 #pragma pack(pop)
 
@@ -27,7 +25,6 @@ class CTextureParser {
 public:
     CGraphicHeader Header;
     CPixelFormatInit FormatInfo;
-    std::vector<uint32_t> MipSizes;
     ETextureFormat DecodedFormat = ETextureFormat::Unknown;
     std::vector<uint8_t> DecodedPixels;
     bool IsParsed = false;
@@ -44,9 +41,28 @@ public:
         }
     }
 
-    void Parse(const std::vector<uint8_t>& metadata, const std::vector<uint8_t>& pixelData) {
+    void DecodeFormat(bool isBump) {
+        // Disassembly: CGraphicDataBank::GetPixelFormats + GetDXTCFormat
+        if (isBump) {
+            DecodedFormat = ETextureFormat::NormalMap;
+            return;
+        }
+
+        switch (Header.TransparencyType) {
+        case 0: DecodedFormat = ETextureFormat::DXT1; break; // NonAlpha
+        case 1:
+        case 4: DecodedFormat = ETextureFormat::DXT3; break; // Alpha/Explicit
+        case 2: DecodedFormat = ETextureFormat::DXT1; break; // Boolean (DXT1 1-bit)
+        case 3: DecodedFormat = ETextureFormat::DXT5; break; // Interpolated
+        default:
+            if (FormatInfo.ColourDepth == 32) DecodedFormat = ETextureFormat::ARGB8888;
+            else DecodedFormat = ETextureFormat::Unknown;
+            break;
+        }
+    }
+
+    void Parse(const std::vector<uint8_t>& metadata, const std::vector<uint8_t>& pixelData, int32_t entryType) {
         IsParsed = false;
-        MipSizes.clear();
         DecodedPixels.clear();
         DebugLog = "";
 
@@ -54,34 +70,26 @@ public:
         memcpy(&Header, metadata.data(), 28);
         if (metadata.size() >= 34) memcpy(&FormatInfo, metadata.data() + 28, 6);
 
-        DecodeFormat();
+        bool isBump = (entryType == 0x2 || entryType == 0x3);
+        DecodeFormat(isBump);
 
         uint32_t frames = (Header.FrameCount > 0) ? Header.FrameCount : 1;
+        // FrameDataSize is the uncompressed size of a SINGLE frame (all mips)
         size_t totalUncompressedSize = (size_t)Header.FrameDataSize * frames;
 
         if (pixelData.empty()) return;
 
-        // Use size mismatch to detect if we need the multi-block LZO path
-        if (pixelData.size() == totalUncompressedSize) {
+        // Disassembly: Sequences are written RAW, Mip0 of single textures is compressed
+        if (pixelData.size() == totalUncompressedSize || Header.FrameCount > 1) {
             DecodedPixels = pixelData;
-            DebugLog = "Loaded raw sequence data.";
+            DebugLog = "Loaded raw pixel stream.";
         }
         else {
             size_t cursor = 0;
             DecodedPixels = DecompressLZO(pixelData.data(), cursor, pixelData.size(), totalUncompressedSize);
-            DebugLog = "Decompressed multi-block stream.";
+            DebugLog = "Decompressed Mip0 LZO block.";
         }
 
         if (!DecodedPixels.empty()) IsParsed = true;
-    }
-
-private:
-    void DecodeFormat() {
-        // Direct mapping from the transparency types in the bank assembly
-        if (Header.TransparencyType == 0) DecodedFormat = ETextureFormat::DXT1;
-        else if (Header.TransparencyType == 1) DecodedFormat = ETextureFormat::DXT3;
-        else if (Header.TransparencyType == 3) DecodedFormat = ETextureFormat::DXT5;
-        else if (FormatInfo.ColourDepth == 32) DecodedFormat = ETextureFormat::ARGB8888;
-        else DecodedFormat = ETextureFormat::Unknown;
     }
 };
