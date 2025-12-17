@@ -1,0 +1,114 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Source Files\Utilities">
+      <UniqueIdentifier>{5fa71c5e-7d2c-4ff8-a62b-b509d6f65508}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Utilities\ImGui">
+      <UniqueIdentifier>{dbe6daff-c1ad-44dd-bc72-29fa57241411}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\MeshParser">
+      <UniqueIdentifier>{e4b91cc3-f4cb-4b34-a6e8-de2ef8aa1b2b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\AnimParser">
+      <UniqueIdentifier>{c53183b1-056d-41ac-b0fe-dd1775533843}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\BankParser">
+      <UniqueIdentifier>{0a37d186-2f06-45d0-9910-c6878d1ebd1c}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="BankBackend.h">
+      <Filter>Source Files\BankParser</Filter>
+    </ClInclude>
+    <ClInclude Include="BankExplorer.h">
+      <Filter>Source Files\BankParser</Filter>
+    </ClInclude>
+    <ClInclude Include="AnimParser.h">
+      <Filter>Source Files\AnimParser</Filter>
+    </ClInclude>
+    <ClInclude Include="AnimProperties.h">
+      <Filter>Source Files\AnimParser</Filter>
+    </ClInclude>
+    <ClInclude Include="BBMParser.h">
+      <Filter>Source Files\MeshParser</Filter>
+    </ClInclude>
+    <ClInclude Include="C3DViewports.h">
+      <Filter>Source Files\MeshParser</Filter>
+    </ClInclude>
+    <ClInclude Include="MeshParser.h">
+      <Filter>Source Files\MeshParser</Filter>
+    </ClInclude>
+    <ClInclude Include="MeshProperties.h">
+      <Filter>Source Files\MeshParser</Filter>
+    </ClInclude>
+    <ClInclude Include="Utils.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="GltfExporter.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imstb_truetype.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imconfig.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imgui.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imgui_impl_dx11.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imgui_impl_win32.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imgui_internal.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imstb_rectpack.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGUI\imstb_textedit.h">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="ImGUI\imgui_widgets.cpp">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="ImGUI\imgui.cpp">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="ImGUI\imgui_demo.cpp">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="ImGUI\imgui_draw.cpp">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="ImGUI\imgui_impl_dx11.cpp">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="ImGUI\imgui_impl_win32.cpp">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="ImGUI\imgui_tables.cpp">
+      <Filter>Source Files\Utilities\ImGui</Filter>
+    </ClCompile>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
