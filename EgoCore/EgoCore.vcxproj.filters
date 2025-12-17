@@ -16,99 +16,107 @@
     <Filter Include="Source Files\Utilities">
       <UniqueIdentifier>{5fa71c5e-7d2c-4ff8-a62b-b509d6f65508}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\Utilities\ImGui">
-      <UniqueIdentifier>{dbe6daff-c1ad-44dd-bc72-29fa57241411}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\MeshParser">
-      <UniqueIdentifier>{e4b91cc3-f4cb-4b34-a6e8-de2ef8aa1b2b}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\AnimParser">
+    <Filter Include="Source Files\Animations">
       <UniqueIdentifier>{c53183b1-056d-41ac-b0fe-dd1775533843}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\BankParser">
+    <Filter Include="Source Files\Banks">
       <UniqueIdentifier>{0a37d186-2f06-45d0-9910-c6878d1ebd1c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Meshes">
+      <UniqueIdentifier>{e4b91cc3-f4cb-4b34-a6e8-de2ef8aa1b2b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Utilities\ImGUI">
+      <UniqueIdentifier>{f51cd537-294a-46a7-97b5-9cf4e929d607}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="BankBackend.h">
-      <Filter>Source Files\BankParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imconfig.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="BankExplorer.h">
-      <Filter>Source Files\BankParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imgui.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="AnimParser.h">
-      <Filter>Source Files\AnimParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imgui_impl_dx11.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="AnimProperties.h">
-      <Filter>Source Files\AnimParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imgui_impl_win32.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="BBMParser.h">
-      <Filter>Source Files\MeshParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imgui_internal.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="C3DViewports.h">
-      <Filter>Source Files\MeshParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imstb_rectpack.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="MeshParser.h">
-      <Filter>Source Files\MeshParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imstb_textedit.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="MeshProperties.h">
-      <Filter>Source Files\MeshParser</Filter>
+    <ClInclude Include="Utilities\ImGUI\imstb_truetype.h">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClInclude>
-    <ClInclude Include="Utils.h">
+    <ClInclude Include="Animations\AnimParser.h">
+      <Filter>Source Files\Animations</Filter>
+    </ClInclude>
+    <ClInclude Include="Animations\AnimProperties.h">
+      <Filter>Source Files\Animations</Filter>
+    </ClInclude>
+    <ClInclude Include="Banks\BankExplorer.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Banks\BankBackend.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\BBMParser.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\C3DViewports.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\MeshParser.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\MeshProperties.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\Utils.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="GltfExporter.h">
+    <ClInclude Include="Utilities\GltfExporter.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="ImGUI\imstb_truetype.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="ImGUI\imconfig.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="ImGUI\imgui.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="ImGUI\imgui_impl_dx11.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="ImGUI\imgui_impl_win32.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="ImGUI\imgui_internal.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="ImGUI\imstb_rectpack.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
-    </ClInclude>
-    <ClInclude Include="ImGUI\imstb_textedit.h">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClInclude Include="resource.h">
+      <Filter>Resource Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ImGUI\imgui_widgets.cpp">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClCompile Include="Utilities\ImGUI\imgui.cpp">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClCompile>
-    <ClCompile Include="ImGUI\imgui.cpp">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClCompile Include="Utilities\ImGUI\imgui_demo.cpp">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClCompile>
-    <ClCompile Include="ImGUI\imgui_demo.cpp">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClCompile Include="Utilities\ImGUI\imgui_draw.cpp">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClCompile>
-    <ClCompile Include="ImGUI\imgui_draw.cpp">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClCompile Include="Utilities\ImGUI\imgui_impl_dx11.cpp">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClCompile>
-    <ClCompile Include="ImGUI\imgui_impl_dx11.cpp">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClCompile Include="Utilities\ImGUI\imgui_impl_win32.cpp">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClCompile>
-    <ClCompile Include="ImGUI\imgui_impl_win32.cpp">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClCompile Include="Utilities\ImGUI\imgui_tables.cpp">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClCompile>
-    <ClCompile Include="ImGUI\imgui_tables.cpp">
-      <Filter>Source Files\Utilities\ImGui</Filter>
+    <ClCompile Include="Utilities\ImGUI\imgui_widgets.cpp">
+      <Filter>Source Files\Utilities\ImGUI</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="EgoCore.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
   </ItemGroup>
 </Project>

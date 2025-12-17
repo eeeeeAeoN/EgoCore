@@ -4,6 +4,7 @@
 #include <d3d11.h>
 #include <tchar.h>
 #include "BankExplorer.h"
+#include "resource.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -22,6 +23,10 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 int main(int, char**) {
     InitDebugConsole();
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"FableTool", nullptr };
+
+    wc.hIcon = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON));
+    wc.hIconSm = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON));
+
     ::RegisterClassExW(&wc);
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Ego Core", WS_OVERLAPPEDWINDOW, 100, 100, 1000, 800, nullptr, nullptr, wc.hInstance, nullptr);
 

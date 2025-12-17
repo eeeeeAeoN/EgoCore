@@ -18,6 +18,40 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Animations\AnimParser.h" />
+    <ClInclude Include="Animations\AnimProperties.h" />
+    <ClInclude Include="Banks\BankBackend.h" />
+    <ClInclude Include="Banks\BankExplorer.h" />
+    <ClInclude Include="Meshes\BBMParser.h" />
+    <ClInclude Include="Meshes\C3DViewports.h" />
+    <ClInclude Include="Meshes\MeshParser.h" />
+    <ClInclude Include="Meshes\MeshProperties.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="Utilities\GltfExporter.h" />
+    <ClInclude Include="Utilities\ImGUI\imconfig.h" />
+    <ClInclude Include="Utilities\ImGUI\imgui.h" />
+    <ClInclude Include="Utilities\ImGUI\imgui_impl_dx11.h" />
+    <ClInclude Include="Utilities\ImGUI\imgui_impl_win32.h" />
+    <ClInclude Include="Utilities\ImGUI\imgui_internal.h" />
+    <ClInclude Include="Utilities\ImGUI\imstb_rectpack.h" />
+    <ClInclude Include="Utilities\ImGUI\imstb_textedit.h" />
+    <ClInclude Include="Utilities\ImGUI\imstb_truetype.h" />
+    <ClInclude Include="Utilities\Utils.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="Utilities\ImGUI\imgui.cpp" />
+    <ClCompile Include="Utilities\ImGUI\imgui_demo.cpp" />
+    <ClCompile Include="Utilities\ImGUI\imgui_draw.cpp" />
+    <ClCompile Include="Utilities\ImGUI\imgui_impl_dx11.cpp" />
+    <ClCompile Include="Utilities\ImGUI\imgui_impl_win32.cpp" />
+    <ClCompile Include="Utilities\ImGUI\imgui_tables.cpp" />
+    <ClCompile Include="Utilities\ImGUI\imgui_widgets.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="EgoCore.rc" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -71,10 +105,10 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\ImGUI</IncludePath>
+    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\ImGUI</IncludePath>
+    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -130,36 +164,6 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <ClInclude Include="AnimParser.h" />
-    <ClInclude Include="AnimProperties.h" />
-    <ClInclude Include="BankBackend.h" />
-    <ClInclude Include="BankExplorer.h" />
-    <ClInclude Include="BBMParser.h" />
-    <ClInclude Include="C3DViewports.h" />
-    <ClInclude Include="GltfExporter.h" />
-    <ClInclude Include="ImGUI\imconfig.h" />
-    <ClInclude Include="ImGUI\imgui.h" />
-    <ClInclude Include="ImGUI\imgui_impl_dx11.h" />
-    <ClInclude Include="ImGUI\imgui_impl_win32.h" />
-    <ClInclude Include="ImGUI\imgui_internal.h" />
-    <ClInclude Include="ImGUI\imstb_rectpack.h" />
-    <ClInclude Include="ImGUI\imstb_textedit.h" />
-    <ClInclude Include="ImGUI\imstb_truetype.h" />
-    <ClInclude Include="MeshParser.h" />
-    <ClInclude Include="MeshProperties.h" />
-    <ClInclude Include="Utils.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="ImGUI\imgui.cpp" />
-    <ClCompile Include="ImGUI\imgui_demo.cpp" />
-    <ClCompile Include="ImGUI\imgui_draw.cpp" />
-    <ClCompile Include="ImGUI\imgui_impl_dx11.cpp" />
-    <ClCompile Include="ImGUI\imgui_impl_win32.cpp" />
-    <ClCompile Include="ImGUI\imgui_tables.cpp" />
-    <ClCompile Include="ImGUI\imgui_widgets.cpp" />
-    <ClCompile Include="main.cpp" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
