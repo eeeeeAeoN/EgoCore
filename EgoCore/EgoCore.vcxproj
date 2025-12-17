@@ -107,10 +107,10 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
+    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Textures;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
+    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Textures;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
