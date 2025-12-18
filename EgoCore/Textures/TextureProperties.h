@@ -15,23 +15,16 @@ extern ID3D11Device* g_pd3dDevice;
 // UI States
 static int g_SelectedFrame = 0;
 static int g_SelectedSlice = 0;
-static int g_ViewChannel = 0; // 0=RGB, 1=Alpha, 2=Red, 3=Green, 4=Blue
-
+static int g_ViewChannel = 0;
 static ID3D11ShaderResourceView* g_BackgroundSRV = nullptr;
 
-// [CHANGED] Now creates a flat solid background (R:16, G:16, B:16)
 inline void CreateBackgroundTexture() {
     if (g_BackgroundSRV) return;
     const int W = 32, H = 32;
     uint32_t pixelData[W * H];
-
-    // Fill with solid color: R=16(0x10), G=16(0x10), B=16(0x10), A=255(0xFF)
-    // Format B8G8R8A8_UNORM -> 0xAARRGGBB in hex
+    // Solid Dark Grey Background (R:16, G:16, B:16)
     const uint32_t flatColor = 0xFF101010;
-
-    for (int i = 0; i < W * H; i++) {
-        pixelData[i] = flatColor;
-    }
+    for (int i = 0; i < W * H; i++) pixelData[i] = flatColor;
 
     D3D11_TEXTURE2D_DESC desc = {};
     desc.Width = W; desc.Height = H; desc.MipLevels = 1; desc.ArraySize = 1;
@@ -175,20 +168,20 @@ struct TextureViewport {
         default: return false;
         }
 
-        uint32_t width = parser.Header.FrameWidth;
-        uint32_t height = parser.Header.FrameHeight;
+        uint32_t width = parser.Header.Width;
+        uint32_t height = parser.Header.Height;
+        if (width == 0) width = parser.Header.FrameWidth;
+        if (height == 0) height = parser.Header.FrameHeight;
 
-        // Safety: width/height must be > 0
         if (width == 0 || height == 0) return false;
 
-        // Calc Offset
         uint32_t singleSliceSize = parser.GetMipSize(width, height, 1);
         size_t finalOffset = ((size_t)parser.TrueFrameStride * frameIdx) + (sliceIdx * singleSliceSize);
+
         if (finalOffset + singleSliceSize > parser.DecodedPixels.size()) return false;
 
         const uint8_t* rawData = parser.DecodedPixels.data() + finalOffset;
 
-        // --- PATH A: Direct Upload (Fast, RGB mode only) ---
         if (!needsSoftwareDecode) {
             D3D11_TEXTURE2D_DESC desc = {};
             desc.Width = width; desc.Height = height; desc.MipLevels = 1; desc.ArraySize = 1;
@@ -206,12 +199,11 @@ struct TextureViewport {
                 tex->Release();
             }
         }
-        // --- PATH B: Software Decode & Swizzle (Channel Viewing) ---
         else {
             std::vector<Color32> rgbaPixels(width * height);
 
             if (blockWidth == 4) {
-                // Decompress DXT to RGBA
+                // Decompress DXT
                 uint32_t blocksX = (width + 3) / 4;
                 uint32_t blocksY = (height + 3) / 4;
                 uint32_t blockSize = (dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16;
@@ -227,7 +219,6 @@ struct TextureViewport {
                         else
                             DecompressDXT5Block(blockSrc, blockOut, 4);
 
-                        // Copy 4x4 block to main buffer
                         for (int py = 0; py < 4; py++) {
                             for (int px = 0; px < 4; px++) {
                                 uint32_t globalX = x * 4 + px;
@@ -242,27 +233,23 @@ struct TextureViewport {
                 }
             }
             else {
-                // Already ARGB8888
                 memcpy(rgbaPixels.data(), rawData, width * height * 4);
             }
 
-            // Apply Channel Filter
             for (auto& px : rgbaPixels) {
                 uint8_t val = 0;
                 switch (channelMode) {
-                case 1: val = px.a; break; // Alpha
-                case 2: val = px.r; break; // Red
-                case 3: val = px.g; break; // Green
-                case 4: val = px.b; break; // Blue
+                case 1: val = px.a; break;
+                case 2: val = px.r; break;
+                case 3: val = px.g; break;
+                case 4: val = px.b; break;
                 }
-                // Convert to Opaque Grayscale
                 px.r = val; px.g = val; px.b = val; px.a = 255;
             }
 
-            // Upload RGBA Uncompressed
             D3D11_TEXTURE2D_DESC desc = {};
             desc.Width = width; desc.Height = height; desc.MipLevels = 1; desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // Force RGBA
+            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
             desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
             D3D11_SUBRESOURCE_DATA subData = {};
@@ -286,15 +273,6 @@ struct TextureViewport {
 
 static TextureViewport g_TexViewport;
 
-inline std::string BytesToHexString(const uint8_t* data, size_t size, size_t bytesPerLine = 16) {
-    std::stringstream ss;
-    for (size_t i = 0; i < size; i++) {
-        ss << std::hex << std::uppercase << std::setfill('0') << std::setw(2) << (int)data[i] << " ";
-        if ((i + 1) % bytesPerLine == 0 && i != size - 1) ss << "\n";
-    }
-    return ss.str();
-}
-
 inline void DrawTextureProperties() {
     CreateBackgroundTexture();
 
@@ -306,13 +284,28 @@ inline void DrawTextureProperties() {
 
     const auto& entry = g_CurrentBank.Entries[g_SelectedEntryIndex];
     bool isVolume = (g_TextureParser.Header.Depth > 1);
-    bool isBump = (entry.Type == 0x2 || entry.Type == 0x3);
+    bool isFlatSeq = (entry.Type == 0x5);
 
-    // --- CONTROLS ROW ---
+    int physW = g_TextureParser.Header.Width;
+    int physH = g_TextureParser.Header.Height;
+    if (physW == 0) physW = g_TextureParser.Header.FrameWidth;
+    if (physH == 0) physH = g_TextureParser.Header.FrameHeight;
+
+    int logW = g_TextureParser.Header.FrameWidth;
+    int logH = g_TextureParser.Header.FrameHeight;
+    if (logW == 0) logW = physW;
+    if (logH == 0) logH = physH;
+
+    int cols = (logW > 0) ? physW / logW : 1;
+    int rows = (logH > 0) ? physH / logH : 1;
+    int flatFrameCount = cols * rows;
+
     ImGui::BeginGroup();
 
     // 1. Frame Selector
     int maxFrames = (std::max)(1, (int)g_TextureParser.Header.FrameCount);
+    if (isFlatSeq) maxFrames = flatFrameCount;
+
     if (maxFrames > 1) {
         ImGui::PushItemWidth(100);
         if (g_SelectedFrame >= maxFrames) g_SelectedFrame = 0;
@@ -333,43 +326,95 @@ inline void DrawTextureProperties() {
     }
     else { g_SelectedSlice = 0; }
 
-    // 3. Channel Selector (Available for ALL textures now)
+    // 3. Channel Selector
     ImGui::PushItemWidth(100);
     const char* viewModes[] = { "RGB", "Alpha", "Red", "Green", "Blue" };
     ImGui::Combo("##channel", &g_ViewChannel, viewModes, IM_ARRAYSIZE(viewModes));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Channel View");
     ImGui::PopItemWidth();
 
     ImGui::EndGroup();
 
-    // Update Texture 
-    g_TexViewport.Update(g_pd3dDevice, g_TextureParser, entry.ID, g_SelectedFrame, g_SelectedSlice, g_ViewChannel);
+    int uploadFrameIdx = isFlatSeq ? 0 : g_SelectedFrame;
+    g_TexViewport.Update(g_pd3dDevice, g_TextureParser, entry.ID, uploadFrameIdx, g_SelectedSlice, g_ViewChannel);
 
     if (g_TexViewport.SRV) {
         float availWidth = ImGui::GetContentRegionAvail().x;
-        float aspect = (float)g_TextureParser.Header.FrameHeight / (float)g_TextureParser.Header.FrameWidth;
-        float displayH = (std::min)(400.0f, availWidth * aspect);
-        float displayW = displayH / aspect;
+
+        ImVec2 uv0(0, 0);
+        ImVec2 uv1(1, 1);
+        float displayAspect = (float)physH / (float)physW;
+
+        if (isFlatSeq && cols > 0 && rows > 0) {
+            int c = g_SelectedFrame % cols;
+            int r = g_SelectedFrame / cols;
+            uv0.x = (float)(c * logW) / (float)physW;
+            uv0.y = (float)(r * logH) / (float)physH;
+            uv1.x = (float)((c + 1) * logW) / (float)physW;
+            uv1.y = (float)((r + 1) * logH) / (float)physH;
+            displayAspect = (float)logH / (float)logW;
+        }
+
+        float displayH = (std::min)(400.0f, availWidth * displayAspect);
+        float displayW = displayH / displayAspect;
 
         ImGui::BeginChild("TexView", ImVec2(0, displayH + 20), true);
         ImVec2 p_min = ImGui::GetCursorScreenPos();
         ImVec2 p_max = ImVec2(p_min.x + displayW, p_min.y + displayH);
 
-        // Draw Flat Background (To see transparency in RGB mode)
-        // [CHANGED] Variable name updated
         if (g_BackgroundSRV) {
-            ImGui::GetWindowDrawList()->AddImage((void*)g_BackgroundSRV, p_min, p_max,
-                ImVec2(0, 0), ImVec2(displayW / 32.0f, displayH / 32.0f));
+            ImGui::GetWindowDrawList()->AddImage((void*)g_BackgroundSRV, p_min, p_max, ImVec2(0, 0), ImVec2(1, 1));
         }
 
-        // Draw Texture
-        ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p_min, p_max);
+        ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p_min, p_max, uv0, uv1);
+
+        // [FIXED] Red Rectangle Logic
+        // Draw if NOT a Flat Sequence (Type 5 handles cropping via UVs)
+        // AND if logical dimensions differ from physical dimensions (Width OR Height)
+        bool hasPadding = (logW < physW) || (logH < physH);
+
+        if (!isFlatSeq && hasPadding) {
+            float scaleX = displayW / physW;
+            float scaleY = displayH / physH;
+            float boxW = logW * scaleX;
+            float boxH = logH * scaleY;
+            ImGui::GetWindowDrawList()->AddRect(
+                p_min,
+                ImVec2(p_min.x + boxW, p_min.y + boxH),
+                0xFF0000FF // Red
+            );
+        }
+
         ImGui::EndChild();
     }
 
-    // ... [Metadata Text] ...
+    // Export Button (Hidden for Volumes)
+    if (!isVolume) {
+        if (ImGui::Button("Export Frame (.DDS)")) {
+            OPENFILENAMEA ofn;
+            char szFile[260] = { 0 };
+            std::string defaultName = entry.Name + "_F" + std::to_string(g_SelectedFrame) + ".dds";
+            strcpy_s(szFile, defaultName.c_str());
+
+            ZeroMemory(&ofn, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = NULL;
+            ofn.lpstrFile = szFile;
+            ofn.nMaxFile = sizeof(szFile);
+            ofn.lpstrFilter = "DirectDraw Surface\0*.dds\0All Files\0*.*\0";
+            ofn.nFilterIndex = 1;
+            ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+
+            if (GetSaveFileNameA(&ofn) == TRUE) {
+                int exportIdx = isFlatSeq ? 0 : g_SelectedFrame;
+                bool success = TextureExporter::ExportDDS(g_TextureParser, ofn.lpstrFile, exportIdx);
+                if (!success) MessageBoxA(NULL, "Export Failed", "Error", MB_OK | MB_ICONERROR);
+            }
+        }
+    }
+
     ImGui::Separator();
-    ImGui::TextColored(ImVec4(0, 1, 1, 1), "--- TEXTURE DATA ---");
     ImGui::Text("Format: %s", g_TextureParser.GetFormatString().c_str());
-    ImGui::Text("Dims: %d x %d x %d", g_TextureParser.Header.FrameWidth, g_TextureParser.Header.FrameHeight, (int)g_TextureParser.Header.Depth);
+    ImGui::Text("Phys: %d x %d", physW, physH);
+    ImGui::Text("Log:  %d x %d", logW, logH);
+    if (isFlatSeq) ImGui::Text("Grid: %d x %d", cols, rows);
 }

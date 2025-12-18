@@ -21,7 +21,6 @@ struct CGraphicHeader {
 };
 #pragma pack(pop)
 
-// [UPDATED] Added NormalMap_DXT1 and NormalMap_DXT5
 enum class ETextureFormat { Unknown, DXT1, DXT3, DXT5, ARGB8888, NormalMap_DXT1, NormalMap_DXT5 };
 
 class CTextureParser {
@@ -51,7 +50,6 @@ public:
         }
     }
 
-    // [UPDATED] Takes Depth into account
     uint32_t GetMipSize(uint32_t w, uint32_t h, uint32_t d) {
         uint32_t minDim = 1;
         uint32_t bitsPerPixel = 0;
@@ -68,24 +66,16 @@ public:
 
         uint32_t currentW = (w < minDim) ? minDim : w;
         uint32_t currentH = (h < minDim) ? minDim : h;
-        // Depth is not clamped to 4x4 blocks like width/height
         uint32_t currentD = (d < 1) ? 1 : d;
 
-        // Size = (2D Slice Size) * Depth
         return ((currentW * currentH * bitsPerPixel) / 8) * currentD;
     }
 
     void DecodeFormat(bool isBump) {
         if (isBump) {
-            // [FIX] Use TransparencyType to differentiate DXT1 (4bpp) from DXT5 (8bpp) bumps
             switch (Header.TransparencyType) {
-            case 0:
-            case 2:
-                DecodedFormat = ETextureFormat::NormalMap_DXT1;
-                break;
-            default:
-                DecodedFormat = ETextureFormat::NormalMap_DXT5;
-                break;
+            case 0: case 2: DecodedFormat = ETextureFormat::NormalMap_DXT1; break;
+            default:        DecodedFormat = ETextureFormat::NormalMap_DXT5; break;
             }
             return;
         }
@@ -105,8 +95,15 @@ public:
 
     uint32_t CalculateTotalFrameSize() {
         uint32_t totalSize = 0;
-        uint32_t w = Header.FrameWidth;
-        uint32_t h = Header.FrameHeight;
+        // [FIX] CRITICAL: Use Physical Dimensions (Width/Height) not Logical (FrameWidth)
+        // Memory is allocated based on the power-of-two container.
+        uint32_t w = Header.Width;
+        uint32_t h = Header.Height;
+
+        // Sanity Check: If Width is 0 (rare), fallback to FrameWidth
+        if (w == 0) w = Header.FrameWidth;
+        if (h == 0) h = Header.FrameHeight;
+
         uint32_t d = (Header.Depth > 0) ? Header.Depth : 1;
         int mips = (Header.MipmapLevels > 0) ? Header.MipmapLevels : 1;
 
@@ -128,20 +125,18 @@ public:
         memcpy(&Header, metadata.data(), 28);
         if (metadata.size() >= 34) memcpy(&FormatInfo, metadata.data() + 28, 6);
 
-        // Check if Bump (0x2) or Bump Sequence (0x3)
-        // Also treat Volume Textures (0x4) generally by existing logic unless specific handling needed
         bool isBump = (entryType == 0x2 || entryType == 0x3);
         DecodeFormat(isBump);
 
         TrueFrameStride = CalculateTotalFrameSize();
-        // Fallback safety if calculation fails
-        if (TrueFrameStride == 0) TrueFrameStride = Header.FrameDataSize;
+        // Fallback: If calc is smaller than header claim, trust header (prevents truncation)
+        if (TrueFrameStride < Header.FrameDataSize) TrueFrameStride = Header.FrameDataSize;
 
         uint32_t frames = (Header.FrameCount > 0) ? Header.FrameCount : 1;
         size_t expectedTotalSize = (size_t)TrueFrameStride * frames;
 
-        // Safety padding for LZO
-        DecodedPixels.resize(expectedTotalSize + 8192, 0);
+        // Large Padding for LZO safety (prevents overflow on bad decompression)
+        DecodedPixels.resize(expectedTotalSize + 65536, 0);
 
         if (pixelData.empty()) return;
 
@@ -153,8 +148,12 @@ public:
         int mips = (Header.MipmapLevels > 0) ? Header.MipmapLevels : 1;
 
         for (uint32_t f = 0; f < frames; f++) {
-            uint32_t w = Header.FrameWidth;
-            uint32_t h = Header.FrameHeight;
+            // [FIX] Use Physical Dimensions for Loop state
+            uint32_t w = Header.Width;
+            uint32_t h = Header.Height;
+            if (w == 0) w = Header.FrameWidth;
+            if (h == 0) h = Header.FrameHeight;
+
             uint32_t d = (Header.Depth > 0) ? Header.Depth : 1;
 
             for (int m = 0; m < mips; m++) {

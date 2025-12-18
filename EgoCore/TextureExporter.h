@@ -64,10 +64,15 @@ public:
         header.dwSize = sizeof(DDS_HEADER);
         header.dwFlags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE;
 
-        header.dwHeight = parser.Header.FrameHeight;
-        header.dwWidth = parser.Header.FrameWidth;
+        // [FIX] Use Physical Dimensions for DDS Header to match byte stride
+        uint32_t physW = parser.Header.Width;
+        uint32_t physH = parser.Header.Height;
+        if (physW == 0) physW = parser.Header.FrameWidth;
+        if (physH == 0) physH = parser.Header.FrameHeight;
 
-        // Handle Depth for Volume Textures
+        header.dwHeight = physH;
+        header.dwWidth = physW;
+
         if (parser.Header.Depth > 1) {
             header.dwDepth = parser.Header.Depth;
             header.dwFlags |= DDSD_DEPTH;
@@ -88,7 +93,7 @@ public:
             header.ddspf.dwGBitMask = 0x0000FF00;
             header.ddspf.dwBBitMask = 0x000000FF;
             header.ddspf.dwABitMask = 0xFF000000;
-            header.dwPitchOrLinearSize = (parser.Header.FrameWidth * 32 + 7) / 8;
+            header.dwPitchOrLinearSize = (physW * 32 + 7) / 8;
         }
         else {
             header.ddspf.dwFlags = DDPF_FOURCC;
@@ -112,13 +117,14 @@ public:
         file.write((const char*)&DDS_MAGIC, sizeof(uint32_t));
         file.write((const char*)&header, sizeof(DDS_HEADER));
 
-        // Export the whole "Frame" (which includes all Mips + all Depth slices)
+        // Export data
         size_t frameOffset = (size_t)parser.TrueFrameStride * frameIndex;
 
         if (frameOffset + parser.TrueFrameStride <= parser.DecodedPixels.size()) {
             file.write((const char*)parser.DecodedPixels.data() + frameOffset, parser.TrueFrameStride);
         }
         else {
+            // Index out of bounds
             return false;
         }
 
