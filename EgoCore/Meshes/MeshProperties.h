@@ -4,14 +4,88 @@
 #include "MeshRenderer.h"
 #include <functional>
 #include <d3d11.h>
+#include <map>
 
 extern ID3D11Device* g_pd3dDevice;
 
-// Global Renderer Instance
 static MeshRenderer g_MeshRenderer;
-static bool g_ShowWireframe = true;
+static bool g_ShowWireframe = false;
 
-// Helper to check if we just loaded a new mesh and need to send it to GPU
+// Cache to prevent re-parsing the same texture multiple times per session
+static std::map<int, ID3D11ShaderResourceView*> g_MeshTextureCache;
+
+// [NEW] Helper to load a texture by ID from any open Textures bank
+inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
+    if (textureID == -1) return nullptr;
+    if (g_MeshTextureCache.count(textureID)) return g_MeshTextureCache[textureID];
+
+    // Search open banks for "textures.big" (or GBANK_MAIN_PC)
+    for (auto& bank : g_OpenBanks) {
+        if (bank.Type == EBankType::Textures) {
+            // Find entry with this ID
+            for (int i = 0; i < bank.Entries.size(); ++i) {
+                if (bank.Entries[i].ID == (uint32_t)textureID) {
+                    // Temporarily load this entry to parse it
+                    // We need to be careful not to mess up the active parser state if it's currently used by the texture tab.
+                    // But since we are in the Mesh tab, the global Texture Parser is free to use for temporary work.
+
+                    bank.Stream->clear();
+                    bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
+
+                    size_t fileSize = bank.Entries[i].Size;
+                    std::vector<uint8_t> tempData(fileSize + 64); // Padding logic
+                    bank.Stream->read((char*)tempData.data(), fileSize);
+
+                    // Parse
+                    g_TextureParser.Parse(bank.SubheaderCache[i], tempData, bank.Entries[i].Type);
+
+                    if (g_TextureParser.IsParsed && !g_TextureParser.DecodedPixels.empty()) {
+                        // Create D3D Texture
+                        ID3D11ShaderResourceView* srv = nullptr;
+
+                        // --- DUPLICATE TEXTURE CREATION LOGIC (Simplified) ---
+                        // We assume DXT or ARGB. We don't support Channel Swizzle here (just standard view)
+                        DXGI_FORMAT dxFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+                        uint32_t blockWidth = 1;
+                        switch (g_TextureParser.DecodedFormat) {
+                        case ETextureFormat::DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
+                        case ETextureFormat::DXT3: dxFormat = DXGI_FORMAT_BC2_UNORM; blockWidth = 4; break;
+                        case ETextureFormat::DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
+                        case ETextureFormat::NormalMap_DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
+                        case ETextureFormat::NormalMap_DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
+                        case ETextureFormat::ARGB8888: dxFormat = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+                        }
+
+                        D3D11_TEXTURE2D_DESC desc = {};
+                        desc.Width = g_TextureParser.Header.Width ? g_TextureParser.Header.Width : g_TextureParser.Header.FrameWidth;
+                        desc.Height = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
+                        desc.MipLevels = 1; desc.ArraySize = 1;
+                        desc.Format = dxFormat; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
+                        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                        D3D11_SUBRESOURCE_DATA subData = {};
+                        subData.pSysMem = g_TextureParser.DecodedPixels.data(); // Frame 0
+                        if (blockWidth == 4) subData.SysMemPitch = ((desc.Width + 3) / 4) * ((dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
+                        else subData.SysMemPitch = desc.Width * 4;
+
+                        ID3D11Texture2D* tex = nullptr;
+                        if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex))) {
+                            g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &srv);
+                            tex->Release();
+                        }
+
+                        if (srv) {
+                            g_MeshTextureCache[textureID] = srv;
+                            return srv;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
 inline void CheckMeshUpload(ID3D11Device* device) {
     if (g_MeshUploadNeeded) {
         g_MeshRenderer.Initialize(device);
@@ -21,6 +95,22 @@ inline void CheckMeshUpload(ID3D11Device* device) {
         }
         else if (g_ActiveMeshContent.IsParsed) {
             g_MeshRenderer.UploadMesh(device, g_ActiveMeshContent);
+
+            // [NEW] Resolve Textures
+            std::vector<ID3D11ShaderResourceView*> textures;
+            // Resize vector to max material index + 1
+            int maxMat = 0;
+            for (const auto& m : g_ActiveMeshContent.Materials) if (m.ID > maxMat) maxMat = m.ID;
+            textures.resize(maxMat + 1, nullptr);
+
+            for (const auto& m : g_ActiveMeshContent.Materials) {
+                // Fable Logic: Diffuse Map is what we want for basic view
+                if (m.DiffuseMapID > 0) {
+                    ID3D11ShaderResourceView* tex = LoadTextureForMesh(m.DiffuseMapID);
+                    if (tex) textures[m.ID] = tex;
+                }
+            }
+            g_MeshRenderer.SetMaterialTextures(textures);
         }
         g_MeshUploadNeeded = false;
     }
@@ -50,9 +140,27 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     // 1. Ensure GPU Data is up to date
     CheckMeshUpload(g_pd3dDevice);
 
-    // 2. Draw The Viewport (Unified for both Physics & Standard Meshes)
+    // 2. Texture Bank Check (New Feature)
+    bool hasTextureBank = false;
+    // We access the global g_OpenBanks from BankBackend.h
+    for (const auto& bank : g_OpenBanks) {
+        if (bank.Type == EBankType::Textures) {
+            hasTextureBank = true;
+            break;
+        }
+    }
+
+    // 3. Draw The Viewport (Unified for both Physics & Standard Meshes)
     if (g_BBMParser.IsParsed || g_ActiveMeshContent.IsParsed) {
         ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), g_BBMParser.IsParsed ? "PHYSICS MESH (BBM)" : "STANDARD MESH");
+
+        // [NEW] Warning if textures missing (Only for Standard Meshes, BBMs don't use textures usually)
+        if (!g_BBMParser.IsParsed && !hasTextureBank) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[!] Textures not loaded.");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open 'textures.big' (or GBANK_MAIN_PC) in a new tab to see textures on this mesh.");
+        }
+
         ImGui::Separator();
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -84,7 +192,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         return;
     }
 
-    // 3. Draw The Inspector Tabs (Context Sensitive)
+    // 4. Draw The Inspector Tabs (Context Sensitive)
 
     // --- PATH A: PHYSICS MESH (BBM) ---
     if (g_BBMParser.IsParsed) {

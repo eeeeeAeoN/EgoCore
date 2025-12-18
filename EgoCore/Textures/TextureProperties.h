@@ -42,7 +42,7 @@ inline void CreateBackgroundTexture() {
     }
 }
 
-// --- DXT DECOMPRESSION HELPERS (For Channel Viewing) ---
+// --- DXT DECOMPRESSION HELPERS ---
 struct Color32 { uint8_t r, g, b, a; };
 
 inline void GetColorBlockColors(Color32* colors, const uint8_t* block) {
@@ -282,7 +282,14 @@ inline void DrawTextureProperties() {
         return;
     }
 
-    const auto& entry = g_CurrentBank.Entries[g_SelectedEntryIndex];
+    // [FIX] Use the NEW multi-bank system to get the entry details
+    // g_CurrentBank was replaced by g_OpenBanks[g_ActiveBankIndex]
+    if (g_ActiveBankIndex == -1 || g_ActiveBankIndex >= g_OpenBanks.size()) return;
+    const auto& bank = g_OpenBanks[g_ActiveBankIndex];
+
+    if (bank.SelectedEntryIndex == -1 || bank.SelectedEntryIndex >= bank.Entries.size()) return;
+    const auto& entry = bank.Entries[bank.SelectedEntryIndex];
+
     bool isVolume = (g_TextureParser.Header.Depth > 1);
     bool isFlatSeq = (entry.Type == 0x5);
 
@@ -367,9 +374,7 @@ inline void DrawTextureProperties() {
 
         ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p_min, p_max, uv0, uv1);
 
-        // [FIXED] Red Rectangle Logic
-        // Draw if NOT a Flat Sequence (Type 5 handles cropping via UVs)
-        // AND if logical dimensions differ from physical dimensions (Width OR Height)
+        // Red Rectangle Logic
         bool hasPadding = (logW < physW) || (logH < physH);
 
         if (!isFlatSeq && hasPadding) {

@@ -15,16 +15,46 @@ using namespace DirectX;
 struct GPUVertex { XMFLOAT3 Pos; XMFLOAT3 Norm; XMFLOAT2 UV; };
 struct CBMatrix { XMMATRIX WorldViewProj; XMMATRIX World; XMFLOAT4 Color; XMFLOAT4 LightDir; };
 
+struct RenderBatch {
+    uint32_t IndexStart;
+    uint32_t IndexCount;
+    int32_t MaterialIndex;
+};
+
 class MeshRenderer {
 private:
     ID3D11VertexShader* VS = nullptr; ID3D11PixelShader* PS = nullptr; ID3D11InputLayout* Layout = nullptr;
     ID3D11Buffer* VBuffer = nullptr; ID3D11Buffer* IBuffer = nullptr; ID3D11Buffer* ConstantBuffer = nullptr;
     ID3D11RasterizerState* RastStateSolid = nullptr; ID3D11RasterizerState* RastStateWire = nullptr;
     ID3D11DepthStencilState* DepthState = nullptr;
+    ID3D11BlendState* BlendState = nullptr; // [NEW] Blending
+
+    ID3D11SamplerState* Sampler = nullptr;
+    ID3D11ShaderResourceView* DefaultWhiteSRV = nullptr;
+    std::vector<ID3D11ShaderResourceView*> MaterialTextures;
+
     ID3D11Texture2D* RenderTex = nullptr; ID3D11RenderTargetView* RTV = nullptr;
     ID3D11ShaderResourceView* SRV = nullptr; ID3D11Texture2D* DepthTex = nullptr; ID3D11DepthStencilView* DSV = nullptr;
-    uint32_t IndexCount = 0; float Width = 0, Height = 0;
+
+    std::vector<RenderBatch> Batches;
+    float Width = 0, Height = 0;
     float CamRotX = 0.0f; float CamRotY = 0.0f; float CamDist = 10.0f; XMFLOAT2 CamPan = { 0, 0 };
+
+    void CreateDefaultTexture(ID3D11Device* device) {
+        if (DefaultWhiteSRV) return;
+        uint32_t white = 0xFFFFFFFF;
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = 1; desc.Height = 1; desc.MipLevels = 1; desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_IMMUTABLE;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA data = { &white, 4, 0 };
+        ID3D11Texture2D* tex = nullptr;
+        if (SUCCEEDED(device->CreateTexture2D(&desc, &data, &tex))) {
+            device->CreateShaderResourceView(tex, nullptr, &DefaultWhiteSRV);
+            tex->Release();
+        }
+    }
 
 public:
     ~MeshRenderer() { Release(); }
@@ -35,6 +65,9 @@ public:
         if (RastStateSolid) RastStateSolid->Release(); RastStateSolid = nullptr;
         if (RastStateWire) RastStateWire->Release(); RastStateWire = nullptr;
         if (DepthState) DepthState->Release(); DepthState = nullptr;
+        if (Sampler) Sampler->Release(); Sampler = nullptr;
+        if (DefaultWhiteSRV) DefaultWhiteSRV->Release(); DefaultWhiteSRV = nullptr;
+        if (BlendState) BlendState->Release(); BlendState = nullptr;
         ReleaseResizedResources();
     }
     void ReleaseResizedResources() {
@@ -45,7 +78,39 @@ public:
 
     bool Initialize(ID3D11Device* device) {
         if (VS) return true;
-        const char* shaderSrc = "cbuffer CBuf : register(b0) { matrix WVP; matrix World; float4 Col; float4 LightDir; }; struct VS_IN { float3 Pos : POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; }; struct PS_IN { float4 Pos : SV_POSITION; float3 Norm : NORMAL; }; PS_IN VS(VS_IN input) { PS_IN output; output.Pos = mul(float4(input.Pos, 1.0f), WVP); output.Norm = mul(input.Norm, (float3x3)World); return output; } float4 PS(PS_IN input) : SV_Target { float3 n = normalize(input.Norm); float3 l = normalize(LightDir.xyz); float diff = max(dot(n, l), 0.2f); return float4(Col.rgb * diff, 1.0f); }";
+
+        // [FIX] Added clip(texColor.a - 0.1f) to shader
+        // This effectively performs "Alpha Testing", discarding pixels that are transparent
+        const char* shaderSrc = R"(
+            cbuffer CBuf : register(b0) { matrix WVP; matrix World; float4 Col; float4 LightDir; };
+            struct VS_IN { float3 Pos : POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; };
+            struct PS_IN { float4 Pos : SV_POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; };
+            
+            PS_IN VS(VS_IN input) { 
+                PS_IN output; 
+                output.Pos = mul(float4(input.Pos, 1.0f), WVP); 
+                output.Norm = mul(input.Norm, (float3x3)World); 
+                output.UV = input.UV;
+                return output; 
+            }
+            
+            Texture2D tex : register(t0);
+            SamplerState sam : register(s0);
+
+            float4 PS(PS_IN input) : SV_Target { 
+                float4 texColor = tex.Sample(sam, input.UV);
+                
+                // ALPHA TEST: Discard invisible pixels so they don't block the background
+                clip(texColor.a - 0.1f);
+
+                float3 n = normalize(input.Norm); 
+                float3 l = normalize(LightDir.xyz); 
+                float diff = max(dot(n, l), 0.2f); 
+                
+                return float4(texColor.rgb * Col.rgb * diff, texColor.a); 
+            }
+        )";
+
         ID3DBlob* vsBlob = nullptr; ID3DBlob* psBlob = nullptr;
         D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "VS", "vs_4_0", 0, 0, &vsBlob, nullptr);
         device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &VS);
@@ -57,26 +122,58 @@ public:
         D3D11_RASTERIZER_DESC rsDesc = {}; rsDesc.FillMode = D3D11_FILL_SOLID; rsDesc.CullMode = D3D11_CULL_NONE; rsDesc.DepthClipEnable = true; device->CreateRasterizerState(&rsDesc, &RastStateSolid);
         rsDesc.FillMode = D3D11_FILL_WIREFRAME; device->CreateRasterizerState(&rsDesc, &RastStateWire);
         D3D11_DEPTH_STENCIL_DESC dsDesc = {}; dsDesc.DepthEnable = true; dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; dsDesc.DepthFunc = D3D11_COMPARISON_LESS; device->CreateDepthStencilState(&dsDesc, &DepthState);
+
+        D3D11_SAMPLER_DESC sampDesc = {};
+        sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampDesc.MinLOD = 0; sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+        device->CreateSamplerState(&sampDesc, &Sampler);
+
+        // Blend State (Still useful for partial transparency on edges)
+        D3D11_BLEND_DESC blendDesc = {};
+        blendDesc.RenderTarget[0].BlendEnable = TRUE;
+        blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+        blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        device->CreateBlendState(&blendDesc, &BlendState);
+
+        CreateDefaultTexture(device);
         return true;
+    }
+
+    void SetMaterialTextures(const std::vector<ID3D11ShaderResourceView*>& textures) {
+        MaterialTextures = textures;
     }
 
     void UploadMesh(ID3D11Device* device, const C3DMeshContent& mesh) {
         if (!mesh.IsParsed) return;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
         std::vector<GPUVertex> vertices; std::vector<uint32_t> indices; uint32_t indexOffset = 0;
+        Batches.clear();
 
         for (const auto& prim : mesh.Primitives) {
+            uint32_t batchStart = (uint32_t)indices.size();
+
             for (int v = 0; v < prim.VertexCount; v++) {
                 size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
                 GPUVertex gpuV;
                 if (prim.IsCompressed) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset); UnpackPOSPACKED3(p, prim.Compression.Scale, prim.Compression.Offset, gpuV.Pos.x, gpuV.Pos.y, gpuV.Pos.z); }
                 else { const float* r = (const float*)(prim.VertexBuffer.data() + offset); gpuV.Pos = XMFLOAT3(r[0], r[1], r[2]); }
+
                 size_t normOff = prim.IsCompressed ? (prim.AnimatedBlockCount > 0 ? 12 : 4) : (prim.AnimatedBlockCount > 0 ? 20 : 12);
                 if (offset + normOff + 4 <= prim.VertexBuffer.size()) {
                     if (prim.IsCompressed) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset + normOff); UnpackNORMPACKED3(p, gpuV.Norm.x, gpuV.Norm.y, gpuV.Norm.z); }
                     else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + normOff); gpuV.Norm = XMFLOAT3(r[0], r[1], r[2]); }
                 }
                 else gpuV.Norm = XMFLOAT3(0, 1, 0);
+
                 size_t uvOff = prim.IsCompressed ? (prim.AnimatedBlockCount > 0 ? 16 : 8) : (prim.AnimatedBlockCount > 0 ? 32 : 24);
                 if (offset + uvOff + 4 <= prim.VertexBuffer.size()) {
                     if (prim.IsCompressed) { int16_t* u = (int16_t*)(prim.VertexBuffer.data() + offset + uvOff); gpuV.UV = XMFLOAT2(DecompressUV(u[0]), DecompressUV(u[1])); }
@@ -85,6 +182,7 @@ public:
                 else gpuV.UV = XMFLOAT2(0, 0);
                 vertices.push_back(gpuV);
             }
+
             auto ProcessIndices = [&](uint32_t start, uint32_t count, bool isStrip) {
                 if (isStrip) {
                     for (uint32_t k = 0; k < count; k++) {
@@ -102,13 +200,20 @@ public:
             for (const auto& b : prim.AnimatedBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip); processed = true; }
             if (!processed && !prim.IndexBuffer.empty()) { ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false); }
             indexOffset += prim.VertexCount;
+
+            RenderBatch batch;
+            batch.IndexStart = batchStart;
+            batch.IndexCount = (uint32_t)indices.size() - batchStart;
+            batch.MaterialIndex = prim.MaterialIndex;
+            Batches.push_back(batch);
         }
+
         if (vertices.empty()) return;
         D3D11_BUFFER_DESC vDesc = {}; vDesc.ByteWidth = sizeof(GPUVertex) * (UINT)vertices.size(); vDesc.Usage = D3D11_USAGE_DEFAULT; vDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         D3D11_SUBRESOURCE_DATA vData = { vertices.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &VBuffer);
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
-        IndexCount = (uint32_t)indices.size();
+
         CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f;
         CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
     }
@@ -116,17 +221,23 @@ public:
     void UploadBBM(ID3D11Device* device, const CBBMParser& bbm) {
         if (!bbm.IsParsed || bbm.ParsedVertices.empty()) return;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
+        Batches.clear();
+
         std::vector<GPUVertex> vertices; float maxDistSq = 0.0f;
         for (const auto& v : bbm.ParsedVertices) {
             GPUVertex g; g.Pos = XMFLOAT3(v.Position.x, v.Position.y, v.Position.z); g.Norm = XMFLOAT3(v.Normal.x, v.Normal.y, v.Normal.z); g.UV = XMFLOAT2(v.UV.u, v.UV.v);
             vertices.push_back(g); float d = g.Pos.x * g.Pos.x + g.Pos.y * g.Pos.y + g.Pos.z * g.Pos.z; if (d > maxDistSq) maxDistSq = d;
         }
         std::vector<uint32_t> indices; for (auto idx : bbm.ParsedIndices) indices.push_back(idx);
+
         D3D11_BUFFER_DESC vDesc = {}; vDesc.ByteWidth = sizeof(GPUVertex) * (UINT)vertices.size(); vDesc.Usage = D3D11_USAGE_DEFAULT; vDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         D3D11_SUBRESOURCE_DATA vData = { vertices.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &VBuffer);
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
-        IndexCount = (uint32_t)indices.size();
+
+        RenderBatch batch = { 0, (uint32_t)indices.size(), -1 };
+        Batches.push_back(batch);
+
         float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f;
         CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
     }
@@ -159,8 +270,29 @@ public:
         ctx->IASetIndexBuffer(IBuffer, DXGI_FORMAT_R32_UINT, 0); ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->IASetInputLayout(Layout); ctx->VSSetShader(VS, nullptr, 0); ctx->VSSetConstantBuffers(0, 1, &ConstantBuffer);
         ctx->PSSetShader(PS, nullptr, 0); ctx->PSSetConstantBuffers(0, 1, &ConstantBuffer);
-        ctx->OMSetDepthStencilState(DepthState, 0); ctx->RSSetState(RastStateSolid); ctx->DrawIndexed(IndexCount, 0, 0);
-        if (showWireframe) { ctx->RSSetState(RastStateWire); cb.Color = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f); ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0); ctx->DrawIndexed(IndexCount, 0, 0); }
+        ctx->OMSetDepthStencilState(DepthState, 0); ctx->RSSetState(RastStateSolid);
+        ctx->PSSetSamplers(0, 1, &Sampler);
+
+        float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        ctx->OMSetBlendState(BlendState, blendFactor, 0xffffffff);
+
+        for (const auto& batch : Batches) {
+            ID3D11ShaderResourceView* tex = DefaultWhiteSRV;
+            if (batch.MaterialIndex >= 0 && batch.MaterialIndex < MaterialTextures.size()) {
+                if (MaterialTextures[batch.MaterialIndex]) tex = MaterialTextures[batch.MaterialIndex];
+            }
+            ctx->PSSetShaderResources(0, 1, &tex);
+            ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
+        }
+
+        if (showWireframe) {
+            ctx->RSSetState(RastStateWire);
+            ID3D11ShaderResourceView* white = DefaultWhiteSRV;
+            ctx->PSSetShaderResources(0, 1, &white);
+            cb.Color = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+            ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+            for (const auto& batch : Batches) ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
+        }
         return SRV;
     }
 };
