@@ -90,10 +90,10 @@
     <ClInclude Include="resource.h">
       <Filter>Resource Files</Filter>
     </ClInclude>
-    <ClInclude Include="TextureParser.h">
+    <ClInclude Include="Textures\TextureParser.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
-    <ClInclude Include="TextureProperties.h">
+    <ClInclude Include="Textures\TextureProperties.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
   </ItemGroup>

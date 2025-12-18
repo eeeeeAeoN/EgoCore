@@ -1,6 +1,7 @@
 #pragma once
 #include "imgui.h"
 #include "BankBackend.h"
+#include "TextureParser.h"
 #include <d3d11.h>
 #include <string>
 #include <vector>
@@ -44,14 +45,17 @@ struct TextureViewport {
         D3D11_TEXTURE2D_DESC desc = {};
         desc.Width = parser.Header.FrameWidth;
         desc.Height = parser.Header.FrameHeight;
-        desc.MipLevels = 1;
+        desc.MipLevels = 1; // We only upload the top mip for visualization
         desc.ArraySize = 1;
         desc.Format = dxFormat;
         desc.SampleDesc.Count = 1;
         desc.Usage = D3D11_USAGE_DEFAULT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-        size_t frameOffset = (size_t)parser.Header.FrameDataSize * frameIdx;
+        // Calculate offset using the TrueFrameStride (Total size of Frame + All Mips)
+        size_t frameOffset = (size_t)parser.TrueFrameStride * frameIdx;
+
+        // Safety check
         if (frameOffset + parser.Header.FrameDataSize > parser.DecodedPixels.size()) return false;
 
         D3D11_SUBRESOURCE_DATA subData = {};
