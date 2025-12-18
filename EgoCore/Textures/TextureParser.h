@@ -21,7 +21,8 @@ struct CGraphicHeader {
 };
 #pragma pack(pop)
 
-enum class ETextureFormat { Unknown, DXT1, DXT3, DXT5, ARGB8888, NormalMap };
+// [UPDATED] Added NormalMap_DXT1 and NormalMap_DXT5
+enum class ETextureFormat { Unknown, DXT1, DXT3, DXT5, ARGB8888, NormalMap_DXT1, NormalMap_DXT5 };
 
 class CTextureParser {
 public:
@@ -35,49 +36,60 @@ public:
     uint32_t TrueFrameStride = 0;
 
     void LogDebug(const std::string& msg) {
-        // Uncomment to see logs in console
-        // std::cout << "[TextureParser] " << msg << std::endl;
         DebugLog += msg + "\n";
     }
 
-    // [RESTORED] Missing function that caused C2039
     std::string GetFormatString() {
         switch (DecodedFormat) {
         case ETextureFormat::DXT1: return "DXT1";
         case ETextureFormat::DXT3: return "DXT3";
         case ETextureFormat::DXT5: return "DXT5";
         case ETextureFormat::ARGB8888: return "ARGB8888";
-        case ETextureFormat::NormalMap: return "BUMP/Normal";
+        case ETextureFormat::NormalMap_DXT1: return "BUMP (DXT1)";
+        case ETextureFormat::NormalMap_DXT5: return "BUMP (DXT5)";
         default: return "Unknown";
         }
     }
 
-    // Helper: Calculate size of a specific mip level in bytes
-    uint32_t GetMipSize(uint32_t w, uint32_t h) {
+    // [UPDATED] Takes Depth into account
+    uint32_t GetMipSize(uint32_t w, uint32_t h, uint32_t d) {
         uint32_t minDim = 1;
         uint32_t bitsPerPixel = 0;
 
-        if (DecodedFormat == ETextureFormat::DXT1) {
+        if (DecodedFormat == ETextureFormat::DXT1 || DecodedFormat == ETextureFormat::NormalMap_DXT1) {
             minDim = 4; bitsPerPixel = 4;
         }
-        else if (DecodedFormat == ETextureFormat::DXT3 || DecodedFormat == ETextureFormat::DXT5 || DecodedFormat == ETextureFormat::NormalMap) {
+        else if (DecodedFormat == ETextureFormat::DXT3 || DecodedFormat == ETextureFormat::DXT5 || DecodedFormat == ETextureFormat::NormalMap_DXT5) {
             minDim = 4; bitsPerPixel = 8;
         }
         else if (DecodedFormat == ETextureFormat::ARGB8888) {
             minDim = 1; bitsPerPixel = 32;
         }
 
-        // Fable clamps mip dimensions to minDim (4x4 for DXT)
         uint32_t currentW = (w < minDim) ? minDim : w;
         uint32_t currentH = (h < minDim) ? minDim : h;
-        return (currentW * currentH * bitsPerPixel) / 8;
+        // Depth is not clamped to 4x4 blocks like width/height
+        uint32_t currentD = (d < 1) ? 1 : d;
+
+        // Size = (2D Slice Size) * Depth
+        return ((currentW * currentH * bitsPerPixel) / 8) * currentD;
     }
 
     void DecodeFormat(bool isBump) {
         if (isBump) {
-            DecodedFormat = ETextureFormat::NormalMap;
+            // [FIX] Use TransparencyType to differentiate DXT1 (4bpp) from DXT5 (8bpp) bumps
+            switch (Header.TransparencyType) {
+            case 0:
+            case 2:
+                DecodedFormat = ETextureFormat::NormalMap_DXT1;
+                break;
+            default:
+                DecodedFormat = ETextureFormat::NormalMap_DXT5;
+                break;
+            }
             return;
         }
+
         switch (Header.TransparencyType) {
         case 0: DecodedFormat = ETextureFormat::DXT1; break;
         case 1: DecodedFormat = ETextureFormat::DXT3; break;
@@ -95,12 +107,14 @@ public:
         uint32_t totalSize = 0;
         uint32_t w = Header.FrameWidth;
         uint32_t h = Header.FrameHeight;
+        uint32_t d = (Header.Depth > 0) ? Header.Depth : 1;
         int mips = (Header.MipmapLevels > 0) ? Header.MipmapLevels : 1;
 
         for (int i = 0; i < mips; i++) {
-            totalSize += GetMipSize(w, h);
+            totalSize += GetMipSize(w, h, d);
             if (w > 1) w >>= 1;
             if (h > 1) h >>= 1;
+            if (d > 1) d >>= 1;
         }
         return totalSize;
     }
@@ -114,19 +128,20 @@ public:
         memcpy(&Header, metadata.data(), 28);
         if (metadata.size() >= 34) memcpy(&FormatInfo, metadata.data() + 28, 6);
 
+        // Check if Bump (0x2) or Bump Sequence (0x3)
+        // Also treat Volume Textures (0x4) generally by existing logic unless specific handling needed
         bool isBump = (entryType == 0x2 || entryType == 0x3);
         DecodeFormat(isBump);
 
         TrueFrameStride = CalculateTotalFrameSize();
+        // Fallback safety if calculation fails
         if (TrueFrameStride == 0) TrueFrameStride = Header.FrameDataSize;
 
         uint32_t frames = (Header.FrameCount > 0) ? Header.FrameCount : 1;
         size_t expectedTotalSize = (size_t)TrueFrameStride * frames;
 
-        // [CRITICAL FIX] Heap Corruption Protection
-        // Resize to Expected + 4KB padding. LZO often writes slightly past the end during operation.
-        // We will resize back down at the end.
-        DecodedPixels.resize(expectedTotalSize + 4096, 0);
+        // Safety padding for LZO
+        DecodedPixels.resize(expectedTotalSize + 8192, 0);
 
         if (pixelData.empty()) return;
 
@@ -140,33 +155,19 @@ public:
         for (uint32_t f = 0; f < frames; f++) {
             uint32_t w = Header.FrameWidth;
             uint32_t h = Header.FrameHeight;
+            uint32_t d = (Header.Depth > 0) ? Header.Depth : 1;
 
             for (int m = 0; m < mips; m++) {
-                uint32_t mipSize = GetMipSize(w, h);
-
-                // DISASSEMBLY LOGIC: 
-                // If (m > 0 || MipSize0 == 0) -> RAW COPY (Always uncompressed)
-                // If (m == 0 && MipSize0 > 0) -> COMPRESSED READ (LZO)
-
+                uint32_t mipVolumeSize = GetMipSize(w, h, d);
                 bool isCompressed = (m == 0 && Header.MipSize0 > 0);
 
                 if (!isCompressed) {
-                    // --- RAW COPY ---
-                    // Used for all Mips > 0, and Mip 0 if the header says size is 0 (uncompressed flag)
-                    if (inputCursor + mipSize <= inputSize) {
-                        memcpy(DecodedPixels.data() + outputOffset, src + inputCursor, mipSize);
-                        inputCursor += mipSize;
-                    }
-                    else {
-                        LogDebug("Error: Unexpected EOF in Raw Mip (M:" + std::to_string(m) + ")");
-                        break;
+                    if (inputCursor + mipVolumeSize <= inputSize) {
+                        memcpy(DecodedPixels.data() + outputOffset, src + inputCursor, mipVolumeSize);
+                        inputCursor += mipVolumeSize;
                     }
                 }
                 else {
-                    // --- LZO DECOMPRESS ---
-                    // Used ONLY for Mip 0 when flagged as compressed
-
-                    // 1. Read Chunk Header (2 or 4 bytes)
                     if (inputCursor + 2 > inputSize) break;
                     uint32_t compSize = *(uint16_t*)(src + inputCursor);
                     inputCursor += 2;
@@ -176,44 +177,33 @@ public:
                         inputCursor += 4;
                     }
 
-                    // 2. Decompress
                     if (compSize == 0) {
-                        // 0 Size usually implies raw copy of 'mipSize' bytes in this context
-                        if (inputCursor + mipSize <= inputSize) {
-                            memcpy(DecodedPixels.data() + outputOffset, src + inputCursor, mipSize);
-                            inputCursor += mipSize;
+                        if (inputCursor + mipVolumeSize <= inputSize) {
+                            memcpy(DecodedPixels.data() + outputOffset, src + inputCursor, mipVolumeSize);
+                            inputCursor += mipVolumeSize;
                         }
                     }
                     else {
                         if (inputCursor + compSize > inputSize) break;
                         size_t outLen = 0;
-
-                        // Note: DecodedPixels has +4096 padding, so this won't heap corrupt
                         LZO1X_Decompress(src + inputCursor, compSize, DecodedPixels.data() + outputOffset, &outLen);
                         inputCursor += compSize;
 
-                        // 3. Fable "+3 Bytes" Fix
-                        // The last 3 bytes of the texture data are stored uncompressed AFTER the LZO block.
-                        // We must overwrite the end of the decompressed data with these 3 bytes.
-                        if (inputCursor + 3 <= inputSize && mipSize >= 3) {
-                            uint8_t* destEnd = DecodedPixels.data() + outputOffset + mipSize - 3;
+                        if (inputCursor + 3 <= inputSize && mipVolumeSize >= 3) {
+                            uint8_t* destEnd = DecodedPixels.data() + outputOffset + mipVolumeSize - 3;
                             memcpy(destEnd, src + inputCursor, 3);
                             inputCursor += 3;
                         }
                     }
                 }
+                outputOffset += mipVolumeSize;
 
-                outputOffset += mipSize;
-
-                // Update dims for next mip
                 if (w > 1) w >>= 1;
                 if (h > 1) h >>= 1;
+                if (d > 1) d >>= 1;
             }
         }
-
-        // Restore correct size (strip safety padding)
         DecodedPixels.resize(expectedTotalSize);
-
         if (!DecodedPixels.empty()) IsParsed = true;
     }
 };

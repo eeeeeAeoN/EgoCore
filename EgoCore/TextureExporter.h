@@ -3,8 +3,7 @@
 #include <fstream>
 #include <vector>
 
-// Standard DDS Header Structures (DirectX 9)
-const uint32_t DDS_MAGIC = 0x20534444; // "DDS "
+const uint32_t DDS_MAGIC = 0x20534444;
 
 #pragma pack(push, 1)
 struct DDS_PIXELFORMAT {
@@ -36,7 +35,6 @@ struct DDS_HEADER {
 };
 #pragma pack(pop)
 
-// DDS Flags
 const uint32_t DDSD_CAPS = 0x00000001;
 const uint32_t DDSD_HEIGHT = 0x00000002;
 const uint32_t DDSD_WIDTH = 0x00000004;
@@ -56,7 +54,6 @@ const uint32_t DDSCAPS_MIPMAP = 0x00400000;
 
 class TextureExporter {
 public:
-    // CHANGED: Added 'frameIndex' parameter
     static bool ExportDDS(const CTextureParser& parser, const std::string& filename, int frameIndex) {
         if (!parser.IsParsed || parser.DecodedPixels.empty()) return false;
 
@@ -69,15 +66,22 @@ public:
 
         header.dwHeight = parser.Header.FrameHeight;
         header.dwWidth = parser.Header.FrameWidth;
-        header.dwDepth = 0;
+
+        // Handle Depth for Volume Textures
+        if (parser.Header.Depth > 1) {
+            header.dwDepth = parser.Header.Depth;
+            header.dwFlags |= DDSD_DEPTH;
+        }
+        else {
+            header.dwDepth = 0;
+        }
+
         header.dwMipMapCount = (parser.Header.MipmapLevels > 0) ? parser.Header.MipmapLevels : 1;
         header.dwCaps = DDSCAPS_TEXTURE | DDSCAPS_COMPLEX | DDSCAPS_MIPMAP;
 
         header.ddspf.dwSize = sizeof(DDS_PIXELFORMAT);
 
-        // ... [Keep the Pixel Format Switch logic exactly as it was] ...
         if (parser.DecodedFormat == ETextureFormat::ARGB8888) {
-            // ... (Existing ARGB logic) ...
             header.ddspf.dwFlags = DDPF_RGB | DDPF_ALPHAPIXELS;
             header.ddspf.dwRGBBitCount = 32;
             header.ddspf.dwRBitMask = 0x00FF0000;
@@ -89,29 +93,32 @@ public:
         else {
             header.ddspf.dwFlags = DDPF_FOURCC;
             switch (parser.DecodedFormat) {
-            case ETextureFormat::DXT1:      header.ddspf.dwFourCC = 0x31545844; break;
-            case ETextureFormat::DXT3:      header.ddspf.dwFourCC = 0x33545844; break;
-            case ETextureFormat::DXT5:      header.ddspf.dwFourCC = 0x35545844; break;
-            case ETextureFormat::NormalMap: header.ddspf.dwFourCC = 0x35545844; break;
+            case ETextureFormat::DXT1:
+            case ETextureFormat::NormalMap_DXT1:
+                header.ddspf.dwFourCC = 0x31545844; // "DXT1"
+                break;
+            case ETextureFormat::DXT3:
+                header.ddspf.dwFourCC = 0x33545844; // "DXT3"
+                break;
+            case ETextureFormat::DXT5:
+            case ETextureFormat::NormalMap_DXT5:
+                header.ddspf.dwFourCC = 0x35545844; // "DXT5"
+                break;
             default: return false;
             }
             header.dwPitchOrLinearSize = parser.Header.FrameDataSize;
         }
 
-        // Write Magic & Header
         file.write((const char*)&DDS_MAGIC, sizeof(uint32_t));
         file.write((const char*)&header, sizeof(DDS_HEADER));
 
-        // --- CHANGED LOGIC HERE ---
-        // Calculate offset for the specific frame
+        // Export the whole "Frame" (which includes all Mips + all Depth slices)
         size_t frameOffset = (size_t)parser.TrueFrameStride * frameIndex;
 
-        // Safety check to ensure we don't read out of bounds
         if (frameOffset + parser.TrueFrameStride <= parser.DecodedPixels.size()) {
             file.write((const char*)parser.DecodedPixels.data() + frameOffset, parser.TrueFrameStride);
         }
         else {
-            // Fallback: If calculation fails, just write what we can (prevent crash)
             return false;
         }
 
