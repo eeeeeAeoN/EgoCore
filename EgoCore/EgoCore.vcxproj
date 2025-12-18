@@ -28,6 +28,7 @@
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="TextureExporter.h" />
     <ClInclude Include="Textures\TextureParser.h" />
     <ClInclude Include="Textures\TextureProperties.h" />
     <ClInclude Include="Utilities\GltfExporter.h" />

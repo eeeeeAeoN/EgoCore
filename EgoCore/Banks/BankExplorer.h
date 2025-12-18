@@ -10,27 +10,42 @@
 static void SelectEntry(int idx) {
     if (idx < 0 || idx >= (int)g_CurrentBank.Entries.size()) return;
 
+    // [FIX] Explicit Reset of Parser Memory
+    // This breaks the chain of heap corruption if a previous parse failed slightly
+    g_TextureParser.DecodedPixels.clear();
+    g_TextureParser.IsParsed = false;
+    std::vector<uint8_t>().swap(g_TextureParser.DecodedPixels); // Force release
+
     g_SelectedEntryIndex = idx;
     g_SelectedLOD = 0;
     const auto& e = g_CurrentBank.Entries[idx];
 
     g_BankStream.clear();
     g_BankStream.seekg(e.Offset, std::ios::beg);
-    size_t bytesToRead = (e.Size > 50000000) ? 50000000 : e.Size;
-    g_CurrentEntryRawData.resize(bytesToRead);
-    g_BankStream.read((char*)g_CurrentEntryRawData.data(), bytesToRead);
+
+    // [FIX] Input Padding for LZO Safety
+    // We allocate 64 bytes MORE than the file size and zero it.
+    // This allows LZO "Speculative Reads" (reading 4 bytes when only 1 is needed)
+    // to land safely on zeros instead of crashing the app.
+    size_t fileSize = (e.Size > 50000000) ? 50000000 : e.Size;
+    size_t paddedSize = fileSize + 64;
+
+    g_CurrentEntryRawData.clear();
+    g_CurrentEntryRawData.resize(paddedSize, 0);
+    g_BankStream.read((char*)g_CurrentEntryRawData.data(), fileSize);
 
     g_ActiveMeshContent = C3DMeshContent();
     g_BBMParser.IsParsed = false;
     g_AnimParseSuccess = false;
-    g_TextureParser.IsParsed = false;
 
     if (g_CurrentBank.Type == EBankType::Textures) {
         if (g_SubheaderCache.count(idx)) {
+            // Pass the padded buffer. The parser logic handles the bounds.
             g_TextureParser.Parse(g_SubheaderCache[idx], g_CurrentEntryRawData, e.Type);
         }
     }
     else {
+        // ... (Existing Mesh/Anim logic unchanged) ...
         if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
             g_BBMParser.Parse(g_CurrentEntryRawData);
         }

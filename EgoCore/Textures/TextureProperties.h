@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "BankBackend.h"
 #include "TextureParser.h"
+#include "TextureExporter.h"
 #include <d3d11.h>
 #include <string>
 #include <vector>
@@ -108,6 +109,28 @@ inline void DrawTextureProperties() {
     }
     else {
         g_SelectedFrame = 0;
+    }
+
+    //Export button
+    if (ImGui::Button("Export Current Frame (.DDS)")) {
+        OPENFILENAMEA ofn;
+        char szFile[260] = { 0 };
+        std::string defaultName = entry.Name + "_Frame" + std::to_string(g_SelectedFrame) + ".dds";
+        strcpy_s(szFile, defaultName.c_str());
+
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = NULL;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "DirectDraw Surface\0*.dds\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+
+        if (GetSaveFileNameA(&ofn) == TRUE) {
+            bool success = TextureExporter::ExportDDS(g_TextureParser, ofn.lpstrFile, g_SelectedFrame);
+            if (!success) MessageBoxA(NULL, "Export Failed", "Error", MB_OK | MB_ICONERROR);
+        }
     }
 
     g_TexViewport.Update(g_pd3dDevice, g_TextureParser, entry.ID, g_SelectedFrame);

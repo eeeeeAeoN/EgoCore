@@ -96,6 +96,9 @@
     <ClInclude Include="Textures\TextureProperties.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
+    <ClInclude Include="TextureExporter.h">
+      <Filter>Source Files\Textures</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">
