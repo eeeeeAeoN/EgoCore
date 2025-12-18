@@ -10,11 +10,9 @@
 static void SelectEntry(int idx) {
     if (idx < 0 || idx >= (int)g_CurrentBank.Entries.size()) return;
 
-    // [FIX] Explicit Reset of Parser Memory
-    // This breaks the chain of heap corruption if a previous parse failed slightly
     g_TextureParser.DecodedPixels.clear();
     g_TextureParser.IsParsed = false;
-    std::vector<uint8_t>().swap(g_TextureParser.DecodedPixels); // Force release
+    std::vector<uint8_t>().swap(g_TextureParser.DecodedPixels);
 
     g_SelectedEntryIndex = idx;
     g_SelectedLOD = 0;
@@ -23,10 +21,6 @@ static void SelectEntry(int idx) {
     g_BankStream.clear();
     g_BankStream.seekg(e.Offset, std::ios::beg);
 
-    // [FIX] Input Padding for LZO Safety
-    // We allocate 64 bytes MORE than the file size and zero it.
-    // This allows LZO "Speculative Reads" (reading 4 bytes when only 1 is needed)
-    // to land safely on zeros instead of crashing the app.
     size_t fileSize = (e.Size > 50000000) ? 50000000 : e.Size;
     size_t paddedSize = fileSize + 64;
 
@@ -40,20 +34,20 @@ static void SelectEntry(int idx) {
 
     if (g_CurrentBank.Type == EBankType::Textures) {
         if (g_SubheaderCache.count(idx)) {
-            // Pass the padded buffer. The parser logic handles the bounds.
             g_TextureParser.Parse(g_SubheaderCache[idx], g_CurrentEntryRawData, e.Type);
         }
     }
     else {
-        // ... (Existing Mesh/Anim logic unchanged) ...
         if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
             g_BBMParser.Parse(g_CurrentEntryRawData);
+            g_MeshUploadNeeded = true; // [FIX] Signal GPU upload
         }
         else if (IsSupportedMesh(e.Type)) {
             if (g_SubheaderCache.count(idx)) {
                 g_ActiveMeshContent.ParseEntryMetadata(g_SubheaderCache[idx]);
             }
             ParseSelectedLOD();
+            g_MeshUploadNeeded = true; // [FIX] Signal GPU upload
         }
         else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
             if (g_SubheaderCache.count(idx)) {

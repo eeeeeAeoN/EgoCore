@@ -24,9 +24,9 @@
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
-    <ClInclude Include="Meshes\C3DViewports.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
+    <ClInclude Include="MeshRenderer.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="TextureExporter.h" />
     <ClInclude Include="Textures\TextureParser.h" />

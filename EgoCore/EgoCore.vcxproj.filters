@@ -72,9 +72,6 @@
     <ClInclude Include="Meshes\BBMParser.h">
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>
-    <ClInclude Include="Meshes\C3DViewports.h">
-      <Filter>Source Files\Meshes</Filter>
-    </ClInclude>
     <ClInclude Include="Meshes\MeshParser.h">
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>
@@ -98,6 +95,9 @@
     </ClInclude>
     <ClInclude Include="TextureExporter.h">
       <Filter>Source Files\Textures</Filter>
+    </ClInclude>
+    <ClInclude Include="MeshRenderer.h">
+      <Filter>Source Files\Meshes</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

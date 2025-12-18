@@ -67,6 +67,9 @@ static C3DMeshContent g_ActiveMeshContent;
 static CBBMParser g_BBMParser;
 static CTextureParser g_TextureParser;
 
+// [FIX] Global flag moved here so BankExplorer and MeshProperties can both see it
+static bool g_MeshUploadNeeded = false;
+
 static int g_SelectedLOD = 0;
 static std::vector<uint8_t> g_CurrentEntryRawData;
 
@@ -87,53 +90,30 @@ inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) 
     std::set<std::string> folders;
     for (const auto& sb : subBanks) folders.insert(sb.Name);
 
-    if (folders.count("PARTICLE_MAIN")) {
-        throw std::runtime_error("Xbox Version Detected (found PARTICLE_MAIN). Only PC is supported.");
-    }
-
-    if (folders.count("GBANK_FRONT_END")) {
-        throw std::runtime_error("Xbox Version Detected (found GBANK_FRONT_END). Only PC is supported.");
-    }
-
-    if (folders.count("GBANK_GUI")) {
-        throw std::runtime_error("Xbox Version Detected (found GBANK_GUI). Only PC is supported.");
-    }
-
-    if (folders.count("GBANK_MAIN")) {
-        throw std::runtime_error("Xbox Version Detected (found GBANK_MAIN). Only PC is supported.");
-    }
+    if (folders.count("PARTICLE_MAIN")) throw std::runtime_error("Xbox Version Detected. Only PC is supported.");
+    if (folders.count("GBANK_FRONT_END")) throw std::runtime_error("Xbox Version Detected. Only PC is supported.");
+    if (folders.count("GBANK_GUI")) throw std::runtime_error("Xbox Version Detected. Only PC is supported.");
+    if (folders.count("GBANK_MAIN")) throw std::runtime_error("Xbox Version Detected. Only PC is supported.");
 
     bool hasMeshes = folders.count("MBANK_ALLMESHES");
     bool hasEngine = folders.count("MBANK_ENGINE");
 
     if (hasMeshes || hasEngine) {
-        if (folders.size() != 2 || !hasMeshes || !hasEngine) {
-            throw std::runtime_error("Graphics Bank: Structure invalid (Expected exactly MBANK_ALLMESHES & MBANK_ENGINE).");
-        }
+        if (folders.size() != 2 || !hasMeshes || !hasEngine) throw std::runtime_error("Graphics Bank: Structure invalid.");
         return EBankType::Graphics;
     }
 
-    if (folders.count("GBANK_GUI_PC") && folders.count("GBANK_MAIN_PC")) {
-        return EBankType::Textures;
-    }
-
-    if (folders.count("GBANK_FRONT_END_PC")) {
-        return EBankType::Frontend;
-    }
-
-    if (folders.count("PARTICLE_MAIN_PC")) {
-        return EBankType::Effects;
-    }
+    if (folders.count("GBANK_GUI_PC") && folders.count("GBANK_MAIN_PC")) return EBankType::Textures;
+    if (folders.count("GBANK_FRONT_END_PC")) return EBankType::Frontend;
+    if (folders.count("PARTICLE_MAIN_PC")) return EBankType::Effects;
 
     for (const auto& folder : folders) {
-
         if (StartsWith(folder, "SHADERS_")) return EBankType::Shaders;
         if (StartsWith(folder, "TEXT_") && Contains(folder, "_MAIN")) return EBankType::Text;
         if (StartsWith(folder, "LIPSYNC_")) return EBankType::Dialogue;
         if (StartsWith(folder, "STREAMING_FONT_") && Contains(folder, "_PC")) return EBankType::Fonts;
         if (StartsWith(folder, "FONT_") && Contains(folder, "_MAIN")) return EBankType::Fonts;
     }
-
     return EBankType::Unknown;
 }
 
@@ -175,7 +155,6 @@ inline void LoadSubBankEntries(int subBankIndex) {
     g_SubheaderCache.clear();
 
     const auto& info = g_CurrentBank.SubBanks[subBankIndex];
-
     g_BankStream.seekg(info.Offset, std::ios::beg);
 
     uint32_t statsCount = 0; g_BankStream.read((char*)&statsCount, 4);
@@ -184,19 +163,12 @@ inline void LoadSubBankEntries(int subBankIndex) {
 
     for (uint32_t i = 0; i < info.EntryCount; i++) {
         BankEntry e; uint32_t magicE;
-        g_BankStream.read((char*)&magicE, 4);
-        g_BankStream.read((char*)&e.ID, 4);
-        g_BankStream.read((char*)&e.Type, 4);
-        g_BankStream.read((char*)&e.Size, 4);
-        g_BankStream.read((char*)&e.Offset, 4);
-        g_BankStream.read((char*)&e.CRC, 4);
+        g_BankStream.read((char*)&magicE, 4); g_BankStream.read((char*)&e.ID, 4); g_BankStream.read((char*)&e.Type, 4);
+        g_BankStream.read((char*)&e.Size, 4); g_BankStream.read((char*)&e.Offset, 4); g_BankStream.read((char*)&e.CRC, 4);
 
         if (magicE != 42) continue;
-
         e.Name = ReadBankString(g_BankStream);
-
         g_BankStream.seekg(8, std::ios::cur);
-
         g_BankStream.seekg(-4, std::ios::cur);
         uint32_t depCount = 0; g_BankStream.read((char*)&depCount, 4);
         for (uint32_t d = 0; d < depCount; d++) ReadBankString(g_BankStream);
@@ -221,13 +193,9 @@ inline void InitializeBank() {
     case EBankType::Graphics:
         g_BankStatus = "Graphics Bank Initialized (PC).";
         for (int i = 0; i < g_CurrentBank.SubBanks.size(); i++) {
-            if (g_CurrentBank.SubBanks[i].Name == "MBANK_ALLMESHES") {
-                LoadSubBankEntries(i);
-                break;
-            }
+            if (g_CurrentBank.SubBanks[i].Name == "MBANK_ALLMESHES") { LoadSubBankEntries(i); break; }
         }
         break;
-
     case EBankType::Textures:
         g_BankStatus = "Textures Bank Identified.";
         {
@@ -239,74 +207,26 @@ inline void InitializeBank() {
             if (targetIdx != -1) LoadSubBankEntries(targetIdx);
         }
         break;
-
-    case EBankType::Frontend:
-        g_BankStatus = "Frontend Bank Identified.";
-        LoadSubBankEntries(0);
-        break;
-
-    case EBankType::Effects:
-        g_BankStatus = "Effects/Particles Bank Identified.";
-        LoadSubBankEntries(0);
-        break;
-
-    case EBankType::Shaders:
-        g_BankStatus = "Shaders Bank Identified.";
-        LoadSubBankEntries(0);
-        break;
-
-    case EBankType::Text:
-        g_BankStatus = "Localization/Text Bank Identified.";
-        LoadSubBankEntries(0);
-        break;
-
-    case EBankType::Dialogue:
-        g_BankStatus = "Dialogue/Lipsync Bank Identified.";
-        LoadSubBankEntries(0);
-        break;
-
-    case EBankType::Fonts:
-        g_BankStatus = "Fonts Bank Identified.";
-        LoadSubBankEntries(0);
-        break;
-
-    case EBankType::Unknown:
-    default:
-        g_BankStatus = "Unknown Bank Type. Loaded Default.";
-        if (!g_CurrentBank.SubBanks.empty()) LoadSubBankEntries(0);
-        break;
+    case EBankType::Frontend: g_BankStatus = "Frontend Bank Identified."; LoadSubBankEntries(0); break;
+    case EBankType::Effects: g_BankStatus = "Effects/Particles Bank Identified."; LoadSubBankEntries(0); break;
+    case EBankType::Shaders: g_BankStatus = "Shaders Bank Identified."; LoadSubBankEntries(0); break;
+    case EBankType::Text: g_BankStatus = "Localization/Text Bank Identified."; LoadSubBankEntries(0); break;
+    case EBankType::Dialogue: g_BankStatus = "Dialogue/Lipsync Bank Identified."; LoadSubBankEntries(0); break;
+    case EBankType::Fonts: g_BankStatus = "Fonts Bank Identified."; LoadSubBankEntries(0); break;
+    default: g_BankStatus = "Unknown Bank Type. Loaded Default."; if (!g_CurrentBank.SubBanks.empty()) LoadSubBankEntries(0); break;
     }
 }
 
 inline void LoadBank(const std::string& path) {
     if (g_BankStream.is_open()) g_BankStream.close();
-
-    // Reset all global states for the new file
     g_CurrentBank = LoadedBank();
-    g_SelectedEntryIndex = -1;
-    g_SubheaderCache.clear();
-    g_CurrentEntryRawData.clear();
-    g_ActiveMeshContent = C3DMeshContent();
-    g_BBMParser.IsParsed = false;
-    g_AnimParseSuccess = false;
-    g_TextureParser.IsParsed = false;
+    g_SelectedEntryIndex = -1; g_SubheaderCache.clear(); g_CurrentEntryRawData.clear();
+    g_ActiveMeshContent = C3DMeshContent(); g_BBMParser.IsParsed = false; g_AnimParseSuccess = false; g_TextureParser.IsParsed = false;
 
-    // --- [FIX] CLEAR STREAM & ROBUST OPEN ---
     g_BankStream.clear();
-
-    // Attempt Read/Write first
     g_BankStream.open(path, std::ios::binary | std::ios::in | std::ios::out);
-
-    if (!g_BankStream) {
-        // Fallback: If write access is denied (file lock/permissions), open as Read-Only
-        g_BankStream.clear();
-        g_BankStream.open(path, std::ios::binary | std::ios::in);
-    }
-
-    if (!g_BankStream) {
-        g_BankStatus = "Error: Could not open file (Check if locked or path is valid)";
-        return;
-    }
+    if (!g_BankStream) { g_BankStream.clear(); g_BankStream.open(path, std::ios::binary | std::ios::in); }
+    if (!g_BankStream) { g_BankStatus = "Error: Could not open file (Check if locked or path is valid)"; return; }
 
     g_CurrentBank.FullPath = path;
     g_CurrentBank.FileName = fs::path(path).filename().string();
@@ -316,33 +236,19 @@ inline void LoadBank(const std::string& path) {
 
     struct HeaderBIG { char m[4]; uint32_t v; uint32_t footOff; uint32_t footSz; } h;
     g_BankStream.read((char*)&h, sizeof(h));
-
     g_BankStream.seekg(h.footOff, std::ios::beg);
     uint32_t bankCount = 0; g_BankStream.read((char*)&bankCount, 4);
 
     for (uint32_t i = 0; i < bankCount; i++) {
         InternalBankInfo b;
         std::getline(g_BankStream, b.Name, '\0');
-        g_BankStream.read((char*)&b.Version, 4);
-        g_BankStream.read((char*)&b.EntryCount, 4);
-        g_BankStream.read((char*)&b.Offset, 4);
-        g_BankStream.read((char*)&b.Size, 4);
-        g_BankStream.read((char*)&b.Align, 4);
+        g_BankStream.read((char*)&b.Version, 4); g_BankStream.read((char*)&b.EntryCount, 4);
+        g_BankStream.read((char*)&b.Offset, 4); g_BankStream.read((char*)&b.Size, 4); g_BankStream.read((char*)&b.Align, 4);
         g_CurrentBank.SubBanks.push_back(b);
     }
-
     g_BankStatus = "Found " + std::to_string(bankCount) + " internal banks.";
-
-    try {
-        g_CurrentBank.Type = ResolveBankType(g_CurrentBank.SubBanks);
-        InitializeBank();
-    }
-    catch (const std::exception& e) {
-        g_CurrentBank.SubBanks.clear();
-        g_CurrentBank.Entries.clear();
-        g_CurrentBank.Type = EBankType::Unknown;
-        g_BankStatus = "Error: " + std::string(e.what());
-    }
+    try { g_CurrentBank.Type = ResolveBankType(g_CurrentBank.SubBanks); InitializeBank(); }
+    catch (const std::exception& e) { g_CurrentBank.SubBanks.clear(); g_CurrentBank.Entries.clear(); g_CurrentBank.Type = EBankType::Unknown; g_BankStatus = "Error: " + std::string(e.what()); }
 }
 
 inline void SaveEntryChanges() {
@@ -350,19 +256,14 @@ inline void SaveEntryChanges() {
     if (!g_BankStream.is_open()) return;
     BankEntry& e = g_CurrentBank.Entries[g_SelectedEntryIndex];
     std::vector<uint8_t> newBytes;
-
-    if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
-        newBytes = g_ActiveAnim.Serialize();
-    }
+    if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) { newBytes = g_ActiveAnim.Serialize(); }
     else return;
 
     if (newBytes.size() <= e.InfoSize) {
-        g_BankStream.clear();
-        g_BankStream.seekp(e.SubheaderFileOffset, std::ios::beg);
+        g_BankStream.clear(); g_BankStream.seekp(e.SubheaderFileOffset, std::ios::beg);
         g_BankStream.write((char*)newBytes.data(), newBytes.size());
         g_SubheaderCache[g_SelectedEntryIndex] = newBytes;
-        g_BankStatus = "Saved.";
-        g_BankStream.flush();
+        g_BankStatus = "Saved."; g_BankStream.flush();
     }
     else { g_BankStatus = "Error: New header too big!"; }
 }
@@ -376,11 +277,13 @@ inline void ParseSelectedLOD() {
         size_t currentOffset = 0;
         for (int i = 0; i < g_SelectedLOD; i++) currentOffset += g_ActiveMeshContent.EntryMeta.LODSizes[i];
         size_t currentSize = g_ActiveMeshContent.EntryMeta.LODSizes[g_SelectedLOD];
-
         if (currentOffset + currentSize <= g_CurrentEntryRawData.size()) { offset = currentOffset; size = currentSize; }
         else { g_BankStatus = "Error: LOD Offset out of bounds!"; }
     }
     std::vector<uint8_t> slice;
     if (size > 0) { slice.resize(size); memcpy(slice.data(), g_CurrentEntryRawData.data() + offset, size); }
     g_ActiveMeshContent.Parse(slice);
+
+    // [FIX] Signal Renderer that LOD changed
+    g_MeshUploadNeeded = true;
 }
