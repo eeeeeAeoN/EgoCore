@@ -31,6 +31,9 @@
     <Filter Include="Source Files\Textures">
       <UniqueIdentifier>{53146c54-c415-4fec-ace3-f1ec4b85b672}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Text">
+      <UniqueIdentifier>{cad63c4e-b97e-4de6-bf67-b74a204b5d1a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -93,11 +96,17 @@
     <ClInclude Include="Textures\TextureProperties.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
-    <ClInclude Include="TextureExporter.h">
+    <ClInclude Include="Meshes\MeshRenderer.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Textures\TextureExporter.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
-    <ClInclude Include="MeshRenderer.h">
-      <Filter>Source Files\Meshes</Filter>
+    <ClInclude Include="Text\TextParser.h">
+      <Filter>Source Files\Text</Filter>
+    </ClInclude>
+    <ClInclude Include="Text\TextProperties.h">
+      <Filter>Source Files\Text</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -12,7 +12,6 @@
 
 extern ID3D11Device* g_pd3dDevice;
 
-// UI States
 static int g_SelectedFrame = 0;
 static int g_SelectedSlice = 0;
 static int g_ViewChannel = 0;
@@ -42,7 +41,6 @@ inline void CreateBackgroundTexture() {
     }
 }
 
-// --- DXT DECOMPRESSION HELPERS ---
 struct Color32 { uint8_t r, g, b, a; };
 
 inline void GetColorBlockColors(Color32* colors, const uint8_t* block) {
@@ -129,7 +127,6 @@ inline void DecompressDXT5Block(const uint8_t* block, Color32* output, uint32_t 
         }
     }
 }
-// ----------------------------------------------------
 
 struct TextureViewport {
     ID3D11ShaderResourceView* SRV = nullptr;
@@ -309,7 +306,6 @@ inline void DrawTextureProperties() {
 
     ImGui::BeginGroup();
 
-    // 1. Frame Selector
     int maxFrames = (std::max)(1, (int)g_TextureParser.Header.FrameCount);
     if (isFlatSeq) maxFrames = flatFrameCount;
 
@@ -322,7 +318,6 @@ inline void DrawTextureProperties() {
     }
     else { g_SelectedFrame = 0; }
 
-    // 2. Depth Slice Selector
     if (isVolume) {
         int maxDepth = (std::max)(1, (int)g_TextureParser.Header.Depth);
         ImGui::PushItemWidth(100);
@@ -333,7 +328,6 @@ inline void DrawTextureProperties() {
     }
     else { g_SelectedSlice = 0; }
 
-    // 3. Channel Selector
     ImGui::PushItemWidth(100);
     const char* viewModes[] = { "RGB", "Alpha", "Red", "Green", "Blue" };
     ImGui::Combo("##channel", &g_ViewChannel, viewModes, IM_ARRAYSIZE(viewModes));
@@ -374,7 +368,6 @@ inline void DrawTextureProperties() {
 
         ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p_min, p_max, uv0, uv1);
 
-        // Red Rectangle Logic
         bool hasPadding = (logW < physW) || (logH < physH);
 
         if (!isFlatSeq && hasPadding) {
@@ -385,7 +378,7 @@ inline void DrawTextureProperties() {
             ImGui::GetWindowDrawList()->AddRect(
                 p_min,
                 ImVec2(p_min.x + boxW, p_min.y + boxH),
-                0xFF0000FF // Red
+                0xFF0000FF
             );
         }
 

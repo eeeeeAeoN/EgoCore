@@ -27,7 +27,7 @@ private:
     ID3D11Buffer* VBuffer = nullptr; ID3D11Buffer* IBuffer = nullptr; ID3D11Buffer* ConstantBuffer = nullptr;
     ID3D11RasterizerState* RastStateSolid = nullptr; ID3D11RasterizerState* RastStateWire = nullptr;
     ID3D11DepthStencilState* DepthState = nullptr;
-    ID3D11BlendState* BlendState = nullptr; // [NEW] Blending
+    ID3D11BlendState* BlendState = nullptr;
 
     ID3D11SamplerState* Sampler = nullptr;
     ID3D11ShaderResourceView* DefaultWhiteSRV = nullptr;
@@ -79,8 +79,6 @@ public:
     bool Initialize(ID3D11Device* device) {
         if (VS) return true;
 
-        // [FIX] Added clip(texColor.a - 0.1f) to shader
-        // This effectively performs "Alpha Testing", discarding pixels that are transparent
         const char* shaderSrc = R"(
             cbuffer CBuf : register(b0) { matrix WVP; matrix World; float4 Col; float4 LightDir; };
             struct VS_IN { float3 Pos : POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; };
@@ -99,14 +97,10 @@ public:
 
             float4 PS(PS_IN input) : SV_Target { 
                 float4 texColor = tex.Sample(sam, input.UV);
-                
-                // ALPHA TEST: Discard invisible pixels so they don't block the background
                 clip(texColor.a - 0.1f);
-
                 float3 n = normalize(input.Norm); 
                 float3 l = normalize(LightDir.xyz); 
                 float diff = max(dot(n, l), 0.2f); 
-                
                 return float4(texColor.rgb * Col.rgb * diff, texColor.a); 
             }
         )";
@@ -132,7 +126,6 @@ public:
         sampDesc.MinLOD = 0; sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
         device->CreateSamplerState(&sampDesc, &Sampler);
 
-        // Blend State (Still useful for partial transparency on edges)
         D3D11_BLEND_DESC blendDesc = {};
         blendDesc.RenderTarget[0].BlendEnable = TRUE;
         blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
@@ -251,26 +244,59 @@ public:
         device->CreateTexture2D(&dDesc, nullptr, &DepthTex); device->CreateDepthStencilView(DepthTex, nullptr, &DSV);
     }
 
-    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe) {
+    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false) {
         if (!VS || !VBuffer) return nullptr;
+
+        // Camera Controls
         if (ImGui::IsWindowHovered()) {
             if (ImGui::IsMouseDragging(1)) { CamRotY += ImGui::GetIO().MouseDelta.x * 0.01f; CamRotX += ImGui::GetIO().MouseDelta.y * 0.01f; }
             if (ImGui::IsMouseDragging(2)) { CamPan.x += ImGui::GetIO().MouseDelta.x * (CamDist * 0.002f); CamPan.y -= ImGui::GetIO().MouseDelta.y * (CamDist * 0.002f); }
             CamDist -= ImGui::GetIO().MouseWheel * CamDist * 0.1f; if (CamDist < 0.1f) CamDist = 0.1f;
         }
-        float bgColor[] = { 0.1f, 0.12f, 0.15f, 1.0f }; ctx->ClearRenderTargetView(RTV, bgColor); ctx->ClearDepthStencilView(DSV, D3D11_CLEAR_DEPTH, 1.0f, 0); ctx->OMSetRenderTargets(1, &RTV, DSV);
-        D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f }; ctx->RSSetViewports(1, &vp);
+
+        // [FIX] Green Background for Physics, Blue-Grey for Standard
+        float bgColor[4];
+        if (isPhysics) {
+            // Dark Green (Physics Mode)
+            bgColor[0] = 0.05f; bgColor[1] = 0.25f; bgColor[2] = 0.1f; bgColor[3] = 1.0f;
+        }
+        else {
+            // Dark Slate (Standard Mode)
+            bgColor[0] = 0.1f; bgColor[1] = 0.12f; bgColor[2] = 0.15f; bgColor[3] = 1.0f;
+        }
+
+        ctx->ClearRenderTargetView(RTV, bgColor);
+        ctx->ClearDepthStencilView(DSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
+        ctx->OMSetRenderTargets(1, &RTV, DSV);
+
+        D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f };
+        ctx->RSSetViewports(1, &vp);
+
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
-        XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY); world = world * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
-        CBMatrix cb; cb.World = XMMatrixTranspose(world); cb.WorldViewProj = XMMatrixTranspose(world * view * proj);
-        cb.Color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f); cb.LightDir = XMFLOAT4(0.5f, 1.0f, -0.5f, 0.0f);
+        XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
+        world = world * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+
+        CBMatrix cb;
+        cb.World = XMMatrixTranspose(world);
+        cb.WorldViewProj = XMMatrixTranspose(world * view * proj);
+        cb.Color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
+        cb.LightDir = XMFLOAT4(0.5f, 1.0f, -0.5f, 0.0f);
+
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
-        UINT stride = sizeof(GPUVertex); UINT offset = 0; ctx->IASetVertexBuffers(0, 1, &VBuffer, &stride, &offset);
-        ctx->IASetIndexBuffer(IBuffer, DXGI_FORMAT_R32_UINT, 0); ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        ctx->IASetInputLayout(Layout); ctx->VSSetShader(VS, nullptr, 0); ctx->VSSetConstantBuffers(0, 1, &ConstantBuffer);
-        ctx->PSSetShader(PS, nullptr, 0); ctx->PSSetConstantBuffers(0, 1, &ConstantBuffer);
-        ctx->OMSetDepthStencilState(DepthState, 0); ctx->RSSetState(RastStateSolid);
+
+        UINT stride = sizeof(GPUVertex); UINT offset = 0;
+        ctx->IASetVertexBuffers(0, 1, &VBuffer, &stride, &offset);
+        ctx->IASetIndexBuffer(IBuffer, DXGI_FORMAT_R32_UINT, 0);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ctx->IASetInputLayout(Layout);
+        ctx->VSSetShader(VS, nullptr, 0);
+        ctx->VSSetConstantBuffers(0, 1, &ConstantBuffer);
+        ctx->PSSetShader(PS, nullptr, 0);
+        ctx->PSSetConstantBuffers(0, 1, &ConstantBuffer);
+        ctx->OMSetDepthStencilState(DepthState, 0);
+        ctx->RSSetState(RastStateSolid);
+
         ctx->PSSetSamplers(0, 1, &Sampler);
 
         float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -278,6 +304,8 @@ public:
 
         for (const auto& batch : Batches) {
             ID3D11ShaderResourceView* tex = DefaultWhiteSRV;
+            // Physics meshes usually don't have material textures mapped this way, 
+            // so they will default to White (which looks Green due to lighting/background context)
             if (batch.MaterialIndex >= 0 && batch.MaterialIndex < MaterialTextures.size()) {
                 if (MaterialTextures[batch.MaterialIndex]) tex = MaterialTextures[batch.MaterialIndex];
             }
@@ -293,6 +321,32 @@ public:
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             for (const auto& batch : Batches) ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
         }
+
         return SRV;
+    }
+
+    // [NEW] Transform a 3D Point to 2D Screen Space
+    // Returns true if point is in front of camera
+    bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH) {
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), screenW / screenH, 0.1f, 100000.0f);
+        XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
+        XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
+        world = world * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+
+        XMMATRIX wvp = world * view * proj;
+        XMVECTOR v = XMVectorSet(worldPos.x, worldPos.y, worldPos.z, 1.0f);
+        XMVECTOR vClip = XMVector3TransformCoord(v, wvp); // This does the Perspective Divide ( / w)
+
+        float x = XMVectorGetX(vClip);
+        float y = XMVectorGetY(vClip);
+        float z = XMVectorGetZ(vClip);
+
+        // If z > 1.0f or z < 0.0f, it's clipped
+        if (z < 0.0f || z > 1.0f) return false;
+
+        // Map -1..1 to 0..Screen
+        outPos.x = (x + 1.0f) * 0.5f * screenW;
+        outPos.y = (1.0f - y) * 0.5f * screenH; // Flip Y
+        return true;
     }
 };
