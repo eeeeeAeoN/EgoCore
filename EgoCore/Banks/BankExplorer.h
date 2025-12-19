@@ -13,9 +13,7 @@
 #include <vector>
 #include <string>
 
-
 static bool g_HasInitialized = false;
-
 
 static void SelectEntry(LoadedBank* bank, int idx) {
     if (!bank || idx < 0 || idx >= (int)bank->Entries.size()) return;
@@ -293,6 +291,21 @@ static void DrawBankExplorer() {
                 std::string root = OpenFolderDialog();
                 if (!root.empty()) InitializeSetup(root);
             }
+
+            ImGui::Separator();
+
+            // --- NEW EXIT LOGIC ---
+            if (ImGui::MenuItem("Exit")) {
+                if (g_DefWorkspace.IsDirty() && g_AppConfig.ShowUnsavedChangesWarning) {
+                    g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
+                    g_DefWorkspace.TriggerUnsavedPopup = true;
+                }
+                else {
+                    exit(0);
+                }
+            }
+            // ---------------------
+
             ImGui::EndMenu();
         }
         ImGui::SameLine();
@@ -311,5 +324,85 @@ static void DrawBankExplorer() {
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
+    }
+
+    // --- NEW: GLOBAL POPUP RENDER (Appended to the end) ---
+    if (g_DefWorkspace.TriggerUnsavedPopup) {
+        ImGui::OpenPopup("UnsavedChangesGlobal");
+        g_DefWorkspace.TriggerUnsavedPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("UnsavedChangesGlobal", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("You have unsaved changes.");
+        ImGui::Text("What would you like to do?");
+        ImGui::Separator();
+
+        static bool dontShowUnsaved = false;
+        ImGui::Checkbox("Don't show this message again", &dontShowUnsaved);
+        ImGui::Dummy(ImVec2(0, 10));
+
+        if (ImGui::Button("Save & Continue", ImVec2(140, 0))) {
+            if (g_DefWorkspace.ShowDefsMode) {
+                if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1)
+                    SaveDefEntry(g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType][g_DefWorkspace.SelectedEntryIndex]);
+            }
+            else {
+                if (g_DefWorkspace.SelectedEnumIndex != -1)
+                    SaveHeaderEntry(g_DefWorkspace.AllEnums[g_DefWorkspace.SelectedEnumIndex]);
+            }
+
+            if (dontShowUnsaved) {
+                g_AppConfig.ShowUnsavedChangesWarning = false;
+                SaveConfig();
+            }
+
+            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) {
+                exit(0);
+            }
+            else if (g_DefWorkspace.PendingNav.Action == DefAction::SwitchToDef) {
+                g_DefWorkspace.ShowDefsMode = true;
+                g_DefWorkspace.SelectedType = g_DefWorkspace.PendingNav.TargetType;
+                g_DefWorkspace.SelectedEntryIndex = g_DefWorkspace.PendingNav.TargetIndex;
+                LoadDefContent(g_DefWorkspace.CategorizedDefs[g_DefWorkspace.PendingNav.TargetType][g_DefWorkspace.PendingNav.TargetIndex]);
+            }
+            else if (g_DefWorkspace.PendingNav.Action == DefAction::SwitchToHeader) {
+                g_DefWorkspace.ShowDefsMode = false;
+                g_DefWorkspace.SelectedEnumIndex = g_DefWorkspace.PendingNav.TargetIndex;
+                LoadHeaderContent(g_DefWorkspace.AllEnums[g_DefWorkspace.PendingNav.TargetIndex]);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Discard & Continue", ImVec2(140, 0))) {
+            if (dontShowUnsaved) {
+                g_AppConfig.ShowUnsavedChangesWarning = false;
+                SaveConfig();
+            }
+
+            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) {
+                exit(0);
+            }
+            else if (g_DefWorkspace.PendingNav.Action == DefAction::SwitchToDef) {
+                g_DefWorkspace.ShowDefsMode = true;
+                g_DefWorkspace.SelectedType = g_DefWorkspace.PendingNav.TargetType;
+                g_DefWorkspace.SelectedEntryIndex = g_DefWorkspace.PendingNav.TargetIndex;
+                LoadDefContent(g_DefWorkspace.CategorizedDefs[g_DefWorkspace.PendingNav.TargetType][g_DefWorkspace.PendingNav.TargetIndex]);
+            }
+            else if (g_DefWorkspace.PendingNav.Action == DefAction::SwitchToHeader) {
+                g_DefWorkspace.ShowDefsMode = false;
+                g_DefWorkspace.SelectedEnumIndex = g_DefWorkspace.PendingNav.TargetIndex;
+                LoadHeaderContent(g_DefWorkspace.AllEnums[g_DefWorkspace.PendingNav.TargetIndex]);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }

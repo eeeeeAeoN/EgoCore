@@ -1,19 +1,44 @@
 #pragma once
 #include "imgui.h"
 #include "DefBackend.h"
+#include "ConfigBackend.h" 
 
 static void DrawDefTab() {
     static float leftPaneWidth = 350.0f;
     if (leftPaneWidth < 50.0f) leftPaneWidth = 50.0f;
     if (leftPaneWidth > ImGui::GetWindowWidth() - 100.0f) leftPaneWidth = ImGui::GetWindowWidth() - 100.0f;
 
-    // State for deletion
+    // States
     static DefEntry entryToDeleteCopy;
     static bool triggerDeletePopup = false;
-
-    // State for adding
     static std::string typeToAddPending = "";
     static bool triggerAddPopup = false;
+
+    // Helpers
+    auto RequestLoadDef = [&](const std::string& type, int index) {
+        if (g_DefWorkspace.IsDirty() && g_AppConfig.ShowUnsavedChangesWarning) {
+            g_DefWorkspace.PendingNav = { DefAction::SwitchToDef, type, index };
+            g_DefWorkspace.TriggerUnsavedPopup = true;
+        }
+        else {
+            g_DefWorkspace.ShowDefsMode = true;
+            g_DefWorkspace.SelectedType = type;
+            g_DefWorkspace.SelectedEntryIndex = index;
+            LoadDefContent(g_DefWorkspace.CategorizedDefs[type][index]);
+        }
+        };
+
+    auto RequestLoadHeader = [&](int index) {
+        if (g_DefWorkspace.IsDirty() && g_AppConfig.ShowUnsavedChangesWarning) {
+            g_DefWorkspace.PendingNav = { DefAction::SwitchToHeader, "", index };
+            g_DefWorkspace.TriggerUnsavedPopup = true;
+        }
+        else {
+            g_DefWorkspace.ShowDefsMode = false;
+            g_DefWorkspace.SelectedEnumIndex = index;
+            LoadHeaderContent(g_DefWorkspace.AllEnums[index]);
+        }
+        };
 
     if (!g_DefWorkspace.IsLoaded) {
         ImGui::TextDisabled("No Definitions loaded.");
@@ -27,13 +52,12 @@ static void DrawDefTab() {
 
             // --- TAB 1: DEFINITIONS ---
             if (ImGui::BeginTabItem("Definitions")) {
+                g_DefWorkspace.ShowDefsMode = true;
                 ImGui::BeginChild("DefLeftPane", ImVec2(leftPaneWidth, 0), true);
 
-                // --- FOLDER / CONTEXT SELECTOR ---
-                // This mimics the Bank Explorer's sub-bank selection
                 if (!g_DefWorkspace.Contexts.empty()) {
                     DefContext& current = g_DefWorkspace.Contexts[g_DefWorkspace.ActiveContextIndex];
-                    ImGui::SetNextItemWidth(-FLT_MIN); // Full width
+                    ImGui::SetNextItemWidth(-FLT_MIN);
                     if (ImGui::BeginCombo("##defcontext", current.Name.c_str())) {
                         for (int i = 0; i < g_DefWorkspace.Contexts.size(); i++) {
                             bool isSelected = (g_DefWorkspace.ActiveContextIndex == i);
@@ -47,22 +71,18 @@ static void DrawDefTab() {
                     }
                     ImGui::Separator();
                 }
-                // ---------------------------------
 
-                // Keyboard Nav (Unchanged)
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
                     if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
-                        g_DefWorkspace.SelectedEntryIndex--;
-                        if (g_DefWorkspace.SelectedEntryIndex < 0) g_DefWorkspace.SelectedEntryIndex = 0;
-                        if (!g_DefWorkspace.SelectedType.empty())
-                            LoadDefContent(g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType][g_DefWorkspace.SelectedEntryIndex]);
+                        int newIdx = g_DefWorkspace.SelectedEntryIndex - 1;
+                        if (newIdx >= 0 && !g_DefWorkspace.SelectedType.empty())
+                            RequestLoadDef(g_DefWorkspace.SelectedType, newIdx);
                     }
                     if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
                         if (!g_DefWorkspace.SelectedType.empty()) {
                             int max = (int)g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType].size() - 1;
-                            g_DefWorkspace.SelectedEntryIndex++;
-                            if (g_DefWorkspace.SelectedEntryIndex > max) g_DefWorkspace.SelectedEntryIndex = max;
-                            LoadDefContent(g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType][g_DefWorkspace.SelectedEntryIndex]);
+                            if (g_DefWorkspace.SelectedEntryIndex < max)
+                                RequestLoadDef(g_DefWorkspace.SelectedType, g_DefWorkspace.SelectedEntryIndex + 1);
                         }
                     }
                 }
@@ -74,7 +94,6 @@ static void DrawDefTab() {
                 ImGui::Separator();
 
                 std::string typeToAdd = "";
-
                 for (auto& [type, entries] : g_DefWorkspace.CategorizedDefs) {
                     bool showFolder = !hasFilter;
                     if (hasFilter) {
@@ -92,16 +111,10 @@ static void DrawDefTab() {
                     if (!showFolder) continue;
                     if (hasFilter) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
-                    // --- ADD BUTTON ---
                     ImGui::PushID(type.c_str());
                     if (ImGui::SmallButton("+")) {
-                        if (g_DefWorkspace.ShowAddConfirm) {
-                            typeToAddPending = type;
-                            triggerAddPopup = true;
-                        }
-                        else {
-                            typeToAdd = type;
-                        }
+                        if (g_AppConfig.ShowAddConfirm) { typeToAddPending = type; triggerAddPopup = true; }
+                        else { typeToAdd = type; }
                     }
                     ImGui::PopID();
                     ImGui::SameLine();
@@ -114,111 +127,57 @@ static void DrawDefTab() {
                                 if (n.find(filterLower) == std::string::npos) continue;
                             }
 
-                            // --- RED DELETE BUTTON ---
                             ImGui::PushID((type + std::to_string(k)).c_str());
-
                             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
                             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
                             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-
                             if (ImGui::SmallButton("-")) {
-                                if (g_DefWorkspace.ShowDeleteConfirm) {
-                                    entryToDeleteCopy = entries[k];
-                                    triggerDeletePopup = true;
-                                }
-                                else {
-                                    DeleteDefEntry(entries[k]);
-                                    ImGui::PopStyleColor(3);
-                                    ImGui::PopID();
-                                    ImGui::TreePop();
-                                    ImGui::EndChild();
-                                    ImGui::EndTabItem();
-                                    ImGui::EndTabBar();
-                                    return;
-                                }
+                                if (g_AppConfig.ShowDeleteConfirm) { entryToDeleteCopy = entries[k]; triggerDeletePopup = true; }
+                                else { DeleteDefEntry(entries[k]); ImGui::PopStyleColor(3); ImGui::PopID(); ImGui::TreePop(); ImGui::EndChild(); ImGui::EndTabItem(); ImGui::EndTabBar(); return; }
                             }
                             ImGui::PopStyleColor(3);
                             ImGui::PopID();
-                            // -------------------------
 
                             ImGui::SameLine();
 
                             std::string label = entries[k].Name + "##" + type + std::to_string(k);
                             bool isSelected = (g_DefWorkspace.SelectedType == type && g_DefWorkspace.SelectedEntryIndex == k);
                             if (ImGui::Selectable(label.c_str(), isSelected)) {
-                                g_DefWorkspace.SelectedType = type;
-                                g_DefWorkspace.SelectedEntryIndex = k;
-                                LoadDefContent(entries[k]);
+                                RequestLoadDef(type, k);
                             }
                         }
                         ImGui::TreePop();
                     }
                 }
-
                 if (!typeToAdd.empty()) CreateNewDef(typeToAdd);
 
-                // --- POPUP HANDLERS ---
-
-                // 1. Delete Modal
-                if (triggerDeletePopup) {
-                    ImGui::OpenPopup("DeleteConfirmation");
-                    triggerDeletePopup = false;
-                }
+                if (triggerDeletePopup) { ImGui::OpenPopup("DeleteConfirmation"); triggerDeletePopup = false; }
                 if (ImGui::BeginPopupModal("DeleteConfirmation", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
                     ImGui::Text("Do you want to delete '%s'?", entryToDeleteCopy.Name.c_str());
-                    ImGui::TextDisabled("This action permanently removes the text block.");
                     ImGui::Separator();
-
-                    static bool dontShowDeleteAgain = false;
-                    ImGui::Checkbox("Don't show this message again", &dontShowDeleteAgain);
-
-                    ImGui::Dummy(ImVec2(0, 10));
-
-                    if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
-                        if (dontShowDeleteAgain) g_DefWorkspace.ShowDeleteConfirm = false;
-                        DeleteDefEntry(entryToDeleteCopy);
-                        ImGui::CloseCurrentPopup();
+                    static bool dontShowDelete = false; ImGui::Checkbox("Don't show again", &dontShowDelete);
+                    if (ImGui::Button("Yes", ImVec2(100, 0))) {
+                        if (dontShowDelete) { g_AppConfig.ShowDeleteConfirm = false; SaveConfig(); }
+                        DeleteDefEntry(entryToDeleteCopy); ImGui::CloseCurrentPopup();
                     }
-                    ImGui::SetItemDefaultFocus();
-                    ImGui::SameLine();
-                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                        ImGui::CloseCurrentPopup();
-                    }
+                    ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(100, 0))) ImGui::CloseCurrentPopup();
                     ImGui::EndPopup();
                 }
 
-                // 2. Add Modal
-                if (triggerAddPopup) {
-                    ImGui::OpenPopup("AddConfirmation");
-                    triggerAddPopup = false;
-                }
+                if (triggerAddPopup) { ImGui::OpenPopup("AddConfirmation"); triggerAddPopup = false; }
                 if (ImGui::BeginPopupModal("AddConfirmation", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::Text("Create a new definition of type '%s'?", typeToAddPending.c_str());
+                    ImGui::Text("Create definition of type '%s'?", typeToAddPending.c_str());
                     ImGui::Separator();
-
-                    static bool dontShowAddAgain = false;
-                    ImGui::Checkbox("Don't show this message again", &dontShowAddAgain);
-
-                    ImGui::Dummy(ImVec2(0, 10));
-
-                    if (ImGui::Button("Yes, Create", ImVec2(120, 0))) {
-                        if (dontShowAddAgain) g_DefWorkspace.ShowAddConfirm = false;
-                        CreateNewDef(typeToAddPending);
-                        typeToAddPending = "";
-                        ImGui::CloseCurrentPopup();
+                    static bool dontShowAdd = false; ImGui::Checkbox("Don't show again", &dontShowAdd);
+                    if (ImGui::Button("Yes", ImVec2(100, 0))) {
+                        if (dontShowAdd) { g_AppConfig.ShowAddConfirm = false; SaveConfig(); }
+                        CreateNewDef(typeToAddPending); typeToAddPending = ""; ImGui::CloseCurrentPopup();
                     }
-                    ImGui::SetItemDefaultFocus();
-                    ImGui::SameLine();
-                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                        typeToAddPending = "";
-                        ImGui::CloseCurrentPopup();
-                    }
+                    ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(100, 0))) { typeToAddPending = ""; ImGui::CloseCurrentPopup(); }
                     ImGui::EndPopup();
                 }
-                // ---------------------------------
 
                 ImGui::EndChild();
-
                 ImGui::SameLine();
                 ImGui::InvisibleButton("vsplitterDef", ImVec2(4.0f, -1.0f));
                 if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -227,27 +186,20 @@ static void DrawDefTab() {
 
                 ImGui::BeginChild("DefRightPane", ImVec2(0, 0), true);
                 if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1) {
-                    // Check bounds again as reload might have happened
                     if (g_DefWorkspace.CategorizedDefs.count(g_DefWorkspace.SelectedType) &&
                         g_DefWorkspace.SelectedEntryIndex < g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType].size()) {
 
                         auto& entries = g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType];
                         DefEntry& entry = entries[g_DefWorkspace.SelectedEntryIndex];
-
                         ImGui::Text("%s", entry.Name.c_str());
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("| %s", entry.SourceFile.c_str());
+                        ImGui::SameLine(); ImGui::TextDisabled("| %s", entry.SourceFile.c_str());
 
-                        bool isDirty = (g_DefWorkspace.Editor.GetText() != g_DefWorkspace.OriginalContent);
-                        if (isDirty) {
+                        if (g_DefWorkspace.IsDirty()) {
                             ImGui::SameLine();
                             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-                            if (ImGui::Button("SAVE CHANGES")) {
-                                SaveDefEntry(entry);
-                            }
+                            if (ImGui::Button("SAVE CHANGES")) SaveDefEntry(entry);
                             ImGui::PopStyleColor();
                         }
-
                         ImGui::Separator();
 
                         ImGuiIO& io = ImGui::GetIO();
@@ -257,7 +209,6 @@ static void DrawDefTab() {
                                 if (g_DefWorkspace.IsSearchOpen) ImGui::SetKeyboardFocusHere(0);
                             }
                         }
-
                         if (g_DefWorkspace.IsSearchOpen) {
                             ImGui::SetNextItemWidth(200);
                             static bool needsRefocus = false;
@@ -271,6 +222,10 @@ static void DrawDefTab() {
                             ImGui::Separator();
                         }
 
+                        if (io.KeyCtrl && io.MouseWheel != 0.0f && ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
+                            float step = (io.MouseWheel > 0) ? 0.2f : -0.2f;
+                            g_DefWorkspace.EditorFontScale = std::clamp(g_DefWorkspace.EditorFontScale + step, 0.5f, 3.0f);
+                        }
                         extern ImFont* g_EditorFont;
                         ImFont* fontToUse = g_EditorFont ? g_EditorFont : ImGui::GetFont();
                         float oldScale = fontToUse->Scale;
@@ -280,21 +235,32 @@ static void DrawDefTab() {
                         ImGui::PopFont();
                         fontToUse->Scale = oldScale;
 
-                        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-                            SaveDefEntry(entry);
-                        }
+                        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) SaveDefEntry(entry);
                     }
-                }
-                else {
-                    ImGui::Text("Select a Definition to edit.");
                 }
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
 
-            // --- TAB 2: HEADERS (Unchanged) ---
+            // --- TAB 2: HEADERS ---
             if (ImGui::BeginTabItem("Headers")) {
+                g_DefWorkspace.ShowDefsMode = false;
                 ImGui::BeginChild("HeadLeftPane", ImVec2(leftPaneWidth, 0), true);
+
+                // --- NEW KEYBOARD NAVIGATION LOGIC ---
+                if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+                        if (g_DefWorkspace.SelectedEnumIndex > 0) {
+                            RequestLoadHeader(g_DefWorkspace.SelectedEnumIndex - 1);
+                        }
+                    }
+                    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+                        if (g_DefWorkspace.SelectedEnumIndex < (int)g_DefWorkspace.AllEnums.size() - 1) {
+                            RequestLoadHeader(g_DefWorkspace.SelectedEnumIndex + 1);
+                        }
+                    }
+                }
+                // -------------------------------------
 
                 ImGui::Text("Header Filter");
                 ImGui::InputText("##hFilter", g_DefWorkspace.HeaderFilter, 128);
@@ -312,15 +278,13 @@ static void DrawDefTab() {
 
                         bool isSelected = (g_DefWorkspace.SelectedEnumIndex == i);
                         if (ImGui::Selectable(g_DefWorkspace.AllEnums[i].Name.c_str(), isSelected)) {
-                            g_DefWorkspace.SelectedEnumIndex = i;
-                            LoadHeaderContent(g_DefWorkspace.AllEnums[i]);
+                            RequestLoadHeader(i);
                         }
                         if (isSelected) ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndListBox();
                 }
                 ImGui::EndChild();
-
                 ImGui::SameLine();
                 ImGui::InvisibleButton("vsplitterHead", ImVec2(4.0f, -1.0f));
                 if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -330,21 +294,15 @@ static void DrawDefTab() {
                 ImGui::BeginChild("HeadRightPane", ImVec2(0, 0), true);
                 if (g_DefWorkspace.SelectedEnumIndex != -1 && g_DefWorkspace.SelectedEnumIndex < g_DefWorkspace.AllEnums.size()) {
                     EnumEntry& entry = g_DefWorkspace.AllEnums[g_DefWorkspace.SelectedEnumIndex];
-
                     ImGui::Text("%s", entry.Name.c_str());
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("| %s", entry.FilePath.c_str());
+                    ImGui::SameLine(); ImGui::TextDisabled("| %s", entry.FilePath.c_str());
 
-                    bool isDirty = (g_DefWorkspace.Editor.GetText() != g_DefWorkspace.OriginalContent);
-                    if (isDirty) {
+                    if (g_DefWorkspace.IsDirty()) {
                         ImGui::SameLine();
                         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-                        if (ImGui::Button("SAVE CHANGES")) {
-                            SaveHeaderEntry(entry);
-                        }
+                        if (ImGui::Button("SAVE CHANGES")) SaveHeaderEntry(entry);
                         ImGui::PopStyleColor();
                     }
-
                     ImGui::Separator();
 
                     ImGuiIO& io = ImGui::GetIO();
@@ -354,7 +312,6 @@ static void DrawDefTab() {
                             if (g_DefWorkspace.IsSearchOpen) ImGui::SetKeyboardFocusHere(0);
                         }
                     }
-
                     if (g_DefWorkspace.IsSearchOpen) {
                         ImGui::SetNextItemWidth(200);
                         static bool needsRefocus = false;
@@ -368,28 +325,24 @@ static void DrawDefTab() {
                         ImGui::Separator();
                     }
 
+                    if (io.KeyCtrl && io.MouseWheel != 0.0f && ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
+                        float step = (io.MouseWheel > 0) ? 0.2f : -0.2f;
+                        g_DefWorkspace.EditorFontScale = std::clamp(g_DefWorkspace.EditorFontScale + step, 0.5f, 3.0f);
+                    }
                     extern ImFont* g_EditorFont;
                     ImFont* fontToUse = g_EditorFont ? g_EditorFont : ImGui::GetFont();
                     float oldScale = fontToUse->Scale;
                     fontToUse->Scale = g_DefWorkspace.EditorFontScale;
-
                     ImGui::PushFont(fontToUse);
                     g_DefWorkspace.Editor.Render("HeaderEditor");
                     ImGui::PopFont();
                     fontToUse->Scale = oldScale;
 
-                    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-                        SaveHeaderEntry(entry);
-                    }
-
-                }
-                else {
-                    ImGui::Text("Select a Header to view.");
+                    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) SaveHeaderEntry(entry);
                 }
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
-
             ImGui::EndTabBar();
         }
     }

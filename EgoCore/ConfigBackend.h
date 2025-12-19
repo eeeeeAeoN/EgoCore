@@ -12,6 +12,11 @@ struct AppConfig {
     std::string GameRootPath;
     std::vector<std::string> AutoLoadBanks;
     bool IsConfigured = false;
+
+    // --- NEW FLAGS (Required for Warnings) ---
+    bool ShowDeleteConfirm = true;
+    bool ShowAddConfirm = true;
+    bool ShowUnsavedChangesWarning = true;
 };
 
 static AppConfig g_AppConfig;
@@ -31,10 +36,17 @@ static const std::vector<std::string> DEFAULT_BANKS = {
 static void SaveConfig() {
     std::ofstream file(CONFIG_FILENAME);
     if (file.is_open()) {
+        // Save Paths (Original Logic)
         file << "Root=" << g_AppConfig.GameRootPath << "\n";
         for (const auto& path : g_AppConfig.AutoLoadBanks) {
             file << "Bank=" << path << "\n";
         }
+
+        // Save Flags (New Logic)
+        file << "ShowDeleteConfirm=" << (g_AppConfig.ShowDeleteConfirm ? "1" : "0") << "\n";
+        file << "ShowAddConfirm=" << (g_AppConfig.ShowAddConfirm ? "1" : "0") << "\n";
+        file << "ShowUnsavedChangesWarning=" << (g_AppConfig.ShowUnsavedChangesWarning ? "1" : "0") << "\n";
+
         file.close();
     }
 }
@@ -44,9 +56,17 @@ static void LoadConfig() {
     g_AppConfig.AutoLoadBanks.clear();
     g_AppConfig.IsConfigured = false;
 
+    // Set defaults in case config file is old
+    g_AppConfig.ShowDeleteConfirm = true;
+    g_AppConfig.ShowAddConfirm = true;
+    g_AppConfig.ShowUnsavedChangesWarning = true;
+
     if (file.is_open()) {
         std::string line;
         while (std::getline(file, line)) {
+            // Trim Windows line endings
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+
             if (line.find("Root=") == 0) {
                 g_AppConfig.GameRootPath = line.substr(5);
                 if (!g_AppConfig.GameRootPath.empty() && fs::exists(g_AppConfig.GameRootPath)) {
@@ -56,6 +76,16 @@ static void LoadConfig() {
             else if (line.find("Bank=") == 0) {
                 std::string path = line.substr(5);
                 if (!path.empty()) g_AppConfig.AutoLoadBanks.push_back(path);
+            }
+            // Parse Flags
+            else if (line.find("ShowDeleteConfirm=") == 0) {
+                g_AppConfig.ShowDeleteConfirm = (line.substr(18) == "1");
+            }
+            else if (line.find("ShowAddConfirm=") == 0) {
+                g_AppConfig.ShowAddConfirm = (line.substr(15) == "1");
+            }
+            else if (line.find("ShowUnsavedChangesWarning=") == 0) {
+                g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
             }
         }
         file.close();

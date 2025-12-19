@@ -3,6 +3,8 @@
 #include "imgui_impl_dx11.h"
 #include <d3d11.h>
 #include <tchar.h>
+#include <filesystem>
+#include <iostream>
 #include "BankExplorer.h"
 #include "resource.h"
 
@@ -47,7 +49,6 @@ int main(int, char**) {
         g_EditorFont = io.Fonts->AddFontFromFileTTF("CascadiaMono.ttf", 18.0f);
     }
     else {
-        std::cout << "Warning: CascadiaMono.ttf not found. Using default." << std::endl;
         g_EditorFont = io.Fonts->AddFontDefault();
     }
 
@@ -103,9 +104,41 @@ bool CreateDeviceD3D(HWND hWnd) {
     if (D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext) != S_OK) return false;
     CreateRenderTarget(); return true;
 }
-
 void CleanupDeviceD3D() { CleanupRenderTarget(); if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; } if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; } if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; } }
 void CreateRenderTarget() { ID3D11Texture2D* pBackBuffer; g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer)); g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView); pBackBuffer->Release(); }
 void CleanupRenderTarget() { if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; } }
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) { if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true; switch (msg) { case WM_SIZE: if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED) { CleanupRenderTarget(); g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0); CreateRenderTarget(); } return 0; case WM_SYSCOMMAND: if ((wParam & 0xfff0) == SC_KEYMENU) return 0; break; case WM_DESTROY: ::PostQuitMessage(0); return 0; } return ::DefWindowProcW(hWnd, msg, wParam, lParam); }
+
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
+
+    switch (msg) {
+    case WM_SIZE:
+        if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED) {
+            CleanupRenderTarget();
+            g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
+            CreateRenderTarget();
+        }
+        return 0;
+
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        break;
+
+    case WM_CLOSE:
+        // Check global config instead of workspace
+        if (g_DefWorkspace.IsDirty() && g_AppConfig.ShowUnsavedChangesWarning) {
+            g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
+            g_DefWorkspace.TriggerUnsavedPopup = true;
+            return 0;
+        }
+        ::DestroyWindow(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        ::PostQuitMessage(0);
+        return 0;
+    }
+    return ::DefWindowProcW(hWnd, msg, wParam, lParam);
+}
