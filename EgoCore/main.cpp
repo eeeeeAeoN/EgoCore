@@ -13,6 +13,7 @@ ID3D11Device* g_pd3dDevice = nullptr;
 ID3D11DeviceContext* g_pd3dDeviceContext = nullptr;
 IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
+ImFont* g_EditorFont = nullptr;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
@@ -41,6 +42,15 @@ int main(int, char**) {
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+
+    if (std::filesystem::exists("CascadiaMono.ttf")) {
+        g_EditorFont = io.Fonts->AddFontFromFileTTF("CascadiaMono.ttf", 18.0f);
+    }
+    else {
+        // Fallback if you forget to copy the file
+        std::cout << "Warning: CascadiaMono.ttf not found. Using default." << std::endl;
+        g_EditorFont = io.Fonts->AddFontDefault();
+    }
 
     bool done = false;
     while (!done) {

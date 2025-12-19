@@ -34,6 +34,12 @@
     <Filter Include="Source Files\Text">
       <UniqueIdentifier>{cad63c4e-b97e-4de6-bf67-b74a204b5d1a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Definitions">
+      <UniqueIdentifier>{a21ddcf3-3de4-4075-9580-748e23e3ff2e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\TextEditor">
+      <UniqueIdentifier>{fecb2acd-d396-4cad-935b-546cf88fed10}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -108,6 +114,18 @@
     <ClInclude Include="Text\TextProperties.h">
       <Filter>Source Files\Text</Filter>
     </ClInclude>
+    <ClInclude Include="DefBackend.h">
+      <Filter>Source Files\Definitions</Filter>
+    </ClInclude>
+    <ClInclude Include="TextEditor\TextEditor.h">
+      <Filter>Source Files\TextEditor</Filter>
+    </ClInclude>
+    <ClInclude Include="DefExplorer.h">
+      <Filter>Source Files\Definitions</Filter>
+    </ClInclude>
+    <ClInclude Include="ConfigBackend.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">
@@ -133,6 +151,9 @@
     </ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="TextEditor\TextEditor.cpp">
+      <Filter>Source Files\TextEditor</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
