@@ -17,16 +17,15 @@ struct AppConfig {
 static AppConfig g_AppConfig;
 static const std::string CONFIG_FILENAME = "egocore_config.ini";
 
-// Default list as per your request
 static const std::vector<std::string> DEFAULT_BANKS = {
     "\\Data\\graphics\\graphics.big",
     "\\Data\\graphics\\pc\\textures.big",
     "\\Data\\graphics\\pc\\frontend.big",
-    "\\Data\\graphics\\lang\\English\\text.big",
-    "\\Data\\graphics\\lang\\English\\fonts.big",
-    "\\Data\\graphics\\lang\\English\\dialogue.big",
-    "\\Data\\graphics\\misc\\pc\\effects.big",
-    "\\Data\\graphics\\shaders\\pc\\shaders.big"
+    "\\Data\\lang\\English\\text.big",
+    "\\Data\\lang\\English\\fonts.big",
+    "\\Data\\lang\\English\\dialogue.big",
+    "\\Data\\misc\\pc\\effects.big",
+    "\\Data\\shaders\\pc\\shaders.big"
 };
 
 static void SaveConfig() {
@@ -66,10 +65,8 @@ static void LoadConfig() {
 static void PerformAutoLoad() {
     if (!g_AppConfig.IsConfigured) return;
 
-    // 1. Load Defs
     LoadDefsFromFolder(g_AppConfig.GameRootPath);
 
-    // 2. Load Banks
     for (const auto& relativePath : g_AppConfig.AutoLoadBanks) {
         std::string fullPath = g_AppConfig.GameRootPath + relativePath;
         if (fs::exists(fullPath)) {

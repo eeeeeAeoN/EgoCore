@@ -2,7 +2,7 @@
 #include "imgui.h"
 #include "BankBackend.h"
 #include "DefExplorer.h"
-#include "ConfigBackend.h" // New Include
+#include "ConfigBackend.h"
 #include "MeshProperties.h"
 #include "AnimProperties.h"
 #include "TextureProperties.h"
@@ -13,11 +13,10 @@
 #include <vector>
 #include <string>
 
-// --- HELPER: Init wrapper ---
+
 static bool g_HasInitialized = false;
 
-// --- Helper Functions for Bank Management ---
-// (Keeping your existing SelectEntry, SaveEntry, etc. unchanged)
+
 static void SelectEntry(LoadedBank* bank, int idx) {
     if (!bank || idx < 0 || idx >= (int)bank->Entries.size()) return;
 
@@ -120,7 +119,6 @@ static std::string OpenFileDialog() {
     return "";
 }
 
-// --- TAB 1: BANK UI CONTENT ---
 static void DrawBankTab() {
     static float bankSidebarWidth = 300.0f;
     if (bankSidebarWidth < 50.0f) bankSidebarWidth = 50.0f;
@@ -247,10 +245,8 @@ static void DrawBankTab() {
     }
 }
 
-// --- MAIN UI RENDER ---
 static void DrawBankExplorer() {
 
-    // --- 1. STARTUP CHECK ---
     if (!g_HasInitialized) {
         LoadConfig();
         if (g_AppConfig.IsConfigured) {
@@ -259,10 +255,11 @@ static void DrawBankExplorer() {
         g_HasInitialized = true;
     }
 
-    // --- 2. SETUP SCREEN (If Config Missing) ---
     if (!g_AppConfig.IsConfigured) {
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(400, 200));
+
+        ImGui::SetNextWindowFocus();
 
         if (ImGui::Begin("Welcome to EgoCore", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove)) {
             ImGui::Text("Welcome to EgoCore!");
@@ -273,14 +270,14 @@ static void DrawBankExplorer() {
             ImGui::Dummy(ImVec2(0, 20));
 
             if (ImGui::Button("Select Game Folder", ImVec2(-1, 40))) {
-                std::string root = OpenFolderDialog(); // From DefBackend.h
+                std::string root = OpenFolderDialog();
                 if (!root.empty()) {
                     InitializeSetup(root);
                 }
             }
         }
         ImGui::End();
-        return; // Stop rendering main UI until configured
+        return;
     }
 
     // --- 3. MAIN APP UI ---

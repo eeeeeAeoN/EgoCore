@@ -47,7 +47,6 @@ int main(int, char**) {
         g_EditorFont = io.Fonts->AddFontFromFileTTF("CascadiaMono.ttf", 18.0f);
     }
     else {
-        // Fallback if you forget to copy the file
         std::cout << "Warning: CascadiaMono.ttf not found. Using default." << std::endl;
         g_EditorFont = io.Fonts->AddFontDefault();
     }

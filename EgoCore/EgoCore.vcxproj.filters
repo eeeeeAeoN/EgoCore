@@ -114,17 +114,17 @@
     <ClInclude Include="Text\TextProperties.h">
       <Filter>Source Files\Text</Filter>
     </ClInclude>
-    <ClInclude Include="DefBackend.h">
-      <Filter>Source Files\Definitions</Filter>
-    </ClInclude>
     <ClInclude Include="TextEditor\TextEditor.h">
       <Filter>Source Files\TextEditor</Filter>
     </ClInclude>
-    <ClInclude Include="DefExplorer.h">
-      <Filter>Source Files\Definitions</Filter>
-    </ClInclude>
     <ClInclude Include="ConfigBackend.h">
       <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Definitions\DefBackend.h">
+      <Filter>Source Files\Definitions</Filter>
+    </ClInclude>
+    <ClInclude Include="Definitions\DefExplorer.h">
+      <Filter>Source Files\Definitions</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

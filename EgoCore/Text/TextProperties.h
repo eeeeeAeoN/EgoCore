@@ -15,7 +15,6 @@ inline std::string WStringToString(const std::wstring& wstr) {
     return strTo;
 }
 
-// Helper to peek into the bank and get the text content for a specific ID
 inline std::string FetchTextContent(LoadedBank* bank, uint32_t id) {
     if (!bank) return "";
 
@@ -43,12 +42,10 @@ inline std::string FetchTextContent(LoadedBank* bank, uint32_t id) {
     return "[ID Not Found]";
 }
 
-// [NEW] Run this ONCE when selecting a group, not every frame!
 inline void ResolveGroupMetadata(LoadedBank* bank) {
     if (!g_TextParser.IsParsed || !g_TextParser.IsGroup || !bank) return;
 
     for (auto& item : g_TextParser.GroupData.Items) {
-        // Find Name
         bool found = false;
         for (const auto& entry : bank->Entries) {
             if (entry.ID == item.ID) {
@@ -58,8 +55,6 @@ inline void ResolveGroupMetadata(LoadedBank* bank) {
             }
         }
         if (!found) item.CachedName = "Unknown ID";
-
-        // Fetch Content (Expensive)
         if (found) {
             item.CachedContent = FetchTextContent(bank, item.ID);
         }
@@ -75,7 +70,6 @@ inline void DrawTextProperties() {
         return;
     }
 
-    // --- CASE A: GROUP ENTRY (Type 1) ---
     if (g_TextParser.IsGroup) {
         const auto& group = g_TextParser.GroupData;
         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "GROUP: Contains %zu entries", group.Items.size());
@@ -87,7 +81,6 @@ inline void DrawTextProperties() {
             ImGui::TableSetupColumn("Content Preview", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
 
-            // [FIX] Just display cached data, no calculations here
             for (const auto& item : group.Items) {
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0); ImGui::Text("%u", item.ID);
@@ -99,7 +92,6 @@ inline void DrawTextProperties() {
         return;
     }
 
-    // --- CASE B: TEXT ENTRY (Type 0) ---
     const auto& e = g_TextParser.TextData;
 
     ImGui::TextColored(ImVec4(0.5f, 1.0f, 1.0f, 1.0f), "ID: %s", e.Identifier.c_str());

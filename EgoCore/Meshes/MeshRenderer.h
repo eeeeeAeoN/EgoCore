@@ -247,21 +247,17 @@ public:
     ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false) {
         if (!VS || !VBuffer) return nullptr;
 
-        // Camera Controls
         if (ImGui::IsWindowHovered()) {
             if (ImGui::IsMouseDragging(1)) { CamRotY += ImGui::GetIO().MouseDelta.x * 0.01f; CamRotX += ImGui::GetIO().MouseDelta.y * 0.01f; }
             if (ImGui::IsMouseDragging(2)) { CamPan.x += ImGui::GetIO().MouseDelta.x * (CamDist * 0.002f); CamPan.y -= ImGui::GetIO().MouseDelta.y * (CamDist * 0.002f); }
             CamDist -= ImGui::GetIO().MouseWheel * CamDist * 0.1f; if (CamDist < 0.1f) CamDist = 0.1f;
         }
 
-        // [FIX] Green Background for Physics, Blue-Grey for Standard
         float bgColor[4];
         if (isPhysics) {
-            // Dark Green (Physics Mode)
-            bgColor[0] = 0.05f; bgColor[1] = 0.25f; bgColor[2] = 0.1f; bgColor[3] = 1.0f;
+            bgColor[0] = 0.15f; bgColor[1] = 0.12f; bgColor[2] = 0.1f; bgColor[3] = 1.0f;
         }
         else {
-            // Dark Slate (Standard Mode)
             bgColor[0] = 0.1f; bgColor[1] = 0.12f; bgColor[2] = 0.15f; bgColor[3] = 1.0f;
         }
 
@@ -304,8 +300,6 @@ public:
 
         for (const auto& batch : Batches) {
             ID3D11ShaderResourceView* tex = DefaultWhiteSRV;
-            // Physics meshes usually don't have material textures mapped this way, 
-            // so they will default to White (which looks Green due to lighting/background context)
             if (batch.MaterialIndex >= 0 && batch.MaterialIndex < MaterialTextures.size()) {
                 if (MaterialTextures[batch.MaterialIndex]) tex = MaterialTextures[batch.MaterialIndex];
             }
@@ -325,8 +319,6 @@ public:
         return SRV;
     }
 
-    // [NEW] Transform a 3D Point to 2D Screen Space
-    // Returns true if point is in front of camera
     bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH) {
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), screenW / screenH, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
@@ -335,18 +327,15 @@ public:
 
         XMMATRIX wvp = world * view * proj;
         XMVECTOR v = XMVectorSet(worldPos.x, worldPos.y, worldPos.z, 1.0f);
-        XMVECTOR vClip = XMVector3TransformCoord(v, wvp); // This does the Perspective Divide ( / w)
+        XMVECTOR vClip = XMVector3TransformCoord(v, wvp);
 
         float x = XMVectorGetX(vClip);
         float y = XMVectorGetY(vClip);
         float z = XMVectorGetZ(vClip);
 
-        // If z > 1.0f or z < 0.0f, it's clipped
         if (z < 0.0f || z > 1.0f) return false;
-
-        // Map -1..1 to 0..Screen
         outPos.x = (x + 1.0f) * 0.5f * screenW;
-        outPos.y = (1.0f - y) * 0.5f * screenH; // Flip Y
+        outPos.y = (1.0f - y) * 0.5f * screenH;
         return true;
     }
 };

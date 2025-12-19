@@ -24,8 +24,8 @@
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="ConfigBackend.h" />
-    <ClInclude Include="DefBackend.h" />
-    <ClInclude Include="DefExplorer.h" />
+    <ClInclude Include="Definitions\DefBackend.h" />
+    <ClInclude Include="Definitions\DefExplorer.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />

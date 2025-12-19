@@ -7,6 +7,8 @@
 #include <sstream>
 #include <iostream>
 #include <algorithm>
+#include <regex>
+#include <set>
 #include <shlobj.h> 
 #include "TextEditor.h"
 
@@ -20,17 +22,26 @@ struct DefEntry {
     size_t EndOffset = 0;
 };
 
+struct EnumEntry {
+    std::string Name;
+    std::string FullContent;
+    std::string FilePath;
+};
+
 struct DefWorkspace {
     std::string RootPath;
     bool IsLoaded = false;
 
     std::map<std::string, std::vector<DefEntry>> CategorizedDefs;
-
     std::string SelectedType;
     int SelectedEntryIndex = -1;
     char FilterText[128] = "";
-    float EditorFontScale = 1.0f;
 
+    std::vector<EnumEntry> AllEnums;
+    int SelectedEnumIndex = -1;
+    char HeaderFilter[128] = "";
+
+    float EditorFontScale = 1.0f;
     bool IsSearchOpen = false;
     char SearchBuffer[128] = "";
     bool SearchCaseSensitive = false;
@@ -53,6 +64,54 @@ static std::string OpenFolderDialog() {
     LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
     if (pidl != 0) { SHGetPathFromIDListA(pidl, path); CoTaskMemFree(pidl); return std::string(path); }
     return "";
+}
+
+static void LoadHeadersFromDir(const std::string& rootPath) {
+    g_DefWorkspace.AllEnums.clear();
+    std::set<std::string> visitedFiles;
+
+    std::regex enumRegex(R"(enum\s+(\w+)\s*(\{[\s\S]*?\};))");
+
+    try {
+        if (!fs::exists(rootPath)) return;
+
+        for (const auto& entry : fs::recursive_directory_iterator(rootPath)) {
+            std::string pathStr = entry.path().string();
+            std::string pathLower = pathStr;
+            std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), ::tolower);
+
+            if (pathLower.find("devheaders") != std::string::npos) continue;
+            if (pathLower.find("retailheaders") != std::string::npos && pathLower.find("xbox") != std::string::npos) continue;
+
+            if (entry.path().extension() == ".h") {
+                if (visitedFiles.count(pathStr)) continue;
+                visitedFiles.insert(pathStr);
+
+                std::ifstream file(entry.path());
+                if (file.is_open()) {
+                    std::stringstream buffer;
+                    buffer << file.rdbuf();
+                    std::string content = buffer.str();
+
+                    auto words_begin = std::sregex_iterator(content.begin(), content.end(), enumRegex);
+                    auto words_end = std::sregex_iterator();
+
+                    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+                        std::smatch match = *i;
+                        EnumEntry newEnum;
+                        newEnum.Name = match[1].str();
+                        newEnum.FullContent = "enum " + newEnum.Name + "\n" + match[2].str();
+                        newEnum.FilePath = pathStr;
+                        g_DefWorkspace.AllEnums.push_back(newEnum);
+                    }
+                }
+            }
+        }
+    }
+    catch (...) {}
+
+    std::sort(g_DefWorkspace.AllEnums.begin(), g_DefWorkspace.AllEnums.end(),
+        [](const EnumEntry& a, const EnumEntry& b) { return a.Name < b.Name; });
 }
 
 static void ScanFileForDefs(const fs::path& filePath) {
@@ -95,17 +154,28 @@ static void LoadDefsFromFolder(const std::string& rootPath) {
     for (const auto& searchDir : searchPaths) {
         if (!fs::exists(searchDir)) continue;
         for (const auto& entry : fs::recursive_directory_iterator(searchDir)) {
+            std::string pathStr = entry.path().string();
+            std::string pathLower = pathStr;
+            std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), ::tolower);
+
+            if (pathLower.find("devheaders") != std::string::npos) continue;
+
             if (entry.is_regular_file()) {
                 std::string ext = entry.path().extension().string();
                 if (ext == ".def" || ext == ".tpl") {
-                    std::string fullPath = entry.path().string();
                     bool alreadyScanned = false;
-                    for (const auto& v : visitedPaths) { if (v == fullPath) { alreadyScanned = true; break; } }
-                    if (!alreadyScanned) { visitedPaths.push_back(fullPath); ScanFileForDefs(entry.path()); }
+                    for (const auto& v : visitedPaths) { if (v == pathStr) { alreadyScanned = true; break; } }
+                    if (!alreadyScanned) {
+                        visitedPaths.push_back(pathStr);
+                        ScanFileForDefs(entry.path());
+                    }
                 }
             }
         }
     }
+
+    LoadHeadersFromDir(rootPath);
+
     g_DefWorkspace.IsLoaded = true;
 }
 
@@ -134,36 +204,28 @@ static void LoadDefContent(DefEntry& entry) {
     g_DefWorkspace.Editor.SetText(buffer);
 }
 
-// --- YOUR EXACT SEARCH IMPLEMENTATION ---
 static void FindNextInEditor() {
     if (!g_DefWorkspace.IsLoaded) return;
-
     std::string query = g_DefWorkspace.SearchBuffer;
     if (query.empty()) return;
-
     auto lines = g_DefWorkspace.Editor.GetTextLines();
     auto cursor = g_DefWorkspace.Editor.GetCursorPosition();
-
     int startLine = cursor.mLine;
-    int startCol = cursor.mColumn + 1; // Start search from next character
+    int startCol = cursor.mColumn + 1;
 
-    // Case-insensitive helper
     auto charsMatch = [](char a, char b, bool caseSensitive) {
         if (caseSensitive) return a == b;
         return std::tolower(a) == std::tolower(b);
         };
 
-    // Search function
     auto searchInLine = [&](const std::string& line, size_t fromCol) -> int {
         if (fromCol >= line.length()) return -1;
         if (line.length() - fromCol < query.length()) return -1;
-
         for (size_t i = fromCol; i <= line.length() - query.length(); i++) {
             bool match = true;
             for (size_t j = 0; j < query.length(); j++) {
                 if (!charsMatch(line[i + j], query[j], g_DefWorkspace.SearchCaseSensitive)) {
-                    match = false;
-                    break;
+                    match = false; break;
                 }
             }
             if (match) return (int)i;
@@ -171,19 +233,14 @@ static void FindNextInEditor() {
         return -1;
         };
 
-    // Two-pass search
     for (int pass = 0; pass < 2; pass++) {
         int beginLine = (pass == 0) ? startLine : 0;
         int endLine = (pass == 0) ? (int)lines.size() : startLine + 1;
-
         for (int i = beginLine; i < endLine; i++) {
             if (i >= (int)lines.size()) continue;
-
             int searchFrom = (pass == 0 && i == startLine) ? startCol : 0;
             int foundCol = searchInLine(lines[i], searchFrom);
-
             if (foundCol != -1) {
-                // Just move cursor, no selection
                 TextEditor::Coordinates pos(i, foundCol);
                 g_DefWorkspace.Editor.SetCursorPosition(pos);
                 return;

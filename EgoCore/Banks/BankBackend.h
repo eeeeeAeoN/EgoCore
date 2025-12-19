@@ -12,7 +12,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <set>
-#include <memory> // For unique_ptr
+#include <memory>
 
 namespace fs = std::filesystem;
 
@@ -40,7 +40,6 @@ struct InternalBankInfo {
     uint32_t Align;
 };
 
-// [REFACTORED] Contains ALL state for a single open file
 struct LoadedBank {
     std::string FileName;
     std::string FullPath;
@@ -50,8 +49,7 @@ struct LoadedBank {
     std::vector<BankEntry> Entries;
     std::vector<int> FilteredIndices;
 
-    // Per-Tab State
-    std::unique_ptr<std::fstream> Stream; // Own file handle
+    std::unique_ptr<std::fstream> Stream;
     int SelectedEntryIndex = -1;
     int SelectedLOD = 0;
     char FilterText[128] = "";
@@ -61,21 +59,17 @@ struct LoadedBank {
     LoadedBank() {
         Stream = std::make_unique<std::fstream>();
     }
-    // Delete copy to protect unique_ptr stream
     LoadedBank(const LoadedBank&) = delete;
     LoadedBank& operator=(const LoadedBank&) = delete;
-    // Allow move
     LoadedBank(LoadedBank&&) = default;
     LoadedBank& operator=(LoadedBank&&) = default;
 };
 
-// Global Bank List (The "Tabs")
 static std::vector<LoadedBank> g_OpenBanks;
 static int g_ActiveBankIndex = -1;
 
 static std::string g_BankStatus = "Ready";
 
-// Global Parsers (These act as the "Viewers" for the active tab)
 static C3DMeshContent g_ActiveMeshContent;
 static CBBMParser g_BBMParser;
 static CTextureParser g_TextureParser;
@@ -209,13 +203,11 @@ inline void InitializeBank(LoadedBank& bank) {
 }
 
 inline void LoadBank(const std::string& path) {
-    // 1. Check Max Limit
     if (g_OpenBanks.size() >= 8) {
         g_BankStatus = "Limit reached (Max 8 Banks). Close one first.";
         return;
     }
 
-    // 2. Check Duplicates
     for (const auto& b : g_OpenBanks) {
         if (b.FullPath == path) {
             g_BankStatus = "Bank already open: " + b.FileName;
@@ -223,7 +215,6 @@ inline void LoadBank(const std::string& path) {
         }
     }
 
-    // 3. Create New Bank
     LoadedBank newBank;
     newBank.FullPath = path;
     newBank.FileName = fs::path(path).filename().string();
@@ -257,8 +248,8 @@ inline void LoadBank(const std::string& path) {
     try {
         newBank.Type = ResolveBankType(newBank.SubBanks);
         InitializeBank(newBank);
-        g_OpenBanks.push_back(std::move(newBank)); // Move into global vector
-        g_ActiveBankIndex = (int)g_OpenBanks.size() - 1; // Switch to new tab
+        g_OpenBanks.push_back(std::move(newBank));
+        g_ActiveBankIndex = (int)g_OpenBanks.size() - 1;
     }
     catch (const std::exception& e) {
         g_BankStatus = "Error: " + std::string(e.what());

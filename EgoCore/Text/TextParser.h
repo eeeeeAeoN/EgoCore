@@ -8,11 +8,10 @@ struct CTextTag {
     std::string Name;
 };
 
-// [NEW] Holds cached metadata for group items
 struct CTextGroupItem {
     uint32_t ID;
-    std::string CachedName;    // Populated after parse
-    std::string CachedContent; // Populated after parse
+    std::string CachedName;  
+    std::string CachedContent;
 };
 
 struct CTextEntry {
@@ -35,7 +34,6 @@ public:
     bool IsGroup = false;
     std::string DebugLog;
 
-    // Helper: Read Null-Terminated Wide String
     std::wstring ReadWString(const uint8_t* data, size_t& offset, size_t max) {
         std::wstring res;
         while (offset + 2 <= max) {
@@ -47,7 +45,6 @@ public:
         return res;
     }
 
-    // Helper: Read Presized String
     std::string ReadPresizedString(const uint8_t* data, size_t& offset, size_t max) {
         if (offset + 4 > max) return "";
         uint32_t len = *(uint32_t*)(data + offset);
@@ -58,7 +55,6 @@ public:
         return res;
     }
 
-    // Helper: Read Null-Terminated String
     std::string ReadNullTermString(const uint8_t* data, size_t& offset, size_t max) {
         std::string res;
         while (offset < max) {
@@ -83,7 +79,6 @@ public:
         const uint8_t* ptr = data.data();
 
         try {
-            // --- TYPE 1: GROUP ENTRY ---
             if (entryType == 1) {
                 IsGroup = true;
                 if (cursor + 4 <= size) {
@@ -95,16 +90,14 @@ public:
                         uint32_t id = *(uint32_t*)(ptr + cursor);
                         cursor += 4;
 
-                        // [FIX] Store in new Item struct
                         CTextGroupItem item;
                         item.ID = id;
-                        // Names/Content will be filled by ResolveGroupMetadata later
+
                         GroupData.Items.push_back(item);
                     }
                 }
                 IsParsed = true;
             }
-            // --- TYPE 0: TEXT ENTRY ---
             else {
                 IsGroup = false;
                 TextData.Content = ReadWString(ptr, cursor, size);

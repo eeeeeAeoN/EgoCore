@@ -10,18 +10,16 @@ extern ID3D11Device* g_pd3dDevice;
 
 static MeshRenderer g_MeshRenderer;
 static bool g_ShowWireframe = false;
-static bool g_ShowHelpers = false; // Toggle for Helper/Dummy overlay
+static bool g_ShowHelpers = false; 
 
-// Cache to prevent re-parsing the same texture multiple times per session
+
 static std::map<int, ID3D11ShaderResourceView*> g_MeshTextureCache;
 
-// Helper to load a texture by ID strictly from Textures bank
 inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
     if (textureID == -1) return nullptr;
     if (g_MeshTextureCache.count(textureID)) return g_MeshTextureCache[textureID];
 
     for (auto& bank : g_OpenBanks) {
-        // STRICTLY look in Textures bank only (as requested)
         if (bank.Type == EBankType::Textures) {
             for (int i = 0; i < bank.Entries.size(); ++i) {
                 if (bank.Entries[i].ID == (uint32_t)textureID) {
@@ -32,7 +30,6 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
                     std::vector<uint8_t> tempData(fileSize + 64);
                     bank.Stream->read((char*)tempData.data(), fileSize);
 
-                    // Use the global parser temporarily
                     g_TextureParser.Parse(bank.SubheaderCache[i], tempData, bank.Entries[i].Type);
 
                     if (g_TextureParser.IsParsed && !g_TextureParser.DecodedPixels.empty()) {
@@ -89,7 +86,6 @@ inline void CheckMeshUpload(ID3D11Device* device) {
         else if (g_ActiveMeshContent.IsParsed) {
             g_MeshRenderer.UploadMesh(device, g_ActiveMeshContent);
 
-            // Resolve Textures
             std::vector<ID3D11ShaderResourceView*> textures;
             int maxMat = 0;
             for (const auto& m : g_ActiveMeshContent.Materials) if (m.ID > maxMat) maxMat = m.ID;
@@ -107,7 +103,6 @@ inline void CheckMeshUpload(ID3D11Device* device) {
     }
 }
 
-// Helpers for Inspector UI
 static void DrawMatrix4x3(const float* m, const char* label) {
     if (ImGui::TreeNode(label)) {
         ImGui::Text("Right: %.3f, %.3f, %.3f", m[0], m[1], m[2]);
@@ -129,7 +124,6 @@ static ImVec4 UnpackBGRA(uint32_t bgra) {
 inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     CheckMeshUpload(g_pd3dDevice);
 
-    // Texture Bank Check
     bool hasTextureBank = false;
     for (const auto& bank : g_OpenBanks) {
         if (bank.Type == EBankType::Textures) {
@@ -149,7 +143,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
         ImGui::Separator();
 
-        // Viewport Layout
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float height = 400.0f;
 
@@ -160,32 +153,25 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, avail.x, height, g_ShowWireframe, g_BBMParser.IsParsed);
         ctx->Release();
 
-        // Determine screen coordinates for overlay
         ImVec2 pMin = ImGui::GetCursorScreenPos();
         ImVec2 pMax = ImVec2(pMin.x + avail.x, pMin.y + height);
 
         if (tex) ImGui::Image((void*)tex, ImVec2(avail.x, height));
 
-        // --- HELPER POINT OVERLAY ---
         if (g_ShowHelpers && g_ActiveMeshContent.IsParsed) {
             ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            // [FIX] CLIP DRAWING TO VIEWPORT RECT
             dl->PushClipRect(pMin, pMax, true);
 
             ImVec2 mousePos = ImGui::GetMousePos();
 
-            // 1. Helpers (HPNT)
             for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
                 const auto& h = g_ActiveMeshContent.Helpers[i];
                 ImVec2 scrPos;
                 if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Pos[0], h.Pos[1], h.Pos[2]), scrPos, avail.x, height)) {
                     scrPos.x += pMin.x; scrPos.y += pMin.y;
 
-                    // Dot
-                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200)); // Cyan
+                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
 
-                    // Hover
                     float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
                     if (dist < 8.0f) {
                         dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
@@ -195,20 +181,16 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 }
             }
 
-            // 2. Dummies (HDMY)
             for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
                 const auto& d = g_ActiveMeshContent.Dummies[i];
-                // Fable Dummy transform is [Right, Up, Look, Pos]
                 XMFLOAT3 pos = XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]);
 
                 ImVec2 scrPos;
                 if (g_MeshRenderer.ProjectToScreen(pos, scrPos, avail.x, height)) {
                     scrPos.x += pMin.x; scrPos.y += pMin.y;
 
-                    // Dot
-                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200)); // Magenta
+                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200)); 
 
-                    // Hover
                     float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
                     if (dist < 8.0f) {
                         dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
@@ -234,7 +216,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         return;
     }
 
-    // --- INSPECTORS ---
     if (g_BBMParser.IsParsed) {
         if (ImGui::BeginTabBar("BBMTabs")) {
             if (ImGui::BeginTabItem("Overview")) {
