@@ -14,6 +14,8 @@
 
 namespace fs = std::filesystem;
 
+// --- Structures ---
+
 struct DefEntry {
     std::string Type;
     std::string Name;
@@ -26,21 +28,43 @@ struct EnumEntry {
     std::string Name;
     std::string FullContent;
     std::string FilePath;
+    size_t StartOffset = 0;
+    size_t EndOffset = 0;
+};
+
+struct DefContext {
+    std::string Name;
+    std::string RelativePath;
+    std::string AddonFileName;
 };
 
 struct DefWorkspace {
     std::string RootPath;
     bool IsLoaded = false;
 
+    // --- CONTEXT STATE ---
+    int ActiveContextIndex = 0;
+    std::vector<DefContext> Contexts = {
+        { "Game Defs",     "Defs",              "EgoCoreDefs_Addons.def" },
+        { "Script Defs",   "Defs\\ScriptDefs",   "EgoCoreScriptDefs_Addons.def" },
+        { "Frontend Defs", "Defs\\FrontEndDefs", "EgoCoreFrontEndDefs_Addons.def" }
+    };
+
+    // --- DEFS STATE ---
     std::map<std::string, std::vector<DefEntry>> CategorizedDefs;
     std::string SelectedType;
     int SelectedEntryIndex = -1;
     char FilterText[128] = "";
 
+    // --- HEADERS STATE ---
     std::vector<EnumEntry> AllEnums;
     int SelectedEnumIndex = -1;
     char HeaderFilter[128] = "";
 
+    // --- UI STATE ---
+    bool ShowDeleteConfirm = true;
+    bool ShowAddConfirm = true;
+    std::string OriginalContent;
     float EditorFontScale = 1.0f;
     bool IsSearchOpen = false;
     char SearchBuffer[128] = "";
@@ -58,6 +82,8 @@ struct DefWorkspace {
 
 static DefWorkspace g_DefWorkspace;
 
+// --- Helper Functions ---
+
 static std::string OpenFolderDialog() {
     char path[MAX_PATH];
     BROWSEINFOA bi = { 0 }; bi.lpszTitle = "Select Game Root Folder"; bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
@@ -66,16 +92,17 @@ static std::string OpenFolderDialog() {
     return "";
 }
 
+// --- Header Parsing Logic ---
+
 static void LoadHeadersFromDir(const std::string& rootPath) {
     g_DefWorkspace.AllEnums.clear();
     std::set<std::string> visitedFiles;
-
     std::regex enumRegex(R"(enum\s+(\w+)\s*(\{[\s\S]*?\};))");
+    std::string searchPath = rootPath + "\\Data\\Defs";
 
     try {
-        if (!fs::exists(rootPath)) return;
-
-        for (const auto& entry : fs::recursive_directory_iterator(rootPath)) {
+        if (!fs::exists(searchPath)) return;
+        for (const auto& entry : fs::recursive_directory_iterator(searchPath)) {
             std::string pathStr = entry.path().string();
             std::string pathLower = pathStr;
             std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), ::tolower);
@@ -87,21 +114,21 @@ static void LoadHeadersFromDir(const std::string& rootPath) {
                 if (visitedFiles.count(pathStr)) continue;
                 visitedFiles.insert(pathStr);
 
-                std::ifstream file(entry.path());
+                std::ifstream file(entry.path(), std::ios::binary);
                 if (file.is_open()) {
                     std::stringstream buffer;
                     buffer << file.rdbuf();
                     std::string content = buffer.str();
-
                     auto words_begin = std::sregex_iterator(content.begin(), content.end(), enumRegex);
                     auto words_end = std::sregex_iterator();
-
                     for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
                         std::smatch match = *i;
                         EnumEntry newEnum;
                         newEnum.Name = match[1].str();
                         newEnum.FullContent = "enum " + newEnum.Name + "\n" + match[2].str();
                         newEnum.FilePath = pathStr;
+                        newEnum.StartOffset = match.position(0);
+                        newEnum.EndOffset = newEnum.StartOffset + match.length(0);
                         g_DefWorkspace.AllEnums.push_back(newEnum);
                     }
                 }
@@ -109,10 +136,10 @@ static void LoadHeadersFromDir(const std::string& rootPath) {
         }
     }
     catch (...) {}
-
-    std::sort(g_DefWorkspace.AllEnums.begin(), g_DefWorkspace.AllEnums.end(),
-        [](const EnumEntry& a, const EnumEntry& b) { return a.Name < b.Name; });
+    std::sort(g_DefWorkspace.AllEnums.begin(), g_DefWorkspace.AllEnums.end(), [](const EnumEntry& a, const EnumEntry& b) { return a.Name < b.Name; });
 }
+
+// --- Def Parsing Logic ---
 
 static void ScanFileForDefs(const fs::path& filePath) {
     std::ifstream file(filePath, std::ios::binary);
@@ -148,50 +175,246 @@ static void LoadDefsFromFolder(const std::string& rootPath) {
     g_DefWorkspace.CategorizedDefs.clear();
     g_DefWorkspace.RootPath = rootPath;
 
-    std::vector<std::string> searchPaths = { rootPath + "\\Data\\Defs" };
+    if (g_DefWorkspace.ActiveContextIndex < 0 || g_DefWorkspace.ActiveContextIndex >= g_DefWorkspace.Contexts.size())
+        g_DefWorkspace.ActiveContextIndex = 0;
+
+    DefContext& ctx = g_DefWorkspace.Contexts[g_DefWorkspace.ActiveContextIndex];
+    std::string searchPath = rootPath + "\\Data\\" + ctx.RelativePath;
     std::vector<std::string> visitedPaths;
 
-    for (const auto& searchDir : searchPaths) {
-        if (!fs::exists(searchDir)) continue;
-        for (const auto& entry : fs::recursive_directory_iterator(searchDir)) {
+    if (fs::exists(searchPath)) {
+        for (const auto& entry : fs::recursive_directory_iterator(searchPath)) {
             std::string pathStr = entry.path().string();
             std::string pathLower = pathStr;
             std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), ::tolower);
 
             if (pathLower.find("devheaders") != std::string::npos) continue;
 
+            if (g_DefWorkspace.ActiveContextIndex == 0) {
+                if (pathLower.find("\\scriptdefs") != std::string::npos ||
+                    pathLower.find("/scriptdefs") != std::string::npos) continue;
+                if (pathLower.find("\\frontenddefs") != std::string::npos ||
+                    pathLower.find("/frontenddefs") != std::string::npos) continue;
+            }
+
             if (entry.is_regular_file()) {
                 std::string ext = entry.path().extension().string();
                 if (ext == ".def" || ext == ".tpl") {
                     bool alreadyScanned = false;
                     for (const auto& v : visitedPaths) { if (v == pathStr) { alreadyScanned = true; break; } }
-                    if (!alreadyScanned) {
-                        visitedPaths.push_back(pathStr);
-                        ScanFileForDefs(entry.path());
-                    }
+                    if (!alreadyScanned) { visitedPaths.push_back(pathStr); ScanFileForDefs(entry.path()); }
                 }
             }
         }
     }
-
     LoadHeadersFromDir(rootPath);
-
+    g_DefWorkspace.SelectedType = "";
+    g_DefWorkspace.SelectedEntryIndex = -1;
+    g_DefWorkspace.Editor.SetText("");
     g_DefWorkspace.IsLoaded = true;
 }
+
+// --- CREATE & DELETE ---
+
+static void CreateNewDef(const std::string& type) {
+    if (g_DefWorkspace.RootPath.empty()) return;
+
+    std::string baseName = "New_Entry";
+    std::string candidateName = baseName;
+    int counter = 1;
+
+    auto& entries = g_DefWorkspace.CategorizedDefs[type];
+    bool exists;
+    do {
+        exists = false;
+        for (const auto& e : entries) {
+            if (e.Name == candidateName) {
+                exists = true; break;
+            }
+        }
+        if (exists) { candidateName = baseName + "_" + std::to_string(counter++); }
+    } while (exists);
+
+    DefContext& ctx = g_DefWorkspace.Contexts[g_DefWorkspace.ActiveContextIndex];
+    std::string targetFile = g_DefWorkspace.RootPath + "\\Data\\" + ctx.RelativePath + "\\" + ctx.AddonFileName;
+
+    fs::path p(targetFile);
+    if (!fs::exists(p.parent_path())) fs::create_directories(p.parent_path());
+
+    std::ofstream file(targetFile, std::ios::app);
+    if (file.is_open()) {
+        file << "\n\n";
+        file << "#definition " << type << " " << candidateName << "\n\n";
+        file << "// Contents\n\n";
+        file << "#end_definition\n";
+        file.close();
+        LoadDefsFromFolder(g_DefWorkspace.RootPath);
+    }
+}
+
+static void DeleteDefEntry(const DefEntry& entry) {
+    std::ifstream inFile(entry.SourceFile, std::ios::binary);
+    if (!inFile.is_open()) return;
+    std::string content((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
+    inFile.close();
+
+    if (content.size() < entry.EndOffset) return;
+
+    size_t cutStart = entry.StartOffset;
+    size_t cutEnd = entry.EndOffset;
+
+    // --- SMART EXPANSION: BACKWARDS (Preceding comments/whitespace) ---
+    // Look backwards line by line. If a line is empty or starts with "//", include it.
+    // Stop if we hit "#end_definition" or file start.
+    while (cutStart > 0) {
+        // Find start of the line where cutStart currently is
+        size_t lineStart = content.rfind('\n', cutStart - 1);
+        if (lineStart == std::string::npos) lineStart = 0;
+        else lineStart += 1; // Move past \n
+
+        // If we are at the very start of file, break
+        if (lineStart >= cutStart) break;
+
+        // Extract the line before our current block
+        // Find the line *before* the one we just found
+        size_t prevLineEnd = (lineStart > 0) ? lineStart - 1 : 0;
+        size_t prevLineStart = content.rfind('\n', (prevLineEnd > 0 ? prevLineEnd - 1 : 0));
+        if (prevLineStart == std::string::npos) prevLineStart = 0;
+        else prevLineStart += 1;
+
+        if (prevLineEnd < prevLineStart) break; // Should not happen
+
+        std::string line = content.substr(prevLineStart, prevLineEnd - prevLineStart);
+
+        // Analyze line content
+        // 1. Trim leading whitespace
+        size_t firstNonSpace = line.find_first_not_of(" \t\r");
+
+        bool isDeletable = false;
+        if (firstNonSpace == std::string::npos) {
+            isDeletable = true; // Empty/Whitespace line
+        }
+        else {
+            // Check for Comment
+            if (line.substr(firstNonSpace, 2) == "//") isDeletable = true;
+
+            // Check for safety stops
+            if (line.find("#end_definition") != std::string::npos) isDeletable = false;
+            if (line.find("#definition") != std::string::npos) isDeletable = false;
+        }
+
+        if (isDeletable) {
+            cutStart = prevLineStart; // Expand deletion upwards
+            if (cutStart == 0) break;
+        }
+        else {
+            break; // Stop scanning back
+        }
+    }
+
+    // --- SMART EXPANSION: FORWARDS (Trailing comments/whitespace) ---
+    // Eat newlines, spaces, and comments immediately following
+    while (cutEnd < content.size()) {
+        char c = content[cutEnd];
+        if (isspace((unsigned char)c)) {
+            cutEnd++;
+            continue;
+        }
+        // Check for trailing comment
+        if (content.compare(cutEnd, 2, "//") == 0) {
+            // Eat until end of line
+            size_t nextLine = content.find('\n', cutEnd);
+            if (nextLine == std::string::npos) cutEnd = content.size();
+            else cutEnd = nextLine + 1; // Include the newline
+            continue;
+        }
+        // If we hit anything else (like another #definition), stop.
+        break;
+    }
+
+    // Perform Cut
+    std::string pre = content.substr(0, cutStart);
+    std::string post = content.substr(cutEnd);
+
+    std::ofstream outFile(entry.SourceFile, std::ios::binary);
+    outFile << pre << post;
+    outFile.close();
+
+    LoadDefsFromFolder(g_DefWorkspace.RootPath);
+    g_DefWorkspace.SelectedEntryIndex = -1;
+    g_DefWorkspace.SelectedType = "";
+    g_DefWorkspace.Editor.SetText("");
+}
+
+// --- SAVE & LOAD CONTENT ---
 
 static void SaveDefEntry(DefEntry& entry) {
     std::string newContent = g_DefWorkspace.Editor.GetText();
     std::ifstream inFile(entry.SourceFile, std::ios::binary);
     std::string fileContent((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
     inFile.close();
+
     if (fileContent.size() < entry.EndOffset) return;
+
     std::string pre = fileContent.substr(0, entry.StartOffset);
     std::string post = fileContent.substr(entry.EndOffset);
     std::string finalContent = pre + newContent + post;
+
     std::ofstream outFile(entry.SourceFile, std::ios::binary);
     outFile << finalContent; outFile.close();
+
     long long sizeDiff = (long long)newContent.size() - (long long)(entry.EndOffset - entry.StartOffset);
+
+    for (auto& [t, list] : g_DefWorkspace.CategorizedDefs) {
+        for (auto& other : list) {
+            if (other.SourceFile == entry.SourceFile && other.StartOffset > entry.StartOffset) {
+                other.StartOffset += sizeDiff;
+                other.EndOffset += sizeDiff;
+            }
+        }
+    }
     entry.EndOffset += sizeDiff;
+    g_DefWorkspace.OriginalContent = newContent;
+
+    std::stringstream ss(newContent);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (line.find("#definition") != std::string::npos) {
+            std::stringstream ls(line);
+            std::string temp, type, name;
+            ls >> temp >> type >> name;
+            if (!name.empty()) { entry.Name = name; }
+            break;
+        }
+    }
+}
+
+static void SaveHeaderEntry(EnumEntry& entry) {
+    std::string newContent = g_DefWorkspace.Editor.GetText();
+    std::ifstream inFile(entry.FilePath, std::ios::binary);
+    std::string fileContent((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
+    inFile.close();
+
+    if (fileContent.size() < entry.EndOffset) return;
+
+    std::string pre = fileContent.substr(0, entry.StartOffset);
+    std::string post = fileContent.substr(entry.EndOffset);
+    std::string finalContent = pre + newContent + post;
+
+    std::ofstream outFile(entry.FilePath, std::ios::binary);
+    outFile << finalContent; outFile.close();
+
+    long long sizeDiff = (long long)newContent.size() - (long long)(entry.EndOffset - entry.StartOffset);
+
+    for (auto& other : g_DefWorkspace.AllEnums) {
+        if (other.FilePath == entry.FilePath && other.StartOffset > entry.StartOffset) {
+            other.StartOffset += sizeDiff;
+            other.EndOffset += sizeDiff;
+        }
+    }
+    entry.EndOffset += sizeDiff;
+    entry.FullContent = newContent;
+    g_DefWorkspace.OriginalContent = newContent;
 }
 
 static void LoadDefContent(DefEntry& entry) {
@@ -201,7 +424,14 @@ static void LoadDefContent(DefEntry& entry) {
     size_t len = entry.EndOffset - entry.StartOffset;
     std::string buffer(len, '\0');
     file.read(&buffer[0], len);
+
+    g_DefWorkspace.OriginalContent = buffer;
     g_DefWorkspace.Editor.SetText(buffer);
+}
+
+static void LoadHeaderContent(EnumEntry& entry) {
+    g_DefWorkspace.OriginalContent = entry.FullContent;
+    g_DefWorkspace.Editor.SetText(entry.FullContent);
 }
 
 static void FindNextInEditor() {
