@@ -11,6 +11,7 @@ extern ID3D11Device* g_pd3dDevice;
 static MeshRenderer g_MeshRenderer;
 static bool g_ShowWireframe = false;
 static bool g_ShowHelpers = false; 
+static bool g_ShowBounds = false;
 
 
 static std::map<int, ID3D11ShaderResourceView*> g_MeshTextureCache;
@@ -150,7 +151,19 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
         ID3D11DeviceContext* ctx;
         g_pd3dDevice->GetImmediateContext(&ctx);
+
+        // 1. Main Render (Mesh)
         ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, avail.x, height, g_ShowWireframe, g_BBMParser.IsParsed);
+
+        // 2. Bounds Render (Overlay)
+        if (g_ShowBounds && g_ActiveMeshContent.IsParsed) {
+            g_MeshRenderer.RenderBounds(ctx, avail.x, height,
+                g_ActiveMeshContent.BoundingBoxMin,
+                g_ActiveMeshContent.BoundingBoxMax,
+                g_ActiveMeshContent.BoundingSphereCenter,
+                g_ActiveMeshContent.BoundingSphereRadius);
+        }
+
         ctx->Release();
 
         ImVec2 pMin = ImGui::GetCursorScreenPos();
@@ -206,6 +219,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::Checkbox("Show Wireframe", &g_ShowWireframe);
         ImGui::SameLine();
         ImGui::Checkbox("Show Helpers", &g_ShowHelpers);
+        ImGui::SameLine();
+        ImGui::Checkbox("Show Bounds", &g_ShowBounds);
         ImGui::Separator();
     }
     else {

@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "DefBackend.h"
 #include "ConfigBackend.h" 
+#include "CompilerBackend.h"
 
 static void DrawDefTab() {
     static float leftPaneWidth = 350.0f;
@@ -13,6 +14,7 @@ static void DrawDefTab() {
     static bool triggerDeletePopup = false;
     static std::string typeToAddPending = "";
     static bool triggerAddPopup = false;
+    static bool triggerCompileSuccess = false;
 
     // Helpers
     auto RequestLoadDef = [&](const std::string& type, int index) {
@@ -48,6 +50,63 @@ static void DrawDefTab() {
         }
     }
     else {
+
+        // =========================================================================================
+        // NEW COMPILATION UI START
+        // =========================================================================================
+
+        // 1. The Button
+        if (ImGui::Button("Compile All Defs")) {
+            CompileAllDefs_Stealth(); // Triggers the threaded double-launch
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles definitions for BOTH Frontend and Game.\n(Generates frontend.bin and game.bin)");
+
+        // 2. The Loading Modal (Blocks input while compiling)
+        // g_IsCompiling is defined in CompilerBackend.h
+        if (g_IsCompiling) {
+            ImGui::OpenPopup("Compiling...");
+        }
+
+        if (ImGui::BeginPopupModal("Compiling...", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+            // Display status from the worker thread (e.g. "Compiling Game (2/2)...")
+            ImGui::Text("%s", g_CompileStatus.c_str());
+            ImGui::Separator();
+
+            // Simple animated spinner text
+            static int dots = 0;
+            if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
+            std::string spinner = "Please wait";
+            for (int i = 0; i < dots; i++) spinner += ".";
+            ImGui::Text("%s", spinner.c_str());
+
+            // Check if thread finished
+            if (!g_IsCompiling) {
+                ImGui::CloseCurrentPopup();
+                triggerCompileSuccess = true; // Queue the success popup
+            }
+            ImGui::EndPopup();
+        }
+
+        // 3. The Success Popup
+        if (triggerCompileSuccess) {
+            ImGui::OpenPopup("Compile Complete");
+            triggerCompileSuccess = false;
+        }
+
+        if (ImGui::BeginPopupModal("Compile Complete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Successfully compiled definitions!");
+            ImGui::Text("Generated: frontend.bin & game.bin");
+            ImGui::Separator();
+            if (ImGui::Button("OK", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+        ImGui::Separator();
+        // =========================================================================================
+        // NEW COMPILATION UI END
+        // =========================================================================================
+
         if (ImGui::BeginTabBar("DefSubTabs", ImGuiTabBarFlags_None)) {
 
             // --- TAB 1: DEFINITIONS ---

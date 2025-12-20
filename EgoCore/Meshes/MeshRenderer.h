@@ -23,7 +23,8 @@ struct RenderBatch {
 
 class MeshRenderer {
 private:
-    ID3D11VertexShader* VS = nullptr; ID3D11PixelShader* PS = nullptr; ID3D11InputLayout* Layout = nullptr;
+    ID3D11VertexShader* VS = nullptr; ID3D11PixelShader* PS = nullptr; ID3D11PixelShader* PS_Solid = nullptr;
+    ID3D11InputLayout* Layout = nullptr;
     ID3D11Buffer* VBuffer = nullptr; ID3D11Buffer* IBuffer = nullptr; ID3D11Buffer* ConstantBuffer = nullptr;
     ID3D11RasterizerState* RastStateSolid = nullptr; ID3D11RasterizerState* RastStateWire = nullptr;
     ID3D11DepthStencilState* DepthState = nullptr;
@@ -39,6 +40,12 @@ private:
     std::vector<RenderBatch> Batches;
     float Width = 0, Height = 0;
     float CamRotX = 0.0f; float CamRotY = 0.0f; float CamDist = 10.0f; XMFLOAT2 CamPan = { 0, 0 };
+
+    // DEBUG BUFFERS
+    ID3D11Buffer* DebugVBuffer = nullptr; ID3D11Buffer* DebugIBuffer = nullptr;
+    uint32_t DebugBoxIndexCount = 0;
+    uint32_t DebugCircleIndexCount = 0;
+    uint32_t DebugCircleStartIndex = 0;
 
     void CreateDefaultTexture(ID3D11Device* device) {
         if (DefaultWhiteSRV) return;
@@ -56,10 +63,58 @@ private:
         }
     }
 
+    void CreateDebugBuffers(ID3D11Device* device) {
+        if (DebugVBuffer) return;
+
+        std::vector<GPUVertex> verts;
+        std::vector<uint32_t> inds;
+
+        // 1. UNIT CUBE (Lines) - Vertices 0-7
+        // Min at -0.5, Max at 0.5
+        float h = 0.5f;
+        XMFLOAT3 boxVerts[] = {
+            {-h,-h,-h}, { h,-h,-h}, { h, h,-h}, {-h, h,-h}, // Front
+            {-h,-h, h}, { h,-h, h}, { h, h, h}, {-h, h, h}  // Back
+        };
+        for (auto& p : boxVerts) verts.push_back({ p, {0,0,0}, {0,0} });
+
+        // Cube Indices (Line List)
+        uint32_t boxInds[] = {
+            0,1, 1,2, 2,3, 3,0, // Front Face
+            4,5, 5,6, 6,7, 7,4, // Back Face
+            0,4, 1,5, 2,6, 3,7  // Connecting Lines
+        };
+        for (auto i : boxInds) inds.push_back(i);
+        DebugBoxIndexCount = 24;
+
+        // 2. UNIT CIRCLE (Lines) - Vertices 8+
+        // Radius 1.0 on XY plane
+        DebugCircleStartIndex = (uint32_t)inds.size();
+        uint32_t circleVertStart = (uint32_t)verts.size();
+        int segments = 64;
+        for (int i = 0; i < segments; i++) {
+            float theta = (float)i / segments * XM_2PI;
+            verts.push_back({ XMFLOAT3(cosf(theta), sinf(theta), 0.0f), {0,0,0}, {0,0} });
+
+            inds.push_back(circleVertStart + i);
+            inds.push_back(circleVertStart + ((i + 1) % segments));
+        }
+        DebugCircleIndexCount = segments * 2;
+
+        D3D11_BUFFER_DESC vDesc = {}; vDesc.ByteWidth = sizeof(GPUVertex) * (UINT)verts.size(); vDesc.Usage = D3D11_USAGE_IMMUTABLE; vDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        D3D11_SUBRESOURCE_DATA vData = { verts.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &DebugVBuffer);
+
+        D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)inds.size(); iDesc.Usage = D3D11_USAGE_IMMUTABLE; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+        D3D11_SUBRESOURCE_DATA iData = { inds.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &DebugIBuffer);
+    }
+
 public:
     ~MeshRenderer() { Release(); }
     void Release() {
-        if (VS) VS->Release(); VS = nullptr; if (PS) PS->Release(); PS = nullptr; if (Layout) Layout->Release(); Layout = nullptr;
+        if (VS) VS->Release(); VS = nullptr;
+        if (PS) PS->Release(); PS = nullptr;
+        if (PS_Solid) PS_Solid->Release(); PS_Solid = nullptr;
+        if (Layout) Layout->Release(); Layout = nullptr;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
         if (ConstantBuffer) ConstantBuffer->Release(); ConstantBuffer = nullptr;
         if (RastStateSolid) RastStateSolid->Release(); RastStateSolid = nullptr;
@@ -68,6 +123,8 @@ public:
         if (Sampler) Sampler->Release(); Sampler = nullptr;
         if (DefaultWhiteSRV) DefaultWhiteSRV->Release(); DefaultWhiteSRV = nullptr;
         if (BlendState) BlendState->Release(); BlendState = nullptr;
+        if (DebugVBuffer) DebugVBuffer->Release(); DebugVBuffer = nullptr;
+        if (DebugIBuffer) DebugIBuffer->Release(); DebugIBuffer = nullptr;
         ReleaseResizedResources();
     }
     void ReleaseResizedResources() {
@@ -79,6 +136,7 @@ public:
     bool Initialize(ID3D11Device* device) {
         if (VS) return true;
 
+        // Standard Shader
         const char* shaderSrc = R"(
             cbuffer CBuf : register(b0) { matrix WVP; matrix World; float4 Col; float4 LightDir; };
             struct VS_IN { float3 Pos : POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; };
@@ -103,70 +161,63 @@ public:
                 float diff = max(dot(n, l), 0.2f); 
                 return float4(texColor.rgb * Col.rgb * diff, texColor.a); 
             }
+
+            // UNLIT SOLID COLOR SHADER
+            float4 PS_Solid(PS_IN input) : SV_Target {
+                return Col; 
+            }
         )";
 
-        ID3DBlob* vsBlob = nullptr; ID3DBlob* psBlob = nullptr;
+        ID3DBlob* vsBlob = nullptr; ID3DBlob* psBlob = nullptr; ID3DBlob* psSolidBlob = nullptr;
         D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "VS", "vs_4_0", 0, 0, &vsBlob, nullptr);
         device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &VS);
         D3D11_INPUT_ELEMENT_DESC desc[] = { { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }, { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 }, { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 } };
         device->CreateInputLayout(desc, 3, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &Layout); vsBlob->Release();
+
         D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "PS", "ps_4_0", 0, 0, &psBlob, nullptr);
         device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &PS); psBlob->Release();
+
+        // Compile Solid PS
+        D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "PS_Solid", "ps_4_0", 0, 0, &psSolidBlob, nullptr);
+        device->CreatePixelShader(psSolidBlob->GetBufferPointer(), psSolidBlob->GetBufferSize(), nullptr, &PS_Solid); psSolidBlob->Release();
+
         D3D11_BUFFER_DESC cbDesc = {}; cbDesc.ByteWidth = sizeof(CBMatrix); cbDesc.Usage = D3D11_USAGE_DEFAULT; cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER; device->CreateBuffer(&cbDesc, nullptr, &ConstantBuffer);
         D3D11_RASTERIZER_DESC rsDesc = {}; rsDesc.FillMode = D3D11_FILL_SOLID; rsDesc.CullMode = D3D11_CULL_NONE; rsDesc.DepthClipEnable = true; device->CreateRasterizerState(&rsDesc, &RastStateSolid);
         rsDesc.FillMode = D3D11_FILL_WIREFRAME; device->CreateRasterizerState(&rsDesc, &RastStateWire);
         D3D11_DEPTH_STENCIL_DESC dsDesc = {}; dsDesc.DepthEnable = true; dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; dsDesc.DepthFunc = D3D11_COMPARISON_LESS; device->CreateDepthStencilState(&dsDesc, &DepthState);
 
         D3D11_SAMPLER_DESC sampDesc = {};
-        sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-        sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-        sampDesc.MinLOD = 0; sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+        sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP; sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP; sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP; sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER; sampDesc.MinLOD = 0; sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
         device->CreateSamplerState(&sampDesc, &Sampler);
 
-        D3D11_BLEND_DESC blendDesc = {};
-        blendDesc.RenderTarget[0].BlendEnable = TRUE;
-        blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-        blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-        blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-        blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-        blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
-        blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        D3D11_BLEND_DESC blendDesc = {}; blendDesc.RenderTarget[0].BlendEnable = TRUE; blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA; blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA; blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD; blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE; blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO; blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD; blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
         device->CreateBlendState(&blendDesc, &BlendState);
 
         CreateDefaultTexture(device);
+        CreateDebugBuffers(device);
         return true;
     }
 
-    void SetMaterialTextures(const std::vector<ID3D11ShaderResourceView*>& textures) {
-        MaterialTextures = textures;
-    }
-
+    // ... (SetMaterialTextures, UploadMesh, UploadBBM, Resize remain exactly the same) ...
+    void SetMaterialTextures(const std::vector<ID3D11ShaderResourceView*>& textures) { MaterialTextures = textures; }
     void UploadMesh(ID3D11Device* device, const C3DMeshContent& mesh) {
         if (!mesh.IsParsed) return;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
         std::vector<GPUVertex> vertices; std::vector<uint32_t> indices; uint32_t indexOffset = 0;
         Batches.clear();
-
         for (const auto& prim : mesh.Primitives) {
             uint32_t batchStart = (uint32_t)indices.size();
-
             for (int v = 0; v < prim.VertexCount; v++) {
                 size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
                 GPUVertex gpuV;
                 if (prim.IsCompressed) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset); UnpackPOSPACKED3(p, prim.Compression.Scale, prim.Compression.Offset, gpuV.Pos.x, gpuV.Pos.y, gpuV.Pos.z); }
                 else { const float* r = (const float*)(prim.VertexBuffer.data() + offset); gpuV.Pos = XMFLOAT3(r[0], r[1], r[2]); }
-
                 size_t normOff = prim.IsCompressed ? (prim.AnimatedBlockCount > 0 ? 12 : 4) : (prim.AnimatedBlockCount > 0 ? 20 : 12);
                 if (offset + normOff + 4 <= prim.VertexBuffer.size()) {
                     if (prim.IsCompressed) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset + normOff); UnpackNORMPACKED3(p, gpuV.Norm.x, gpuV.Norm.y, gpuV.Norm.z); }
                     else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + normOff); gpuV.Norm = XMFLOAT3(r[0], r[1], r[2]); }
                 }
                 else gpuV.Norm = XMFLOAT3(0, 1, 0);
-
                 size_t uvOff = prim.IsCompressed ? (prim.AnimatedBlockCount > 0 ? 16 : 8) : (prim.AnimatedBlockCount > 0 ? 32 : 24);
                 if (offset + uvOff + 4 <= prim.VertexBuffer.size()) {
                     if (prim.IsCompressed) { int16_t* u = (int16_t*)(prim.VertexBuffer.data() + offset + uvOff); gpuV.UV = XMFLOAT2(DecompressUV(u[0]), DecompressUV(u[1])); }
@@ -175,7 +226,6 @@ public:
                 else gpuV.UV = XMFLOAT2(0, 0);
                 vertices.push_back(gpuV);
             }
-
             auto ProcessIndices = [&](uint32_t start, uint32_t count, bool isStrip) {
                 if (isStrip) {
                     for (uint32_t k = 0; k < count; k++) {
@@ -193,48 +243,32 @@ public:
             for (const auto& b : prim.AnimatedBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip); processed = true; }
             if (!processed && !prim.IndexBuffer.empty()) { ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false); }
             indexOffset += prim.VertexCount;
-
-            RenderBatch batch;
-            batch.IndexStart = batchStart;
-            batch.IndexCount = (uint32_t)indices.size() - batchStart;
-            batch.MaterialIndex = prim.MaterialIndex;
-            Batches.push_back(batch);
+            RenderBatch batch; batch.IndexStart = batchStart; batch.IndexCount = (uint32_t)indices.size() - batchStart; batch.MaterialIndex = prim.MaterialIndex; Batches.push_back(batch);
         }
-
         if (vertices.empty()) return;
         D3D11_BUFFER_DESC vDesc = {}; vDesc.ByteWidth = sizeof(GPUVertex) * (UINT)vertices.size(); vDesc.Usage = D3D11_USAGE_DEFAULT; vDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         D3D11_SUBRESOURCE_DATA vData = { vertices.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &VBuffer);
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
-
-        CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f;
-        CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
+        CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f; CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
     }
-
     void UploadBBM(ID3D11Device* device, const CBBMParser& bbm) {
         if (!bbm.IsParsed || bbm.ParsedVertices.empty()) return;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
         Batches.clear();
-
         std::vector<GPUVertex> vertices; float maxDistSq = 0.0f;
         for (const auto& v : bbm.ParsedVertices) {
             GPUVertex g; g.Pos = XMFLOAT3(v.Position.x, v.Position.y, v.Position.z); g.Norm = XMFLOAT3(v.Normal.x, v.Normal.y, v.Normal.z); g.UV = XMFLOAT2(v.UV.u, v.UV.v);
             vertices.push_back(g); float d = g.Pos.x * g.Pos.x + g.Pos.y * g.Pos.y + g.Pos.z * g.Pos.z; if (d > maxDistSq) maxDistSq = d;
         }
         std::vector<uint32_t> indices; for (auto idx : bbm.ParsedIndices) indices.push_back(idx);
-
         D3D11_BUFFER_DESC vDesc = {}; vDesc.ByteWidth = sizeof(GPUVertex) * (UINT)vertices.size(); vDesc.Usage = D3D11_USAGE_DEFAULT; vDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         D3D11_SUBRESOURCE_DATA vData = { vertices.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &VBuffer);
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
-
-        RenderBatch batch = { 0, (uint32_t)indices.size(), -1 };
-        Batches.push_back(batch);
-
-        float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f;
-        CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
+        RenderBatch batch = { 0, (uint32_t)indices.size(), -1 }; Batches.push_back(batch);
+        float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f; CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
     }
-
     void Resize(ID3D11Device* device, float w, float h) {
         if (w == Width && h == Height && RenderTex) return;
         ReleaseResizedResources(); Width = w; Height = h; if (w <= 0 || h <= 0) return;
@@ -244,29 +278,21 @@ public:
         device->CreateTexture2D(&dDesc, nullptr, &DepthTex); device->CreateDepthStencilView(DepthTex, nullptr, &DSV);
     }
 
+    // --- STANDARD RENDER ---
     ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false) {
         if (!VS || !VBuffer) return nullptr;
-
+        // Camera Input Processing (Same as before)
         if (ImGui::IsWindowHovered()) {
             if (ImGui::IsMouseDragging(1)) { CamRotY += ImGui::GetIO().MouseDelta.x * 0.01f; CamRotX += ImGui::GetIO().MouseDelta.y * 0.01f; }
             if (ImGui::IsMouseDragging(2)) { CamPan.x += ImGui::GetIO().MouseDelta.x * (CamDist * 0.002f); CamPan.y -= ImGui::GetIO().MouseDelta.y * (CamDist * 0.002f); }
             CamDist -= ImGui::GetIO().MouseWheel * CamDist * 0.1f; if (CamDist < 0.1f) CamDist = 0.1f;
         }
 
-        float bgColor[4];
-        if (isPhysics) {
-            bgColor[0] = 0.15f; bgColor[1] = 0.12f; bgColor[2] = 0.1f; bgColor[3] = 1.0f;
-        }
-        else {
-            bgColor[0] = 0.1f; bgColor[1] = 0.12f; bgColor[2] = 0.15f; bgColor[3] = 1.0f;
-        }
-
+        float bgColor[4] = { isPhysics ? 0.15f : 0.1f, 0.12f, isPhysics ? 0.1f : 0.15f, 1.0f };
         ctx->ClearRenderTargetView(RTV, bgColor);
         ctx->ClearDepthStencilView(DSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
         ctx->OMSetRenderTargets(1, &RTV, DSV);
-
-        D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f };
-        ctx->RSSetViewports(1, &vp);
+        D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f }; ctx->RSSetViewports(1, &vp);
 
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
@@ -292,11 +318,9 @@ public:
         ctx->PSSetConstantBuffers(0, 1, &ConstantBuffer);
         ctx->OMSetDepthStencilState(DepthState, 0);
         ctx->RSSetState(RastStateSolid);
-
         ctx->PSSetSamplers(0, 1, &Sampler);
 
-        float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        ctx->OMSetBlendState(BlendState, blendFactor, 0xffffffff);
+        float blendFactor[4] = { 0,0,0,0 }; ctx->OMSetBlendState(BlendState, blendFactor, 0xffffffff);
 
         for (const auto& batch : Batches) {
             ID3D11ShaderResourceView* tex = DefaultWhiteSRV;
@@ -315,8 +339,73 @@ public:
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             for (const auto& batch : Batches) ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
         }
-
         return SRV;
+    }
+
+    // --- NEW: RENDER BOUNDS (Call this after Render()) ---
+    void RenderBounds(ID3D11DeviceContext* ctx, float w, float h,
+        const float* bMin, const float* bMax,
+        const float* sCenter, float sRadius)
+    {
+        if (!VS || !DebugVBuffer) return;
+
+        // Setup Pipeline for Lines
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        ctx->PSSetShader(PS_Solid, nullptr, 0); // Use Unlit Solid Color
+        ctx->RSSetState(RastStateSolid); // Use Solid state, but Lines are always 1px. Avoid Wireframe state to prevent confusion.
+
+        UINT stride = sizeof(GPUVertex); UINT offset = 0;
+        ctx->IASetVertexBuffers(0, 1, &DebugVBuffer, &stride, &offset);
+        ctx->IASetIndexBuffer(DebugIBuffer, DXGI_FORMAT_R32_UINT, 0);
+
+        // Recalculate Matrices (Same View/Proj as main render)
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
+        XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
+        XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
+        worldCam = worldCam * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+
+        CBMatrix cb;
+
+        // 1. DRAW BOX (Green)
+        // Transform Unit Box [-0.5, 0.5] to Target Bounds
+        float bSize[3] = { bMax[0] - bMin[0], bMax[1] - bMin[1], bMax[2] - bMin[2] };
+        float bCenter[3] = { bMin[0] + bSize[0] * 0.5f, bMin[1] + bSize[1] * 0.5f, bMin[2] + bSize[2] * 0.5f };
+
+        XMMATRIX boxWorld = XMMatrixScaling(bSize[0], bSize[1], bSize[2]) * XMMatrixTranslation(bCenter[0], bCenter[1], bCenter[2]) *
+            worldCam;
+
+        cb.World = XMMatrixTranspose(boxWorld);
+        cb.WorldViewProj = XMMatrixTranspose(boxWorld * view * proj);
+        cb.Color = XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f); // Green
+
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugBoxIndexCount, 0, 0);
+
+        // 2. DRAW SPHERE (Yellow)
+        // Draw 3 rings (XY, XZ, YZ)
+        XMMATRIX sphereScaleTrans = XMMatrixScaling(sRadius, sRadius, sRadius) * XMMatrixTranslation(sCenter[0], sCenter[1], sCenter[2]);
+
+        cb.Color = XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
+
+        // Ring 1 (XY Plane - Default)
+        XMMATRIX ring1 = sphereScaleTrans * worldCam;
+        cb.WorldViewProj = XMMatrixTranspose(ring1 * view * proj);
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+        // Ring 2 (XZ Plane - Rotate 90 X)
+        XMMATRIX ring2 = XMMatrixRotationX(XM_PIDIV2) * sphereScaleTrans * worldCam;
+        cb.WorldViewProj = XMMatrixTranspose(ring2 * view * proj);
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+        // Ring 3 (YZ Plane - Rotate 90 Y)
+        XMMATRIX ring3 = XMMatrixRotationY(XM_PIDIV2) * sphereScaleTrans * worldCam;
+        cb.WorldViewProj = XMMatrixTranspose(ring3 * view * proj);
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     }
 
     bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH) {

@@ -126,6 +126,9 @@
     <ClInclude Include="Definitions\DefExplorer.h">
       <Filter>Source Files\Definitions</Filter>
     </ClInclude>
+    <ClInclude Include="Definitions\CompilerBackend.h">
+      <Filter>Source Files\Definitions</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

@@ -24,6 +24,7 @@
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="ConfigBackend.h" />
+    <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
@@ -145,6 +146,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -172,6 +174,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
