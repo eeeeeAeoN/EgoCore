@@ -6,88 +6,38 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <cstring> // memcpy
+
+// MINIAUDIO (Must be defined in main.cpp)
 #include "miniaudio.h"
 
 // =========================================================
 // 1. FABLE FILE STRUCTURES
 // =========================================================
 #pragma pack(push, 1)
-
 struct LHAudioBankCompData {
     char     Signature[32];
     uint32_t Unk1;
     uint32_t Unk2;
     uint32_t TotalAudioSize;
 };
-
 struct LHAudioBankLookupTable {
     char     Signature[32];
     uint32_t BankID;
     uint32_t BankFlags;
     uint32_t NumEntries;
 };
-
 struct AudioLookupEntry {
     uint32_t SoundID;
     uint32_t Length;
     uint32_t Offset;
 };
-
 #pragma pack(pop)
 
 // =========================================================
-// 2. XBOX ADPCM DECODER
+// 2. ADPCM SHARED TABLES
 // =========================================================
-class XboxAdpcmDecoder {
-    static const int16_t StepTable[89];
-public:
-    static std::vector<int16_t> Decode(const std::vector<uint8_t>& adpcmData, int channels) {
-        std::vector<int16_t> pcm;
-        if (adpcmData.empty()) return pcm;
-
-        int blockSize = 36 * channels;
-        int numBlocks = (int)adpcmData.size() / blockSize;
-
-        pcm.reserve(numBlocks * 64 * channels);
-
-        for (int b = 0; b < numBlocks; b++) {
-            for (int ch = 0; ch < channels; ch++) {
-                const uint8_t* block = &adpcmData[b * blockSize + ch * 36];
-
-                int16_t predictor = (int16_t)(block[0] | (block[1] << 8));
-                uint16_t stepIndex = (uint16_t)(block[2] | (block[3] << 8));
-
-                // Fix min/max macro collision
-                stepIndex = (std::clamp)((int)stepIndex, 0, 88);
-
-                int32_t currentVal = predictor;
-
-                for (int i = 4; i < 36; i++) {
-                    uint8_t byte = block[i];
-                    for (int nibble = 0; nibble < 2; nibble++) {
-                        int step = StepTable[stepIndex];
-                        int delta = (nibble == 0) ? (byte & 0x0F) : ((byte >> 4) & 0x0F);
-
-                        int diff = step >> 3;
-                        if (delta & 4) diff += step;
-                        if (delta & 2) diff += step >> 1;
-                        if (delta & 1) diff += step >> 2;
-                        if (delta & 8) currentVal -= diff; else currentVal += diff;
-
-                        currentVal = (std::clamp)(currentVal, -32768, 32767);
-                        pcm.push_back((int16_t)currentVal);
-
-                        static const int IndexTable[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
-                        stepIndex = (std::clamp)(stepIndex + IndexTable[delta], 0, 88);
-                    }
-                }
-            }
-        }
-        return pcm;
-    }
-};
-
-const int16_t XboxAdpcmDecoder::StepTable[89] = {
+static const int16_t StepTable[89] = {
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
     50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
     253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
@@ -96,128 +46,219 @@ const int16_t XboxAdpcmDecoder::StepTable[89] = {
     11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29800, 32767
 };
 
+// Standard IMA Index Table (Extended for nibbles 0-15)
+static const int IndexTable[16] = {
+    -1, -1, -1, -1, 2, 4, 6, 8,
+    -1, -1, -1, -1, 2, 4, 6, 8
+};
+
 // =========================================================
-// 3. AUDIO PLAYER (Miniaudio Wrapper)
+// 3. XBOX ADPCM ENCODER (Fixed Math)
+// =========================================================
+class XboxAdpcmEncoder {
+    struct State {
+        int16_t sample = 0;
+        uint8_t index = 0;
+    };
+
+    // Strictly ported from Sergeanur's ImaADPCM.cpp to fix distortion
+    static uint8_t EncodeNibble(State& state, int16_t target) {
+        int32_t delta = target;
+        delta -= state.sample;
+
+        uint8_t nibble = 0;
+        if (delta < 0) {
+            delta = -delta;
+            nibble |= 8;
+        }
+
+        uint16_t step = StepTable[state.index];
+        int32_t diff = step >> 3;
+
+        // Loop 3 times for 3 bits (4, 2, 1)
+        for (uint8_t i = 0; i < 3; i++) {
+            // Sergeanur uses strict > (Greater Than), not >=
+            if (delta > step) {
+                delta -= step;
+                diff += step;
+                nibble |= (4 >> i);
+            }
+            step >>= 1;
+        }
+
+        if (nibble & 8) diff = -diff;
+
+        state.sample = (int16_t)(std::clamp)((int32_t)state.sample + diff, -32768, 32767);
+        state.index = (uint8_t)(std::clamp)((int)state.index + IndexTable[nibble], 0, 88);
+
+        return nibble;
+    }
+
+public:
+    static std::vector<uint8_t> Encode(const std::vector<int16_t>& pcm) {
+        std::vector<uint8_t> out;
+        if (pcm.empty()) return out;
+
+        // Block Config: 1 Header Sample + 64 Encoded Samples = 65 Total PCM Samples per Block
+        // Output Size: 4 bytes Header + 32 bytes Data = 36 Bytes per Block
+        const int SamplesPerBlock = 65;
+        size_t totalSamples = pcm.size();
+        size_t numBlocks = (totalSamples + SamplesPerBlock - 1) / SamplesPerBlock;
+
+        out.reserve(numBlocks * 36);
+
+        State state;
+        size_t cursor = 0;
+
+        for (size_t b = 0; b < numBlocks; b++) {
+            // 1. HEADER: The Predictor is the FIRST sample of this block
+            int16_t headerSample = (cursor < totalSamples) ? pcm[cursor] : 0;
+
+            // IMPORTANT: The header stores the state used to decode the *following* 64 samples.
+            // Sergeanur's code initializes the decoder with this sample.
+            state.sample = headerSample;
+            state.index = (b == 0) ? 0 : state.index; // Reset index? Usually continued, but Xbox blocks are often independent.
+            // Actually, let's keep index continuity if possible, but the header MUST store the current index.
+
+            // Write Header [Sample(16)][Index(8)][Padding(8)]
+            out.push_back(state.sample & 0xFF);
+            out.push_back((state.sample >> 8) & 0xFF);
+            out.push_back(state.index);
+            out.push_back(0);
+
+            cursor++; // Consume header sample
+
+            // 2. DATA: Encode next 64 samples
+            for (int i = 0; i < 32; i++) {
+                int16_t s1 = (cursor < totalSamples) ? pcm[cursor++] : 0;
+                int16_t s2 = (cursor < totalSamples) ? pcm[cursor++] : 0;
+
+                // Sergeanur encodes Low Nibble first
+                uint8_t n1 = EncodeNibble(state, s1);
+                uint8_t n2 = EncodeNibble(state, s2);
+
+                out.push_back(n1 | (n2 << 4));
+            }
+        }
+        return out;
+    }
+};
+
+// =========================================================
+// 4. XBOX ADPCM DECODER
+// =========================================================
+class XboxAdpcmDecoder {
+public:
+    static std::vector<int16_t> Decode(const std::vector<uint8_t>& adpcmData) {
+        std::vector<int16_t> pcm;
+        if (adpcmData.empty()) return pcm;
+
+        int blockSize = 36;
+        int numBlocks = (int)adpcmData.size() / blockSize;
+        pcm.reserve(numBlocks * 65);
+
+        for (int b = 0; b < numBlocks; b++) {
+            const uint8_t* block = &adpcmData[b * blockSize];
+
+            int16_t predictor = (int16_t)(block[0] | (block[1] << 8));
+            uint16_t stepIndex = (uint16_t)(block[2]); // Index is 1 byte
+            stepIndex = (std::clamp)((int)stepIndex, 0, 88);
+
+            // Output Header Sample
+            int32_t currentVal = predictor;
+            pcm.push_back((int16_t)currentVal);
+
+            // Decode 64 nibbles
+            for (int i = 4; i < 36; i++) {
+                uint8_t byte = block[i];
+                for (int nibble = 0; nibble < 2; nibble++) {
+                    int step = StepTable[stepIndex];
+                    int delta = (nibble == 0) ? (byte & 0x0F) : ((byte >> 4) & 0x0F);
+
+                    int diff = step >> 3;
+                    if (delta & 4) diff += step;
+                    if (delta & 2) diff += step >> 1;
+                    if (delta & 1) diff += step >> 2;
+                    if (delta & 8) currentVal -= diff; else currentVal += diff;
+
+                    currentVal = (std::clamp)(currentVal, -32768, 32767);
+                    pcm.push_back((int16_t)currentVal);
+
+                    stepIndex = (std::clamp)((int)stepIndex + IndexTable[delta], 0, 88);
+                }
+            }
+        }
+        return pcm;
+    }
+};
+
+// =========================================================
+// 5. AUDIO PLAYER
 // =========================================================
 class AudioPlayer {
     ma_device device;
     bool isInit = false;
     std::vector<int16_t> activeBuffer;
-
-    // We use atomic so the UI thread can read position while Audio thread writes it
     std::atomic<size_t> playCursor = 0;
-
     int currentSampleRate = 22050;
 
     static void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
         AudioPlayer* player = (AudioPlayer*)pDevice->pUserData;
         if (!player) return;
-
         int16_t* out = (int16_t*)pOutput;
         size_t cursor = player->playCursor.load();
         size_t total = player->activeBuffer.size();
-
-        size_t samplesNeeded = frameCount;
-        size_t samplesAvailable = (total > cursor) ? (total - cursor) : 0;
-        size_t toCopy = (std::min)(samplesNeeded, samplesAvailable);
+        size_t available = (total > cursor) ? (total - cursor) : 0;
+        size_t toCopy = (std::min)((size_t)frameCount, available);
 
         if (toCopy > 0) {
             memcpy(out, &player->activeBuffer[cursor], toCopy * sizeof(int16_t));
             player->playCursor.store(cursor + toCopy);
         }
-
-        // Fill remainder with silence if we hit end
-        if (toCopy < samplesNeeded) {
-            memset(out + toCopy, 0, (samplesNeeded - toCopy) * sizeof(int16_t));
-            // Optional: Auto-stop or loop could go here
+        if (toCopy < frameCount) {
+            memset(out + toCopy, 0, (frameCount - toCopy) * sizeof(int16_t));
         }
     }
 
 public:
     AudioPlayer() { memset(&device, 0, sizeof(device)); }
-    ~AudioPlayer() { if (isInit) ma_device_uninit(&device); }
+    ~AudioPlayer() { Reset(); }
 
-    void LoadPCM(const std::vector<int16_t>& pcm, int sampleRate) {
-        // Stop old playback
-        if (isInit) {
-            ma_device_uninit(&device);
-            isInit = false;
-        }
+    void Reset() {
+        if (isInit) { ma_device_uninit(&device); isInit = false; }
+        activeBuffer.clear(); playCursor = 0;
+    }
 
+    void PlayPCM(const std::vector<int16_t>& pcm, int sampleRate) {
+        Reset();
         activeBuffer = pcm;
-        playCursor = 0;
         currentSampleRate = sampleRate;
-
         ma_device_config config = ma_device_config_init(ma_device_type_playback);
         config.playback.format = ma_format_s16;
         config.playback.channels = 1;
         config.sampleRate = sampleRate;
         config.dataCallback = data_callback;
         config.pUserData = this;
-
-        if (ma_device_init(NULL, &config, &device) != MA_SUCCESS) return;
-        isInit = true;
-    }
-
-    void Play() {
-        if (isInit && !ma_device_is_started(&device)) {
+        if (ma_device_init(NULL, &config, &device) == MA_SUCCESS) {
+            isInit = true;
             ma_device_start(&device);
         }
     }
 
-    void Pause() {
-        if (isInit && ma_device_is_started(&device)) {
-            ma_device_stop(&device);
-        }
-    }
+    void Play() { if (isInit) ma_device_start(&device); }
+    void Pause() { if (isInit) ma_device_stop(&device); }
+    bool IsPlaying() { return isInit && ma_device_is_started(&device); }
+    float GetProgress() { return activeBuffer.empty() ? 0.0f : (float)playCursor / activeBuffer.size(); }
+    float GetTotalDuration() { return activeBuffer.empty() ? 0.0f : (float)activeBuffer.size() / currentSampleRate; }
 
-    void Toggle() {
-        if (isInit) {
-            if (ma_device_is_started(&device)) Pause();
-            else Play();
-        }
-    }
+    // Missing Function Fixed Here
+    float GetCurrentTime() { return activeBuffer.empty() ? 0.0f : (float)playCursor / currentSampleRate; }
 
-    bool IsPlaying() {
-        return isInit && ma_device_is_started(&device);
-    }
-
-    // Returns progress 0.0 -> 1.0
-    float GetProgress() {
-        if (activeBuffer.empty()) return 0.0f;
-        return (float)playCursor.load() / (float)activeBuffer.size();
-    }
-
-    // Returns current time in seconds
-    float GetCurrentTime() {
-        return (float)playCursor.load() / (float)currentSampleRate;
-    }
-
-    // Returns total duration in seconds
-    float GetTotalDuration() {
-        if (activeBuffer.empty()) return 0.0f;
-        return (float)activeBuffer.size() / (float)currentSampleRate;
-    }
-
-    // Seek to 0.0 -> 1.0
-    void Seek(float progress) {
-        if (activeBuffer.empty()) return;
-        size_t newPos = (size_t)(progress * activeBuffer.size());
-        playCursor.store(newPos);
-    }
-
-    void Reset() {
-        if (isInit) {
-            ma_device_uninit(&device);
-            isInit = false;
-        }
-        activeBuffer.clear();
-        playCursor = 0;
-    }
+    void Seek(float p) { if (!activeBuffer.empty()) playCursor = (size_t)(p * activeBuffer.size()); }
 };
 
 // =========================================================
-// 4. BANK PARSER
+// 6. BANK PARSER
 // =========================================================
 class AudioBankParser {
 public:
@@ -227,9 +268,9 @@ public:
     uint32_t AudioBlobSize = 0;
     std::vector<AudioLookupEntry> Entries;
     bool IsLoaded = false;
-
-    // The player instance for this bank
     AudioPlayer Player;
+
+    std::map<int, std::vector<uint8_t>> ModifiedCache;
 
     bool Parse(const std::string& path) {
         FileName = path;
@@ -252,41 +293,148 @@ public:
             Stream.read((char*)&entry, sizeof(AudioLookupEntry));
             Entries.push_back(entry);
         }
-
         IsLoaded = true;
         return true;
     }
 
     std::vector<int16_t> GetDecodedAudio(int index) {
         if (index < 0 || index >= Entries.size()) return {};
+        std::vector<uint8_t> rawBuffer;
 
-        const auto& e = Entries[index];
-        std::vector<uint8_t> rawBuffer(e.Length);
-
-        Stream.clear();
-        Stream.seekg(AudioBlobStart + e.Offset, std::ios::beg);
-        Stream.read((char*)rawBuffer.data(), e.Length);
-
-        int riffStart = -1;
-        for (size_t i = 0; i < rawBuffer.size() - 4; i++) {
-            if (rawBuffer[i] == 'R' && rawBuffer[i + 1] == 'I' && rawBuffer[i + 2] == 'F' && rawBuffer[i + 3] == 'F') {
-                riffStart = i; break;
-            }
+        if (ModifiedCache.count(index)) {
+            rawBuffer = ModifiedCache[index];
         }
-
-        if (riffStart == -1) return {};
+        else {
+            const auto& e = Entries[index];
+            rawBuffer.resize(e.Length);
+            Stream.clear();
+            Stream.seekg(AudioBlobStart + e.Offset, std::ios::beg);
+            Stream.read((char*)rawBuffer.data(), e.Length);
+        }
 
         int dataStart = -1;
-        for (size_t i = riffStart; i < rawBuffer.size() - 4; i++) {
-            if (rawBuffer[i] == 'd' && rawBuffer[i + 1] == 'a' && rawBuffer[i + 2] == 't' && rawBuffer[i + 3] == 'a') {
-                dataStart = i + 8;
-                break;
-            }
+        for (size_t i = 0; i < rawBuffer.size() - 8; i++) {
+            if (memcmp(&rawBuffer[i], "data", 4) == 0) { dataStart = i + 8; break; }
         }
-
         if (dataStart == -1) return {};
 
         std::vector<uint8_t> adpcmData(rawBuffer.begin() + dataStart, rawBuffer.end());
-        return XboxAdpcmDecoder::Decode(adpcmData, 1);
+        return XboxAdpcmDecoder::Decode(adpcmData);
+    }
+
+    // --- ROBUST IMPORT FUNCTION ---
+    bool ImportWav(int index, const std::string& wavPath) {
+        if (index < 0 || index >= Entries.size()) return false;
+
+        std::ifstream f(wavPath, std::ios::binary);
+        if (!f.is_open()) return false;
+
+        f.seekg(0, std::ios::end);
+        size_t fileSize = f.tellg();
+        f.seekg(0, std::ios::beg);
+        std::vector<uint8_t> fileData(fileSize);
+        f.read((char*)fileData.data(), fileSize);
+        f.close();
+
+        if (fileSize < 12 || memcmp(&fileData[0], "RIFF", 4) != 0 || memcmp(&fileData[8], "WAVE", 4) != 0) {
+            std::cout << "Invalid WAV header" << std::endl;
+            return false;
+        }
+
+        uint16_t numChannels = 0;
+        uint32_t sampleRate = 22050;
+        uint16_t bitsPerSample = 0;
+        const uint8_t* pcmStart = nullptr;
+        size_t pcmBytes = 0;
+
+        size_t cursor = 12;
+        while (cursor < fileSize - 8) {
+            uint32_t chunkId = 0, chunkSize = 0;
+            memcpy(&chunkId, &fileData[cursor], 4);
+            memcpy(&chunkSize, &fileData[cursor + 4], 4);
+            size_t chunkDataPos = cursor + 8;
+
+            if (memcmp(&chunkId, "fmt ", 4) == 0) {
+                memcpy(&numChannels, &fileData[chunkDataPos + 2], 2);
+                memcpy(&sampleRate, &fileData[chunkDataPos + 4], 4);
+                memcpy(&bitsPerSample, &fileData[chunkDataPos + 14], 2);
+            }
+            else if (memcmp(&chunkId, "data", 4) == 0) {
+                pcmStart = &fileData[chunkDataPos];
+                pcmBytes = chunkSize;
+            }
+            cursor += 8 + chunkSize;
+        }
+
+        if (!pcmStart || pcmBytes == 0 || numChannels == 0) return false;
+
+        // --- CONVERT TO RAW MONO PCM ---
+        std::vector<int16_t> finalPcm;
+        if (bitsPerSample == 16) {
+            size_t numSamples = pcmBytes / 2;
+            const int16_t* src = (const int16_t*)pcmStart;
+
+            if (numChannels == 1) {
+                // Mono: Direct Copy
+                finalPcm.assign(src, src + numSamples);
+            }
+            else if (numChannels == 2) {
+                // Stereo: Drop Right Channel, Keep Left Only
+                // Averaging causes phase noise if channels differ. Dropping is safer for cleaning noise.
+                size_t numFrames = numSamples / 2;
+                finalPcm.reserve(numFrames);
+                for (size_t i = 0; i < numFrames; i++) {
+                    finalPcm.push_back(src[i * 2]);
+                }
+            }
+        }
+        else {
+            std::cout << "Unsupported bit depth: " << bitsPerSample << std::endl;
+            return false;
+        }
+
+        // --- ENCODE ---
+        std::vector<uint8_t> encoded = XboxAdpcmEncoder::Encode(finalPcm);
+
+        // --- WRAP IN RIFF ---
+        std::vector<uint8_t> riffFile;
+        uint32_t totalSize = 36 + (uint32_t)encoded.size();
+
+        auto pushU32 = [&](uint32_t v) { riffFile.insert(riffFile.end(), { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24) }); };
+        auto pushU16 = [&](uint16_t v) { riffFile.insert(riffFile.end(), { (uint8_t)v, (uint8_t)(v >> 8) }); };
+        auto pushStr = [&](const char* s) { riffFile.insert(riffFile.end(), s, s + 4); };
+
+        pushStr("RIFF"); pushU32(totalSize); pushStr("WAVE");
+        pushStr("fmt "); pushU32(20); pushU16(0x0069); pushU16(1);
+        pushU32(sampleRate);
+        pushU32((sampleRate * 36) / 64);
+        pushU16(36); pushU16(4); pushU16(2); pushU16(64);
+        pushStr("data"); pushU32((uint32_t)encoded.size());
+        riffFile.insert(riffFile.end(), encoded.begin(), encoded.end());
+
+        // --- PREPEND INTERNAL HEADER ---
+        std::vector<uint8_t> finalBlob;
+        const auto& originalEntry = Entries[index];
+        Stream.clear();
+        Stream.seekg(AudioBlobStart + originalEntry.Offset, std::ios::beg);
+
+        std::vector<uint8_t> headerProbe(64);
+        Stream.read((char*)headerProbe.data(), 64);
+
+        int riffStart = -1;
+        for (int i = 0; i < 60; i++) if (memcmp(&headerProbe[i], "RIFF", 4) == 0) { riffStart = i; break; }
+
+        if (riffStart > 0) {
+            finalBlob.resize(riffStart);
+            memcpy(finalBlob.data(), headerProbe.data(), riffStart);
+        }
+        else {
+            finalBlob.resize(30, 0);
+            memcpy(finalBlob.data(), &originalEntry.SoundID, 4);
+        }
+
+        finalBlob.insert(finalBlob.end(), riffFile.begin(), riffFile.end());
+        ModifiedCache[index] = finalBlob;
+        return true;
     }
 };
