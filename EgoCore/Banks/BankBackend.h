@@ -5,6 +5,7 @@
 #include "AnimParser.h"
 #include "AnimProperties.h"
 #include "TextureParser.h"
+#include "AudioBackend.h" // <--- NEW: Include the Audio Backend
 #include <fstream>
 #include <vector>
 #include <string>
@@ -16,8 +17,9 @@
 
 namespace fs = std::filesystem;
 
+// Updated Enum with 'Audio'
 enum class EBankType {
-    Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders
+    Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio
 };
 
 struct BankEntry {
@@ -50,6 +52,10 @@ struct LoadedBank {
     std::vector<int> FilteredIndices;
 
     std::unique_ptr<std::fstream> Stream;
+
+    // <--- NEW: Generic pointer to the Audio Parser (only used if Type == Audio)
+    std::shared_ptr<AudioBankParser> AudioParser;
+
     int SelectedEntryIndex = -1;
     int SelectedLOD = 0;
     char FilterText[128] = "";
@@ -78,6 +84,8 @@ static bool g_MeshUploadNeeded = false;
 static C3DAnimationInfo g_ActiveAnim;
 static AnimUIContext    g_AnimUIState;
 static bool             g_AnimParseSuccess = false;
+
+// --- UTILS ---
 
 inline bool StartsWith(const std::string& str, const std::string& prefix) {
     if (str.length() < prefix.length()) return false;
@@ -202,8 +210,41 @@ inline void InitializeBank(LoadedBank& bank) {
     }
 }
 
+inline void WriteWavFile(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate, int channels) {
+    if (pcm.empty()) return;
+    std::ofstream f(path, std::ios::binary);
+
+    int byteRate = sampleRate * channels * 2;
+    int dataChunkSize = (int)pcm.size() * 2;
+    int fileSize = 36 + dataChunkSize;
+
+    f.write("RIFF", 4);
+    f.write((char*)&fileSize, 4);
+    f.write("WAVE", 4);
+    f.write("fmt ", 4);
+    int fmtChunkSize = 16;
+    short audioFormat = 1; // PCM
+    short numChannels = (short)channels;
+    int sampleRate32 = sampleRate;
+    short blockAlign = (short)(channels * 2);
+    short bitsPerSample = 16;
+
+    f.write((char*)&fmtChunkSize, 4);
+    f.write((char*)&audioFormat, 2);
+    f.write((char*)&numChannels, 2);
+    f.write((char*)&sampleRate32, 4);
+    f.write((char*)&byteRate, 4);
+    f.write((char*)&blockAlign, 2);
+    f.write((char*)&bitsPerSample, 2);
+
+    f.write("data", 4);
+    f.write((char*)&dataChunkSize, 4);
+    f.write((char*)pcm.data(), dataChunkSize);
+    f.close();
+}
+
 inline void LoadBank(const std::string& path) {
-    if (g_OpenBanks.size() >= 8) {
+    if (g_OpenBanks.size() >= 10) {
         g_BankStatus = "Limit reached (Max 8 Banks). Close one first.";
         return;
     }
@@ -219,6 +260,40 @@ inline void LoadBank(const std::string& path) {
     newBank.FullPath = path;
     newBank.FileName = fs::path(path).filename().string();
 
+    // --- CHECK FOR .LUT AUDIO FILES ---
+    std::string ext = fs::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    if (ext == ".lut") {
+        newBank.Type = EBankType::Audio;
+        newBank.AudioParser = std::make_shared<AudioBankParser>();
+
+        if (newBank.AudioParser->Parse(path)) {
+            // Convert the Audio Parser's internal entries into generic BankEntries for the UI
+            for (size_t i = 0; i < newBank.AudioParser->Entries.size(); i++) {
+                const auto& audioEntry = newBank.AudioParser->Entries[i];
+                BankEntry be;
+                be.ID = audioEntry.SoundID;
+                be.Name = "Sound ID " + std::to_string(audioEntry.SoundID);
+                be.Size = audioEntry.Length;
+                be.Offset = audioEntry.Offset;
+                be.Type = 999; // Arbitrary type ID for Audio
+
+                newBank.Entries.push_back(be);
+                newBank.FilteredIndices.push_back((int)i);
+            }
+            g_OpenBanks.push_back(std::move(newBank));
+            g_ActiveBankIndex = (int)g_OpenBanks.size() - 1;
+            g_BankStatus = "Loaded Audio Bank.";
+        }
+        else {
+            g_BankStatus = "Failed to parse .LUT file.";
+        }
+        // Return early so we don't try to read it as a .BIG
+        return;
+    }
+
+    // --- STANDARD .BIG PARSING LOGIC ---
     newBank.Stream->open(path, std::ios::binary | std::ios::in | std::ios::out);
     if (!newBank.Stream->is_open()) {
         newBank.Stream->clear();

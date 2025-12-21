@@ -104,14 +104,6 @@ struct DefWorkspace {
 
 static DefWorkspace g_DefWorkspace;
 
-static std::string OpenFolderDialog() {
-    char path[MAX_PATH];
-    BROWSEINFOA bi = { 0 }; bi.lpszTitle = "Select Game Root Folder"; bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-    LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
-    if (pidl != 0) { SHGetPathFromIDListA(pidl, path); CoTaskMemFree(pidl); return std::string(path); }
-    return "";
-}
-
 static void LoadHeadersFromDir(const std::string& rootPath) {
     g_DefWorkspace.AllEnums.clear();
     std::set<std::string> visitedFiles;

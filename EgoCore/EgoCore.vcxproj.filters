@@ -43,6 +43,9 @@
     <Filter Include="Source Files\LipSync">
       <UniqueIdentifier>{2fa367e9-8aca-426d-9c75-9a5dad09e2e7}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Audio">
+      <UniqueIdentifier>{f74d7e13-b583-4403-ba8f-bcd1dd6a0073}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -140,6 +143,18 @@
     </ClInclude>
     <ClInclude Include="BinaryParser.h">
       <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="FileDialogs.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="AudioBackend.h">
+      <Filter>Source Files\Audio</Filter>
+    </ClInclude>
+    <ClInclude Include="miniaudio.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="AudioExplorer.h">
+      <Filter>Source Files\Audio</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

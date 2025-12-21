@@ -21,6 +21,8 @@
   <ItemGroup>
     <ClInclude Include="Animations\AnimParser.h" />
     <ClInclude Include="Animations\AnimProperties.h" />
+    <ClInclude Include="AudioBackend.h" />
+    <ClInclude Include="AudioExplorer.h" />
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="BinaryParser.h" />
@@ -28,12 +30,14 @@
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
+    <ClInclude Include="FileDialogs.h" />
     <ClInclude Include="LipSyncParser.h" />
     <ClInclude Include="LipSyncProperties.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
+    <ClInclude Include="miniaudio.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
     <ClInclude Include="Textures\TextureExporter.h" />

@@ -1,6 +1,8 @@
 #pragma once
 #include "imgui.h"
+#include "FileDialogs.h"
 #include "DefBackend.h"
+#include "BankExplorer.h"
 #include "ConfigBackend.h" 
 #include "CompilerBackend.h"
 
