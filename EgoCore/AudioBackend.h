@@ -6,9 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
-#include <cstring> // memcpy
+#include <cstring> 
+#include <filesystem> 
 
-// MINIAUDIO (Must be defined in main.cpp)
 #include "miniaudio.h"
 
 // =========================================================
@@ -46,14 +46,13 @@ static const int16_t StepTable[89] = {
     11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29800, 32767
 };
 
-// Standard IMA Index Table (Extended for nibbles 0-15)
 static const int IndexTable[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8,
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
 // =========================================================
-// 3. XBOX ADPCM ENCODER (Fixed Math)
+// 3. XBOX ADPCM ENCODER
 // =========================================================
 class XboxAdpcmEncoder {
     struct State {
@@ -61,27 +60,19 @@ class XboxAdpcmEncoder {
         uint8_t index = 0;
     };
 
-    // Strictly ported from Sergeanur's ImaADPCM.cpp to fix distortion
     static uint8_t EncodeNibble(State& state, int16_t target) {
         int32_t delta = target;
         delta -= state.sample;
 
         uint8_t nibble = 0;
-        if (delta < 0) {
-            delta = -delta;
-            nibble |= 8;
-        }
+        if (delta < 0) { delta = -delta; nibble |= 8; }
 
         uint16_t step = StepTable[state.index];
         int32_t diff = step >> 3;
 
-        // Loop 3 times for 3 bits (4, 2, 1)
         for (uint8_t i = 0; i < 3; i++) {
-            // Sergeanur uses strict > (Greater Than), not >=
             if (delta > step) {
-                delta -= step;
-                diff += step;
-                nibble |= (4 >> i);
+                delta -= step; diff += step; nibble |= (4 >> i);
             }
             step >>= 1;
         }
@@ -99,8 +90,6 @@ public:
         std::vector<uint8_t> out;
         if (pcm.empty()) return out;
 
-        // Block Config: 1 Header Sample + 64 Encoded Samples = 65 Total PCM Samples per Block
-        // Output Size: 4 bytes Header + 32 bytes Data = 36 Bytes per Block
         const int SamplesPerBlock = 65;
         size_t totalSamples = pcm.size();
         size_t numBlocks = (totalSamples + SamplesPerBlock - 1) / SamplesPerBlock;
@@ -111,32 +100,22 @@ public:
         size_t cursor = 0;
 
         for (size_t b = 0; b < numBlocks; b++) {
-            // 1. HEADER: The Predictor is the FIRST sample of this block
             int16_t headerSample = (cursor < totalSamples) ? pcm[cursor] : 0;
-
-            // IMPORTANT: The header stores the state used to decode the *following* 64 samples.
-            // Sergeanur's code initializes the decoder with this sample.
             state.sample = headerSample;
-            state.index = (b == 0) ? 0 : state.index; // Reset index? Usually continued, but Xbox blocks are often independent.
-            // Actually, let's keep index continuity if possible, but the header MUST store the current index.
+            state.index = (b == 0) ? 0 : state.index;
 
-            // Write Header [Sample(16)][Index(8)][Padding(8)]
             out.push_back(state.sample & 0xFF);
             out.push_back((state.sample >> 8) & 0xFF);
             out.push_back(state.index);
             out.push_back(0);
 
-            cursor++; // Consume header sample
+            cursor++;
 
-            // 2. DATA: Encode next 64 samples
             for (int i = 0; i < 32; i++) {
                 int16_t s1 = (cursor < totalSamples) ? pcm[cursor++] : 0;
                 int16_t s2 = (cursor < totalSamples) ? pcm[cursor++] : 0;
-
-                // Sergeanur encodes Low Nibble first
                 uint8_t n1 = EncodeNibble(state, s1);
                 uint8_t n2 = EncodeNibble(state, s2);
-
                 out.push_back(n1 | (n2 << 4));
             }
         }
@@ -161,14 +140,12 @@ public:
             const uint8_t* block = &adpcmData[b * blockSize];
 
             int16_t predictor = (int16_t)(block[0] | (block[1] << 8));
-            uint16_t stepIndex = (uint16_t)(block[2]); // Index is 1 byte
+            uint16_t stepIndex = (uint16_t)(block[2]);
             stepIndex = (std::clamp)((int)stepIndex, 0, 88);
 
-            // Output Header Sample
             int32_t currentVal = predictor;
             pcm.push_back((int16_t)currentVal);
 
-            // Decode 64 nibbles
             for (int i = 4; i < 36; i++) {
                 uint8_t byte = block[i];
                 for (int nibble = 0; nibble < 2; nibble++) {
@@ -250,10 +227,7 @@ public:
     bool IsPlaying() { return isInit && ma_device_is_started(&device); }
     float GetProgress() { return activeBuffer.empty() ? 0.0f : (float)playCursor / activeBuffer.size(); }
     float GetTotalDuration() { return activeBuffer.empty() ? 0.0f : (float)activeBuffer.size() / currentSampleRate; }
-
-    // Missing Function Fixed Here
     float GetCurrentTime() { return activeBuffer.empty() ? 0.0f : (float)playCursor / currentSampleRate; }
-
     void Seek(float p) { if (!activeBuffer.empty()) playCursor = (size_t)(p * activeBuffer.size()); }
 };
 
@@ -265,7 +239,11 @@ public:
     std::string FileName;
     std::fstream Stream;
     uint32_t AudioBlobStart = 44;
-    uint32_t AudioBlobSize = 0;
+
+    LHAudioBankCompData MainHeader;
+    LHAudioBankLookupTable TableHeader;
+    std::vector<uint8_t> FooterData;
+
     std::vector<AudioLookupEntry> Entries;
     bool IsLoaded = false;
     AudioPlayer Player;
@@ -277,23 +255,35 @@ public:
         Stream.open(path, std::ios::binary | std::ios::in);
         if (!Stream.is_open()) return false;
 
-        LHAudioBankCompData mainHeader;
-        Stream.read((char*)&mainHeader, sizeof(LHAudioBankCompData));
-        AudioBlobSize = mainHeader.TotalAudioSize;
+        Stream.read((char*)&MainHeader, sizeof(LHAudioBankCompData));
+        AudioBlobStart = sizeof(LHAudioBankCompData);
 
-        uint32_t tableOffset = 44 + AudioBlobSize;
+        uint32_t tableOffset = AudioBlobStart + MainHeader.TotalAudioSize;
         Stream.seekg(tableOffset, std::ios::beg);
 
-        LHAudioBankLookupTable tableHeader;
-        Stream.read((char*)&tableHeader, sizeof(LHAudioBankLookupTable));
+        Stream.read((char*)&TableHeader, sizeof(LHAudioBankLookupTable));
 
         Entries.clear();
-        for (uint32_t i = 0; i < tableHeader.NumEntries; i++) {
+        for (uint32_t i = 0; i < TableHeader.NumEntries; i++) {
             AudioLookupEntry entry;
             Stream.read((char*)&entry, sizeof(AudioLookupEntry));
             Entries.push_back(entry);
         }
+
+        std::streampos currentPos = Stream.tellg();
+        Stream.seekg(0, std::ios::end);
+        std::streampos endPos = Stream.tellg();
+        size_t footerSize = (size_t)(endPos - currentPos);
+
+        if (footerSize > 0) {
+            Stream.seekg(currentPos, std::ios::beg);
+            FooterData.resize(footerSize);
+            Stream.read((char*)FooterData.data(), footerSize);
+        }
+        else FooterData.clear();
+
         IsLoaded = true;
+        ModifiedCache.clear();
         return true;
     }
 
@@ -322,7 +312,6 @@ public:
         return XboxAdpcmDecoder::Decode(adpcmData);
     }
 
-    // --- ROBUST IMPORT FUNCTION ---
     bool ImportWav(int index, const std::string& wavPath) {
         if (index < 0 || index >= Entries.size()) return false;
 
@@ -336,10 +325,7 @@ public:
         f.read((char*)fileData.data(), fileSize);
         f.close();
 
-        if (fileSize < 12 || memcmp(&fileData[0], "RIFF", 4) != 0 || memcmp(&fileData[8], "WAVE", 4) != 0) {
-            std::cout << "Invalid WAV header" << std::endl;
-            return false;
-        }
+        if (fileSize < 12 || memcmp(&fileData[0], "RIFF", 4) != 0 || memcmp(&fileData[8], "WAVE", 4) != 0) return false;
 
         uint16_t numChannels = 0;
         uint32_t sampleRate = 22050;
@@ -368,51 +354,41 @@ public:
 
         if (!pcmStart || pcmBytes == 0 || numChannels == 0) return false;
 
-        // --- CONVERT TO RAW MONO PCM ---
         std::vector<int16_t> finalPcm;
         if (bitsPerSample == 16) {
             size_t numSamples = pcmBytes / 2;
             const int16_t* src = (const int16_t*)pcmStart;
-
-            if (numChannels == 1) {
-                // Mono: Direct Copy
-                finalPcm.assign(src, src + numSamples);
-            }
+            if (numChannels == 1) finalPcm.assign(src, src + numSamples);
             else if (numChannels == 2) {
-                // Stereo: Drop Right Channel, Keep Left Only
-                // Averaging causes phase noise if channels differ. Dropping is safer for cleaning noise.
                 size_t numFrames = numSamples / 2;
                 finalPcm.reserve(numFrames);
-                for (size_t i = 0; i < numFrames; i++) {
-                    finalPcm.push_back(src[i * 2]);
-                }
+                for (size_t i = 0; i < numFrames; i++) finalPcm.push_back(src[i * 2]);
             }
         }
-        else {
-            std::cout << "Unsupported bit depth: " << bitsPerSample << std::endl;
-            return false;
-        }
+        else return false;
 
-        // --- ENCODE ---
         std::vector<uint8_t> encoded = XboxAdpcmEncoder::Encode(finalPcm);
 
-        // --- WRAP IN RIFF ---
+        // --- WRAP IN RIFF (NO FACT CHUNK) ---
+        uint32_t riffSize = 4 + 28 + 8 + (uint32_t)encoded.size();
+
         std::vector<uint8_t> riffFile;
-        uint32_t totalSize = 36 + (uint32_t)encoded.size();
+        riffFile.reserve(riffSize + 8);
 
         auto pushU32 = [&](uint32_t v) { riffFile.insert(riffFile.end(), { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24) }); };
         auto pushU16 = [&](uint16_t v) { riffFile.insert(riffFile.end(), { (uint8_t)v, (uint8_t)(v >> 8) }); };
         auto pushStr = [&](const char* s) { riffFile.insert(riffFile.end(), s, s + 4); };
 
-        pushStr("RIFF"); pushU32(totalSize); pushStr("WAVE");
+        pushStr("RIFF"); pushU32(riffSize); pushStr("WAVE");
         pushStr("fmt "); pushU32(20); pushU16(0x0069); pushU16(1);
         pushU32(sampleRate);
         pushU32((sampleRate * 36) / 64);
         pushU16(36); pushU16(4); pushU16(2); pushU16(64);
+
         pushStr("data"); pushU32((uint32_t)encoded.size());
         riffFile.insert(riffFile.end(), encoded.begin(), encoded.end());
 
-        // --- PREPEND INTERNAL HEADER ---
+        // --- PREPEND & PATCH INTERNAL HEADER ---
         std::vector<uint8_t> finalBlob;
         const auto& originalEntry = Entries[index];
         Stream.clear();
@@ -427,6 +403,18 @@ public:
         if (riffStart > 0) {
             finalBlob.resize(riffStart);
             memcpy(finalBlob.data(), headerProbe.data(), riffStart);
+
+            // --- PATCH HEADER (CORRECTED OFFSETS) ---
+            if (riffStart >= 12) {
+                // Offset 6: Sample Rate
+                uint16_t* pRate = (uint16_t*)&finalBlob[6];
+                *pRate = (uint16_t)sampleRate;
+
+                // Offset 8: Duration/Size
+                // Updating this to RIFF file size to give the game a valid bounds check
+                uint32_t* pSize = (uint32_t*)&finalBlob[8];
+                *pSize = (uint32_t)riffFile.size();
+            }
         }
         else {
             finalBlob.resize(30, 0);
@@ -435,6 +423,65 @@ public:
 
         finalBlob.insert(finalBlob.end(), riffFile.begin(), riffFile.end());
         ModifiedCache[index] = finalBlob;
+        return true;
+    }
+
+    bool SaveBank(const std::string& path) {
+        bool isOverwriting = (path == FileName);
+        std::string targetPath = isOverwriting ? path + ".tmp" : path;
+
+        std::ofstream out(targetPath, std::ios::binary);
+        if (!out.is_open()) return false;
+
+        out.write((char*)&MainHeader, sizeof(MainHeader));
+
+        std::vector<AudioLookupEntry> newEntries;
+        uint32_t currentOffset = 0;
+
+        for (int i = 0; i < (int)Entries.size(); i++) {
+            std::vector<uint8_t> buffer;
+
+            if (ModifiedCache.count(i)) {
+                buffer = ModifiedCache[i];
+            }
+            else {
+                const auto& oldE = Entries[i];
+                buffer.resize(oldE.Length);
+                Stream.clear();
+                Stream.seekg(AudioBlobStart + oldE.Offset, std::ios::beg);
+                Stream.read((char*)buffer.data(), oldE.Length);
+            }
+
+            out.write((char*)buffer.data(), buffer.size());
+
+            AudioLookupEntry newE = Entries[i];
+            newE.Offset = currentOffset;
+            newE.Length = (uint32_t)buffer.size();
+            newEntries.push_back(newE);
+
+            currentOffset += (uint32_t)buffer.size();
+        }
+
+        TableHeader.NumEntries = (uint32_t)newEntries.size();
+        out.write((char*)&TableHeader, sizeof(TableHeader));
+
+        for (const auto& e : newEntries) out.write((char*)&e, sizeof(AudioLookupEntry));
+
+        if (!FooterData.empty()) out.write((char*)FooterData.data(), FooterData.size());
+
+        out.seekp(0, std::ios::beg);
+        MainHeader.TotalAudioSize = currentOffset;
+        out.write((char*)&MainHeader, sizeof(MainHeader));
+
+        out.close();
+
+        if (isOverwriting) {
+            Stream.close();
+            std::filesystem::remove(path);
+            std::filesystem::rename(targetPath, path);
+            Parse(path);
+        }
+
         return true;
     }
 };
