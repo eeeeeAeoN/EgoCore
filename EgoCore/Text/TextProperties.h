@@ -2,10 +2,12 @@
 #include "imgui.h"
 #include "BankBackend.h" 
 #include "TextParser.h"
-#include "BinaryParser.h" // Needed for CRC & Search
+#include "BinaryParser.h" 
 #include <string>
 #include <codecvt> 
 #include <vector>
+#include <sstream>
+#include <iomanip>
 
 static CTextParser g_TextParser;
 
@@ -28,7 +30,7 @@ inline std::string FetchTextContent(LoadedBank* bank, uint32_t id) {
             std::vector<uint8_t> buffer(size + 64);
             bank->Stream->read((char*)buffer.data(), size);
             tempParser.Parse(buffer, bank->Entries[i].Type);
-            if (tempParser.IsParsed && !tempParser.IsGroup) {
+            if (tempParser.IsParsed && !tempParser.IsGroup && !tempParser.IsNarratorList) {
                 return WStringToString(tempParser.TextData.Content);
             }
             return "[Content]";
@@ -54,63 +56,65 @@ inline void ResolveGroupMetadata(LoadedBank* bank) {
     }
 }
 
-// Updated to accept the list of loaded binaries for lookup
 inline void DrawTextProperties(const std::vector<BinaryParser>& loadedBinaries) {
     if (!g_TextParser.IsParsed) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to parse text entry.");
         return;
     }
 
+    // --- TYPE 1: GROUP ENTRY ---
     if (g_TextParser.IsGroup) {
-        // ... (Group drawing logic remains same) ...
-        ImGui::Text("Group Entry");
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Group Entry (%zu Items)", g_TextParser.GroupData.Items.size());
+        ImGui::Separator();
+
+        if (ImGui::BeginTable("GroupTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 300))) {
+            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 150);
+            ImGui::TableSetupColumn("Content", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            ImGuiListClipper clipper;
+            clipper.Begin((int)g_TextParser.GroupData.Items.size());
+            while (clipper.Step()) {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
+                    const auto& item = g_TextParser.GroupData.Items[i];
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::Text("%d", item.ID);
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("%s", item.CachedName.c_str());
+                    ImGui::TableSetColumnIndex(2); ImGui::TextWrapped("%s", item.CachedContent.c_str());
+                }
+            }
+            ImGui::EndTable();
+        }
         return;
     }
 
-    const auto& e = g_TextParser.TextData;
+    // --- TYPE 2: NARRATOR LIST ---
+    if (g_TextParser.IsNarratorList) {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 1.0f, 1.0f), "Narrator List Entry (Type 2)");
+        ImGui::Text("Parsed Strings: %zu", g_TextParser.NarratorStrings.size());
+        ImGui::Separator();
 
-    // --- 1. IDENTIFIER & CRC ---
-    ImGui::TextColored(ImVec4(0.5f, 1.0f, 1.0f, 1.0f), "ID: %s", e.Identifier.c_str());
-
-    // Calculate CRC live
-    uint32_t crc = BinaryParser::CalculateCRC32(e.Identifier);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(CRC: %08X)", crc);
-
-    // --- 2. AUDIO LINK CHECK ---
-    // Search for this CRC in the loaded binaries
-    bool foundLink = false;
-    int32_t linkedID = -1;
-    std::string foundInFile = "";
-
-    for (const auto& bin : loadedBinaries) {
-        for (const auto& entry : bin.Data.Entries) {
-            if (entry.CRC == crc) {
-                linkedID = entry.ID;
-                foundInFile = bin.Data.FileName;
-                foundLink = true;
-                break;
+        // 1. Parsed String List
+        if (ImGui::CollapsingHeader("Parsed Strings", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::BeginChild("NarratorStr", ImVec2(0, 300), true)) {
+                for (const auto& s : g_TextParser.NarratorStrings) {
+                    ImGui::Text("- %s", s.c_str());
+                }
             }
+            ImGui::EndChild();
         }
-        if (foundLink) break;
+        // Removed Hex Dump and Raw Size
+        return;
     }
 
-    ImGui::Separator();
-    if (foundLink) {
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Audio Link Found!");
-        ImGui::Text("File: %s", foundInFile.c_str());
-        ImGui::Text("Audio ID: %d", linkedID);
-        ImGui::SameLine();
-        ImGui::TextDisabled("(This ID matches dialogue.lut)");
-    }
-    else {
-        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "No Audio Link Found");
-        if (loadedBinaries.empty()) ImGui::TextDisabled("(No binary definitions loaded)");
-        else ImGui::TextDisabled("(Checked %zu binaries)", loadedBinaries.size());
-    }
-    ImGui::Separator();
+    // --- TYPE 0: TEXT ENTRY ---
+    auto& e = g_TextParser.TextData;
 
-    // --- 3. STANDARD PROPERTIES ---
+    ImGui::TextColored(ImVec4(0.5f, 1.0f, 1.0f, 1.0f), "ID: %s", e.Identifier.c_str());
+    // Removed CRC Display
+
+    ImGui::Separator();
     if (ImGui::BeginTable("TextMeta", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("Value");
@@ -121,10 +125,26 @@ inline void DrawTextProperties(const std::vector<BinaryParser>& loadedBinaries) 
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Sound Bank");
         ImGui::TableSetColumnIndex(1);
         ImGui::TextColored(ImVec4(1, 0.8f, 0.5f, 1), "%s", e.SpeechBank.c_str());
-        if (foundLink && e.SpeechBank.find("MAIN") != std::string::npos && foundInFile.find("dialoguesnds") != std::string::npos) {
-            ImGui::SameLine(); ImGui::TextDisabled("(Matches .bin)");
-        }
 
+        ImGui::EndTable();
+    }
+
+    // --- MODIFIERS / TAGS ---
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Modifiers / Tags (%zu)", e.Tags.size());
+    if (ImGui::BeginTable("TagsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 100))) {
+        ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthFixed, 80);
+        ImGui::TableSetupColumn("Tag Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+
+        for (auto& tag : e.Tags) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%d", tag.Position);
+
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%s", tag.Name.c_str());
+        }
         ImGui::EndTable();
     }
 

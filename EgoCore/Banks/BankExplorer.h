@@ -11,7 +11,7 @@
 #include "GltfExporter.h"
 #include "LipSyncProperties.h"
 #include "BinaryParser.h"
-#include "AudioExplorer.h" // <--- NEW: Using the dedicated Audio UI file
+#include "AudioExplorer.h"
 #include <windows.h>
 #include <algorithm>
 #include <vector>
@@ -20,8 +20,6 @@
 
 static bool g_HasInitialized = false;
 static std::vector<BinaryParser> g_LoadedBinaries;
-
-// --- INITIALIZATION ---
 
 static void LoadSystemBinaries(const std::string& gameRoot) {
     namespace fs = std::filesystem;
@@ -73,6 +71,8 @@ static void SelectEntry(LoadedBank* bank, int idx) {
     g_TextParser.IsParsed = false;
     g_TextParser.TextData = CTextEntry();
     g_TextParser.GroupData = CTextGroup();
+    g_TextParser.NarratorStrings.clear();
+    g_TextParser.RawData.clear();
     g_LipSyncParser.Data = CLipSyncData();
 
     bank->SelectedEntryIndex = idx;
@@ -81,13 +81,51 @@ static void SelectEntry(LoadedBank* bank, int idx) {
 
     if (bank->Type != EBankType::Audio) {
         bank->Stream->clear();
-        bank->Stream->seekg(e.Offset, std::ios::beg);
-        size_t fileSize = (e.Size > 50000000) ? 50000000 : e.Size;
-        size_t paddedSize = fileSize + 64;
 
-        bank->CurrentEntryRawData.clear();
-        bank->CurrentEntryRawData.resize(paddedSize, 0);
-        bank->Stream->read((char*)bank->CurrentEntryRawData.data(), fileSize);
+        size_t effectiveOffset = e.Offset;
+        size_t effectiveSize = e.Size;
+
+        // --- FIX: Handle 0-Offset/0-Size entries (Type 2 Narrator List) ---
+        if (e.Type == 2 && (effectiveOffset == 0 || effectiveSize == 0)) {
+            // Find the end of the last valid entry in the bank
+            size_t maxEnd = 0;
+            for (const auto& other : bank->Entries) {
+                if (other.ID != e.ID && other.Offset > 0) {
+                    size_t end = other.Offset + other.Size;
+                    if (end > maxEnd) maxEnd = end;
+                }
+            }
+
+            // Assume this entry starts after the last one
+            if (maxEnd > 0) {
+                effectiveOffset = maxEnd;
+            }
+
+            // Calculate size until EOF
+            bank->Stream->seekg(0, std::ios::end);
+            size_t fileEnd = bank->Stream->tellg();
+            if (fileEnd > effectiveOffset) {
+                effectiveSize = fileEnd - effectiveOffset;
+            }
+            else {
+                effectiveSize = 0; // Invalid
+            }
+        }
+        else if (effectiveSize > 50000000) {
+            effectiveSize = 50000000;
+        }
+
+        if (effectiveSize > 0) {
+            bank->Stream->seekg(effectiveOffset, std::ios::beg);
+            // Alloc extra padding just in case parser overreads
+            bank->CurrentEntryRawData.resize(effectiveSize + 64);
+            bank->Stream->read((char*)bank->CurrentEntryRawData.data(), effectiveSize);
+            // Trim back to exact size for the raw buffer logic
+            bank->CurrentEntryRawData.resize(effectiveSize);
+        }
+        else {
+            bank->CurrentEntryRawData.clear();
+        }
     }
 
     if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend) {
@@ -158,27 +196,22 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     }
 }
 
-// --- DRAWING FUNCTIONS ---
-
 static void DrawBinaryTab() {
     static bool isCompilingBins = false;
     static std::string compileBinStatus = "";
     static bool showBinResult = false;
 
-    // --- TOOLBAR ---
     if (ImGui::Button("Load Binaries from Data/Defs")) {
         LoadSystemBinaries(g_AppConfig.GameRootPath);
     }
 
     ImGui::SameLine();
 
-    // NEW COMPILE BUTTON
     if (ImGui::Button("Compile Sound Binaries")) {
         compileBinStatus = "Starting compilation...";
         isCompilingBins = true;
         ImGui::OpenPopup("Compiling Binaries");
 
-        // Run in thread to avoid freezing UI
         std::thread([&]() {
             std::string log = "";
             std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
@@ -189,7 +222,6 @@ static void DrawBinaryTab() {
             }).detach();
     }
 
-    // --- LOADING POPUP ---
     if (ImGui::BeginPopupModal("Compiling Binaries", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         if (isCompilingBins) {
             ImGui::Text("Compiling binaries...");
@@ -204,7 +236,6 @@ static void DrawBinaryTab() {
         ImGui::EndPopup();
     }
 
-    // --- RESULT POPUP ---
     if (showBinResult) {
         ImGui::OpenPopup("Binary Compile Result");
         showBinResult = false;
@@ -216,7 +247,6 @@ static void DrawBinaryTab() {
         ImGui::Separator();
         if (ImGui::Button("OK", ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();
-            // Reload binaries to see changes
             LoadSystemBinaries(g_AppConfig.GameRootPath);
         }
         ImGui::EndPopup();
@@ -229,19 +259,13 @@ static void DrawBinaryTab() {
         return;
     }
 
-    // ... (Rest of the existing DrawBinaryTab logic: CRC Checker, Tabs, etc.) ...
     ImGui::TextColored(ImVec4(0, 1, 1, 1), "Manual CRC Checker");
     static char buf[128] = "";
     ImGui::InputText("Sound Name", buf, 128);
     if (buf[0] != 0) {
-        // Use the Fable CRC for checking now
         uint32_t hash = BinaryParser::CalculateCRC32_Fable(buf);
         ImGui::SameLine();
         ImGui::TextDisabled("Fable CRC: %08X", hash);
-
-        // Also show Standard CRC just in case
-        // uint32_t stdHash = BinaryParser::CalculateCRC32_Standard(buf);
-        // ImGui::TextDisabled("Standard CRC: %08X", stdHash);
 
         bool found = false;
         for (const auto& parser : g_LoadedBinaries) {
@@ -256,7 +280,6 @@ static void DrawBinaryTab() {
     }
     ImGui::Separator();
 
-    // ... (Existing Table Drawing Loop) ...
     if (ImGui::BeginTabBar("BinaryFilesTab", ImGuiTabBarFlags_Reorderable)) {
         for (int i = 0; i < (int)g_LoadedBinaries.size(); ++i) {
             auto& parser = g_LoadedBinaries[i];
@@ -288,37 +311,44 @@ static void DrawBinaryTab() {
 }
 
 static void DrawBankTab() {
+    // 1. Define the static width for the resizable left pane
     static float bankSidebarWidth = 300.0f;
+
+    // Safety clamps to prevent the sidebar from disappearing or taking over the screen
     if (bankSidebarWidth < 50.0f) bankSidebarWidth = 50.0f;
     if (bankSidebarWidth > ImGui::GetWindowWidth() - 100.0f) bankSidebarWidth = ImGui::GetWindowWidth() - 100.0f;
 
-    // --- MAIN BANK TAB BAR ---
     if (ImGui::BeginTabBar("BankFiles", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
 
-        // 1. Iterate Open Banks
+        // Iterate through all open banks
         for (int i = 0; i < (int)g_OpenBanks.size(); ) {
             LoadedBank& bank = g_OpenBanks[i];
             bool keepOpen = true;
             std::string tabLabel = bank.FileName + "##" + std::to_string(i);
 
             if (ImGui::BeginTabItem(tabLabel.c_str(), &keepOpen)) {
+                // If this tab just became active, switch the global active index
                 if (g_ActiveBankIndex != i) {
                     g_ActiveBankIndex = i;
                     if (bank.SelectedEntryIndex != -1) SelectEntry(&bank, bank.SelectedEntryIndex);
                 }
 
-                // --- LEFT PANE: LIST ---
+                // ==========================================================
+                // LEFT PANE: Bank Browser (Sub-banks, Search, List)
+                // ==========================================================
                 ImGui::BeginChild("LeftPane", ImVec2(bankSidebarWidth, 0), true);
 
-                // Sub-Bank Selector (Only for .BIG files)
+                // 1. Sub-Bank Dropdown (If valid and not Audio)
                 if (bank.Type != EBankType::Audio && !bank.SubBanks.empty()) {
                     std::string preview = "Select Sub-Bank";
                     if (bank.ActiveSubBankIndex >= 0) preview = bank.SubBanks[bank.ActiveSubBankIndex].Name;
+
                     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
                     if (ImGui::BeginCombo("##folder", preview.c_str())) {
                         for (int s = 0; s < (int)bank.SubBanks.size(); s++) {
                             bool is_sel = (bank.ActiveSubBankIndex == s);
-                            if (ImGui::Selectable((bank.SubBanks[s].Name + " (" + std::to_string(bank.SubBanks[s].EntryCount) + ")").c_str(), is_sel)) {
+                            std::string itemLabel = bank.SubBanks[s].Name + " (" + std::to_string(bank.SubBanks[s].EntryCount) + ")";
+                            if (ImGui::Selectable(itemLabel.c_str(), is_sel)) {
                                 LoadSubBankEntries(bank, s);
                             }
                         }
@@ -327,22 +357,25 @@ static void DrawBankTab() {
                     ImGui::Separator();
                 }
 
-                // Search Bar
+                // 2. Search Bar
                 ImGui::InputText("Search", bank.FilterText, 128);
                 if (ImGui::IsItemEdited()) UpdateFilter(bank);
 
-                // Entry List
+                // 3. Entry List
                 if (!bank.Entries.empty()) {
                     ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
 
-                    // Keyboard Navigation
+                    // Keyboard Navigation Support (Up/Down Arrows)
                     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !bank.FilteredIndices.empty()) {
                         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
                             int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
                             int currentPos = -1;
+
+                            // Find current index in the filtered list
                             for (int k = 0; k < bank.FilteredIndices.size(); k++) {
                                 if (bank.FilteredIndices[k] == bank.SelectedEntryIndex) { currentPos = k; break; }
                             }
+
                             int newPos = std::clamp(currentPos + direction, 0, (int)bank.FilteredIndices.size() - 1);
                             SelectEntry(&bank, bank.FilteredIndices[newPos]);
                         }
@@ -354,33 +387,43 @@ static void DrawBankTab() {
                         if (ImGui::Selectable(e.Name.c_str(), bank.SelectedEntryIndex == idx)) {
                             SelectEntry(&bank, idx);
                         }
+                        // Ensure focus tracks with selection
                         if (bank.SelectedEntryIndex == idx && ImGui::IsWindowFocused()) ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndChild();
                 }
-                ImGui::EndChild();
+                ImGui::EndChild(); // End Left Pane
 
-                // --- SPLITTER ---
+                // ==========================================================
+                // SPLITTER (Restored & Fixed)
+                // ==========================================================
                 ImGui::SameLine();
                 ImGui::InvisibleButton("vsplitter", ImVec2(4.0f, -1.0f));
+
+                // Change cursor on hover so the user knows it's resizable
+                if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+                // Update width on drag
                 if (ImGui::IsItemActive()) bankSidebarWidth += ImGui::GetIO().MouseDelta.x;
+
                 ImGui::SameLine();
 
-                // --- RIGHT PANE: PROPERTIES ---
+                // ==========================================================
+                // RIGHT PANE: Properties & Editors
+                // ==========================================================
                 ImGui::BeginChild("RightPane", ImVec2(0, 0), true);
+
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
+
+                    // Basic Header
                     ImGui::Text("ID: %d | Type: %d | Size: %d bytes", e.ID, e.Type, e.Size);
 
-                    // ---------------------------
-                    // NEW AUDIO HANDLING
-                    // ---------------------------
+                    // Specific Header for Audio
                     if (bank.Type == EBankType::Audio) {
                         DrawAudioProperties(&bank);
                     }
-                    // ---------------------------
-                    // EXISTING LOD / MESH LOGIC
-                    // ---------------------------
+                    // Specific Header for Meshes (LOD Selector)
                     else if (IsSupportedMesh(e.Type) && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
                         std::string lodPreview = "LOD " + std::to_string(bank.SelectedLOD);
                         if (ImGui::BeginCombo("##lod", lodPreview.c_str())) {
@@ -396,39 +439,48 @@ static void DrawBankTab() {
 
                     ImGui::Separator();
 
-                    // Render Specific Editors
-                    if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) DrawTextureProperties();
-                    else if (bank.Type == EBankType::Text) DrawTextProperties(g_LoadedBinaries);
-                    else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(); // Legacy BIG dialogue
-                    else if (IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
-                    else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION)
+                    // --- Property Drawers ---
+                    if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) {
+                        DrawTextureProperties();
+                    }
+                    else if (bank.Type == EBankType::Text) {
+                        // This now calls the updated DrawTextProperties in TextProperties.h
+                        // which has the CRC removed and the Modifier field added back.
+                        DrawTextProperties(g_LoadedBinaries);
+                    }
+                    else if (bank.Type == EBankType::Dialogue) {
+                        DrawLipSyncProperties();
+                    }
+                    else if (IsSupportedMesh(e.Type)) {
+                        DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
+                    }
+                    else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
                         DrawAnimProperties(g_ActiveAnim, g_AnimParseSuccess, g_AnimUIState, [&]() { SaveEntryChanges(&bank); });
+                    }
                 }
-                ImGui::EndChild();
+                ImGui::EndChild(); // End Right Pane
+
                 ImGui::EndTabItem();
             }
 
+            // Close Tab Logic
             if (!keepOpen) {
                 g_OpenBanks.erase(g_OpenBanks.begin() + i);
                 if (g_OpenBanks.empty()) g_ActiveBankIndex = -1;
                 else if (g_ActiveBankIndex >= i) g_ActiveBankIndex = (std::max)(0, g_ActiveBankIndex - 1);
             }
-            else { i++; }
+            else {
+                i++;
+            }
         }
 
-        // 2. Trailing "Load" Button (Right Side of Tabs)
+        // "+ Load Bank" Button
         if (ImGui::TabItemButton("+ Load Bank (.BIG / .LUT)", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
             std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut\0All Files\0*.*\0");
             if (!path.empty()) LoadBank(path);
         }
 
         ImGui::EndTabBar();
-    }
-
-    // Handle "Empty State" if no tabs are open
-    if (g_OpenBanks.empty()) {
-        // Just show a centered message or instruction
-        // The "+ Load Bank" button is visible in the tab bar even if empty
     }
 }
 
@@ -466,7 +518,6 @@ static void DrawBankExplorer() {
         return;
     }
 
-    // --- MAIN MENU BAR ---
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Open Bank File (.BIG / .LUT)")) {
@@ -516,7 +567,6 @@ static void DrawBankExplorer() {
         ImGui::EndMainMenuBar();
     }
 
-    // --- GLOBAL TABS ---
     if (ImGui::BeginTabBar("ModeTabs", ImGuiTabBarFlags_None)) {
         if (ImGui::BeginTabItem("Bank Archives")) {
             DrawBankTab();
@@ -533,7 +583,6 @@ static void DrawBankExplorer() {
         ImGui::EndTabBar();
     }
 
-    // --- UNSAVED CHANGES POPUP ---
     if (g_DefWorkspace.TriggerUnsavedPopup) {
         ImGui::OpenPopup("UnsavedChangesGlobal");
         g_DefWorkspace.TriggerUnsavedPopup = false;
@@ -566,7 +615,6 @@ static void DrawBankExplorer() {
             if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) {
                 exit(0);
             }
-            // Add navigation logic here if needed
             ImGui::CloseCurrentPopup();
         }
 

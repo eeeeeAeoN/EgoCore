@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <cstring> 
 
 struct CTextTag {
     int32_t Position;
@@ -10,7 +11,7 @@ struct CTextTag {
 
 struct CTextGroupItem {
     uint32_t ID;
-    std::string CachedName;  
+    std::string CachedName;
     std::string CachedContent;
 };
 
@@ -30,8 +31,15 @@ class CTextParser {
 public:
     CTextEntry TextData;
     CTextGroup GroupData;
+
+    // Added for Type 2 support
+    std::vector<std::string> NarratorStrings;
+    std::vector<uint8_t> RawData;
+
     bool IsParsed = false;
     bool IsGroup = false;
+    bool IsNarratorList = false;
+
     std::string DebugLog;
 
     std::wstring ReadWString(const uint8_t* data, size_t& offset, size_t max) {
@@ -68,8 +76,11 @@ public:
     void Parse(const std::vector<uint8_t>& data, int entryType) {
         IsParsed = false;
         IsGroup = false;
+        IsNarratorList = false;
         TextData = CTextEntry();
         GroupData = CTextGroup();
+        NarratorStrings.clear();
+        RawData = data;
         DebugLog = "";
 
         if (data.empty()) return;
@@ -79,7 +90,7 @@ public:
         const uint8_t* ptr = data.data();
 
         try {
-            if (entryType == 1) {
+            if (entryType == 1) { // TYPE_GROUP
                 IsGroup = true;
                 if (cursor + 4 <= size) {
                     uint32_t count = *(uint32_t*)(ptr + cursor);
@@ -92,19 +103,63 @@ public:
 
                         CTextGroupItem item;
                         item.ID = id;
-
                         GroupData.Items.push_back(item);
                     }
                 }
                 IsParsed = true;
             }
-            else {
+            else if (entryType == 2) { // TYPE_NARRATOR_LIST
+                IsNarratorList = true;
+
+                // Signature check: 0E 00 00 00 [NarratorList]
+                const uint8_t sig[] = { 0x0E, 0x00, 0x00, 0x00, '[', 'N', 'a', 'r', 'r', 'a', 't', 'o', 'r', 'L', 'i', 's', 't', ']' };
+                size_t sigLen = 18;
+
+                size_t foundOffset = -1;
+                for (size_t i = 0; i < size - sigLen; i++) {
+                    if (memcmp(ptr + i, sig, sigLen) == 0) {
+                        foundOffset = i;
+                        break;
+                    }
+                }
+
+                if (foundOffset != -1) {
+                    cursor = foundOffset + sigLen;
+
+                    // Skip padding zeros
+                    while (cursor < size && ptr[cursor] == 0) cursor++;
+
+                    // Skip Unknown Int (often 14 15 00 00)
+                    if (cursor + 4 <= size) cursor += 4;
+
+                    // Read Count
+                    uint32_t count = 0;
+                    if (cursor + 4 <= size) {
+                        count = *(uint32_t*)(ptr + cursor);
+                        cursor += 4;
+                    }
+
+                    // Read Strings
+                    if (count > 0 && count < 20000) {
+                        for (uint32_t i = 0; i < count; i++) {
+                            if (cursor >= size) break;
+                            std::string s = ReadNullTermString(ptr, cursor, size);
+                            NarratorStrings.push_back(s);
+                        }
+                    }
+                }
+                IsParsed = true;
+            }
+            else { // TYPE_TEXT (Default)
                 IsGroup = false;
+
+                // 1. Strings
                 TextData.Content = ReadWString(ptr, cursor, size);
                 TextData.SpeechBank = ReadPresizedString(ptr, cursor, size);
                 TextData.Speaker = ReadPresizedString(ptr, cursor, size);
                 TextData.Identifier = ReadPresizedString(ptr, cursor, size);
 
+                // 2. Tags (Modifiers)
                 if (cursor + 4 <= size) {
                     uint32_t tagCount = *(uint32_t*)(ptr + cursor);
                     cursor += 4;
