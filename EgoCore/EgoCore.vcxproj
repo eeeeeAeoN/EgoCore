@@ -23,10 +23,13 @@
     <ClInclude Include="Animations\AnimProperties.h" />
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
+    <ClInclude Include="BinaryParser.h" />
     <ClInclude Include="ConfigBackend.h" />
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
+    <ClInclude Include="LipSyncParser.h" />
+    <ClInclude Include="LipSyncProperties.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />

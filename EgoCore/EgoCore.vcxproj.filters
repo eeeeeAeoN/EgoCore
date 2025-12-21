@@ -40,6 +40,9 @@
     <Filter Include="Source Files\TextEditor">
       <UniqueIdentifier>{fecb2acd-d396-4cad-935b-546cf88fed10}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\LipSync">
+      <UniqueIdentifier>{2fa367e9-8aca-426d-9c75-9a5dad09e2e7}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -128,6 +131,15 @@
     </ClInclude>
     <ClInclude Include="Definitions\CompilerBackend.h">
       <Filter>Source Files\Definitions</Filter>
+    </ClInclude>
+    <ClInclude Include="LipSyncParser.h">
+      <Filter>Source Files\LipSync</Filter>
+    </ClInclude>
+    <ClInclude Include="LipSyncProperties.h">
+      <Filter>Source Files\LipSync</Filter>
+    </ClInclude>
+    <ClInclude Include="BinaryParser.h">
+      <Filter>Source Files\Banks</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

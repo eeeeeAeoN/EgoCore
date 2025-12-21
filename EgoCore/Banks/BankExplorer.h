@@ -8,6 +8,7 @@
 #include "TextureProperties.h"
 #include "TextProperties.h"
 #include "GltfExporter.h"
+#include "LipSyncProperties.h"
 #include <windows.h>
 #include <algorithm>
 #include <vector>
@@ -49,6 +50,10 @@ static void SelectEntry(LoadedBank* bank, int idx) {
         }
     }
     else if (bank->Type == EBankType::Text || bank->Type == EBankType::Dialogue) {
+        if (bank->Type == EBankType::Dialogue) {
+            g_LipSyncParser.Parse(bank->CurrentEntryRawData, bank->SubheaderCache[idx]);
+        }
+
         g_TextParser.Parse(bank->CurrentEntryRawData, e.Type);
         if (g_TextParser.IsGroup) ResolveGroupMetadata(bank);
     }
@@ -220,7 +225,8 @@ static void DrawBankTab() {
                         ImGui::Separator();
 
                         if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) DrawTextureProperties();
-                        else if (bank.Type == EBankType::Text || bank.Type == EBankType::Dialogue) DrawTextProperties();
+                        else if (bank.Type == EBankType::Text) DrawTextProperties(); // Only Text banks
+                        else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(); // NEW: Dialogue banks
                         else if (IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
                         else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION)
                             DrawAnimProperties(g_ActiveAnim, g_AnimParseSuccess, g_AnimUIState, [&]() { SaveEntryChanges(&bank); });
