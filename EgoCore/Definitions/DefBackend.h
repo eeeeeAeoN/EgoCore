@@ -104,6 +104,57 @@ struct DefWorkspace {
 
 static DefWorkspace g_DefWorkspace;
 
+// <--- NEW: Global list of detected .lut files from SOUND_SETUP --->
+static std::vector<std::string> g_AvailableSoundBanks;
+
+static void ScanSoundBanks() {
+    g_AvailableSoundBanks.clear();
+
+    // 1. Check if we have SOUND_SETUP definitions
+    if (g_DefWorkspace.CategorizedDefs.count("SOUND_SETUP")) {
+        const auto& entries = g_DefWorkspace.CategorizedDefs["SOUND_SETUP"];
+
+        // 2. Look for ENGLISH_SOUND_SETUP
+        for (const auto& entry : entries) {
+            if (entry.Name == "ENGLISH_SOUND_SETUP") {
+                // 3. Read the definition content
+                std::ifstream file(entry.SourceFile, std::ios::binary);
+                if (file.is_open()) {
+                    file.seekg(entry.StartOffset);
+                    size_t len = entry.EndOffset - entry.StartOffset;
+                    std::string content(len, '\0');
+                    file.read(&content[0], len);
+                    file.close();
+
+                    // 4. Regex to find .lut filenames
+                    // Matches: "filename.lut" inside CSoundBankEntry(...)
+                    // Looking for the pattern: "some_name.lut"
+                    std::regex lutRegex(R"(\"([a-zA-Z0-9_\-\.]+\.lut)\")", std::regex::icase);
+
+                    auto begin = std::sregex_iterator(content.begin(), content.end(), lutRegex);
+                    auto end = std::sregex_iterator();
+
+                    for (std::sregex_iterator i = begin; i != end; ++i) {
+                        std::smatch match = *i;
+                        std::string val = match[1].str();
+                        // Avoid duplicates
+                        bool exists = false;
+                        for (const auto& s : g_AvailableSoundBanks) if (s == val) exists = true;
+                        if (!exists) g_AvailableSoundBanks.push_back(val);
+                    }
+                }
+                break; // Found English setup, stop looking
+            }
+        }
+    }
+
+    // Fallback if empty (so the list isn't blank)
+    if (g_AvailableSoundBanks.empty()) {
+        g_AvailableSoundBanks.push_back("dialogue.lut");
+        g_AvailableSoundBanks.push_back("scriptdialogue.lut");
+    }
+}
+
 static void LoadHeadersFromDir(const std::string& rootPath) {
     g_DefWorkspace.AllEnums.clear();
     std::set<std::string> visitedFiles;
@@ -200,6 +251,10 @@ static void LoadDefsFromFolder(const std::string& rootPath) {
         }
     }
     LoadHeadersFromDir(rootPath);
+
+    // <--- NEW: Scan for Sound Banks after loading defs
+    ScanSoundBanks();
+
     g_DefWorkspace.SelectedType = ""; g_DefWorkspace.SelectedEntryIndex = -1; g_DefWorkspace.Editor.SetText("");
     g_DefWorkspace.IsLoaded = true;
 }

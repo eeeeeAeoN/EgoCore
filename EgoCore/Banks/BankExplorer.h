@@ -53,6 +53,52 @@ static void LoadSystemBinaries(const std::string& gameRoot) {
     }
 }
 
+// --- HELPER FUNCTIONS FOR TEXT METADATA ---
+
+// Helper to fetch text content for Group entries
+inline std::string FetchTextContent(LoadedBank* bank, uint32_t id) {
+    if (!bank) return "";
+    for (int i = 0; i < bank->Entries.size(); ++i) {
+        if (bank->Entries[i].ID == id) {
+            // Use a temp parser to avoid messing up the global state
+            CTextParser tempParser;
+            bank->Stream->clear();
+            bank->Stream->seekg(bank->Entries[i].Offset, std::ios::beg);
+            size_t size = bank->Entries[i].Size;
+
+            if (size > 0) {
+                std::vector<uint8_t> buffer(size + 64);
+                bank->Stream->read((char*)buffer.data(), size);
+                tempParser.Parse(buffer, bank->Entries[i].Type);
+                if (tempParser.IsParsed && !tempParser.IsGroup && !tempParser.IsNarratorList) {
+                    return WStringToString(tempParser.TextData.Content);
+                }
+            }
+            return "[Content]";
+        }
+    }
+    return "[ID Not Found]";
+}
+
+inline void ResolveGroupMetadata(LoadedBank* bank) {
+    if (!g_TextParser.IsParsed || !g_TextParser.IsGroup || !bank) return;
+    for (auto& item : g_TextParser.GroupData.Items) {
+        bool found = false;
+        for (const auto& entry : bank->Entries) {
+            if (entry.ID == item.ID) {
+                item.CachedName = entry.Name;
+                found = true;
+                break;
+            }
+        }
+        if (!found) item.CachedName = "Unknown ID";
+        if (found) item.CachedContent = FetchTextContent(bank, item.ID);
+        else item.CachedContent = "-";
+    }
+}
+
+// ---------------------------------------------------------
+
 static void SelectEntry(LoadedBank* bank, int idx) {
     if (!bank || idx < 0 || idx >= (int)bank->Entries.size()) return;
 
@@ -80,51 +126,45 @@ static void SelectEntry(LoadedBank* bank, int idx) {
     const auto& e = bank->Entries[idx];
 
     if (bank->Type != EBankType::Audio) {
-        bank->Stream->clear();
-
-        size_t effectiveOffset = e.Offset;
-        size_t effectiveSize = e.Size;
-
-        // --- FIX: Handle 0-Offset/0-Size entries (Type 2 Narrator List) ---
-        if (e.Type == 2 && (effectiveOffset == 0 || effectiveSize == 0)) {
-            // Find the end of the last valid entry in the bank
-            size_t maxEnd = 0;
-            for (const auto& other : bank->Entries) {
-                if (other.ID != e.ID && other.Offset > 0) {
-                    size_t end = other.Offset + other.Size;
-                    if (end > maxEnd) maxEnd = end;
-                }
-            }
-
-            // Assume this entry starts after the last one
-            if (maxEnd > 0) {
-                effectiveOffset = maxEnd;
-            }
-
-            // Calculate size until EOF
-            bank->Stream->seekg(0, std::ios::end);
-            size_t fileEnd = bank->Stream->tellg();
-            if (fileEnd > effectiveOffset) {
-                effectiveSize = fileEnd - effectiveOffset;
-            }
-            else {
-                effectiveSize = 0; // Invalid
-            }
-        }
-        else if (effectiveSize > 50000000) {
-            effectiveSize = 50000000;
-        }
-
-        if (effectiveSize > 0) {
-            bank->Stream->seekg(effectiveOffset, std::ios::beg);
-            // Alloc extra padding just in case parser overreads
-            bank->CurrentEntryRawData.resize(effectiveSize + 64);
-            bank->Stream->read((char*)bank->CurrentEntryRawData.data(), effectiveSize);
-            // Trim back to exact size for the raw buffer logic
-            bank->CurrentEntryRawData.resize(effectiveSize);
+        // NEW: Check memory cache first
+        if (bank->ModifiedEntryData.count(idx)) {
+            bank->CurrentEntryRawData = bank->ModifiedEntryData[idx];
         }
         else {
-            bank->CurrentEntryRawData.clear();
+            bank->Stream->clear();
+            size_t effectiveOffset = e.Offset;
+            size_t effectiveSize = e.Size;
+
+            // --- FIX: Handle 0-Offset/0-Size entries (Type 2 Narrator List) ---
+            // Added explicit (int) cast to e.Type to fix E0349
+            if ((int)e.Type == 2 && (effectiveOffset == 0 || effectiveSize == 0)) {
+                size_t maxEnd = 0;
+                for (const auto& other : bank->Entries) {
+                    if (other.ID != e.ID && other.Offset > 0) {
+                        size_t end = other.Offset + other.Size;
+                        if (end > maxEnd) maxEnd = end;
+                    }
+                }
+                if (maxEnd > 0) effectiveOffset = maxEnd;
+
+                bank->Stream->seekg(0, std::ios::end);
+                size_t fileEnd = bank->Stream->tellg();
+                if (fileEnd > effectiveOffset) effectiveSize = fileEnd - effectiveOffset;
+                else effectiveSize = 0;
+            }
+            else if (effectiveSize > 50000000) {
+                effectiveSize = 50000000;
+            }
+
+            if (effectiveSize > 0) {
+                bank->Stream->seekg(effectiveOffset, std::ios::beg);
+                bank->CurrentEntryRawData.resize(effectiveSize + 64);
+                bank->Stream->read((char*)bank->CurrentEntryRawData.data(), effectiveSize);
+                bank->CurrentEntryRawData.resize(effectiveSize);
+            }
+            else {
+                bank->CurrentEntryRawData.clear();
+            }
         }
     }
 
@@ -138,6 +178,7 @@ static void SelectEntry(LoadedBank* bank, int idx) {
             g_LipSyncParser.Parse(bank->CurrentEntryRawData, bank->SubheaderCache[idx]);
         }
         g_TextParser.Parse(bank->CurrentEntryRawData, e.Type);
+
         if (g_TextParser.IsGroup) ResolveGroupMetadata(bank);
     }
     else if (bank->Type != EBankType::Audio) {
@@ -181,19 +222,25 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     BankEntry& e = bank->Entries[bank->SelectedEntryIndex];
     std::vector<uint8_t> newBytes;
 
-    if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) newBytes = g_ActiveAnim.Serialize();
-    else return;
-
-    if (newBytes.size() <= e.InfoSize) {
-        bank->Stream->clear();
-        bank->Stream->seekp(e.SubheaderFileOffset, std::ios::beg);
-        bank->Stream->write((char*)newBytes.data(), newBytes.size());
-        bank->SubheaderCache[bank->SelectedEntryIndex] = newBytes;
-        g_BankStatus = "Saved."; bank->Stream->flush();
+    if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
+        newBytes = g_ActiveAnim.Serialize();
+    }
+    // FIX HERE: Cast the Enum to int so it matches e.Type
+    else if (e.Type == (int32_t)EBankType::Text) {
+        newBytes = g_TextParser.Recompile();
     }
     else {
-        g_BankStatus = "Error: New data exceeds allocated space!";
+        return;
     }
+
+    // Save to Memory Cache (Avoids file corruption for now)
+    bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+
+    // Update visual cache for immediate feedback
+    bank->CurrentEntryRawData = newBytes;
+    e.Size = (uint32_t)newBytes.size();
+
+    g_BankStatus = "Saved to Memory (Size: " + std::to_string(newBytes.size()) + ")";
 }
 
 static void DrawBinaryTab() {
@@ -311,34 +358,28 @@ static void DrawBinaryTab() {
 }
 
 static void DrawBankTab() {
-    // 1. Define the static width for the resizable left pane
     static float bankSidebarWidth = 300.0f;
-
-    // Safety clamps to prevent the sidebar from disappearing or taking over the screen
     if (bankSidebarWidth < 50.0f) bankSidebarWidth = 50.0f;
     if (bankSidebarWidth > ImGui::GetWindowWidth() - 100.0f) bankSidebarWidth = ImGui::GetWindowWidth() - 100.0f;
 
     if (ImGui::BeginTabBar("BankFiles", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
 
-        // Iterate through all open banks
         for (int i = 0; i < (int)g_OpenBanks.size(); ) {
             LoadedBank& bank = g_OpenBanks[i];
             bool keepOpen = true;
             std::string tabLabel = bank.FileName + "##" + std::to_string(i);
 
             if (ImGui::BeginTabItem(tabLabel.c_str(), &keepOpen)) {
-                // If this tab just became active, switch the global active index
                 if (g_ActiveBankIndex != i) {
                     g_ActiveBankIndex = i;
                     if (bank.SelectedEntryIndex != -1) SelectEntry(&bank, bank.SelectedEntryIndex);
                 }
 
                 // ==========================================================
-                // LEFT PANE: Bank Browser (Sub-banks, Search, List)
+                // LEFT PANE: Bank Browser
                 // ==========================================================
                 ImGui::BeginChild("LeftPane", ImVec2(bankSidebarWidth, 0), true);
 
-                // 1. Sub-Bank Dropdown (If valid and not Audio)
                 if (bank.Type != EBankType::Audio && !bank.SubBanks.empty()) {
                     std::string preview = "Select Sub-Bank";
                     if (bank.ActiveSubBankIndex >= 0) preview = bank.SubBanks[bank.ActiveSubBankIndex].Name;
@@ -357,73 +398,53 @@ static void DrawBankTab() {
                     ImGui::Separator();
                 }
 
-                // 2. Search Bar
                 ImGui::InputText("Search", bank.FilterText, 128);
                 if (ImGui::IsItemEdited()) UpdateFilter(bank);
 
-                // 3. Entry List
                 if (!bank.Entries.empty()) {
                     ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
-
-                    // Keyboard Navigation Support (Up/Down Arrows)
                     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !bank.FilteredIndices.empty()) {
                         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
                             int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
                             int currentPos = -1;
-
-                            // Find current index in the filtered list
                             for (int k = 0; k < bank.FilteredIndices.size(); k++) {
                                 if (bank.FilteredIndices[k] == bank.SelectedEntryIndex) { currentPos = k; break; }
                             }
-
                             int newPos = std::clamp(currentPos + direction, 0, (int)bank.FilteredIndices.size() - 1);
                             SelectEntry(&bank, bank.FilteredIndices[newPos]);
                         }
                     }
 
-                    // Render List Items
                     for (int idx : bank.FilteredIndices) {
                         const auto& e = bank.Entries[idx];
                         if (ImGui::Selectable(e.Name.c_str(), bank.SelectedEntryIndex == idx)) {
                             SelectEntry(&bank, idx);
                         }
-                        // Ensure focus tracks with selection
                         if (bank.SelectedEntryIndex == idx && ImGui::IsWindowFocused()) ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndChild();
                 }
-                ImGui::EndChild(); // End Left Pane
+                ImGui::EndChild();
 
-                // ==========================================================
-                // SPLITTER (Restored & Fixed)
-                // ==========================================================
                 ImGui::SameLine();
                 ImGui::InvisibleButton("vsplitter", ImVec2(4.0f, -1.0f));
-
-                // Change cursor on hover so the user knows it's resizable
                 if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-                // Update width on drag
                 if (ImGui::IsItemActive()) bankSidebarWidth += ImGui::GetIO().MouseDelta.x;
-
                 ImGui::SameLine();
 
                 // ==========================================================
-                // RIGHT PANE: Properties & Editors
+                // RIGHT PANE: Properties
                 // ==========================================================
                 ImGui::BeginChild("RightPane", ImVec2(0, 0), true);
 
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
 
-                    // Basic Header
                     ImGui::Text("ID: %d | Type: %d | Size: %d bytes", e.ID, e.Type, e.Size);
 
-                    // Specific Header for Audio
                     if (bank.Type == EBankType::Audio) {
                         DrawAudioProperties(&bank);
                     }
-                    // Specific Header for Meshes (LOD Selector)
                     else if (IsSupportedMesh(e.Type) && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
                         std::string lodPreview = "LOD " + std::to_string(bank.SelectedLOD);
                         if (ImGui::BeginCombo("##lod", lodPreview.c_str())) {
@@ -439,14 +460,12 @@ static void DrawBankTab() {
 
                     ImGui::Separator();
 
-                    // --- Property Drawers ---
                     if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) {
                         DrawTextureProperties();
                     }
                     else if (bank.Type == EBankType::Text) {
-                        // This now calls the updated DrawTextProperties in TextProperties.h
-                        // which has the CRC removed and the Modifier field added back.
-                        DrawTextProperties(g_LoadedBinaries);
+                        // FIX E0413: Pass the pointer to the bank, not the global list
+                        DrawTextProperties(&bank);
                     }
                     else if (bank.Type == EBankType::Dialogue) {
                         DrawLipSyncProperties();
@@ -458,12 +477,10 @@ static void DrawBankTab() {
                         DrawAnimProperties(g_ActiveAnim, g_AnimParseSuccess, g_AnimUIState, [&]() { SaveEntryChanges(&bank); });
                     }
                 }
-                ImGui::EndChild(); // End Right Pane
-
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
 
-            // Close Tab Logic
             if (!keepOpen) {
                 g_OpenBanks.erase(g_OpenBanks.begin() + i);
                 if (g_OpenBanks.empty()) g_ActiveBankIndex = -1;
@@ -474,7 +491,6 @@ static void DrawBankTab() {
             }
         }
 
-        // "+ Load Bank" Button
         if (ImGui::TabItemButton("+ Load Bank (.BIG / .LUT)", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
             std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut\0All Files\0*.*\0");
             if (!path.empty()) LoadBank(path);

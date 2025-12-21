@@ -61,6 +61,7 @@ struct LoadedBank {
     char FilterText[128] = "";
     std::map<int, std::vector<uint8_t>> SubheaderCache;
     std::vector<uint8_t> CurrentEntryRawData;
+    std::map<int, std::vector<uint8_t>> ModifiedEntryData;
 
     LoadedBank() {
         Stream = std::make_unique<std::fstream>();

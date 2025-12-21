@@ -3,9 +3,10 @@
 #include <string>
 #include <cstdint>
 #include <cstring> 
+#include <codecvt>
 
 struct CTextTag {
-    int32_t Position;
+    int32_t Position = 0;
     std::string Name;
 };
 
@@ -32,7 +33,6 @@ public:
     CTextEntry TextData;
     CTextGroup GroupData;
 
-    // Added for Type 2 support
     std::vector<std::string> NarratorStrings;
     std::vector<uint8_t> RawData;
 
@@ -42,6 +42,7 @@ public:
 
     std::string DebugLog;
 
+    // --- READ HELPERS ---
     std::wstring ReadWString(const uint8_t* data, size_t& offset, size_t max) {
         std::wstring res;
         while (offset + 2 <= max) {
@@ -72,6 +73,31 @@ public:
         }
         return res;
     }
+
+    // --- WRITE HELPERS ---
+    void WriteWString(std::vector<uint8_t>& buf, const std::wstring& str) {
+        for (wchar_t c : str) {
+            uint16_t val = (uint16_t)c;
+            buf.push_back(val & 0xFF);
+            buf.push_back((val >> 8) & 0xFF);
+        }
+        buf.push_back(0); buf.push_back(0); // Wide Null Terminator
+    }
+
+    void WritePresizedString(std::vector<uint8_t>& buf, const std::string& str) {
+        uint32_t len = (uint32_t)str.length();
+        buf.insert(buf.end(), (uint8_t*)&len, (uint8_t*)&len + 4);
+        if (len > 0) {
+            buf.insert(buf.end(), str.begin(), str.end());
+        }
+    }
+
+    void WriteNullTermString(std::vector<uint8_t>& buf, const std::string& str) {
+        buf.insert(buf.end(), str.begin(), str.end());
+        buf.push_back(0);
+    }
+
+    // --- MAIN FUNCTIONS ---
 
     void Parse(const std::vector<uint8_t>& data, int entryType) {
         IsParsed = false;
@@ -110,8 +136,6 @@ public:
             }
             else if (entryType == 2) { // TYPE_NARRATOR_LIST
                 IsNarratorList = true;
-
-                // Signature check: 0E 00 00 00 [NarratorList]
                 const uint8_t sig[] = { 0x0E, 0x00, 0x00, 0x00, '[', 'N', 'a', 'r', 'r', 'a', 't', 'o', 'r', 'L', 'i', 's', 't', ']' };
                 size_t sigLen = 18;
 
@@ -125,21 +149,15 @@ public:
 
                 if (foundOffset != -1) {
                     cursor = foundOffset + sigLen;
-
-                    // Skip padding zeros
                     while (cursor < size && ptr[cursor] == 0) cursor++;
-
-                    // Skip Unknown Int (often 14 15 00 00)
                     if (cursor + 4 <= size) cursor += 4;
 
-                    // Read Count
                     uint32_t count = 0;
                     if (cursor + 4 <= size) {
                         count = *(uint32_t*)(ptr + cursor);
                         cursor += 4;
                     }
 
-                    // Read Strings
                     if (count > 0 && count < 20000) {
                         for (uint32_t i = 0; i < count; i++) {
                             if (cursor >= size) break;
@@ -153,13 +171,11 @@ public:
             else { // TYPE_TEXT (Default)
                 IsGroup = false;
 
-                // 1. Strings
                 TextData.Content = ReadWString(ptr, cursor, size);
                 TextData.SpeechBank = ReadPresizedString(ptr, cursor, size);
                 TextData.Speaker = ReadPresizedString(ptr, cursor, size);
                 TextData.Identifier = ReadPresizedString(ptr, cursor, size);
 
-                // 2. Tags (Modifiers)
                 if (cursor + 4 <= size) {
                     uint32_t tagCount = *(uint32_t*)(ptr + cursor);
                     cursor += 4;
@@ -179,5 +195,40 @@ public:
             DebugLog = "Exception during parsing.";
             IsParsed = false;
         }
+    }
+
+    // --- RECOMPILE ---
+    std::vector<uint8_t> Recompile() {
+        std::vector<uint8_t> buf;
+
+        if (IsGroup) {
+            // Write Count
+            uint32_t count = (uint32_t)GroupData.Items.size();
+            buf.insert(buf.end(), (uint8_t*)&count, (uint8_t*)&count + 4);
+
+            // Write IDs
+            for (const auto& item : GroupData.Items) {
+                buf.insert(buf.end(), (uint8_t*)&item.ID, (uint8_t*)&item.ID + 4);
+            }
+        }
+        else if (IsNarratorList) {
+            return RawData; // Not editable yet
+        }
+        else {
+            // Type 0
+            WriteWString(buf, TextData.Content);
+            WritePresizedString(buf, TextData.SpeechBank);
+            WritePresizedString(buf, TextData.Speaker);
+            WritePresizedString(buf, TextData.Identifier);
+
+            uint32_t tagCount = (uint32_t)TextData.Tags.size();
+            buf.insert(buf.end(), (uint8_t*)&tagCount, (uint8_t*)&tagCount + 4);
+
+            for (const auto& tag : TextData.Tags) {
+                buf.insert(buf.end(), (uint8_t*)&tag.Position, (uint8_t*)&tag.Position + 4);
+                WriteNullTermString(buf, tag.Name);
+            }
+        }
+        return buf;
     }
 };
