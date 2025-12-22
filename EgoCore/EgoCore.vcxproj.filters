@@ -162,6 +162,9 @@
     <ClInclude Include="TextBackend.h">
       <Filter>Source Files\Text</Filter>
     </ClInclude>
+    <ClInclude Include="Text\TextCompiler.h">
+      <Filter>Source Files\Text</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

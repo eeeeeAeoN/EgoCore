@@ -15,6 +15,7 @@ static bool g_ShowDeleteBankEntryPopup = false;
 static bool g_ShowAddEntryPopup = false;
 
 static void DrawBinaryTab() {
+    // ... (Unchanged from previous versions) ...
     static bool isCompilingBins = false;
     static std::string compileBinStatus = "";
     static bool showBinResult = false;
@@ -146,10 +147,7 @@ static void DrawBankTab() {
                     if (bank.SelectedEntryIndex != -1) SelectEntry(&bank, bank.SelectedEntryIndex);
                 }
 
-                // ==========================================================
-                // GLOBAL TAB SHORTCUTS
-                // ==========================================================
-                // Handle Delete Key (Works in List or Properties if window is focused)
+                // Global Shortcuts
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
                     if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
                         if (g_AppConfig.ShowBankDeleteConfirm) {
@@ -163,10 +161,17 @@ static void DrawBankTab() {
                     }
                 }
 
-                // ==========================================================
-                // LEFT PANE: Bank Browser
-                // ==========================================================
                 ImGui::BeginChild("LeftPane", ImVec2(bankSidebarWidth, 0), true);
+
+                // --- RECOMPILE BUTTON (TEXT ONLY) ---
+                if (bank.Type == EBankType::Text) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
+                    if (ImGui::Button("Recompile Text Bank (.BIG)", ImVec2(-FLT_MIN, 30))) {
+                        SaveBigBank(&bank);
+                    }
+                    ImGui::PopStyleColor();
+                    ImGui::Separator();
+                }
 
                 if (bank.Type != EBankType::Audio && !bank.SubBanks.empty()) {
                     std::string preview = "Select Sub-Bank";
@@ -264,7 +269,7 @@ static void DrawBankTab() {
 
                     ImGui::Text("ID: %d | Type: %d | Size: %d bytes", e.ID, e.Type, e.Size);
 
-                    // --- DELETE BUTTON (Available for ALL banks now) ---
+                    // --- DELETE BUTTON ---
                     ImGui::SameLine();
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
                     if (ImGui::SmallButton("Delete Entry")) {
@@ -315,7 +320,7 @@ static void DrawBankTab() {
                 }
                 ImGui::EndChild();
 
-                // --- DELETE POPUP (Rendered outside child windows for safety) ---
+                // --- DELETE POPUP ---
                 if (ImGui::BeginPopupModal("Delete Bank Entry?", &g_ShowDeleteBankEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
                     ImGui::Text("Are you sure you want to delete this entry?");
                     ImGui::TextColored(ImVec4(1, 0, 0, 1), "This action cannot be undone.");

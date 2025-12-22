@@ -5,7 +5,7 @@
 #include "AnimParser.h"
 #include "AnimProperties.h"
 #include "TextureParser.h"
-#include "AudioBackend.h" // <--- NEW: Include the Audio Backend
+#include "AudioBackend.h" 
 #include <fstream>
 #include <vector>
 #include <string>
@@ -17,7 +17,6 @@
 
 namespace fs = std::filesystem;
 
-// Updated Enum with 'Audio'
 enum class EBankType {
     Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio
 };
@@ -31,6 +30,8 @@ struct BankEntry {
     uint32_t CRC = 0;
     uint32_t InfoSize = 0;
     uint32_t SubheaderFileOffset = 0;
+
+    std::vector<std::string> Dependencies;
 };
 
 struct InternalBankInfo {
@@ -46,14 +47,15 @@ struct LoadedBank {
     std::string FileName;
     std::string FullPath;
     EBankType Type = EBankType::Unknown;
+
+    uint32_t FileVersion = 2;
+
     std::vector<InternalBankInfo> SubBanks;
     int ActiveSubBankIndex = -1;
     std::vector<BankEntry> Entries;
     std::vector<int> FilteredIndices;
 
     std::unique_ptr<std::fstream> Stream;
-
-    // <--- NEW: Generic pointer to the Audio Parser (only used if Type == Audio)
     std::shared_ptr<AudioBankParser> AudioParser;
 
     int SelectedEntryIndex = -1;
@@ -66,28 +68,21 @@ struct LoadedBank {
     LoadedBank() {
         Stream = std::make_unique<std::fstream>();
     }
-    LoadedBank(const LoadedBank&) = delete;
-    LoadedBank& operator=(const LoadedBank&) = delete;
-    LoadedBank(LoadedBank&&) = default;
-    LoadedBank& operator=(LoadedBank&&) = default;
 };
 
 static std::vector<LoadedBank> g_OpenBanks;
 static int g_ActiveBankIndex = -1;
-
 static std::string g_BankStatus = "Ready";
 
 static C3DMeshContent g_ActiveMeshContent;
 static CBBMParser g_BBMParser;
 static CTextureParser g_TextureParser;
 static bool g_MeshUploadNeeded = false;
-
 static C3DAnimationInfo g_ActiveAnim;
 static AnimUIContext    g_AnimUIState;
 static bool             g_AnimParseSuccess = false;
 
 // --- UTILS ---
-
 inline bool StartsWith(const std::string& str, const std::string& prefix) {
     if (str.length() < prefix.length()) return false;
     return str.compare(0, prefix.length(), prefix) == 0;
@@ -168,10 +163,14 @@ inline void LoadSubBankEntries(LoadedBank& bank, int subBankIndex) {
 
         if (magicE != 42) continue;
         e.Name = ReadBankString(*bank.Stream);
-        bank.Stream->seekg(8, std::ios::cur);
-        bank.Stream->seekg(-4, std::ios::cur);
-        uint32_t depCount = 0; bank.Stream->read((char*)&depCount, 4);
-        for (uint32_t d = 0; d < depCount; d++) ReadBankString(*bank.Stream);
+
+        bank.Stream->seekg(4, std::ios::cur);
+
+        uint32_t depCount = 0;
+        bank.Stream->read((char*)&depCount, 4);
+        for (uint32_t d = 0; d < depCount; d++) {
+            e.Dependencies.push_back(ReadBankString(*bank.Stream));
+        }
 
         bank.Stream->read((char*)&e.InfoSize, 4);
         e.SubheaderFileOffset = (uint32_t)bank.Stream->tellg();
@@ -191,9 +190,7 @@ inline void LoadSubBankEntries(LoadedBank& bank, int subBankIndex) {
 inline void InitializeBank(LoadedBank& bank) {
     switch (bank.Type) {
     case EBankType::Graphics:
-        for (int i = 0; i < bank.SubBanks.size(); i++) {
-            if (bank.SubBanks[i].Name == "MBANK_ALLMESHES") { LoadSubBankEntries(bank, i); break; }
-        }
+        for (int i = 0; i < bank.SubBanks.size(); i++) { if (bank.SubBanks[i].Name == "MBANK_ALLMESHES") { LoadSubBankEntries(bank, i); break; } }
         break;
     case EBankType::Textures:
     {
@@ -214,63 +211,33 @@ inline void InitializeBank(LoadedBank& bank) {
 inline void WriteWavFile(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate, int channels) {
     if (pcm.empty()) return;
     std::ofstream f(path, std::ios::binary);
-
     int byteRate = sampleRate * channels * 2;
     int dataChunkSize = (int)pcm.size() * 2;
     int fileSize = 36 + dataChunkSize;
-
-    f.write("RIFF", 4);
-    f.write((char*)&fileSize, 4);
-    f.write("WAVE", 4);
-    f.write("fmt ", 4);
-    int fmtChunkSize = 16;
-    short audioFormat = 1; // PCM
-    short numChannels = (short)channels;
-    int sampleRate32 = sampleRate;
-    short blockAlign = (short)(channels * 2);
-    short bitsPerSample = 16;
-
-    f.write((char*)&fmtChunkSize, 4);
-    f.write((char*)&audioFormat, 2);
-    f.write((char*)&numChannels, 2);
-    f.write((char*)&sampleRate32, 4);
-    f.write((char*)&byteRate, 4);
-    f.write((char*)&blockAlign, 2);
-    f.write((char*)&bitsPerSample, 2);
-
-    f.write("data", 4);
-    f.write((char*)&dataChunkSize, 4);
-    f.write((char*)pcm.data(), dataChunkSize);
+    f.write("RIFF", 4); f.write((char*)&fileSize, 4); f.write("WAVE", 4); f.write("fmt ", 4);
+    int fmtChunkSize = 16; short audioFormat = 1; short numChannels = (short)channels;
+    int sampleRate32 = sampleRate; short blockAlign = (short)(channels * 2); short bitsPerSample = 16;
+    f.write((char*)&fmtChunkSize, 4); f.write((char*)&audioFormat, 2); f.write((char*)&numChannels, 2);
+    f.write((char*)&sampleRate32, 4); f.write((char*)&byteRate, 4); f.write((char*)&blockAlign, 2); f.write((char*)&bitsPerSample, 2);
+    f.write("data", 4); f.write((char*)&dataChunkSize, 4); f.write((char*)pcm.data(), dataChunkSize);
     f.close();
 }
 
 inline void LoadBank(const std::string& path) {
-    if (g_OpenBanks.size() >= 10) {
-        g_BankStatus = "Limit reached (Max 8 Banks). Close one first.";
-        return;
-    }
-
-    for (const auto& b : g_OpenBanks) {
-        if (b.FullPath == path) {
-            g_BankStatus = "Bank already open: " + b.FileName;
-            return;
-        }
-    }
+    if (g_OpenBanks.size() >= 10) { g_BankStatus = "Limit reached."; return; }
+    for (const auto& b : g_OpenBanks) { if (b.FullPath == path) { g_BankStatus = "Bank already open."; return; } }
 
     LoadedBank newBank;
     newBank.FullPath = path;
     newBank.FileName = fs::path(path).filename().string();
 
-    // --- CHECK FOR .LUT AUDIO FILES ---
     std::string ext = fs::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
     if (ext == ".lut") {
         newBank.Type = EBankType::Audio;
         newBank.AudioParser = std::make_shared<AudioBankParser>();
-
         if (newBank.AudioParser->Parse(path)) {
-            // Convert the Audio Parser's internal entries into generic BankEntries for the UI
             for (size_t i = 0; i < newBank.AudioParser->Entries.size(); i++) {
                 const auto& audioEntry = newBank.AudioParser->Entries[i];
                 BankEntry be;
@@ -278,8 +245,7 @@ inline void LoadBank(const std::string& path) {
                 be.Name = "Sound ID " + std::to_string(audioEntry.SoundID);
                 be.Size = audioEntry.Length;
                 be.Offset = audioEntry.Offset;
-                be.Type = 999; // Arbitrary type ID for Audio
-
+                be.Type = 999;
                 newBank.Entries.push_back(be);
                 newBank.FilteredIndices.push_back((int)i);
             }
@@ -287,29 +253,25 @@ inline void LoadBank(const std::string& path) {
             g_ActiveBankIndex = (int)g_OpenBanks.size() - 1;
             g_BankStatus = "Loaded Audio Bank.";
         }
-        else {
-            g_BankStatus = "Failed to parse .LUT file.";
-        }
-        // Return early so we don't try to read it as a .BIG
+        else g_BankStatus = "Failed to parse .LUT file.";
         return;
     }
 
-    // --- STANDARD .BIG PARSING LOGIC ---
     newBank.Stream->open(path, std::ios::binary | std::ios::in | std::ios::out);
     if (!newBank.Stream->is_open()) {
         newBank.Stream->clear();
         newBank.Stream->open(path, std::ios::binary | std::ios::in);
     }
-    if (!newBank.Stream->is_open()) {
-        g_BankStatus = "Error opening file.";
-        return;
-    }
+    if (!newBank.Stream->is_open()) { g_BankStatus = "Error opening file."; return; }
 
     char magic[4]; newBank.Stream->read(magic, 4); newBank.Stream->seekg(0, std::ios::beg);
     if (strncmp(magic, "BIGB", 4) != 0) { g_BankStatus = "Invalid .BIG file"; return; }
 
     struct HeaderBIG { char m[4]; uint32_t v; uint32_t footOff; uint32_t footSz; } h;
     newBank.Stream->read((char*)&h, sizeof(h));
+
+    newBank.FileVersion = h.v;
+
     newBank.Stream->seekg(h.footOff, std::ios::beg);
     uint32_t bankCount = 0; newBank.Stream->read((char*)&bankCount, 4);
 
@@ -327,7 +289,5 @@ inline void LoadBank(const std::string& path) {
         g_OpenBanks.push_back(std::move(newBank));
         g_ActiveBankIndex = (int)g_OpenBanks.size() - 1;
     }
-    catch (const std::exception& e) {
-        g_BankStatus = "Error: " + std::string(e.what());
-    }
+    catch (const std::exception& e) { g_BankStatus = "Error: " + std::string(e.what()); }
 }

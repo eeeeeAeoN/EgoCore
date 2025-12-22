@@ -8,6 +8,7 @@
 #include "TextProperties.h"
 #include "LipSyncProperties.h"
 #include "GltfExporter.h"
+#include "TextCompiler.h" // <--- Include the new compiler
 #include <windows.h>
 #include <algorithm>
 #include <vector>
@@ -17,13 +18,6 @@
 
 // --- GLOBAL STATE ---
 static std::vector<BinaryParser> g_LoadedBinaries;
-
-// --- UTILS ---
-inline void WriteBankString(std::ofstream& out, const std::string& s) {
-    uint32_t len = (uint32_t)s.length();
-    out.write((char*)&len, 4);
-    if (len > 0) out.write(s.data(), len);
-}
 
 // --- LOGIC FUNCTIONS ---
 
@@ -59,8 +53,6 @@ static void LoadSystemBinaries(const std::string& gameRoot) {
     }
 }
 
-// ... (FetchTextContent and ResolveGroupMetadata unchanged) ...
-// ... (Copied from previous turn) ...
 inline std::string FetchTextContent(LoadedBank* bank, uint32_t id) {
     if (!bank) return "";
     for (int i = 0; i < bank->Entries.size(); ++i) {
@@ -106,8 +98,8 @@ inline void ResolveGroupMetadata(LoadedBank* bank) {
 }
 
 // --- STANDARD BANK FUNCTIONS ---
+
 inline void SelectEntry(LoadedBank* bank, int idx) {
-    // ... (Same as before) ...
     if (!bank || idx < 0 || idx >= (int)bank->Entries.size()) return;
 
     if (bank->Type == EBankType::Audio && bank->AudioParser) {
@@ -242,9 +234,8 @@ inline void CreateNewTextEntry(LoadedBank* bank, int type) {
 }
 
 inline void DeleteBankEntry(LoadedBank* bank, int index) {
-    if (!bank || index < 0 || index >= bank->Entries.size()) return;
+    if (!bank || index < 0 || index >= (int)bank->Entries.size()) return;
 
-    // AUDIO Handling
     if (bank->Type == EBankType::Audio && bank->AudioParser) {
         bank->AudioParser->DeleteEntry(index);
         bank->Entries.erase(bank->Entries.begin() + index);
@@ -253,12 +244,11 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
         return;
     }
 
-    // TEXT Handling: Delete Linked Media + Header
     if (bank->Type == EBankType::Text) {
-        // We need to parse this entry to know what to delete
-        // 1. Get raw data
         std::vector<uint8_t> rawData;
-        if (bank->ModifiedEntryData.count(index)) rawData = bank->ModifiedEntryData[index];
+        if (bank->ModifiedEntryData.count(index)) {
+            rawData = bank->ModifiedEntryData[index];
+        }
         else {
             bank->Stream->clear();
             bank->Stream->seekg(bank->Entries[index].Offset, std::ios::beg);
@@ -266,21 +256,22 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
             bank->Stream->read((char*)rawData.data(), bank->Entries[index].Size);
         }
 
-        // 2. Parse
         CTextParser tempParser;
         tempParser.Parse(rawData, bank->Entries[index].Type);
 
-        // 3. Call Delete
         if (!tempParser.IsGroup && !tempParser.IsNarratorList) {
             DeleteLinkedMedia(tempParser.TextData.SpeechBank, tempParser.TextData.Identifier);
         }
     }
 
-    // GENERIC Delete
     bank->Entries.erase(bank->Entries.begin() + index);
 
-    if (bank->ModifiedEntryData.count(index)) bank->ModifiedEntryData.erase(index);
-    if (bank->SubheaderCache.count(index)) bank->SubheaderCache.erase(index);
+    if (bank->ModifiedEntryData.count(index)) {
+        bank->ModifiedEntryData.erase(index);
+    }
+    if (bank->SubheaderCache.count(index)) {
+        bank->SubheaderCache.erase(index);
+    }
 
     std::map<int, std::vector<uint8_t>> newCache;
     for (auto& [k, v] : bank->ModifiedEntryData) {
@@ -293,8 +284,6 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
     UpdateFilter(*bank);
 }
 
-// ... (ParseSelectedLOD, SaveBigBank, SaveEntryChanges unchanged) ...
-// --- HELPER: RESTORED ParseSelectedLOD ---
 inline void ParseSelectedLOD(LoadedBank* bank) {
     if (!bank || bank->CurrentEntryRawData.empty()) return;
     size_t offset = 0; size_t size = bank->CurrentEntryRawData.size();
@@ -313,157 +302,21 @@ inline void ParseSelectedLOD(LoadedBank* bank) {
     g_MeshUploadNeeded = true;
 }
 
+// --- SAVE BIG BANK WRAPPER ---
 inline void SaveBigBank(LoadedBank* bank) {
-    if (!bank || !bank->Stream->is_open()) return;
-
-    std::string tempPath = bank->FullPath + ".tmp";
-    std::ofstream out(tempPath, std::ios::binary);
-    if (!out.is_open()) { g_BankStatus = "Failed to create temp file."; return; }
-
-    struct TempHeaderBIG { char m[4]; uint32_t v; uint32_t footOff; uint32_t footSz; };
-    TempHeaderBIG header = { {'B','I','G','B'}, 2, 0, 0 };
-    out.write((char*)&header, sizeof(header));
-
-    std::vector<std::vector<BankEntry>> allSubBankEntries;
-
-    bank->Stream->clear();
-
-    for (int sbIdx = 0; sbIdx < (int)bank->SubBanks.size(); sbIdx++) {
-        std::vector<BankEntry> currentEntries;
-
-        if (sbIdx == bank->ActiveSubBankIndex) {
-            currentEntries = bank->Entries;
-            for (int i = 0; i < (int)currentEntries.size(); i++) {
-                BankEntry& e = currentEntries[i];
-                e.Offset = (uint32_t)out.tellp();
-
-                if (bank->ModifiedEntryData.count(i)) {
-                    out.write((char*)bank->ModifiedEntryData[i].data(), bank->ModifiedEntryData[i].size());
-                    e.Size = (uint32_t)bank->ModifiedEntryData[i].size();
-                }
-                else {
-                    std::vector<uint8_t> buffer(e.Size);
-                    uint32_t oldOffset = bank->Entries[i].Offset;
-                    bank->Stream->seekg(oldOffset, std::ios::beg);
-                    bank->Stream->read((char*)buffer.data(), e.Size);
-                    out.write((char*)buffer.data(), e.Size);
-                }
-            }
+    if (bank->Type == EBankType::Text) {
+        if (TextCompiler::CompileTextBank(bank)) {
+            g_BankStatus = "Text Bank Recompiled successfully. Please reload.";
         }
         else {
-            const auto& info = bank->SubBanks[sbIdx];
-            bank->Stream->seekg(info.Offset, std::ios::beg);
-
-            // --- FIX: Robust Stats Skip for Saving too ---
-            uint32_t val = 0; bank->Stream->read((char*)&val, 4);
-            if (val == 42) bank->Stream->seekg(-4, std::ios::cur);
-            else if (val < 1000) bank->Stream->seekg(val * 8, std::ios::cur);
-            else bank->Stream->seekg(-4, std::ios::cur);
-            // ---------------------------------------------
-
-            for (uint32_t k = 0; k < info.EntryCount; k++) {
-                BankEntry e; uint32_t magic;
-                bank->Stream->read((char*)&magic, 4); bank->Stream->read((char*)&e.ID, 4);
-                bank->Stream->read((char*)&e.Type, 4); bank->Stream->read((char*)&e.Size, 4);
-                bank->Stream->read((char*)&e.Offset, 4); bank->Stream->read((char*)&e.CRC, 4);
-
-                if (magic == 42) {
-                    e.Name = ReadBankString(*bank->Stream);
-                    bank->Stream->seekg(4, std::ios::cur);
-                    uint32_t depC = 0; bank->Stream->read((char*)&depC, 4);
-                    for (uint32_t d = 0; d < depC; d++) ReadBankString(*bank->Stream);
-                }
-
-                bank->Stream->read((char*)&e.InfoSize, 4);
-                e.SubheaderFileOffset = (uint32_t)bank->Stream->tellg();
-                if (e.InfoSize > 0) bank->Stream->seekg(e.InfoSize, std::ios::cur);
-
-                uint32_t oldDataOffset = e.Offset;
-                e.Offset = (uint32_t)out.tellp();
-
-                std::vector<uint8_t> buffer(e.Size);
-                std::streampos savePos = bank->Stream->tellg();
-                bank->Stream->seekg(oldDataOffset, std::ios::beg);
-                bank->Stream->read((char*)buffer.data(), e.Size);
-                out.write((char*)buffer.data(), e.Size);
-
-                bank->Stream->seekg(savePos);
-
-                currentEntries.push_back(e);
-            }
-        }
-        allSubBankEntries.push_back(currentEntries);
-    }
-
-    header.footOff = (uint32_t)out.tellp();
-
-    uint32_t bankCount = (uint32_t)bank->SubBanks.size();
-    out.write((char*)&bankCount, 4);
-
-    std::streampos bankInfoStart = out.tellp();
-    for (const auto& info : bank->SubBanks) {
-        InternalBankInfo dummy = info;
-        WriteBankString(out, dummy.Name);
-        out.write((char*)&dummy.Version, 4); out.write((char*)&dummy.EntryCount, 4);
-        out.write((char*)&dummy.Offset, 4); out.write((char*)&dummy.Size, 4); out.write((char*)&dummy.Align, 4);
-    }
-
-    std::vector<uint32_t> entryTableOffsets;
-    for (int i = 0; i < (int)allSubBankEntries.size(); i++) {
-        entryTableOffsets.push_back((uint32_t)out.tellp());
-        uint32_t stats = 0; out.write((char*)&stats, 4);
-
-        for (const auto& e : allSubBankEntries[i]) {
-            uint32_t magic = 42;
-            out.write((char*)&magic, 4); out.write((char*)&e.ID, 4);
-            out.write((char*)&e.Type, 4); out.write((char*)&e.Size, 4);
-            out.write((char*)&e.Offset, 4); out.write((char*)&e.CRC, 4);
-
-            WriteBankString(out, e.Name);
-            uint32_t pad = 0; out.write((char*)&pad, 4);
-
-            uint32_t depCount = 0; out.write((char*)&depCount, 4);
-
-            uint32_t isz = 0;
-            if (i == bank->ActiveSubBankIndex) {
-                out.write((char*)&isz, 4);
-            }
-            else {
-                isz = e.InfoSize;
-                out.write((char*)&isz, 4);
-                if (isz > 0) {
-                    std::vector<uint8_t> m(isz);
-                    bank->Stream->seekg(e.SubheaderFileOffset, std::ios::beg);
-                    bank->Stream->read((char*)m.data(), isz);
-                    out.write((char*)m.data(), isz);
-                }
-            }
+            g_BankStatus = "Text Bank Compilation Failed.";
         }
     }
-
-    std::streampos endPos = out.tellp();
-    header.footSz = (uint32_t)(endPos - (std::streampos)header.footOff);
-
-    out.seekp(bankInfoStart);
-    for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-        InternalBankInfo info = bank->SubBanks[i];
-        info.EntryCount = (uint32_t)allSubBankEntries[i].size();
-        info.Offset = entryTableOffsets[i];
-
-        WriteBankString(out, info.Name);
-        out.write((char*)&info.Version, 4); out.write((char*)&info.EntryCount, 4);
-        out.write((char*)&info.Offset, 4); out.write((char*)&info.Size, 4); out.write((char*)&info.Align, 4);
+    else {
+        // Fallback for other banks if we ever want to recompile them genericly
+        // (Previously existing generic SaveBigBank logic could go here)
+        g_BankStatus = "Recompilation not supported for this bank type.";
     }
-
-    out.seekp(0);
-    out.write((char*)&header, sizeof(header));
-    out.close();
-
-    bank->Stream->close();
-    std::filesystem::remove(bank->FullPath);
-    std::filesystem::rename(tempPath, bank->FullPath);
-
-    g_BankStatus = "Bank Recompiled. Please reload.";
 }
 
 inline void SaveEntryChanges(LoadedBank* bank) {

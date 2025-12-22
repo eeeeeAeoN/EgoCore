@@ -43,6 +43,7 @@
     <ClInclude Include="Textures\TextureExporter.h" />
     <ClInclude Include="Textures\TextureParser.h" />
     <ClInclude Include="Textures\TextureProperties.h" />
+    <ClInclude Include="Text\TextCompiler.h" />
     <ClInclude Include="Text\TextParser.h" />
     <ClInclude Include="Text\TextProperties.h" />
     <ClInclude Include="Utilities\FileDialogs.h" />
