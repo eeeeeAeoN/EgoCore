@@ -17,6 +17,11 @@ static CLipSyncParser g_LipSyncParser;
 // =========================================================
 // LIPSYNC BACKEND STATE
 // =========================================================
+struct AddedEntryData {
+    std::vector<uint8_t> Raw;
+    std::vector<uint8_t> Info;
+};
+
 struct LipSyncState {
     std::string FilePath;
     std::unique_ptr<std::fstream> Stream;
@@ -28,7 +33,9 @@ struct LipSyncState {
 
     // Pending Changes [SubBankIdx] -> ...
     std::map<int, std::set<uint32_t>> PendingDeletes;
-    std::map<int, std::map<uint32_t, std::vector<uint8_t>>> PendingAdds;
+
+    // CHANGED: Stores Raw + Info pair
+    std::map<int, std::map<uint32_t, AddedEntryData>> PendingAdds;
 };
 
 static LipSyncState g_LipSyncState;
@@ -88,8 +95,9 @@ inline void LoadLipSyncSubBankEntries(int sbIdx) {
     g_LipSyncState.Stream->clear();
     g_LipSyncState.Stream->seekg(info.Offset, std::ios::beg);
 
-    uint32_t statsCount = 0; g_LipSyncState.Stream->read((char*)&statsCount, 4);
-    if (statsCount < 1000) g_LipSyncState.Stream->seekg(statsCount * 8, std::ios::cur);
+    uint32_t checkVal = 0; g_LipSyncState.Stream->read((char*)&checkVal, 4);
+    if (checkVal == 42) g_LipSyncState.Stream->seekg(-4, std::ios::cur);
+    else if (checkVal < 1000) g_LipSyncState.Stream->seekg(checkVal * 8, std::ios::cur);
     else g_LipSyncState.Stream->seekg(-4, std::ios::cur);
 
     for (uint32_t i = 0; i < info.EntryCount; i++) {
@@ -102,7 +110,7 @@ inline void LoadLipSyncSubBankEntries(int sbIdx) {
 
         uint32_t nameLen = 0; g_LipSyncState.Stream->read((char*)&nameLen, 4);
         if (nameLen > 0) g_LipSyncState.Stream->seekg(nameLen, std::ios::cur);
-        g_LipSyncState.Stream->seekg(4, std::ios::cur); // Padding
+        g_LipSyncState.Stream->seekg(4, std::ios::cur);
         uint32_t depCount = 0; g_LipSyncState.Stream->read((char*)&depCount, 4);
         for (uint32_t d = 0; d < depCount; d++) {
             uint32_t sLen = 0; g_LipSyncState.Stream->read((char*)&sLen, 4);
@@ -118,29 +126,39 @@ inline void LoadLipSyncSubBankEntries(int sbIdx) {
     g_LipSyncState.CachedSubBankIndex = sbIdx;
 }
 
-inline void AddLipSyncEntry(const std::string& speechBank, uint32_t newID) {
+// --- NEW: Generate binary data AND INFO data ---
+inline void AddLipSyncEntry(const std::string& speechBank, uint32_t newID, float duration) {
     if (!EnsureLipSyncLoaded()) return;
     std::string subName = GetSubBankNameForSpeech(speechBank);
     if (subName.empty()) return;
     if (g_LipSyncState.SubBankMap.find(subName) == g_LipSyncState.SubBankMap.end()) return;
     int sbIdx = g_LipSyncState.SubBankMap[subName];
 
-    // Read First Entry to use as Placeholder
-    LoadLipSyncSubBankEntries(sbIdx);
-    std::vector<uint8_t> placeholderData;
+    // 1. RAW DATA
+    std::vector<uint8_t> raw;
+    raw.push_back(0); // Dictionary Count
 
-    if (!g_LipSyncState.CachedEntries.empty()) {
-        const auto& first = g_LipSyncState.CachedEntries[0];
-        placeholderData.resize(first.Size);
-        g_LipSyncState.Stream->clear();
-        g_LipSyncState.Stream->seekg(first.Offset, std::ios::beg);
-        g_LipSyncState.Stream->read((char*)placeholderData.data(), first.Size);
-    }
-    else {
-        placeholderData = { 0,0,0,0 };
-    }
+    float fpsVal = 43.0f;
+    uint32_t frameCount = (uint32_t)std::ceil(duration * fpsVal);
+    if (frameCount == 0) frameCount = 1;
 
-    g_LipSyncState.PendingAdds[sbIdx][newID] = placeholderData;
+    // Write FPS as INT (Parser casts to float)
+    uint32_t fpsInt = (uint32_t)fpsVal;
+    uint8_t* pFps = (uint8_t*)&fpsInt;
+    raw.insert(raw.end(), pFps, pFps + 4);
+
+    uint8_t* pFrames = (uint8_t*)&frameCount;
+    raw.insert(raw.end(), pFrames, pFrames + 4);
+
+    for (uint32_t i = 0; i < frameCount; i++) raw.push_back(0);
+
+    // 2. INFO DATA (Metadata)
+    // Writing Duration as float (4 bytes)
+    std::vector<uint8_t> info;
+    uint8_t* pDur = (uint8_t*)&duration;
+    info.insert(info.end(), pDur, pDur + 4);
+
+    g_LipSyncState.PendingAdds[sbIdx][newID] = { raw, info };
 }
 
 inline void DeleteLipSyncEntry(const std::string& speechBank, uint32_t id) {
@@ -164,12 +182,27 @@ inline std::unique_ptr<CLipSyncData> FetchLipSyncData(int32_t soundID, const std
 
     if (g_LipSyncState.PendingDeletes[sbIdx].count((uint32_t)soundID)) return nullptr;
 
+    // Check Pending Adds
     if (g_LipSyncState.PendingAdds[sbIdx].count((uint32_t)soundID)) {
-        auto dummy = std::make_unique<CLipSyncData>();
-        dummy->Duration = 1.0f;
-        dummy->FrameCount = 30;
-        dummy->IsParsed = true;
-        return dummy;
+        const auto& entry = g_LipSyncState.PendingAdds[sbIdx][(uint32_t)soundID];
+
+        auto result = std::make_unique<CLipSyncData>();
+        CLipSyncParser parser;
+        parser.Parse(entry.Raw, entry.Info);
+        *result = parser.Data;
+
+        result->IsParsed = true;
+
+        // Force calculation if parser logic didn't pick up Info correctly
+        if (result->Duration == 0.0f) {
+            // Peek duration from info we just created
+            if (entry.Info.size() >= 4) {
+                float dur = *(float*)entry.Info.data();
+                result->Duration = dur;
+            }
+        }
+
+        return result;
     }
 
     LoadLipSyncSubBankEntries(sbIdx);

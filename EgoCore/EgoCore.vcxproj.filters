@@ -159,6 +159,9 @@
     <ClInclude Include="Utilities\miniaudio.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
+    <ClInclude Include="TextBackend.h">
+      <Filter>Source Files\Text</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

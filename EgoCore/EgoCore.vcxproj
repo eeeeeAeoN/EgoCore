@@ -38,6 +38,7 @@
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="TextBackend.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
     <ClInclude Include="Textures\TextureExporter.h" />
     <ClInclude Include="Textures\TextureParser.h" />

@@ -52,11 +52,7 @@ static void DrawDefTab() {
         }
     }
     else {
-
-        // =========================================================================================
-        // NEW COMPILATION UI START
-        // =========================================================================================
-
+        // ... (Compilation UI Code - Unchanged) ...
         // 1. The Button
         if (ImGui::Button("Compile All Defs")) {
             CompileAllDefs_Stealth(); // Triggers the threaded double-launch
@@ -65,54 +61,32 @@ static void DrawDefTab() {
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles definitions for BOTH Frontend and Game.\n(Generates frontend.bin and game.bin)");
 
-        // 2. The Loading Modal (Blocks input while compiling)
-        // g_IsCompiling is defined in CompilerBackend.h
-        if (g_IsCompiling) {
-            ImGui::OpenPopup("Compiling...");
-        }
+        if (g_IsCompiling) { ImGui::OpenPopup("Compiling..."); }
 
         if (ImGui::BeginPopupModal("Compiling...", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-            // Display status from the worker thread (e.g. "Compiling Game (2/2)...")
             ImGui::Text("%s", g_CompileStatus.c_str());
             ImGui::Separator();
-
-            // Simple animated spinner text
-            static int dots = 0;
-            if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
-            std::string spinner = "Please wait";
-            for (int i = 0; i < dots; i++) spinner += ".";
+            static int dots = 0; if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
+            std::string spinner = "Please wait"; for (int i = 0; i < dots; i++) spinner += ".";
             ImGui::Text("%s", spinner.c_str());
-
-            // Check if thread finished
-            if (!g_IsCompiling) {
-                ImGui::CloseCurrentPopup();
-                triggerCompileSuccess = true; // Queue the success popup
-            }
+            if (!g_IsCompiling) { ImGui::CloseCurrentPopup(); triggerCompileSuccess = true; }
             ImGui::EndPopup();
         }
 
-        // 3. The Success Popup
-        if (triggerCompileSuccess) {
-            ImGui::OpenPopup("Compile Complete");
-            triggerCompileSuccess = false;
-        }
-
+        if (triggerCompileSuccess) { ImGui::OpenPopup("Compile Complete"); triggerCompileSuccess = false; }
         if (ImGui::BeginPopupModal("Compile Complete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("Successfully compiled definitions!");
             ImGui::Text("Generated: frontend.bin & game.bin");
-            ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            ImGui::Separator(); if (ImGui::Button("OK", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
         ImGui::Separator();
-        // =========================================================================================
-        // NEW COMPILATION UI END
-        // =========================================================================================
 
         if (ImGui::BeginTabBar("DefSubTabs", ImGuiTabBarFlags_None)) {
 
             // --- TAB 1: DEFINITIONS ---
             if (ImGui::BeginTabItem("Definitions")) {
+                // ... (Definitions UI Code - Unchanged) ...
                 g_DefWorkspace.ShowDefsMode = true;
                 ImGui::BeginChild("DefLeftPane", ImVec2(leftPaneWidth, 0), true);
 
@@ -246,6 +220,7 @@ static void DrawDefTab() {
                 ImGui::SameLine();
 
                 ImGui::BeginChild("DefRightPane", ImVec2(0, 0), true);
+                // ... (Def Right Pane unchanged) ...
                 if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1) {
                     if (g_DefWorkspace.CategorizedDefs.count(g_DefWorkspace.SelectedType) &&
                         g_DefWorkspace.SelectedEntryIndex < g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType].size()) {
@@ -308,7 +283,6 @@ static void DrawDefTab() {
                 g_DefWorkspace.ShowDefsMode = false;
                 ImGui::BeginChild("HeadLeftPane", ImVec2(leftPaneWidth, 0), true);
 
-                // --- NEW KEYBOARD NAVIGATION LOGIC ---
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
                     if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
                         if (g_DefWorkspace.SelectedEnumIndex > 0) {
@@ -321,7 +295,6 @@ static void DrawDefTab() {
                         }
                     }
                 }
-                // -------------------------------------
 
                 ImGui::Text("Header Filter");
                 ImGui::InputText("##hFilter", g_DefWorkspace.HeaderFilter, 128);
@@ -337,8 +310,11 @@ static void DrawDefTab() {
                             if (nameLo.find(hFilter) == std::string::npos) continue;
                         }
 
+                        // --- FIX: USE UNIQUE LABEL ID FOR DUPLICATE ENUM NAMES ---
+                        std::string label = g_DefWorkspace.AllEnums[i].Name + "##" + std::to_string(i);
                         bool isSelected = (g_DefWorkspace.SelectedEnumIndex == i);
-                        if (ImGui::Selectable(g_DefWorkspace.AllEnums[i].Name.c_str(), isSelected)) {
+
+                        if (ImGui::Selectable(label.c_str(), isSelected)) {
                             RequestLoadHeader(i);
                         }
                         if (isSelected) ImGui::SetItemDefaultFocus();
@@ -353,6 +329,7 @@ static void DrawDefTab() {
                 ImGui::SameLine();
 
                 ImGui::BeginChild("HeadRightPane", ImVec2(0, 0), true);
+                // ... (Header Right Pane unchanged) ...
                 if (g_DefWorkspace.SelectedEnumIndex != -1 && g_DefWorkspace.SelectedEnumIndex < g_DefWorkspace.AllEnums.size()) {
                     EnumEntry& entry = g_DefWorkspace.AllEnums[g_DefWorkspace.SelectedEnumIndex];
                     ImGui::Text("%s", entry.Name.c_str());

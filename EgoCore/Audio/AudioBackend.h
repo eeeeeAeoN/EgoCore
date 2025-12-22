@@ -11,6 +11,9 @@
 
 #include "miniaudio.h"
 
+// ... (Structs 1-4 remain unchanged: LHAudioBankCompData, AdpcmEncoder, etc.) ...
+// ... Copy previous content for sections 1, 2, 3, 4 ...
+
 // =========================================================
 // 1. FABLE FILE STRUCTURES
 // =========================================================
@@ -298,12 +301,80 @@ public:
         ModifiedCache = newCache;
     }
 
-    // --- NEW: Add Entry from WAV ---
+    // --- NEW: Helper to get duration of external WAV ---
+    static float GetWavDuration(const std::string& wavPath) {
+        std::ifstream f(wavPath, std::ios::binary);
+        if (!f.is_open()) return 0.0f;
+
+        f.seekg(0, std::ios::end);
+        size_t fileSize = f.tellg();
+        f.seekg(0, std::ios::beg);
+
+        std::vector<uint8_t> header(44); // standard header
+        if (fileSize < 44) return 0.0f;
+        f.read((char*)header.data(), 44);
+        f.close();
+
+        if (memcmp(&header[0], "RIFF", 4) != 0) return 0.0f;
+
+        // Offset 24: Sample Rate (4 bytes)
+        // Offset 28: Byte Rate (4 bytes)
+        // Offset 40: Data Chunk Size (4 bytes)
+
+        // NOTE: This assumes standard WAV header. More robust parsing in ImportWav used, 
+        // but for quick duration check this is usually enough.
+        uint32_t sampleRate = *(uint32_t*)&header[24];
+        uint32_t byteRate = *(uint32_t*)&header[28];
+
+        // If byteRate is 0, calc from sampleRate * channels * bits/8
+        if (sampleRate == 0) return 0.0f;
+
+        // Try scanning chunks like ImportWav for accurate duration
+        // Re-open and scan properly
+        f.open(wavPath, std::ios::binary);
+        f.seekg(12, std::ios::beg);
+
+        size_t cursor = 12;
+        uint32_t pcmBytes = 0;
+        uint32_t rate = 22050;
+        uint16_t bits = 16;
+        uint16_t channels = 1;
+
+        while (cursor < fileSize - 8) {
+            uint32_t chunkId = 0, chunkSize = 0;
+            f.read((char*)&chunkId, 4);
+            f.read((char*)&chunkSize, 4);
+
+            if (memcmp(&chunkId, "fmt ", 4) == 0) {
+                f.seekg(2, std::ios::cur);
+                f.read((char*)&channels, 2);
+                f.read((char*)&rate, 4);
+                f.seekg(6, std::ios::cur);
+                f.read((char*)&bits, 2);
+                f.seekg(chunkSize - 16, std::ios::cur); // skip rest of fmt
+            }
+            else if (memcmp(&chunkId, "data", 4) == 0) {
+                pcmBytes = chunkSize;
+                break; // found data
+            }
+            else {
+                f.seekg(chunkSize, std::ios::cur);
+            }
+            cursor = (size_t)f.tellg();
+        }
+
+        if (pcmBytes == 0 || rate == 0 || channels == 0 || bits == 0) return 0.0f;
+
+        float bytesPerSample = (bits / 8.0f) * channels;
+        float totalSamples = pcmBytes / bytesPerSample;
+        return totalSamples / rate;
+    }
+
     bool AddEntry(uint32_t id, const std::string& wavPath) {
         AudioLookupEntry newE;
         newE.SoundID = id;
-        newE.Length = 0; // Set by ImportWav
-        newE.Offset = 0; // Virtual
+        newE.Length = 0;
+        newE.Offset = 0;
 
         Entries.push_back(newE);
         int idx = (int)Entries.size() - 1;
@@ -440,7 +511,6 @@ public:
 
         finalBlob.insert(finalBlob.end(), riffFile.begin(), riffFile.end());
 
-        // Update Entry Info
         Entries[index].Length = (uint32_t)finalBlob.size();
 
         ModifiedCache[index] = finalBlob;

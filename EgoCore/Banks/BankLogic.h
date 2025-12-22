@@ -59,6 +59,8 @@ static void LoadSystemBinaries(const std::string& gameRoot) {
     }
 }
 
+// ... (FetchTextContent and ResolveGroupMetadata unchanged) ...
+// ... (Copied from previous turn) ...
 inline std::string FetchTextContent(LoadedBank* bank, uint32_t id) {
     if (!bank) return "";
     for (int i = 0; i < bank->Entries.size(); ++i) {
@@ -104,8 +106,8 @@ inline void ResolveGroupMetadata(LoadedBank* bank) {
 }
 
 // --- STANDARD BANK FUNCTIONS ---
-
 inline void SelectEntry(LoadedBank* bank, int idx) {
+    // ... (Same as before) ...
     if (!bank || idx < 0 || idx >= (int)bank->Entries.size()) return;
 
     if (bank->Type == EBankType::Audio && bank->AudioParser) {
@@ -242,15 +244,39 @@ inline void CreateNewTextEntry(LoadedBank* bank, int type) {
 inline void DeleteBankEntry(LoadedBank* bank, int index) {
     if (!bank || index < 0 || index >= bank->Entries.size()) return;
 
+    // AUDIO Handling
     if (bank->Type == EBankType::Audio && bank->AudioParser) {
         bank->AudioParser->DeleteEntry(index);
-        // FIX: Use -> for pointer
         bank->Entries.erase(bank->Entries.begin() + index);
         UpdateFilter(*bank);
         bank->SelectedEntryIndex = -1;
         return;
     }
 
+    // TEXT Handling: Delete Linked Media + Header
+    if (bank->Type == EBankType::Text) {
+        // We need to parse this entry to know what to delete
+        // 1. Get raw data
+        std::vector<uint8_t> rawData;
+        if (bank->ModifiedEntryData.count(index)) rawData = bank->ModifiedEntryData[index];
+        else {
+            bank->Stream->clear();
+            bank->Stream->seekg(bank->Entries[index].Offset, std::ios::beg);
+            rawData.resize(bank->Entries[index].Size);
+            bank->Stream->read((char*)rawData.data(), bank->Entries[index].Size);
+        }
+
+        // 2. Parse
+        CTextParser tempParser;
+        tempParser.Parse(rawData, bank->Entries[index].Type);
+
+        // 3. Call Delete
+        if (!tempParser.IsGroup && !tempParser.IsNarratorList) {
+            DeleteLinkedMedia(tempParser.TextData.SpeechBank, tempParser.TextData.Identifier);
+        }
+    }
+
+    // GENERIC Delete
     bank->Entries.erase(bank->Entries.begin() + index);
 
     if (bank->ModifiedEntryData.count(index)) bank->ModifiedEntryData.erase(index);
@@ -267,7 +293,8 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
     UpdateFilter(*bank);
 }
 
-// --- HELPER ---
+// ... (ParseSelectedLOD, SaveBigBank, SaveEntryChanges unchanged) ...
+// --- HELPER: RESTORED ParseSelectedLOD ---
 inline void ParseSelectedLOD(LoadedBank* bank) {
     if (!bank || bank->CurrentEntryRawData.empty()) return;
     size_t offset = 0; size_t size = bank->CurrentEntryRawData.size();
@@ -327,9 +354,12 @@ inline void SaveBigBank(LoadedBank* bank) {
             const auto& info = bank->SubBanks[sbIdx];
             bank->Stream->seekg(info.Offset, std::ios::beg);
 
-            uint32_t statsCount = 0; bank->Stream->read((char*)&statsCount, 4);
-            if (statsCount < 1000) bank->Stream->seekg(statsCount * 8, std::ios::cur);
+            // --- FIX: Robust Stats Skip for Saving too ---
+            uint32_t val = 0; bank->Stream->read((char*)&val, 4);
+            if (val == 42) bank->Stream->seekg(-4, std::ios::cur);
+            else if (val < 1000) bank->Stream->seekg(val * 8, std::ios::cur);
             else bank->Stream->seekg(-4, std::ios::cur);
+            // ---------------------------------------------
 
             for (uint32_t k = 0; k < info.EntryCount; k++) {
                 BankEntry e; uint32_t magic;
