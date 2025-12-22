@@ -1,247 +1,18 @@
 #pragma once
 #include "imgui.h"
 #include "FileDialogs.h"
-#include "BankBackend.h" 
 #include "DefExplorer.h"
-#include "ConfigBackend.h"
-#include "MeshProperties.h"
-#include "AnimProperties.h"
-#include "TextureProperties.h"
-#include "TextProperties.h"
-#include "GltfExporter.h"
-#include "LipSyncProperties.h"
-#include "BinaryParser.h"
 #include "AudioExplorer.h"
-#include <windows.h>
-#include <algorithm>
-#include <vector>
-#include <string>
-#include <filesystem> 
+#include "BankLogic.h" 
 
 static bool g_HasInitialized = false;
-static std::vector<BinaryParser> g_LoadedBinaries;
 
-static void LoadSystemBinaries(const std::string& gameRoot) {
-    namespace fs = std::filesystem;
-    g_LoadedBinaries.clear();
+// --- STATE FOR DELETE POPUP ---
+static int g_EntryToDeleteIndex = -1;
+static bool g_ShowDeleteBankEntryPopup = false;
 
-    std::vector<std::string> targetFiles = {
-        "gamesnds.bin",
-        "dialoguesnds.bin",         "dialoguesnds.h",
-        "dialoguesnds2.bin",        "dialoguesnds2.h",
-        "scriptdialoguesnds.bin",   "scriptdialoguesnds.h",
-        "scriptdialoguesnds2.bin",  "scriptdialoguesnds2.h"
-    };
-
-    fs::path defsPath = fs::path(gameRoot) / "Data" / "Defs";
-
-    for (const auto& fname : targetFiles) {
-        fs::path fullPath = defsPath / fname;
-        if (fs::exists(fullPath)) {
-            bool alreadyLoaded = false;
-            for (const auto& loaded : g_LoadedBinaries) {
-                if (loaded.Data.FileName == fname) alreadyLoaded = true;
-            }
-            if (alreadyLoaded) continue;
-
-            BinaryParser parser;
-            parser.Parse(fullPath.string());
-            if (parser.Data.IsParsed) {
-                g_LoadedBinaries.push_back(std::move(parser));
-            }
-        }
-    }
-}
-
-// --- HELPER FUNCTIONS FOR TEXT METADATA ---
-
-// Helper to fetch text content for Group entries
-inline std::string FetchTextContent(LoadedBank* bank, uint32_t id) {
-    if (!bank) return "";
-    for (int i = 0; i < bank->Entries.size(); ++i) {
-        if (bank->Entries[i].ID == id) {
-            // Use a temp parser to avoid messing up the global state
-            CTextParser tempParser;
-            bank->Stream->clear();
-            bank->Stream->seekg(bank->Entries[i].Offset, std::ios::beg);
-            size_t size = bank->Entries[i].Size;
-
-            if (size > 0) {
-                std::vector<uint8_t> buffer(size + 64);
-                bank->Stream->read((char*)buffer.data(), size);
-                tempParser.Parse(buffer, bank->Entries[i].Type);
-                if (tempParser.IsParsed && !tempParser.IsGroup && !tempParser.IsNarratorList) {
-                    return WStringToString(tempParser.TextData.Content);
-                }
-            }
-            return "[Content]";
-        }
-    }
-    return "[ID Not Found]";
-}
-
-inline void ResolveGroupMetadata(LoadedBank* bank) {
-    if (!g_TextParser.IsParsed || !g_TextParser.IsGroup || !bank) return;
-    for (auto& item : g_TextParser.GroupData.Items) {
-        bool found = false;
-        for (const auto& entry : bank->Entries) {
-            if (entry.ID == item.ID) {
-                item.CachedName = entry.Name;
-                found = true;
-                break;
-            }
-        }
-        if (!found) item.CachedName = "Unknown ID";
-        if (found) item.CachedContent = FetchTextContent(bank, item.ID);
-        else item.CachedContent = "-";
-    }
-}
-
-// ---------------------------------------------------------
-
-static void SelectEntry(LoadedBank* bank, int idx) {
-    if (!bank || idx < 0 || idx >= (int)bank->Entries.size()) return;
-
-    if (bank->Type == EBankType::Audio && bank->AudioParser) {
-        bank->AudioParser->Player.Reset();
-    }
-
-    g_TextureParser.DecodedPixels.clear();
-    g_TextureParser.IsParsed = false;
-    std::vector<uint8_t>().swap(g_TextureParser.DecodedPixels);
-
-    g_BBMParser.IsParsed = false;
-    g_ActiveMeshContent = C3DMeshContent();
-    g_AnimParseSuccess = false;
-
-    g_TextParser.IsParsed = false;
-    g_TextParser.TextData = CTextEntry();
-    g_TextParser.GroupData = CTextGroup();
-    g_TextParser.NarratorStrings.clear();
-    g_TextParser.RawData.clear();
-    g_LipSyncParser.Data = CLipSyncData();
-
-    bank->SelectedEntryIndex = idx;
-    bank->SelectedLOD = 0;
-    const auto& e = bank->Entries[idx];
-
-    if (bank->Type != EBankType::Audio) {
-        // NEW: Check memory cache first
-        if (bank->ModifiedEntryData.count(idx)) {
-            bank->CurrentEntryRawData = bank->ModifiedEntryData[idx];
-        }
-        else {
-            bank->Stream->clear();
-            size_t effectiveOffset = e.Offset;
-            size_t effectiveSize = e.Size;
-
-            // --- FIX: Handle 0-Offset/0-Size entries (Type 2 Narrator List) ---
-            // Added explicit (int) cast to e.Type to fix E0349
-            if ((int)e.Type == 2 && (effectiveOffset == 0 || effectiveSize == 0)) {
-                size_t maxEnd = 0;
-                for (const auto& other : bank->Entries) {
-                    if (other.ID != e.ID && other.Offset > 0) {
-                        size_t end = other.Offset + other.Size;
-                        if (end > maxEnd) maxEnd = end;
-                    }
-                }
-                if (maxEnd > 0) effectiveOffset = maxEnd;
-
-                bank->Stream->seekg(0, std::ios::end);
-                size_t fileEnd = bank->Stream->tellg();
-                if (fileEnd > effectiveOffset) effectiveSize = fileEnd - effectiveOffset;
-                else effectiveSize = 0;
-            }
-            else if (effectiveSize > 50000000) {
-                effectiveSize = 50000000;
-            }
-
-            if (effectiveSize > 0) {
-                bank->Stream->seekg(effectiveOffset, std::ios::beg);
-                bank->CurrentEntryRawData.resize(effectiveSize + 64);
-                bank->Stream->read((char*)bank->CurrentEntryRawData.data(), effectiveSize);
-                bank->CurrentEntryRawData.resize(effectiveSize);
-            }
-            else {
-                bank->CurrentEntryRawData.clear();
-            }
-        }
-    }
-
-    if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend) {
-        if (bank->SubheaderCache.count(idx)) {
-            g_TextureParser.Parse(bank->SubheaderCache[idx], bank->CurrentEntryRawData, e.Type);
-        }
-    }
-    else if (bank->Type == EBankType::Text || bank->Type == EBankType::Dialogue) {
-        if (bank->Type == EBankType::Dialogue) {
-            g_LipSyncParser.Parse(bank->CurrentEntryRawData, bank->SubheaderCache[idx]);
-        }
-        g_TextParser.Parse(bank->CurrentEntryRawData, e.Type);
-
-        if (g_TextParser.IsGroup) ResolveGroupMetadata(bank);
-    }
-    else if (bank->Type != EBankType::Audio) {
-        if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
-            g_BBMParser.Parse(bank->CurrentEntryRawData);
-            g_MeshUploadNeeded = true;
-        }
-        else if (IsSupportedMesh(e.Type)) {
-            if (bank->SubheaderCache.count(idx)) g_ActiveMeshContent.ParseEntryMetadata(bank->SubheaderCache[idx]);
-            if (!bank->CurrentEntryRawData.empty()) {
-                g_ActiveMeshContent.Parse(bank->CurrentEntryRawData);
-                g_MeshUploadNeeded = true;
-            }
-        }
-        else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
-            if (bank->SubheaderCache.count(idx)) g_AnimParseSuccess = g_ActiveAnim.Deserialize(bank->SubheaderCache[idx]);
-        }
-    }
-}
-
-inline void ParseSelectedLOD(LoadedBank* bank) {
-    if (!bank || bank->CurrentEntryRawData.empty()) return;
-    size_t offset = 0; size_t size = bank->CurrentEntryRawData.size();
-
-    if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
-        if (bank->SelectedLOD >= g_ActiveMeshContent.EntryMeta.LODCount) bank->SelectedLOD = 0;
-        size_t currentOffset = 0;
-        for (int i = 0; i < bank->SelectedLOD; i++) currentOffset += g_ActiveMeshContent.EntryMeta.LODSizes[i];
-        size_t currentSize = g_ActiveMeshContent.EntryMeta.LODSizes[bank->SelectedLOD];
-        if (currentOffset + currentSize <= bank->CurrentEntryRawData.size()) { offset = currentOffset; size = currentSize; }
-    }
-    std::vector<uint8_t> slice;
-    if (size > 0) { slice.resize(size); memcpy(slice.data(), bank->CurrentEntryRawData.data() + offset, size); }
-
-    g_ActiveMeshContent.Parse(slice);
-    g_MeshUploadNeeded = true;
-}
-
-inline void SaveEntryChanges(LoadedBank* bank) {
-    if (!bank || bank->SelectedEntryIndex == -1) return;
-    BankEntry& e = bank->Entries[bank->SelectedEntryIndex];
-    std::vector<uint8_t> newBytes;
-
-    if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
-        newBytes = g_ActiveAnim.Serialize();
-    }
-    // FIX HERE: Cast the Enum to int so it matches e.Type
-    else if (e.Type == (int32_t)EBankType::Text) {
-        newBytes = g_TextParser.Recompile();
-    }
-    else {
-        return;
-    }
-
-    // Save to Memory Cache (Avoids file corruption for now)
-    bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-
-    // Update visual cache for immediate feedback
-    bank->CurrentEntryRawData = newBytes;
-    e.Size = (uint32_t)newBytes.size();
-
-    g_BankStatus = "Saved to Memory (Size: " + std::to_string(newBytes.size()) + ")";
-}
+// --- STATE FOR ADD POPUP ---
+static bool g_ShowAddEntryPopup = false;
 
 static void DrawBinaryTab() {
     static bool isCompilingBins = false;
@@ -376,6 +147,23 @@ static void DrawBankTab() {
                 }
 
                 // ==========================================================
+                // GLOBAL TAB SHORTCUTS
+                // ==========================================================
+                // Handle Delete Key (Works in List or Properties if window is focused)
+                if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+                        if (g_AppConfig.ShowBankDeleteConfirm) {
+                            g_EntryToDeleteIndex = bank.SelectedEntryIndex;
+                            g_ShowDeleteBankEntryPopup = true;
+                            ImGui::OpenPopup("Delete Bank Entry?");
+                        }
+                        else {
+                            DeleteBankEntry(&bank, bank.SelectedEntryIndex);
+                        }
+                    }
+                }
+
+                // ==========================================================
                 // LEFT PANE: Bank Browser
                 // ==========================================================
                 ImGui::BeginChild("LeftPane", ImVec2(bankSidebarWidth, 0), true);
@@ -400,6 +188,40 @@ static void DrawBankTab() {
 
                 ImGui::InputText("Search", bank.FilterText, 128);
                 if (ImGui::IsItemEdited()) UpdateFilter(bank);
+
+                // Add Entry Button (Text Only)
+                if (bank.Type == EBankType::Text) {
+                    if (ImGui::Button("+ Add Entry", ImVec2(-FLT_MIN, 0))) {
+                        g_ShowAddEntryPopup = true;
+                        ImGui::OpenPopup("Add Entry Type");
+                    }
+                }
+
+                // Add Entry Popup
+                if (ImGui::BeginPopupModal("Add Entry Type", &g_ShowAddEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::Text("Select Entry Type:");
+                    ImGui::Separator();
+
+                    if (ImGui::Button("Text Entry (Type 0)", ImVec2(200, 0))) {
+                        CreateNewTextEntry(&bank, 0);
+                        g_ShowAddEntryPopup = false;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::Button("Group Entry (Type 1)", ImVec2(200, 0))) {
+                        CreateNewTextEntry(&bank, 1);
+                        g_ShowAddEntryPopup = false;
+                        ImGui::CloseCurrentPopup();
+                    }
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Type 2 (Narrator List) not supported.");
+
+                    if (ImGui::Button("Cancel", ImVec2(200, 0))) {
+                        g_ShowAddEntryPopup = false;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
 
                 if (!bank.Entries.empty()) {
                     ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
@@ -442,6 +264,21 @@ static void DrawBankTab() {
 
                     ImGui::Text("ID: %d | Type: %d | Size: %d bytes", e.ID, e.Type, e.Size);
 
+                    // --- DELETE BUTTON (Available for ALL banks now) ---
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+                    if (ImGui::SmallButton("Delete Entry")) {
+                        if (g_AppConfig.ShowBankDeleteConfirm) {
+                            g_EntryToDeleteIndex = bank.SelectedEntryIndex;
+                            g_ShowDeleteBankEntryPopup = true;
+                            ImGui::OpenPopup("Delete Bank Entry?");
+                        }
+                        else {
+                            DeleteBankEntry(&bank, bank.SelectedEntryIndex);
+                        }
+                    }
+                    ImGui::PopStyleColor();
+
                     if (bank.Type == EBankType::Audio) {
                         DrawAudioProperties(&bank);
                     }
@@ -464,8 +301,7 @@ static void DrawBankTab() {
                         DrawTextureProperties();
                     }
                     else if (bank.Type == EBankType::Text) {
-                        // FIX E0413: Pass the pointer to the bank, not the global list
-                        DrawTextProperties(&bank);
+                        DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); });
                     }
                     else if (bank.Type == EBankType::Dialogue) {
                         DrawLipSyncProperties();
@@ -478,6 +314,33 @@ static void DrawBankTab() {
                     }
                 }
                 ImGui::EndChild();
+
+                // --- DELETE POPUP (Rendered outside child windows for safety) ---
+                if (ImGui::BeginPopupModal("Delete Bank Entry?", &g_ShowDeleteBankEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::Text("Are you sure you want to delete this entry?");
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "This action cannot be undone.");
+                    ImGui::Separator();
+
+                    static bool dontShowAgain = false;
+                    ImGui::Checkbox("Don't show this again", &dontShowAgain);
+
+                    if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
+                        if (dontShowAgain) {
+                            g_AppConfig.ShowBankDeleteConfirm = false;
+                            SaveConfig();
+                        }
+                        DeleteBankEntry(&bank, g_EntryToDeleteIndex);
+                        g_ShowDeleteBankEntryPopup = false;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                        g_ShowDeleteBankEntryPopup = false;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
+
                 ImGui::EndTabItem();
             }
 

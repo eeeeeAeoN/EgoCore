@@ -114,12 +114,6 @@
     <ClInclude Include="Textures\TextureExporter.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
-    <ClInclude Include="Text\TextParser.h">
-      <Filter>Source Files\Text</Filter>
-    </ClInclude>
-    <ClInclude Include="Text\TextProperties.h">
-      <Filter>Source Files\Text</Filter>
-    </ClInclude>
     <ClInclude Include="TextEditor\TextEditor.h">
       <Filter>Source Files\TextEditor</Filter>
     </ClInclude>
@@ -135,26 +129,35 @@
     <ClInclude Include="Definitions\CompilerBackend.h">
       <Filter>Source Files\Definitions</Filter>
     </ClInclude>
-    <ClInclude Include="LipSyncParser.h">
-      <Filter>Source Files\LipSync</Filter>
-    </ClInclude>
-    <ClInclude Include="LipSyncProperties.h">
-      <Filter>Source Files\LipSync</Filter>
-    </ClInclude>
-    <ClInclude Include="BinaryParser.h">
+    <ClInclude Include="Banks\BinaryParser.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
-    <ClInclude Include="FileDialogs.h">
-      <Filter>Source Files\Utilities</Filter>
+    <ClInclude Include="Banks\BankLogic.h">
+      <Filter>Source Files\Banks</Filter>
     </ClInclude>
-    <ClInclude Include="AudioBackend.h">
+    <ClInclude Include="Audio\AudioBackend.h">
       <Filter>Source Files\Audio</Filter>
     </ClInclude>
-    <ClInclude Include="miniaudio.h">
+    <ClInclude Include="Audio\AudioExplorer.h">
+      <Filter>Source Files\Audio</Filter>
+    </ClInclude>
+    <ClInclude Include="Lipsync\LipSyncParser.h">
+      <Filter>Source Files\LipSync</Filter>
+    </ClInclude>
+    <ClInclude Include="Lipsync\LipSyncProperties.h">
+      <Filter>Source Files\LipSync</Filter>
+    </ClInclude>
+    <ClInclude Include="Text\TextParser.h">
+      <Filter>Source Files\Text</Filter>
+    </ClInclude>
+    <ClInclude Include="Text\TextProperties.h">
+      <Filter>Source Files\Text</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\FileDialogs.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="AudioExplorer.h">
-      <Filter>Source Files\Audio</Filter>
+    <ClInclude Include="Utilities\miniaudio.h">
+      <Filter>Source Files\Utilities</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -287,6 +287,30 @@ public:
         return true;
     }
 
+    void DeleteEntry(int index) {
+        if (index < 0 || index >= (int)Entries.size()) return;
+        Entries.erase(Entries.begin() + index);
+        std::map<int, std::vector<uint8_t>> newCache;
+        for (auto& [k, v] : ModifiedCache) {
+            if (k < index) newCache[k] = v;
+            else if (k > index) newCache[k - 1] = v;
+        }
+        ModifiedCache = newCache;
+    }
+
+    // --- NEW: Add Entry from WAV ---
+    bool AddEntry(uint32_t id, const std::string& wavPath) {
+        AudioLookupEntry newE;
+        newE.SoundID = id;
+        newE.Length = 0; // Set by ImportWav
+        newE.Offset = 0; // Virtual
+
+        Entries.push_back(newE);
+        int idx = (int)Entries.size() - 1;
+
+        return ImportWav(idx, wavPath);
+    }
+
     std::vector<int16_t> GetDecodedAudio(int index) {
         if (index < 0 || index >= Entries.size()) return {};
         std::vector<uint8_t> rawBuffer;
@@ -369,7 +393,6 @@ public:
 
         std::vector<uint8_t> encoded = XboxAdpcmEncoder::Encode(finalPcm);
 
-        // --- WRAP IN RIFF (NO FACT CHUNK) ---
         uint32_t riffSize = 4 + 28 + 8 + (uint32_t)encoded.size();
 
         std::vector<uint8_t> riffFile;
@@ -388,14 +411,13 @@ public:
         pushStr("data"); pushU32((uint32_t)encoded.size());
         riffFile.insert(riffFile.end(), encoded.begin(), encoded.end());
 
-        // --- PREPEND & PATCH INTERNAL HEADER ---
         std::vector<uint8_t> finalBlob;
         const auto& originalEntry = Entries[index];
         Stream.clear();
         Stream.seekg(AudioBlobStart + originalEntry.Offset, std::ios::beg);
 
         std::vector<uint8_t> headerProbe(64);
-        Stream.read((char*)headerProbe.data(), 64);
+        if (originalEntry.Length > 64) Stream.read((char*)headerProbe.data(), 64);
 
         int riffStart = -1;
         for (int i = 0; i < 60; i++) if (memcmp(&headerProbe[i], "RIFF", 4) == 0) { riffStart = i; break; }
@@ -404,14 +426,9 @@ public:
             finalBlob.resize(riffStart);
             memcpy(finalBlob.data(), headerProbe.data(), riffStart);
 
-            // --- PATCH HEADER (CORRECTED OFFSETS) ---
             if (riffStart >= 12) {
-                // Offset 6: Sample Rate
                 uint16_t* pRate = (uint16_t*)&finalBlob[6];
                 *pRate = (uint16_t)sampleRate;
-
-                // Offset 8: Duration/Size
-                // Updating this to RIFF file size to give the game a valid bounds check
                 uint32_t* pSize = (uint32_t*)&finalBlob[8];
                 *pSize = (uint32_t)riffFile.size();
             }
@@ -422,6 +439,10 @@ public:
         }
 
         finalBlob.insert(finalBlob.end(), riffFile.begin(), riffFile.end());
+
+        // Update Entry Info
+        Entries[index].Length = (uint32_t)finalBlob.size();
+
         ModifiedCache[index] = finalBlob;
         return true;
     }

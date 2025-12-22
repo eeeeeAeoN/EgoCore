@@ -17,7 +17,7 @@ struct CTextGroupItem {
 };
 
 struct CTextEntry {
-    std::wstring Content;
+    std::wstring Content; // Content is FIRST
     std::string SpeechBank;
     std::string Speaker;
     std::string Identifier;
@@ -33,7 +33,10 @@ public:
     CTextEntry TextData;
     CTextGroup GroupData;
 
+    // Narrator List Data
+    uint32_t NarratorStartID = 0; // The "7B 01 00 00" from the dump
     std::vector<std::string> NarratorStrings;
+
     std::vector<uint8_t> RawData;
 
     bool IsParsed = false;
@@ -108,6 +111,7 @@ public:
         NarratorStrings.clear();
         RawData = data;
         DebugLog = "";
+        NarratorStartID = 0;
 
         if (data.empty()) return;
 
@@ -136,8 +140,8 @@ public:
             }
             else if (entryType == 2) { // TYPE_NARRATOR_LIST
                 IsNarratorList = true;
-                const uint8_t sig[] = { 0x0E, 0x00, 0x00, 0x00, '[', 'N', 'a', 'r', 'r', 'a', 't', 'o', 'r', 'L', 'i', 's', 't', ']' };
-                size_t sigLen = 18;
+                const uint8_t sig[] = { '[', 'N', 'a', 'r', 'r', 'a', 't', 'o', 'r', 'L', 'i', 's', 't', ']' };
+                size_t sigLen = 14;
 
                 size_t foundOffset = -1;
                 for (size_t i = 0; i < size - sigLen; i++) {
@@ -149,12 +153,19 @@ public:
 
                 if (foundOffset != -1) {
                     cursor = foundOffset + sigLen;
-                    while (cursor < size && ptr[cursor] == 0) cursor++;
+
+                    // SKIP PADDING (00 00 00 00) - Confirmed by hex dump
                     if (cursor + 4 <= size) cursor += 4;
 
                     uint32_t count = 0;
                     if (cursor + 4 <= size) {
                         count = *(uint32_t*)(ptr + cursor);
+                        cursor += 4;
+                    }
+
+                    // READ START ID (e.g. 7B 01 00 00) - Confirmed by hex dump
+                    if (cursor + 4 <= size) {
+                        NarratorStartID = *(uint32_t*)(ptr + cursor);
                         cursor += 4;
                     }
 
@@ -168,9 +179,10 @@ public:
                 }
                 IsParsed = true;
             }
-            else { // TYPE_TEXT (Default)
+            else { // TYPE_TEXT (Default - Type 0)
                 IsGroup = false;
 
+                // ORIGINAL ORDER (Correct)
                 TextData.Content = ReadWString(ptr, cursor, size);
                 TextData.SpeechBank = ReadPresizedString(ptr, cursor, size);
                 TextData.Speaker = ReadPresizedString(ptr, cursor, size);
@@ -202,20 +214,35 @@ public:
         std::vector<uint8_t> buf;
 
         if (IsGroup) {
-            // Write Count
             uint32_t count = (uint32_t)GroupData.Items.size();
             buf.insert(buf.end(), (uint8_t*)&count, (uint8_t*)&count + 4);
-
-            // Write IDs
             for (const auto& item : GroupData.Items) {
                 buf.insert(buf.end(), (uint8_t*)&item.ID, (uint8_t*)&item.ID + 4);
             }
         }
         else if (IsNarratorList) {
-            return RawData; // Not editable yet
+            // Rebuild Signature
+            std::string sig = "[NarratorList]";
+            buf.insert(buf.end(), sig.begin(), sig.end());
+
+            // 4 bytes padding
+            uint32_t pad = 0;
+            buf.insert(buf.end(), (uint8_t*)&pad, (uint8_t*)&pad + 4);
+
+            // Count
+            uint32_t count = (uint32_t)NarratorStrings.size();
+            buf.insert(buf.end(), (uint8_t*)&count, (uint8_t*)&count + 4);
+
+            // Start ID (Preserve the one we read)
+            buf.insert(buf.end(), (uint8_t*)&NarratorStartID, (uint8_t*)&NarratorStartID + 4);
+
+            // Strings
+            for (const auto& str : NarratorStrings) {
+                WriteNullTermString(buf, str);
+            }
         }
         else {
-            // Type 0
+            // Type 0 - ORIGINAL ORDER (Correct)
             WriteWString(buf, TextData.Content);
             WritePresizedString(buf, TextData.SpeechBank);
             WritePresizedString(buf, TextData.Speaker);

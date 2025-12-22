@@ -13,9 +13,10 @@ struct AppConfig {
     std::vector<std::string> AutoLoadBanks;
     bool IsConfigured = false;
 
-    // --- NEW FLAGS (Required for Warnings) ---
-    bool ShowDeleteConfirm = true;
-    bool ShowAddConfirm = true;
+    // --- NEW FLAGS ---
+    bool ShowDeleteConfirm = true;     // For Defs
+    bool ShowAddConfirm = true;        // For Defs
+    bool ShowBankDeleteConfirm = true; // NEW: For Bank Entries
     bool ShowUnsavedChangesWarning = true;
 };
 
@@ -36,17 +37,14 @@ static const std::vector<std::string> DEFAULT_BANKS = {
 static void SaveConfig() {
     std::ofstream file(CONFIG_FILENAME);
     if (file.is_open()) {
-        // Save Paths (Original Logic)
         file << "Root=" << g_AppConfig.GameRootPath << "\n";
         for (const auto& path : g_AppConfig.AutoLoadBanks) {
             file << "Bank=" << path << "\n";
         }
-
-        // Save Flags (New Logic)
         file << "ShowDeleteConfirm=" << (g_AppConfig.ShowDeleteConfirm ? "1" : "0") << "\n";
         file << "ShowAddConfirm=" << (g_AppConfig.ShowAddConfirm ? "1" : "0") << "\n";
+        file << "ShowBankDeleteConfirm=" << (g_AppConfig.ShowBankDeleteConfirm ? "1" : "0") << "\n"; // Save new flag
         file << "ShowUnsavedChangesWarning=" << (g_AppConfig.ShowUnsavedChangesWarning ? "1" : "0") << "\n";
-
         file.close();
     }
 }
@@ -56,15 +54,15 @@ static void LoadConfig() {
     g_AppConfig.AutoLoadBanks.clear();
     g_AppConfig.IsConfigured = false;
 
-    // Set defaults in case config file is old
+    // Defaults
     g_AppConfig.ShowDeleteConfirm = true;
     g_AppConfig.ShowAddConfirm = true;
+    g_AppConfig.ShowBankDeleteConfirm = true;
     g_AppConfig.ShowUnsavedChangesWarning = true;
 
     if (file.is_open()) {
         std::string line;
         while (std::getline(file, line)) {
-            // Trim Windows line endings
             if (!line.empty() && line.back() == '\r') line.pop_back();
 
             if (line.find("Root=") == 0) {
@@ -73,20 +71,11 @@ static void LoadConfig() {
                     g_AppConfig.IsConfigured = true;
                 }
             }
-            else if (line.find("Bank=") == 0) {
-                std::string path = line.substr(5);
-                if (!path.empty()) g_AppConfig.AutoLoadBanks.push_back(path);
-            }
-            // Parse Flags
-            else if (line.find("ShowDeleteConfirm=") == 0) {
-                g_AppConfig.ShowDeleteConfirm = (line.substr(18) == "1");
-            }
-            else if (line.find("ShowAddConfirm=") == 0) {
-                g_AppConfig.ShowAddConfirm = (line.substr(15) == "1");
-            }
-            else if (line.find("ShowUnsavedChangesWarning=") == 0) {
-                g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
-            }
+            else if (line.find("Bank=") == 0) g_AppConfig.AutoLoadBanks.push_back(line.substr(5));
+            else if (line.find("ShowDeleteConfirm=") == 0) g_AppConfig.ShowDeleteConfirm = (line.substr(18) == "1");
+            else if (line.find("ShowAddConfirm=") == 0) g_AppConfig.ShowAddConfirm = (line.substr(15) == "1");
+            else if (line.find("ShowBankDeleteConfirm=") == 0) g_AppConfig.ShowBankDeleteConfirm = (line.substr(22) == "1"); // Load new flag
+            else if (line.find("ShowUnsavedChangesWarning=") == 0) g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
         }
         file.close();
     }
@@ -94,14 +83,10 @@ static void LoadConfig() {
 
 static void PerformAutoLoad() {
     if (!g_AppConfig.IsConfigured) return;
-
     LoadDefsFromFolder(g_AppConfig.GameRootPath);
-
     for (const auto& relativePath : g_AppConfig.AutoLoadBanks) {
         std::string fullPath = g_AppConfig.GameRootPath + relativePath;
-        if (fs::exists(fullPath)) {
-            LoadBank(fullPath);
-        }
+        if (fs::exists(fullPath)) LoadBank(fullPath);
     }
 }
 
