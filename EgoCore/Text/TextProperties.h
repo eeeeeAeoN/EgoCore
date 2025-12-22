@@ -6,7 +6,7 @@
 #include "DefBackend.h" 
 #include "AudioBackend.h" 
 #include "FileDialogs.h"
-#include "LipSyncProperties.h" 
+#include "LipSyncProperties.h" // Backend functions are here
 #include <string>
 #include <vector>
 #include <cstring>
@@ -30,20 +30,6 @@ static char g_GroupSearchBuf[128] = "";
 
 // --- BACKGROUND AUDIO STATE ---
 static std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
-
-// --- BACKGROUND LIPSYNC STATE ---
-struct BackgroundLipSyncCache {
-    std::string FilePath;
-    std::unique_ptr<std::fstream> Stream;
-    std::vector<InternalBankInfo> SubBanks;
-    std::map<std::string, int> SubBankMap;
-    int CachedSubBankIndex = -1;
-    std::vector<BankEntry> CachedEntries;
-
-    // NEW: Store manually added entries here [SubBankIndex][EntryID] -> EntryData
-    std::map<int, std::map<uint32_t, std::vector<uint8_t>>> AddedEntries;
-};
-static BackgroundLipSyncCache g_LipSyncCache;
 
 // --- HELPERS ---
 
@@ -80,7 +66,7 @@ inline std::string PeekEntryName(LoadedBank* bank, uint32_t id) {
     return "Unknown ID";
 }
 
-// --- LOGIC HELPERS ---
+// --- AUDIO LOGIC HELPERS ---
 
 static std::string FormatAudioTime(float seconds) {
     int m = (int)seconds / 60;
@@ -91,7 +77,6 @@ static std::string FormatAudioTime(float seconds) {
     return std::string(buf);
 }
 
-// Logic to derive header name from bank name
 inline std::string GetHeaderName(const std::string& speechBank) {
     std::string stem = speechBank;
     size_t lastDot = stem.find_last_of('.');
@@ -105,7 +90,6 @@ inline std::string GetHeaderName(const std::string& speechBank) {
     return stem + "snds.h";
 }
 
-// Finds entry index in g_DefWorkspace.AllEnums for a given header name
 inline int FindHeaderIndex(const std::string& headerName) {
     for (int i = 0; i < (int)g_DefWorkspace.AllEnums.size(); i++) {
         std::string path = g_DefWorkspace.AllEnums[i].FilePath;
@@ -165,8 +149,6 @@ inline std::shared_ptr<AudioBankParser> GetOrLoadAudioBank(const std::string& ba
     return nullptr;
 }
 
-// --- CREATION UTILS ---
-
 inline uint32_t GetMaxIDInAudioBank(std::shared_ptr<AudioBankParser> bank) {
     uint32_t maxID = 0;
     for (const auto& e : bank->Entries) {
@@ -178,162 +160,11 @@ inline uint32_t GetMaxIDInAudioBank(std::shared_ptr<AudioBankParser> bank) {
 inline void InjectHeaderDefinition(int enumIdx, const std::string& entryName, uint32_t id) {
     if (enumIdx < 0 || enumIdx >= g_DefWorkspace.AllEnums.size()) return;
     auto& entry = g_DefWorkspace.AllEnums[enumIdx];
-
-    // Find the closing brace '};'
     size_t closing = entry.FullContent.rfind("};");
     if (closing != std::string::npos) {
         std::string insertion = "\t" + entryName + " = " + std::to_string(id) + ",\n";
         entry.FullContent.insert(closing, insertion);
-
-        // This marks the file dirty in the workspace so we can save it later
-        // Note: Ideally we set g_DefWorkspace state, but we are hacking access here.
-        // We rely on the fact that if we eventually call SaveHeaderEntry(entry) it uses FullContent.
-        // We'll treat this as "modified in memory".
     }
-}
-
-// --- LIPSYNC LOADER & CREATOR ---
-
-inline bool EnsureLipSyncBankLoaded() {
-    if (g_LipSyncCache.Stream && g_LipSyncCache.Stream->is_open()) return true;
-    std::string path = g_AppConfig.GameRootPath + "\\Data\\Lang\\English\\dialogue.big";
-    if (!std::filesystem::exists(path)) return false;
-
-    g_LipSyncCache.FilePath = path;
-    g_LipSyncCache.Stream = std::make_unique<std::fstream>(path, std::ios::binary | std::ios::in);
-    if (!g_LipSyncCache.Stream->is_open()) return false;
-
-    char magic[4]; g_LipSyncCache.Stream->read(magic, 4);
-    if (strncmp(magic, "BIGB", 4) != 0) return false;
-
-    struct HeaderBIG { char m[4]; uint32_t v; uint32_t footOff; uint32_t footSz; } h;
-    g_LipSyncCache.Stream->seekg(0, std::ios::beg);
-    g_LipSyncCache.Stream->read((char*)&h, sizeof(h));
-
-    g_LipSyncCache.Stream->seekg(h.footOff, std::ios::beg);
-    uint32_t bankCount = 0; g_LipSyncCache.Stream->read((char*)&bankCount, 4);
-
-    g_LipSyncCache.SubBanks.clear();
-    g_LipSyncCache.SubBankMap.clear();
-
-    for (uint32_t i = 0; i < bankCount; i++) {
-        InternalBankInfo b;
-        std::getline(*g_LipSyncCache.Stream, b.Name, '\0');
-        g_LipSyncCache.Stream->read((char*)&b.Version, 4); g_LipSyncCache.Stream->read((char*)&b.EntryCount, 4);
-        g_LipSyncCache.Stream->read((char*)&b.Offset, 4); g_LipSyncCache.Stream->read((char*)&b.Size, 4); g_LipSyncCache.Stream->read((char*)&b.Align, 4);
-
-        g_LipSyncCache.SubBanks.push_back(b);
-        g_LipSyncCache.SubBankMap[b.Name] = i;
-    }
-    return true;
-}
-
-inline std::string GetSubBankNameForSpeech(const std::string& speechBank) {
-    std::string stem = speechBank;
-    size_t ld = stem.find_last_of('.'); if (ld != std::string::npos) stem = stem.substr(0, ld);
-    std::transform(stem.begin(), stem.end(), stem.begin(), ::tolower);
-    if (stem == "dialogue")             return "LIPSYNC_ENGLISH_MAIN";
-    if (stem == "dialogue2")            return "LIPSYNC_ENGLISH_MAIN_2";
-    if (stem == "scriptdialogue")       return "LIPSYNC_ENGLISH_SCRIPT";
-    if (stem == "scriptdialogue2")      return "LIPSYNC_ENGLISH_SCRIPT_2";
-    return "";
-}
-
-inline std::unique_ptr<CLipSyncData> FetchLipSyncData(int32_t soundID, const std::string& speechBank) {
-    if (!EnsureLipSyncBankLoaded()) return nullptr;
-
-    std::string subBankName = GetSubBankNameForSpeech(speechBank);
-    if (subBankName.empty()) return nullptr;
-    if (g_LipSyncCache.SubBankMap.find(subBankName) == g_LipSyncCache.SubBankMap.end()) return nullptr;
-
-    int sbIdx = g_LipSyncCache.SubBankMap[subBankName];
-
-    // CHECK ADDED ENTRIES FIRST
-    if (g_LipSyncCache.AddedEntries.count(sbIdx)) {
-        if (g_LipSyncCache.AddedEntries[sbIdx].count(soundID)) {
-            // Fake data parse
-            // For now, we assume added entries are valid binary blobs.
-            // But we actually just want to show "Created".
-            // Let's return a dummy valid parser object.
-            auto dummy = std::make_unique<CLipSyncData>();
-            dummy->Duration = 1.0f; // placeholder
-            dummy->IsParsed = true;
-            return dummy;
-        }
-    }
-
-    if (g_LipSyncCache.CachedSubBankIndex != sbIdx) {
-        g_LipSyncCache.CachedEntries.clear();
-        const auto& info = g_LipSyncCache.SubBanks[sbIdx];
-
-        g_LipSyncCache.Stream->clear();
-        g_LipSyncCache.Stream->seekg(info.Offset, std::ios::beg);
-
-        uint32_t statsCount = 0; g_LipSyncCache.Stream->read((char*)&statsCount, 4);
-        if (statsCount < 1000) g_LipSyncCache.Stream->seekg(statsCount * 8, std::ios::cur);
-        else g_LipSyncCache.Stream->seekg(-4, std::ios::cur);
-
-        for (uint32_t i = 0; i < info.EntryCount; i++) {
-            BankEntry e; uint32_t magicE;
-            g_LipSyncCache.Stream->read((char*)&magicE, 4); g_LipSyncCache.Stream->read((char*)&e.ID, 4);
-            g_LipSyncCache.Stream->read((char*)&e.Type, 4); g_LipSyncCache.Stream->read((char*)&e.Size, 4);
-            g_LipSyncCache.Stream->read((char*)&e.Offset, 4); g_LipSyncCache.Stream->read((char*)&e.CRC, 4);
-
-            if (magicE != 42) continue;
-
-            uint32_t nameLen = 0; g_LipSyncCache.Stream->read((char*)&nameLen, 4);
-            if (nameLen > 0) g_LipSyncCache.Stream->seekg(nameLen, std::ios::cur);
-            g_LipSyncCache.Stream->seekg(4, std::ios::cur);
-            uint32_t depCount = 0; g_LipSyncCache.Stream->read((char*)&depCount, 4);
-            for (uint32_t d = 0; d < depCount; d++) {
-                uint32_t sLen = 0; g_LipSyncCache.Stream->read((char*)&sLen, 4);
-                if (sLen > 0) g_LipSyncCache.Stream->seekg(sLen, std::ios::cur);
-            }
-
-            g_LipSyncCache.Stream->read((char*)&e.InfoSize, 4);
-            e.SubheaderFileOffset = (uint32_t)g_LipSyncCache.Stream->tellg();
-            if (e.InfoSize > 0) g_LipSyncCache.Stream->seekg(e.InfoSize, std::ios::cur);
-
-            g_LipSyncCache.CachedEntries.push_back(e);
-        }
-        g_LipSyncCache.CachedSubBankIndex = sbIdx;
-    }
-
-    BankEntry* target = nullptr;
-    for (auto& e : g_LipSyncCache.CachedEntries) {
-        if (e.ID == (uint32_t)soundID) { target = &e; break; }
-    }
-
-    if (!target) return nullptr;
-
-    std::vector<uint8_t> rawData(target->Size);
-    g_LipSyncCache.Stream->clear();
-    g_LipSyncCache.Stream->seekg(target->Offset, std::ios::beg);
-    g_LipSyncCache.Stream->read((char*)rawData.data(), target->Size);
-
-    std::vector<uint8_t> infoData(target->InfoSize);
-    g_LipSyncCache.Stream->clear();
-    g_LipSyncCache.Stream->seekg(target->SubheaderFileOffset, std::ios::beg);
-    g_LipSyncCache.Stream->read((char*)infoData.data(), target->InfoSize);
-
-    auto result = std::make_unique<CLipSyncData>();
-    CLipSyncParser parser;
-    parser.Parse(rawData, infoData);
-    *result = parser.Data;
-    return result;
-}
-
-inline void AddLipSyncEntry(int32_t soundID, const std::string& speechBank) {
-    if (!EnsureLipSyncBankLoaded()) return;
-    std::string subBankName = GetSubBankNameForSpeech(speechBank);
-    if (subBankName.empty()) return;
-    if (g_LipSyncCache.SubBankMap.find(subBankName) == g_LipSyncCache.SubBankMap.end()) return;
-    int sbIdx = g_LipSyncCache.SubBankMap[subBankName];
-
-    // Create a dummy byte blob for now, just so it registers as "existing"
-    // In future this would be a valid lipsync binary
-    std::vector<uint8_t> dummyData = { 0,0,0,0 };
-    g_LipSyncCache.AddedEntries[sbIdx][soundID] = dummyData;
 }
 
 // --- MAIN DRAWER ---
@@ -344,13 +175,16 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         return;
     }
 
+    // Reset dirty flag if we switched entries
     if (bank != g_LastBankPtr || (bank && bank->SelectedEntryIndex != g_LastEntryID)) {
         g_IsTextDirty = false;
         g_LastBankPtr = bank;
         if (bank) g_LastEntryID = bank->SelectedEntryIndex;
+        // Reset player if active?
         for (auto& [k, p] : g_BackgroundAudioBanks) p->Player.Reset();
     }
 
+    // --- SHORTCUT: CTRL + S ---
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
         if (onSave) {
             onSave();
@@ -358,13 +192,116 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         }
     }
 
+    // =========================================================
     // TYPE 1: GROUP ENTRY
+    // =========================================================
     if (g_TextParser.IsGroup) {
-        // ... (Group logic omitted for brevity, same as before)
-        ImGui::Text("Group Logic...");
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Group Entry (%zu Items)", g_TextParser.GroupData.Items.size());
+        ImGui::Separator();
+
+        if (ImGui::BeginTable("GroupTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable, ImVec2(0, 300))) {
+            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("Name (Preview)", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 50);
+            ImGui::TableHeadersRow();
+
+            int itemToRemove = -1;
+
+            for (int i = 0; i < g_TextParser.GroupData.Items.size(); i++) {
+                auto& item = g_TextParser.GroupData.Items[i];
+                ImGui::PushID(i);
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0); ImGui::Text("%d", item.ID);
+                ImGui::TableSetColumnIndex(1);
+                if (item.CachedName.empty() && bank) item.CachedName = PeekEntryName(bank, item.ID);
+                ImGui::Text("%s", item.CachedName.c_str());
+
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("X")) itemToRemove = i;
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+
+            if (itemToRemove != -1) {
+                g_TextParser.GroupData.Items.erase(g_TextParser.GroupData.Items.begin() + itemToRemove);
+                g_IsTextDirty = true;
+            }
+        }
+
+        if (ImGui::Button("+ Add Entry")) {
+            g_ShowAddGroupItemPopup = true;
+            g_GroupSearchBuf[0] = '\0';
+            ImGui::OpenPopup("Add Group Item");
+        }
+
+        if (ImGui::BeginPopupModal("Add Group Item", &g_ShowAddGroupItemPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Search for an entry to add:");
+            ImGui::InputText("##search", g_GroupSearchBuf, 128);
+            ImGui::Separator();
+            std::string search = g_GroupSearchBuf;
+            std::transform(search.begin(), search.end(), search.begin(), ::tolower);
+
+            int suggestionsFound = 0;
+            if (bank && !search.empty()) {
+                if (ImGui::BeginListBox("##suggestions", ImVec2(400, 150))) {
+                    for (const auto& entry : bank->Entries) {
+                        if (entry.Type != 0) continue;
+                        if (entry.ID == bank->Entries[bank->SelectedEntryIndex].ID) continue;
+
+                        std::string nameLower = entry.Name;
+                        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                        std::string idStr = std::to_string(entry.ID);
+
+                        if (nameLower.find(search) != std::string::npos || idStr.find(search) != std::string::npos) {
+                            std::string label = entry.Name + " (" + std::to_string(entry.ID) + ")";
+                            if (ImGui::Selectable(label.c_str())) {
+                                CTextGroupItem newItem;
+                                newItem.ID = entry.ID;
+                                newItem.CachedName = entry.Name;
+                                g_TextParser.GroupData.Items.push_back(newItem);
+                                g_IsTextDirty = true;
+                                g_ShowAddGroupItemPopup = false;
+                                ImGui::CloseCurrentPopup();
+                            }
+                            suggestionsFound++;
+                            if (suggestionsFound >= 5) break;
+                        }
+                    }
+                    ImGui::EndListBox();
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) { g_ShowAddGroupItemPopup = false; ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+        ImGui::Spacing(); ImGui::Separator();
     }
+    // =========================================================
+    // TYPE 2: NARRATOR LIST
+    // =========================================================
+    else if (g_TextParser.IsNarratorList) {
+        ImGui::Text("Narrator List");
+        ImGui::Separator();
+
+        // Simple List View
+        if (ImGui::BeginTable("NarratorTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+            ImGui::TableSetupColumn("Index", ImGuiTableColumnFlags_WidthFixed, 50);
+            ImGui::TableSetupColumn("String ID", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            for (int i = 0; i < g_TextParser.NarratorStrings.size(); i++) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
+                ImGui::TableSetColumnIndex(1); ImGui::Text("%s", g_TextParser.NarratorStrings[i].c_str());
+            }
+            ImGui::EndTable();
+        }
+    }
+    // =========================================================
     // TYPE 0: TEXT ENTRY
-    else if (!g_TextParser.IsNarratorList) {
+    // =========================================================
+    else {
         CTextEntry& e = g_TextParser.TextData;
         ImGui::TextColored(ImVec4(0, 1, 1, 1), "Text Entry Editor");
         ImGui::Separator();
@@ -411,6 +348,31 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
             g_IsTextDirty = true;
         }
 
+        ImGui::Spacing(); ImGui::Separator();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Tags / Modifiers (%zu)", e.Tags.size());
+        if (ImGui::BeginTable("TagsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+            ImGui::TableSetupColumn("Tag Name", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 50);
+            ImGui::TableHeadersRow();
+
+            int tagToDelete = -1;
+            for (int i = 0; i < e.Tags.size(); i++) {
+                ImGui::PushID(i);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); if (InputString("##name", e.Tags[i].Name, -FLT_MIN)) g_IsTextDirty = true;
+                ImGui::TableSetColumnIndex(1); if (ImGui::Button("X")) tagToDelete = i;
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+            if (tagToDelete != -1) { e.Tags.erase(e.Tags.begin() + tagToDelete); g_IsTextDirty = true; }
+        }
+
+        if (ImGui::Button("+ Add New Tag")) {
+            CTextTag newTag; newTag.Position = 0; newTag.Name = "NEW_TAG";
+            e.Tags.push_back(newTag);
+            g_IsTextDirty = true;
+        }
+
         // =========================================================
         // AUDIO & LIPSYNC INTEGRATION
         // =========================================================
@@ -426,7 +388,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
             int32_t soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
 
             if (soundID != -1) {
-                // --- EXISTING LOGIC FOR FOUND ID ---
+                // --- AUDIO ---
                 audioBank = GetOrLoadAudioBank(e.SpeechBank);
                 if (audioBank) {
                     for (int i = 0; i < (int)audioBank->Entries.size(); i++) {
@@ -515,9 +477,10 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                     ImGui::SameLine();
                     ImGui::TextDisabled("Not found or failed to load (dialogue.big)");
                 }
+
             }
             else {
-                // --- NEW: ID NOT FOUND -> CREATE LOGIC ---
+                // --- CREATE LOGIC ---
                 ImGui::TextDisabled("No match for '%s' in %s", e.Identifier.c_str(), GetHeaderName(e.SpeechBank).c_str());
                 ImGui::Spacing();
 
@@ -526,7 +489,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                     audioBank = GetOrLoadAudioBank(e.SpeechBank);
                     if (audioBank) {
                         uint32_t nextID = GetMaxIDInAudioBank(audioBank) + 1;
-                        if (nextID < 20000) nextID = 20000; // Start high if empty? or just +1
+                        if (nextID < 20000) nextID = 20000;
 
                         // 2. Open Wav
                         std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
@@ -540,8 +503,8 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
 
                                 // 4. Add to Audio Bank
                                 if (audioBank->AddEntry(nextID, wavPath)) {
-                                    // 5. Add to LipSync
-                                    AddLipSyncEntry(nextID, e.SpeechBank);
+                                    // 5. Add to LipSync (Placeholder)
+                                    AddLipSyncEntry(e.SpeechBank, nextID);
 
                                     g_IsTextDirty = true; // Trigger save button availability
                                 }
@@ -558,7 +521,11 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         ImGui::Spacing(); ImGui::Separator();
     }
 
+    // =========================================================
+    // GLOBAL SAVE BUTTON
+    // =========================================================
     bool isAudioModified = false;
+    // Check if the related audio bank is modified
     if (g_TextParser.IsParsed && !g_TextParser.IsGroup && !g_TextParser.IsNarratorList) {
         if (!g_TextParser.TextData.SpeechBank.empty()) {
             std::string key = g_TextParser.TextData.SpeechBank;
@@ -569,21 +536,16 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         }
     }
 
-    // Check Header Modified
-    bool isHeaderModified = false;
-    // ... logic needed if we want to turn save button green for header changes too, 
-    // but saving text saves DefWorkspace implicitly via "SaveHeaderEntry"? No, we need to call it.
-    // For now we rely on g_IsTextDirty triggered by injection.
-
     if (g_IsTextDirty || isAudioModified) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
 
         if (ImGui::Button("SAVE ENTRY CHANGES (Ctrl+S)", ImVec2(-FLT_MIN, 40))) {
             if (onSave) {
+                // 1. Save Text Entry (Memory)
                 onSave();
 
-                // Save Audio
+                // 2. Save Audio Bank (Disk)
                 if (isAudioModified) {
                     std::string key = g_TextParser.TextData.SpeechBank;
                     std::transform(key.begin(), key.end(), key.begin(), ::tolower);
@@ -593,14 +555,11 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                     }
                 }
 
-                // Save Header if we injected
+                // 3. Save Header if Injected
                 if (!g_TextParser.TextData.SpeechBank.empty()) {
                     std::string hName = GetHeaderName(g_TextParser.TextData.SpeechBank);
                     int hIdx = FindHeaderIndex(hName);
                     if (hIdx != -1) {
-                        // This uses DefExplorer's logic but accessed via DefBackend structs
-                        // We actually need to write the file to disk.
-                        // Re-using SaveHeaderEntry logic manually here:
                         auto& entry = g_DefWorkspace.AllEnums[hIdx];
                         std::ofstream outFile(entry.FilePath, std::ios::binary);
                         outFile << entry.FullContent;
