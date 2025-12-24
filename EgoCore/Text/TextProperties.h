@@ -3,11 +3,10 @@
 #include "TextBackend.h" 
 #include "FileDialogs.h"
 
-// --- STATE FOR ADD ENTRY POPUP ---
 static bool g_ShowAddGroupItemPopup = false;
 static char g_GroupSearchBuf[128] = "";
 
-// --- UI HELPERS ---
+static std::string g_OriginalIdentifier = "";
 
 inline bool InputString(const char* label, std::string& str, float width = 0.0f) {
     static char buffer[1024];
@@ -17,8 +16,6 @@ inline bool InputString(const char* label, std::string& str, float width = 0.0f)
     if (changed) str = buffer;
     return changed;
 }
-
-// --- MAIN DRAWER ---
 
 inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
     if (!g_TextParser.IsParsed) {
@@ -31,17 +28,28 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         g_LastBankPtr = bank;
         if (bank) g_LastEntryID = bank->SelectedEntryIndex;
         for (auto& [k, p] : g_BackgroundAudioBanks) p->Player.Reset();
+
+        if (g_TextParser.IsParsed) g_OriginalIdentifier = g_TextParser.TextData.Identifier;
     }
 
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
         if (onSave) {
+            if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
+                if (!g_TextParser.TextData.SpeechBank.empty()) {
+                    UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
+                }
+                if (bank && bank->SelectedEntryIndex >= 0) {
+                    bank->Entries[bank->SelectedEntryIndex].Name = g_TextParser.TextData.Identifier;
+                }
+                g_OriginalIdentifier = g_TextParser.TextData.Identifier;
+            }
+
             onSave();
             if (!g_TextParser.TextData.SpeechBank.empty()) SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
             g_IsTextDirty = false;
         }
     }
 
-    // TYPE 1: GROUP ENTRY
     if (g_TextParser.IsGroup) {
         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Group Entry (%zu Items)", g_TextParser.GroupData.Items.size());
         ImGui::Separator();
@@ -124,9 +132,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         }
         ImGui::Spacing(); ImGui::Separator();
     }
-    // =========================================================
-    // TYPE 2: NARRATOR LIST
-    // =========================================================
+
     else if (g_TextParser.IsNarratorList) {
         ImGui::Text("Narrator List");
         ImGui::Separator();
@@ -144,9 +150,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
             ImGui::EndTable();
         }
     }
-    // =========================================================
-    // TYPE 0: TEXT ENTRY
-    // =========================================================
+
     else {
         CTextEntry& e = g_TextParser.TextData;
         ImGui::TextColored(ImVec4(0, 1, 1, 1), "Text Entry Editor");
@@ -219,9 +223,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
             g_IsTextDirty = true;
         }
 
-        // =========================================================
-        // AUDIO & LIPSYNC INTEGRATION
-        // =========================================================
         ImGui::Spacing(); ImGui::Separator();
         ImGui::TextColored(ImVec4(0, 1, 1, 1), "Linked Media");
         ImGui::Separator();
@@ -234,7 +235,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
             int32_t soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
 
             if (soundID != -1) {
-                // --- AUDIO ---
                 audioBank = GetOrLoadAudioBank(e.SpeechBank);
                 if (audioBank) {
                     for (int i = 0; i < (int)audioBank->Entries.size(); i++) {
@@ -303,7 +303,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                     ImGui::TextDisabled("Audio bank not found.");
                 }
 
-                // --- LIPSYNC ---
                 ImGui::Separator();
                 ImGui::Text("LipSync Data:");
                 static std::unique_ptr<CLipSyncData> cachedLipSync = nullptr;
@@ -326,15 +325,12 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
 
             }
             else {
-                // --- CREATE LOGIC ---
                 ImGui::TextDisabled("No match for '%s' in %s", e.Identifier.c_str(), GetHeaderName(e.SpeechBank).c_str());
                 ImGui::Spacing();
 
                 if (ImGui::Button("Create Linked Media (Import Wav)", ImVec2(-FLT_MIN, 40))) {
-                    // 1. Load Audio Bank to find max ID
                     audioBank = GetOrLoadAudioBank(e.SpeechBank);
                     if (audioBank) {
-                        // 1. DYNAMIC ID FROM HEADER
                         uint32_t nextID = GetNextIDFromHeader(e.SpeechBank);
 
                         std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
@@ -344,16 +340,11 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                             if (hIdx != -1) {
                                 std::string defName = "SND_" + e.Identifier;
                                 InjectHeaderDefinition(hIdx, defName, nextID);
-
-                                // 4. Add to Audio Bank
                                 if (audioBank->AddEntry(nextID, wavPath)) {
-                                    // 5. Calculate Duration
                                     float dur = AudioBankParser::GetWavDuration(wavPath);
-
-                                    // 6. Add to LipSync with Duration
                                     AddLipSyncEntry(e.SpeechBank, nextID, dur);
 
-                                    g_IsTextDirty = true; // Trigger save button availability
+                                    g_IsTextDirty = true;
                                 }
                             }
                         }
@@ -385,10 +376,17 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
 
         if (ImGui::Button("SAVE ENTRY CHANGES (Ctrl+S)", ImVec2(-FLT_MIN, 40))) {
             if (onSave) {
-                // 1. Save Text Entry (Memory)
-                onSave();
+                if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
+                    if (!g_TextParser.TextData.SpeechBank.empty()) {
+                        UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
+                    }
+                    if (bank && bank->SelectedEntryIndex >= 0) {
+                        bank->Entries[bank->SelectedEntryIndex].Name = g_TextParser.TextData.Identifier;
+                    }
+                    g_OriginalIdentifier = g_TextParser.TextData.Identifier;
+                }
 
-                // 2. Save Audio Bank (Disk)
+                onSave();
                 if (isAudioModified) {
                     std::string key = g_TextParser.TextData.SpeechBank;
                     std::transform(key.begin(), key.end(), key.begin(), ::tolower);
@@ -398,7 +396,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                     }
                 }
 
-                // 3. Save Header if Injected (Memory -> Disk)
                 if (!g_TextParser.TextData.SpeechBank.empty()) {
                     SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
                 }

@@ -128,10 +128,21 @@ inline void LoadLipSyncSubBankEntries(int sbIdx) {
 
 // --- NEW: Generate binary data AND INFO data ---
 inline void AddLipSyncEntry(const std::string& speechBank, uint32_t newID, float duration) {
-    if (!EnsureLipSyncLoaded()) return;
+    std::cout << "[DEBUG] AddLipSyncEntry START. Bank: " << speechBank << " ID: " << newID << " Dur: " << duration << std::endl;
+
+    if (!EnsureLipSyncLoaded()) {
+        std::cout << "[DEBUG] Failed to load LipSync bank!" << std::endl;
+        return;
+    }
     std::string subName = GetSubBankNameForSpeech(speechBank);
-    if (subName.empty()) return;
-    if (g_LipSyncState.SubBankMap.find(subName) == g_LipSyncState.SubBankMap.end()) return;
+    if (subName.empty()) {
+        std::cout << "[DEBUG] SubBank name empty." << std::endl;
+        return;
+    }
+    if (g_LipSyncState.SubBankMap.find(subName) == g_LipSyncState.SubBankMap.end()) {
+        std::cout << "[DEBUG] SubBank not found in map: " << subName << std::endl;
+        return;
+    }
     int sbIdx = g_LipSyncState.SubBankMap[subName];
 
     // 1. RAW DATA
@@ -153,12 +164,13 @@ inline void AddLipSyncEntry(const std::string& speechBank, uint32_t newID, float
     for (uint32_t i = 0; i < frameCount; i++) raw.push_back(0);
 
     // 2. INFO DATA (Metadata)
-    // Writing Duration as float (4 bytes)
     std::vector<uint8_t> info;
     uint8_t* pDur = (uint8_t*)&duration;
     info.insert(info.end(), pDur, pDur + 4);
 
     g_LipSyncState.PendingAdds[sbIdx][newID] = { raw, info };
+
+    std::cout << "[DEBUG] AddLipSyncEntry SUCCESS. PendingAdds Updated. RawSize: " << raw.size() << std::endl;
 }
 
 inline void DeleteLipSyncEntry(const std::string& speechBank, uint32_t id) {

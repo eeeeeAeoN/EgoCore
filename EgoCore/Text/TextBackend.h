@@ -174,17 +174,42 @@ inline void InjectHeaderDefinition(int enumIdx, const std::string& entryName, ui
         std::string insertion = "\t" + entryName + " = " + std::to_string(id) + ",\n";
         entry.FullContent.insert(closing, insertion);
 
-        // --- CHANGED: Update MEMORY ONLY. Do NOT write to disk yet. ---
-
-        // If we are currently viewing this header in the editor (not in defs mode), sync it too
         if (!g_DefWorkspace.ShowDefsMode && g_DefWorkspace.SelectedEnumIndex == enumIdx) {
             g_DefWorkspace.Editor.SetText(entry.FullContent);
-            g_DefWorkspace.OriginalContent = entry.FullContent; // treat as saved/synced for editor logic
+            g_DefWorkspace.OriginalContent = entry.FullContent;
         }
     }
 }
 
-// Helper to save header from memory to disk when user saves text entry
+// --- THIS WAS MISSING ---
+inline void UpdateHeaderDefinition(const std::string& speechBank, const std::string& oldID, const std::string& newID) {
+    if (speechBank.empty() || oldID.empty() || newID.empty()) return;
+
+    std::string headerName = GetHeaderName(speechBank);
+    int idx = FindHeaderIndex(headerName);
+    if (idx == -1) return;
+
+    auto& entry = g_DefWorkspace.AllEnums[idx];
+
+    // Regex to find: (SND_ or TEXT_SND_) + oldID + (any spaces) + = + (any spaces) + (ID number)
+    std::string patternStr = "(SND_|TEXT_SND_)" + oldID + "(\\s*=\\s*\\d+)";
+    std::regex re(patternStr);
+
+    // Replace with: $1 + newID + $2
+    std::string replacement = "$1" + newID + "$2";
+
+    std::string newContent = std::regex_replace(entry.FullContent, re, replacement);
+
+    if (newContent != entry.FullContent) {
+        entry.FullContent = newContent;
+        // Sync Editor if open
+        if (!g_DefWorkspace.ShowDefsMode && g_DefWorkspace.SelectedEnumIndex == idx) {
+            g_DefWorkspace.Editor.SetText(entry.FullContent);
+            g_DefWorkspace.OriginalContent = entry.FullContent;
+        }
+    }
+}
+
 inline void SaveAssociatedHeader(const std::string& speechBank) {
     std::string hName = GetHeaderName(speechBank);
     int hIdx = FindHeaderIndex(hName);
@@ -225,7 +250,6 @@ inline void DeleteLinkedMedia(const std::string& speechBank, const std::string& 
         std::regex re(pattern);
         entry.FullContent = std::regex_replace(entry.FullContent, re, "\n");
 
-        // Sync Editor if open
         if (!g_DefWorkspace.ShowDefsMode && g_DefWorkspace.SelectedEnumIndex == hIdx) {
             g_DefWorkspace.Editor.SetText(entry.FullContent);
             g_DefWorkspace.OriginalContent = entry.FullContent;

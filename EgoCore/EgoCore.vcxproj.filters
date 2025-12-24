@@ -117,9 +117,6 @@
     <ClInclude Include="TextEditor\TextEditor.h">
       <Filter>Source Files\TextEditor</Filter>
     </ClInclude>
-    <ClInclude Include="ConfigBackend.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
     <ClInclude Include="Definitions\DefBackend.h">
       <Filter>Source Files\Definitions</Filter>
     </ClInclude>
@@ -159,11 +156,20 @@
     <ClInclude Include="Utilities\miniaudio.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="TextBackend.h">
-      <Filter>Source Files\Text</Filter>
-    </ClInclude>
     <ClInclude Include="Text\TextCompiler.h">
       <Filter>Source Files\Text</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\ConfigBackend.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Lipsync\LipSyncCompiler.h">
+      <Filter>Source Files\LipSync</Filter>
+    </ClInclude>
+    <ClInclude Include="Text\TextBackend.h">
+      <Filter>Source Files\Text</Filter>
+    </ClInclude>
+    <ClInclude Include="AudioHelpers.h">
+      <Filter>Source Files\Audio</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

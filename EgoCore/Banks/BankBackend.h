@@ -68,6 +68,14 @@ struct LoadedBank {
     LoadedBank() {
         Stream = std::make_unique<std::fstream>();
     }
+
+    // Move Constructor needed for vector resizing if not implicit
+    LoadedBank(LoadedBank&& other) noexcept = default;
+    LoadedBank& operator=(LoadedBank&& other) noexcept = default;
+
+    // Disable copy to prevent accidental stream duplication issues
+    LoadedBank(const LoadedBank&) = delete;
+    LoadedBank& operator=(const LoadedBank&) = delete;
 };
 
 static std::vector<LoadedBank> g_OpenBanks;
@@ -208,6 +216,83 @@ inline void InitializeBank(LoadedBank& bank) {
     }
 }
 
+// --- NEW: Internal function to load without adding to global list ---
+inline std::unique_ptr<LoadedBank> CreateBankFromDisk(const std::string& path) {
+    auto newBank = std::make_unique<LoadedBank>();
+    newBank->FullPath = path;
+    newBank->FileName = fs::path(path).filename().string();
+
+    std::string ext = fs::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    if (ext == ".lut") {
+        newBank->Type = EBankType::Audio;
+        newBank->AudioParser = std::make_shared<AudioBankParser>();
+        if (newBank->AudioParser->Parse(path)) {
+            for (size_t i = 0; i < newBank->AudioParser->Entries.size(); i++) {
+                const auto& audioEntry = newBank->AudioParser->Entries[i];
+                BankEntry be;
+                be.ID = audioEntry.SoundID;
+                be.Name = "Sound ID " + std::to_string(audioEntry.SoundID);
+                be.Size = audioEntry.Length;
+                be.Offset = audioEntry.Offset;
+                be.Type = 999;
+                newBank->Entries.push_back(be);
+                newBank->FilteredIndices.push_back((int)i);
+            }
+            return newBank;
+        }
+        return nullptr;
+    }
+
+    newBank->Stream->open(path, std::ios::binary | std::ios::in | std::ios::out);
+    if (!newBank->Stream->is_open()) {
+        newBank->Stream->clear();
+        newBank->Stream->open(path, std::ios::binary | std::ios::in);
+    }
+    if (!newBank->Stream->is_open()) return nullptr;
+
+    char magic[4]; newBank->Stream->read(magic, 4); newBank->Stream->seekg(0, std::ios::beg);
+    if (strncmp(magic, "BIGB", 4) != 0) return nullptr;
+
+    struct HeaderBIG { char m[4]; uint32_t v; uint32_t footOff; uint32_t footSz; } h;
+    newBank->Stream->read((char*)&h, sizeof(h));
+    newBank->FileVersion = h.v;
+
+    newBank->Stream->seekg(h.footOff, std::ios::beg);
+    uint32_t bankCount = 0; newBank->Stream->read((char*)&bankCount, 4);
+
+    for (uint32_t i = 0; i < bankCount; i++) {
+        InternalBankInfo b;
+        std::getline(*newBank->Stream, b.Name, '\0');
+        newBank->Stream->read((char*)&b.Version, 4); newBank->Stream->read((char*)&b.EntryCount, 4);
+        newBank->Stream->read((char*)&b.Offset, 4); newBank->Stream->read((char*)&b.Size, 4); newBank->Stream->read((char*)&b.Align, 4);
+        newBank->SubBanks.push_back(b);
+    }
+
+    try {
+        newBank->Type = ResolveBankType(newBank->SubBanks);
+        InitializeBank(*newBank);
+        return newBank;
+    }
+    catch (...) { return nullptr; }
+}
+
+inline void LoadBank(const std::string& path) {
+    if (g_OpenBanks.size() >= 10) { g_BankStatus = "Limit reached."; return; }
+    for (const auto& b : g_OpenBanks) { if (b.FullPath == path) { g_BankStatus = "Bank already open."; return; } }
+
+    auto newBank = CreateBankFromDisk(path);
+    if (newBank) {
+        g_OpenBanks.push_back(std::move(*newBank));
+        g_ActiveBankIndex = (int)g_OpenBanks.size() - 1;
+        g_BankStatus = "Loaded: " + g_OpenBanks.back().FileName;
+    }
+    else {
+        g_BankStatus = "Failed to load bank.";
+    }
+}
+
 inline void WriteWavFile(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate, int channels) {
     if (pcm.empty()) return;
     std::ofstream f(path, std::ios::binary);
@@ -221,73 +306,4 @@ inline void WriteWavFile(const std::string& path, const std::vector<int16_t>& pc
     f.write((char*)&sampleRate32, 4); f.write((char*)&byteRate, 4); f.write((char*)&blockAlign, 2); f.write((char*)&bitsPerSample, 2);
     f.write("data", 4); f.write((char*)&dataChunkSize, 4); f.write((char*)pcm.data(), dataChunkSize);
     f.close();
-}
-
-inline void LoadBank(const std::string& path) {
-    if (g_OpenBanks.size() >= 10) { g_BankStatus = "Limit reached."; return; }
-    for (const auto& b : g_OpenBanks) { if (b.FullPath == path) { g_BankStatus = "Bank already open."; return; } }
-
-    LoadedBank newBank;
-    newBank.FullPath = path;
-    newBank.FileName = fs::path(path).filename().string();
-
-    std::string ext = fs::path(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-    if (ext == ".lut") {
-        newBank.Type = EBankType::Audio;
-        newBank.AudioParser = std::make_shared<AudioBankParser>();
-        if (newBank.AudioParser->Parse(path)) {
-            for (size_t i = 0; i < newBank.AudioParser->Entries.size(); i++) {
-                const auto& audioEntry = newBank.AudioParser->Entries[i];
-                BankEntry be;
-                be.ID = audioEntry.SoundID;
-                be.Name = "Sound ID " + std::to_string(audioEntry.SoundID);
-                be.Size = audioEntry.Length;
-                be.Offset = audioEntry.Offset;
-                be.Type = 999;
-                newBank.Entries.push_back(be);
-                newBank.FilteredIndices.push_back((int)i);
-            }
-            g_OpenBanks.push_back(std::move(newBank));
-            g_ActiveBankIndex = (int)g_OpenBanks.size() - 1;
-            g_BankStatus = "Loaded Audio Bank.";
-        }
-        else g_BankStatus = "Failed to parse .LUT file.";
-        return;
-    }
-
-    newBank.Stream->open(path, std::ios::binary | std::ios::in | std::ios::out);
-    if (!newBank.Stream->is_open()) {
-        newBank.Stream->clear();
-        newBank.Stream->open(path, std::ios::binary | std::ios::in);
-    }
-    if (!newBank.Stream->is_open()) { g_BankStatus = "Error opening file."; return; }
-
-    char magic[4]; newBank.Stream->read(magic, 4); newBank.Stream->seekg(0, std::ios::beg);
-    if (strncmp(magic, "BIGB", 4) != 0) { g_BankStatus = "Invalid .BIG file"; return; }
-
-    struct HeaderBIG { char m[4]; uint32_t v; uint32_t footOff; uint32_t footSz; } h;
-    newBank.Stream->read((char*)&h, sizeof(h));
-
-    newBank.FileVersion = h.v;
-
-    newBank.Stream->seekg(h.footOff, std::ios::beg);
-    uint32_t bankCount = 0; newBank.Stream->read((char*)&bankCount, 4);
-
-    for (uint32_t i = 0; i < bankCount; i++) {
-        InternalBankInfo b;
-        std::getline(*newBank.Stream, b.Name, '\0');
-        newBank.Stream->read((char*)&b.Version, 4); newBank.Stream->read((char*)&b.EntryCount, 4);
-        newBank.Stream->read((char*)&b.Offset, 4); newBank.Stream->read((char*)&b.Size, 4); newBank.Stream->read((char*)&b.Align, 4);
-        newBank.SubBanks.push_back(b);
-    }
-
-    try {
-        newBank.Type = ResolveBankType(newBank.SubBanks);
-        InitializeBank(newBank);
-        g_OpenBanks.push_back(std::move(newBank));
-        g_ActiveBankIndex = (int)g_OpenBanks.size() - 1;
-    }
-    catch (const std::exception& e) { g_BankStatus = "Error: " + std::string(e.what()); }
 }

@@ -8,7 +8,8 @@
 #include "TextProperties.h"
 #include "LipSyncProperties.h"
 #include "GltfExporter.h"
-#include "TextCompiler.h" // <--- Include the new compiler
+#include "TextCompiler.h"
+#include "LipSyncCompiler.h" 
 #include <windows.h>
 #include <algorithm>
 #include <vector>
@@ -18,6 +19,20 @@
 
 // --- GLOBAL STATE ---
 static std::vector<BinaryParser> g_LoadedBinaries;
+
+// --- EXTERNALS ---
+extern std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
+
+// --- UTILS ---
+inline void WriteBankString(std::ofstream& out, const std::string& s) {
+    uint32_t len = (uint32_t)s.length();
+    out.write((char*)&len, 4);
+    if (len > 0) out.write(s.data(), len);
+}
+
+inline void WriteNullTermString(std::ofstream& out, const std::string& s) {
+    out.write(s.c_str(), s.length() + 1);
+}
 
 // --- LOGIC FUNCTIONS ---
 
@@ -302,19 +317,111 @@ inline void ParseSelectedLOD(LoadedBank* bank) {
     g_MeshUploadNeeded = true;
 }
 
-// --- SAVE BIG BANK WRAPPER ---
+// --- RELOAD HELPER ---
+inline void ReloadBankInPlace(LoadedBank* bank) {
+    if (!bank) return;
+    std::string path = bank->FullPath;
+
+    // Close current stream
+    if (bank->Stream && bank->Stream->is_open()) bank->Stream->close();
+
+    // Create new bank state from disk
+    auto newBankPtr = CreateBankFromDisk(path);
+    if (newBankPtr) {
+        // Move content to existing pointer to keep UI references valid-ish
+        // (Note: vectors referencing bank content need refresh, but global pointer is stable)
+        *bank = std::move(*newBankPtr);
+        g_BankStatus = "Bank Reloaded.";
+    }
+    else {
+        g_BankStatus = "Error: Failed to reload bank after compilation!";
+    }
+}
+
+// --- SAVE BIG BANK WRAPPER & CASCADE LOGIC ---
 inline void SaveBigBank(LoadedBank* bank) {
     if (bank->Type == EBankType::Text) {
+        // 1. Compile Text Bank (Primary)
         if (TextCompiler::CompileTextBank(bank)) {
-            g_BankStatus = "Text Bank Recompiled successfully. Please reload.";
+            g_BankStatus = "Text Bank Recompiled.";
+
+            // RELOAD TEXT BANK IMMEDIATELY TO FIX READ ERRORS
+            ReloadBankInPlace(bank);
+
+            // 2. CHECK FOR CASCADE REQUIREMENTS
+            bool mediaModified = false;
+            if (!g_LipSyncState.PendingAdds.empty() || !g_LipSyncState.PendingDeletes.empty()) mediaModified = true;
+
+            for (auto& [key, parser] : g_BackgroundAudioBanks) {
+                if (!parser->ModifiedCache.empty()) mediaModified = true;
+            }
+
+            // 3. EXECUTE CASCADE IF NEEDED
+            if (mediaModified) {
+                g_BankStatus = "Compiling Linked Media Chain...";
+
+                // A. Save Headers to Disk
+                for (auto& en : g_DefWorkspace.AllEnums) {
+                    if (en.FilePath.find("snds.h") != std::string::npos) {
+                        std::ofstream out(en.FilePath, std::ios::binary);
+                        if (out.is_open()) { out << en.FullContent; out.close(); }
+                    }
+                }
+
+                // B. Compile Binaries
+                std::string log;
+                std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
+                BinaryParser::CompileSoundBinaries(defsPath, log);
+
+                // C. Compile Audio Banks (.LUT)
+                for (auto& [key, parser] : g_BackgroundAudioBanks) {
+                    if (!parser->ModifiedCache.empty()) {
+                        parser->SaveBank(parser->FileName);
+                        parser->ModifiedCache.clear();
+                    }
+                }
+
+                // D. Compile Dialogue Bank (LipSync)
+                LoadedBank* dialogueBankPtr = nullptr;
+                std::unique_ptr<LoadedBank> tempDialogueBank = nullptr;
+
+                // Check if already open in global list
+                for (auto& b : g_OpenBanks) {
+                    if (b.FileName == "dialogue.big") { dialogueBankPtr = &b; break; }
+                }
+
+                // If not open, load LOCALLY (do NOT push to global vector to avoid reallocation crash)
+                if (!dialogueBankPtr) {
+                    std::string diagPath = g_AppConfig.GameRootPath + "\\Data\\Lang\\English\\dialogue.big";
+                    tempDialogueBank = CreateBankFromDisk(diagPath);
+                    dialogueBankPtr = tempDialogueBank.get();
+                }
+
+                if (dialogueBankPtr) {
+                    if (LipSyncCompiler::CompileLipSyncBank(dialogueBankPtr)) {
+                        g_BankStatus = "Chain Complete: Text, Binaries, Audio, Dialogue saved.";
+                        g_LipSyncState.PendingAdds.clear();
+                        g_LipSyncState.PendingDeletes.clear();
+
+                        // If we modified an OPEN dialogue bank, reload it too
+                        if (!tempDialogueBank) {
+                            ReloadBankInPlace(dialogueBankPtr);
+                        }
+                    }
+                    else {
+                        g_BankStatus = "Error: Failed to compile dialogue.big";
+                    }
+                }
+                else {
+                    g_BankStatus = "Error: Could not load dialogue.big";
+                }
+            }
         }
         else {
             g_BankStatus = "Text Bank Compilation Failed.";
         }
     }
     else {
-        // Fallback for other banks if we ever want to recompile them genericly
-        // (Previously existing generic SaveBigBank logic could go here)
         g_BankStatus = "Recompilation not supported for this bank type.";
     }
 }

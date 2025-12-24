@@ -21,16 +21,17 @@
   <ItemGroup>
     <ClInclude Include="Animations\AnimParser.h" />
     <ClInclude Include="Animations\AnimProperties.h" />
+    <ClInclude Include="AudioHelpers.h" />
     <ClInclude Include="Audio\AudioBackend.h" />
     <ClInclude Include="Audio\AudioExplorer.h" />
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="Banks\BankLogic.h" />
     <ClInclude Include="Banks\BinaryParser.h" />
-    <ClInclude Include="ConfigBackend.h" />
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
+    <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
@@ -38,14 +39,15 @@
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="TextBackend.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
     <ClInclude Include="Textures\TextureExporter.h" />
     <ClInclude Include="Textures\TextureParser.h" />
     <ClInclude Include="Textures\TextureProperties.h" />
+    <ClInclude Include="Text\TextBackend.h" />
     <ClInclude Include="Text\TextCompiler.h" />
     <ClInclude Include="Text\TextParser.h" />
     <ClInclude Include="Text\TextProperties.h" />
+    <ClInclude Include="Utilities\ConfigBackend.h" />
     <ClInclude Include="Utilities\FileDialogs.h" />
     <ClInclude Include="Utilities\GltfExporter.h" />
     <ClInclude Include="Utilities\ImGUI\imconfig.h" />
