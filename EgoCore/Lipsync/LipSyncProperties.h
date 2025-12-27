@@ -11,6 +11,7 @@
 #include <fstream>
 #include <memory>
 #include <filesystem>
+#include <cctype> // for toupper
 
 static CLipSyncParser g_LipSyncParser;
 
@@ -18,6 +19,9 @@ static CLipSyncParser g_LipSyncParser;
 // LIPSYNC BACKEND STATE
 // =========================================================
 struct AddedEntryData {
+    uint32_t Type;
+    std::string NamePrefix;
+    // Removed Speaker
     std::vector<uint8_t> Raw;
     std::vector<uint8_t> Info;
 };
@@ -31,10 +35,7 @@ struct LipSyncState {
     int CachedSubBankIndex = -1;
     std::vector<BankEntry> CachedEntries;
 
-    // Pending Changes [SubBankIdx] -> ...
     std::map<int, std::set<uint32_t>> PendingDeletes;
-
-    // CHANGED: Stores Raw + Info pair
     std::map<int, std::map<uint32_t, AddedEntryData>> PendingAdds;
 };
 
@@ -128,49 +129,53 @@ inline void LoadLipSyncSubBankEntries(int sbIdx) {
 
 // --- NEW: Generate binary data AND INFO data ---
 inline void AddLipSyncEntry(const std::string& speechBank, uint32_t newID, float duration) {
-    std::cout << "[DEBUG] AddLipSyncEntry START. Bank: " << speechBank << " ID: " << newID << " Dur: " << duration << std::endl;
+    std::cout << "[DEBUG] AddLipSyncEntry START. Bank: " << speechBank << " ID: " << newID << std::endl;
 
-    if (!EnsureLipSyncLoaded()) {
-        std::cout << "[DEBUG] Failed to load LipSync bank!" << std::endl;
-        return;
-    }
+    if (!EnsureLipSyncLoaded()) return;
     std::string subName = GetSubBankNameForSpeech(speechBank);
-    if (subName.empty()) {
-        std::cout << "[DEBUG] SubBank name empty." << std::endl;
-        return;
-    }
-    if (g_LipSyncState.SubBankMap.find(subName) == g_LipSyncState.SubBankMap.end()) {
-        std::cout << "[DEBUG] SubBank not found in map: " << subName << std::endl;
-        return;
-    }
+    if (subName.empty()) return;
+    if (g_LipSyncState.SubBankMap.find(subName) == g_LipSyncState.SubBankMap.end()) return;
     int sbIdx = g_LipSyncState.SubBankMap[subName];
 
-    // 1. RAW DATA
-    std::vector<uint8_t> raw;
-    raw.push_back(0); // Dictionary Count
+    // 1. Find Neighbor (for Type and Data cloning)
+    LoadLipSyncSubBankEntries(sbIdx);
+    if (g_LipSyncState.CachedEntries.empty()) {
+        std::cout << "[DEBUG] No neighbors found!" << std::endl;
+        return;
+    }
+    const BankEntry* neighbor = &g_LipSyncState.CachedEntries[0];
 
-    float fpsVal = 43.0f;
-    uint32_t frameCount = (uint32_t)std::ceil(duration * fpsVal);
-    if (frameCount == 0) frameCount = 1;
+    // 2. Clone Raw Data
+    std::vector<uint8_t> newRaw(neighbor->Size);
+    if (neighbor->Size > 0) {
+        g_LipSyncState.Stream->clear();
+        g_LipSyncState.Stream->seekg(neighbor->Offset, std::ios::beg);
+        g_LipSyncState.Stream->read((char*)newRaw.data(), neighbor->Size);
+    }
 
-    // Write FPS as INT (Parser casts to float)
-    uint32_t fpsInt = (uint32_t)fpsVal;
-    uint8_t* pFps = (uint8_t*)&fpsInt;
-    raw.insert(raw.end(), pFps, pFps + 4);
+    // 3. Clone Info Data
+    std::vector<uint8_t> newInfo(neighbor->InfoSize);
+    if (neighbor->InfoSize > 0) {
+        g_LipSyncState.Stream->clear();
+        g_LipSyncState.Stream->seekg(neighbor->SubheaderFileOffset, std::ios::beg);
+        g_LipSyncState.Stream->read((char*)newInfo.data(), neighbor->InfoSize);
+    }
 
-    uint8_t* pFrames = (uint8_t*)&frameCount;
-    raw.insert(raw.end(), pFrames, pFrames + 4);
+    // 4. Patch Duration
+    if (newInfo.size() >= 4) {
+        float* pDur = (float*)newInfo.data();
+        *pDur = duration;
+    }
 
-    for (uint32_t i = 0; i < frameCount; i++) raw.push_back(0);
+    // 5. Prepare Metadata: Name and Prefix
+    std::filesystem::path p(speechBank);
+    std::string prefix = p.stem().string();
+    if (!prefix.empty()) prefix[0] = toupper(prefix[0]); // Capitalize first letter
 
-    // 2. INFO DATA (Metadata)
-    std::vector<uint8_t> info;
-    uint8_t* pDur = (uint8_t*)&duration;
-    info.insert(info.end(), pDur, pDur + 4);
+    // 6. Store in PendingAdds (Speaker hardcoded in compiler now)
+    g_LipSyncState.PendingAdds[sbIdx][newID] = { (uint32_t)neighbor->Type, prefix, newRaw, newInfo };
 
-    g_LipSyncState.PendingAdds[sbIdx][newID] = { raw, info };
-
-    std::cout << "[DEBUG] AddLipSyncEntry SUCCESS. PendingAdds Updated. RawSize: " << raw.size() << std::endl;
+    std::cout << "[DEBUG] AddLipSyncEntry SUCCESS. Type: " << neighbor->Type << " Prefix: " << prefix << std::endl;
 }
 
 inline void DeleteLipSyncEntry(const std::string& speechBank, uint32_t id) {
@@ -194,26 +199,19 @@ inline std::unique_ptr<CLipSyncData> FetchLipSyncData(int32_t soundID, const std
 
     if (g_LipSyncState.PendingDeletes[sbIdx].count((uint32_t)soundID)) return nullptr;
 
-    // Check Pending Adds
     if (g_LipSyncState.PendingAdds[sbIdx].count((uint32_t)soundID)) {
         const auto& entry = g_LipSyncState.PendingAdds[sbIdx][(uint32_t)soundID];
-
         auto result = std::make_unique<CLipSyncData>();
         CLipSyncParser parser;
         parser.Parse(entry.Raw, entry.Info);
         *result = parser.Data;
-
         result->IsParsed = true;
-
-        // Force calculation if parser logic didn't pick up Info correctly
         if (result->Duration == 0.0f) {
-            // Peek duration from info we just created
             if (entry.Info.size() >= 4) {
                 float dur = *(float*)entry.Info.data();
                 result->Duration = dur;
             }
         }
-
         return result;
     }
 
@@ -285,6 +283,16 @@ inline void RenderLipSyncFrames(const CLipSyncData& d) {
 }
 
 inline void DrawLipSyncProperties() {
+    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "LipSync Bank Controls");
+    if (ImGui::Button("FORCE RECOMPILE dialogue.big")) {
+        // ...
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Test Add (ID 999999)")) {
+        AddLipSyncEntry("dialogue.lut", 999999, 2.5f);
+    }
+    ImGui::Separator();
+
     if (!g_LipSyncParser.IsParsed && !g_LipSyncParser.Data.IsParsed) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to parse LipSync data.");
         return;

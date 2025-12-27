@@ -329,7 +329,6 @@ inline void ReloadBankInPlace(LoadedBank* bank) {
     auto newBankPtr = CreateBankFromDisk(path);
     if (newBankPtr) {
         // Move content to existing pointer to keep UI references valid-ish
-        // (Note: vectors referencing bank content need refresh, but global pointer is stable)
         *bank = std::move(*newBankPtr);
         g_BankStatus = "Bank Reloaded.";
     }
@@ -382,38 +381,45 @@ inline void SaveBigBank(LoadedBank* bank) {
                 }
 
                 // D. Compile Dialogue Bank (LipSync)
-                LoadedBank* dialogueBankPtr = nullptr;
-                std::unique_ptr<LoadedBank> tempDialogueBank = nullptr;
+                // --- FIX: Use global g_LipSyncState and avoid file locking conflicts ---
 
-                // Check if already open in global list
+                // 1. Check if dialogue.big is currently open in the Generic Viewer
+                LoadedBank* openDialogueBank = nullptr;
                 for (auto& b : g_OpenBanks) {
-                    if (b.FileName == "dialogue.big") { dialogueBankPtr = &b; break; }
+                    if (b.FileName == "dialogue.big") {
+                        openDialogueBank = &b;
+                        // IMPORTANT: Close stream to avoid sharing violation during overwrite
+                        if (b.Stream && b.Stream->is_open()) b.Stream->close();
+                        break;
+                    }
                 }
 
-                // If not open, load LOCALLY (do NOT push to global vector to avoid reallocation crash)
-                if (!dialogueBankPtr) {
-                    std::string diagPath = g_AppConfig.GameRootPath + "\\Data\\Lang\\English\\dialogue.big";
-                    tempDialogueBank = CreateBankFromDisk(diagPath);
-                    dialogueBankPtr = tempDialogueBank.get();
-                }
-
-                if (dialogueBankPtr) {
-                    if (LipSyncCompiler::CompileLipSyncBank(dialogueBankPtr)) {
+                // 2. Ensure the LipSync backend is loaded
+                if (EnsureLipSyncLoaded()) {
+                    // 3. Compile using the global state (which contains the pending adds)
+                    if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
                         g_BankStatus = "Chain Complete: Text, Binaries, Audio, Dialogue saved.";
+
+                        // Clear pending changes
                         g_LipSyncState.PendingAdds.clear();
                         g_LipSyncState.PendingDeletes.clear();
+                        g_LipSyncState.CachedSubBankIndex = -1;
 
-                        // If we modified an OPEN dialogue bank, reload it too
-                        if (!tempDialogueBank) {
-                            ReloadBankInPlace(dialogueBankPtr);
+                        // 4. If the Generic Viewer had dialogue.big open, reload it now
+                        if (openDialogueBank) {
+                            ReloadBankInPlace(openDialogueBank);
                         }
                     }
                     else {
-                        g_BankStatus = "Error: Failed to compile dialogue.big";
+                        g_BankStatus = "Error: Failed to compile dialogue.big (LipSyncCompiler)";
+                        // Try to restore the viewer even if failed
+                        if (openDialogueBank) ReloadBankInPlace(openDialogueBank);
                     }
                 }
                 else {
-                    g_BankStatus = "Error: Could not load dialogue.big";
+                    g_BankStatus = "Error: Could not load dialogue.big into LipSync State";
+                    // Try to restore the viewer
+                    if (openDialogueBank) ReloadBankInPlace(openDialogueBank);
                 }
             }
         }

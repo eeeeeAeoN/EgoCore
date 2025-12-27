@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "TextBackend.h" 
 #include "FileDialogs.h"
+#include "LipSyncCompiler.h" // <--- NEW: Required to trigger compilation
 
 static bool g_ShowAddGroupItemPopup = false;
 static char g_GroupSearchBuf[128] = "";
@@ -32,22 +33,75 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         if (g_TextParser.IsParsed) g_OriginalIdentifier = g_TextParser.TextData.Identifier;
     }
 
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-        if (onSave) {
-            if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
-                if (!g_TextParser.TextData.SpeechBank.empty()) {
-                    UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
-                }
-                if (bank && bank->SelectedEntryIndex >= 0) {
-                    bank->Entries[bank->SelectedEntryIndex].Name = g_TextParser.TextData.Identifier;
-                }
-                g_OriginalIdentifier = g_TextParser.TextData.Identifier;
+    // Check for modifications
+    bool isAudioModified = false;
+    if (g_TextParser.IsParsed && !g_TextParser.IsGroup && !g_TextParser.IsNarratorList) {
+        if (!g_TextParser.TextData.SpeechBank.empty()) {
+            std::string key = g_TextParser.TextData.SpeechBank;
+            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+            if (g_BackgroundAudioBanks.count(key)) {
+                if (!g_BackgroundAudioBanks[key]->ModifiedCache.empty()) isAudioModified = true;
             }
-
-            onSave();
-            if (!g_TextParser.TextData.SpeechBank.empty()) SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
-            g_IsTextDirty = false;
         }
+    }
+
+    // Check for LipSync modifications
+    bool isLipSyncModified = !g_LipSyncState.PendingAdds.empty() || !g_LipSyncState.PendingDeletes.empty();
+
+    if (g_IsTextDirty || isAudioModified || isLipSyncModified) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
+
+        // Unified Save Button & Shortcut Logic
+        bool triggered = ImGui::Button("SAVE ENTRY CHANGES (Ctrl+S)", ImVec2(-FLT_MIN, 40));
+        if ((ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) || triggered) {
+            if (onSave) {
+                // 1. Update Definition Files if Identifier Changed
+                if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
+                    if (!g_TextParser.TextData.SpeechBank.empty()) {
+                        UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
+                    }
+                    if (bank && bank->SelectedEntryIndex >= 0) {
+                        bank->Entries[bank->SelectedEntryIndex].Name = g_TextParser.TextData.Identifier;
+                    }
+                    g_OriginalIdentifier = g_TextParser.TextData.Identifier;
+                }
+
+                // 2. Save Text Bank (text.big)
+                onSave();
+
+                // 3. Save Audio Bank (.lut)
+                if (isAudioModified) {
+                    std::string key = g_TextParser.TextData.SpeechBank;
+                    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+                    if (g_BackgroundAudioBanks.count(key)) {
+                        g_BackgroundAudioBanks[key]->SaveBank(g_BackgroundAudioBanks[key]->FileName);
+                        g_BackgroundAudioBanks[key]->ModifiedCache.clear();
+                    }
+                }
+
+                // 4. Save LipSync Bank (dialogue.big)
+                if (isLipSyncModified) {
+                    if (EnsureLipSyncLoaded()) {
+                        // Compile using the global state which has our PendingAdds
+                        if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
+                            // On success, clear pending lists
+                            g_LipSyncState.PendingAdds.clear();
+                            g_LipSyncState.PendingDeletes.clear();
+                            g_LipSyncState.CachedSubBankIndex = -1; // Invalidate cache
+                        }
+                    }
+                }
+
+                // 5. Save Header File (.h)
+                if (!g_TextParser.TextData.SpeechBank.empty()) {
+                    SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
+                }
+
+                g_IsTextDirty = false;
+            }
+        }
+        ImGui::PopStyleColor(2);
     }
 
     if (g_TextParser.IsGroup) {
@@ -342,6 +396,8 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                                 InjectHeaderDefinition(hIdx, defName, nextID);
                                 if (audioBank->AddEntry(nextID, wavPath)) {
                                     float dur = AudioBankParser::GetWavDuration(wavPath);
+
+                                    // FIXED CALL: 3 Arguments
                                     AddLipSyncEntry(e.SpeechBank, nextID, dur);
 
                                     g_IsTextDirty = true;
@@ -355,54 +411,5 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         else {
             ImGui::TextDisabled("Assign a SpeechBank and Identifier to link media.");
         }
-
-        ImGui::Spacing(); ImGui::Separator();
-    }
-
-    bool isAudioModified = false;
-    if (g_TextParser.IsParsed && !g_TextParser.IsGroup && !g_TextParser.IsNarratorList) {
-        if (!g_TextParser.TextData.SpeechBank.empty()) {
-            std::string key = g_TextParser.TextData.SpeechBank;
-            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-            if (g_BackgroundAudioBanks.count(key)) {
-                if (!g_BackgroundAudioBanks[key]->ModifiedCache.empty()) isAudioModified = true;
-            }
-        }
-    }
-
-    if (g_IsTextDirty || isAudioModified) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
-
-        if (ImGui::Button("SAVE ENTRY CHANGES (Ctrl+S)", ImVec2(-FLT_MIN, 40))) {
-            if (onSave) {
-                if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
-                    if (!g_TextParser.TextData.SpeechBank.empty()) {
-                        UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
-                    }
-                    if (bank && bank->SelectedEntryIndex >= 0) {
-                        bank->Entries[bank->SelectedEntryIndex].Name = g_TextParser.TextData.Identifier;
-                    }
-                    g_OriginalIdentifier = g_TextParser.TextData.Identifier;
-                }
-
-                onSave();
-                if (isAudioModified) {
-                    std::string key = g_TextParser.TextData.SpeechBank;
-                    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-                    if (g_BackgroundAudioBanks.count(key)) {
-                        g_BackgroundAudioBanks[key]->SaveBank(g_BackgroundAudioBanks[key]->FileName);
-                        g_BackgroundAudioBanks[key]->ModifiedCache.clear();
-                    }
-                }
-
-                if (!g_TextParser.TextData.SpeechBank.empty()) {
-                    SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
-                }
-
-                g_IsTextDirty = false;
-            }
-        }
-        ImGui::PopStyleColor(2);
     }
 }

@@ -25,7 +25,7 @@ static void DrawAudioProperties(LoadedBank* bank) {
     if (bank->SelectedEntryIndex >= 0 && bank->SelectedEntryIndex < bank->AudioParser->Entries.size()) {
         const auto& entry = bank->AudioParser->Entries[bank->SelectedEntryIndex];
 
-        bool isModified = bank->AudioParser->ModifiedCache.count(bank->SelectedEntryIndex);
+        bool isModified = bank->AudioParser->ModifiedCache.count(entry.SoundID);
         if (isModified) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[MODIFIED] ID: %d", entry.SoundID);
         }
@@ -49,7 +49,7 @@ static void DrawAudioProperties(LoadedBank* bank) {
         ImGui::Text("%s / %s", FormatTime(currentT).c_str(), FormatTime(totalT).c_str());
 
         // Standard Buttons
-        float buttonWidth = 80; // Slightly smaller to fit 4 buttons
+        float buttonWidth = 65; // Slightly smaller to fit 5 buttons (Play, Exp, Imp, Clone, Del)
 
         // Play/Pause
         const char* label = player.IsPlaying() ? "Pause" : "Play";
@@ -91,6 +91,15 @@ static void DrawAudioProperties(LoadedBank* bank) {
 
         ImGui::SameLine();
 
+        // --- CLONE BUTTON ---
+        if (ImGui::Button("Clone", ImVec2(buttonWidth, 0))) {
+            if (bank->AudioParser->CloneEntry(bank->SelectedEntryIndex)) {
+                std::cout << "[INFO] Entry Cloned. New ID generated." << std::endl;
+            }
+        }
+
+        ImGui::SameLine();
+
         // Delete
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
@@ -121,7 +130,6 @@ static void DrawAudioProperties(LoadedBank* bank) {
 
             // 2. Add Entry
             if (bank->AudioParser->AddEntry(nextID, openPath)) {
-                // Scroll to bottom or select new entry (optional)
                 std::cout << "[INFO] Added new entry ID: " << nextID << std::endl;
             }
         }
