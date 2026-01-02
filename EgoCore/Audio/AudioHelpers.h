@@ -4,8 +4,11 @@
 #include <cmath>
 #include <atomic>
 #include <cstring>
+#include <fstream>
+#include <iostream>
 #include "miniaudio.h"
 
+// --- ENCODING TABLES ---
 static const int16_t StepTable[89] = {
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
     50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
@@ -20,6 +23,42 @@ static const int IndexTable[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
+// --- WAV WRITER (ADDED FIX) ---
+static void WriteWavFile(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate, int channels) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f.is_open()) return;
+
+    int byteRate = sampleRate * channels * 2;
+    int blockAlign = channels * 2;
+    int dataSize = (int)pcm.size() * 2;
+    int chunkSize = 36 + dataSize;
+
+    f.write("RIFF", 4);
+    f.write((char*)&chunkSize, 4);
+    f.write("WAVE", 4);
+    f.write("fmt ", 4);
+    int subchunk1Size = 16;
+    short audioFormat = 1; // PCM
+    short numChannels = (short)channels;
+    int sRate = sampleRate;
+    short bAlign = (short)blockAlign;
+    short bitsPerSample = 16;
+
+    f.write((char*)&subchunk1Size, 4);
+    f.write((char*)&audioFormat, 2);
+    f.write((char*)&numChannels, 2);
+    f.write((char*)&sRate, 4);
+    f.write((char*)&byteRate, 4);
+    f.write((char*)&bAlign, 2);
+    f.write((char*)&bitsPerSample, 2);
+
+    f.write("data", 4);
+    f.write((char*)&dataSize, 4);
+    f.write((char*)pcm.data(), dataSize);
+    f.close();
+}
+
+// --- ADPCM CLASSES ---
 class XboxAdpcmEncoder {
     struct State {
         int16_t sample = 0;
@@ -132,6 +171,7 @@ public:
     }
 };
 
+// --- AUDIO PLAYER ---
 class AudioPlayer {
     ma_device device;
     bool isInit = false;

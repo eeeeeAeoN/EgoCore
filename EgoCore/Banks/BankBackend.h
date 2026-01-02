@@ -69,26 +69,25 @@ struct LoadedBank {
         Stream = std::make_unique<std::fstream>();
     }
 
-    // Move Constructor needed for vector resizing if not implicit
     LoadedBank(LoadedBank&& other) noexcept = default;
     LoadedBank& operator=(LoadedBank&& other) noexcept = default;
 
-    // Disable copy to prevent accidental stream duplication issues
     LoadedBank(const LoadedBank&) = delete;
     LoadedBank& operator=(const LoadedBank&) = delete;
 };
 
-static std::vector<LoadedBank> g_OpenBanks;
-static int g_ActiveBankIndex = -1;
-static std::string g_BankStatus = "Ready";
+// --- FIXED GLOBALS (Using inline to ensure single instance) ---
+inline std::vector<LoadedBank> g_OpenBanks;
+inline int g_ActiveBankIndex = -1;
+inline std::string g_BankStatus = "Ready";
 
-static C3DMeshContent g_ActiveMeshContent;
-static CBBMParser g_BBMParser;
-static CTextureParser g_TextureParser;
-static bool g_MeshUploadNeeded = false;
-static C3DAnimationInfo g_ActiveAnim;
-static AnimUIContext    g_AnimUIState;
-static bool             g_AnimParseSuccess = false;
+inline C3DMeshContent g_ActiveMeshContent;
+inline CBBMParser g_BBMParser;
+inline CTextureParser g_TextureParser;
+inline bool g_MeshUploadNeeded = false;
+inline C3DAnimationInfo g_ActiveAnim;
+inline AnimUIContext    g_AnimUIState;
+inline bool             g_AnimParseSuccess = false;
 
 // --- UTILS ---
 inline bool StartsWith(const std::string& str, const std::string& prefix) {
@@ -291,19 +290,4 @@ inline void LoadBank(const std::string& path) {
     else {
         g_BankStatus = "Failed to load bank.";
     }
-}
-
-inline void WriteWavFile(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate, int channels) {
-    if (pcm.empty()) return;
-    std::ofstream f(path, std::ios::binary);
-    int byteRate = sampleRate * channels * 2;
-    int dataChunkSize = (int)pcm.size() * 2;
-    int fileSize = 36 + dataChunkSize;
-    f.write("RIFF", 4); f.write((char*)&fileSize, 4); f.write("WAVE", 4); f.write("fmt ", 4);
-    int fmtChunkSize = 16; short audioFormat = 1; short numChannels = (short)channels;
-    int sampleRate32 = sampleRate; short blockAlign = (short)(channels * 2); short bitsPerSample = 16;
-    f.write((char*)&fmtChunkSize, 4); f.write((char*)&audioFormat, 2); f.write((char*)&numChannels, 2);
-    f.write((char*)&sampleRate32, 4); f.write((char*)&byteRate, 4); f.write((char*)&blockAlign, 2); f.write((char*)&bitsPerSample, 2);
-    f.write("data", 4); f.write((char*)&dataChunkSize, 4); f.write((char*)pcm.data(), dataChunkSize);
-    f.close();
 }

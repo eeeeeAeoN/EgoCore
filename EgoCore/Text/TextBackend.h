@@ -16,15 +16,15 @@
 #include <filesystem>
 #include <cmath>
 
-static CTextParser g_TextParser;
+inline CTextParser g_TextParser;
 
-// --- PERSISTENT STATE ---
-static bool g_IsTextDirty = false;
-static int g_LastEntryID = -1;
-static void* g_LastBankPtr = nullptr;
+// --- PERSISTENT STATE (Fixed: inline for linkage) ---
+inline bool g_IsTextDirty = false;
+inline int g_LastEntryID = -1;
+inline void* g_LastBankPtr = nullptr;
 
-// --- BACKGROUND AUDIO STATE ---
-static std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
+// --- BACKGROUND AUDIO STATE (Fixed: inline for linkage) ---
+inline std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
 
 // --- HELPERS ---
 
@@ -181,7 +181,6 @@ inline void InjectHeaderDefinition(int enumIdx, const std::string& entryName, ui
     }
 }
 
-// --- THIS WAS MISSING ---
 inline void UpdateHeaderDefinition(const std::string& speechBank, const std::string& oldID, const std::string& newID) {
     if (speechBank.empty() || oldID.empty() || newID.empty()) return;
 
@@ -202,7 +201,6 @@ inline void UpdateHeaderDefinition(const std::string& speechBank, const std::str
 
     if (newContent != entry.FullContent) {
         entry.FullContent = newContent;
-        // Sync Editor if open
         if (!g_DefWorkspace.ShowDefsMode && g_DefWorkspace.SelectedEnumIndex == idx) {
             g_DefWorkspace.Editor.SetText(entry.FullContent);
             g_DefWorkspace.OriginalContent = entry.FullContent;

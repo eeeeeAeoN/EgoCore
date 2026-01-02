@@ -21,9 +21,9 @@
   <ItemGroup>
     <ClInclude Include="Animations\AnimParser.h" />
     <ClInclude Include="Animations\AnimProperties.h" />
-    <ClInclude Include="AudioHelpers.h" />
     <ClInclude Include="Audio\AudioBackend.h" />
     <ClInclude Include="Audio\AudioExplorer.h" />
+    <ClInclude Include="Audio\AudioHelpers.h" />
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="Banks\BankLogic.h" />

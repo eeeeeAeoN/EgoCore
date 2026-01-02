@@ -168,7 +168,7 @@
     <ClInclude Include="Text\TextBackend.h">
       <Filter>Source Files\Text</Filter>
     </ClInclude>
-    <ClInclude Include="AudioHelpers.h">
+    <ClInclude Include="Audio\AudioHelpers.h">
       <Filter>Source Files\Audio</Filter>
     </ClInclude>
   </ItemGroup>

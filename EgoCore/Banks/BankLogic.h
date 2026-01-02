@@ -18,10 +18,7 @@
 #include <set>
 
 // --- GLOBAL STATE ---
-static std::vector<BinaryParser> g_LoadedBinaries;
-
-// --- EXTERNALS ---
-extern std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
+inline std::vector<BinaryParser> g_LoadedBinaries;
 
 // --- UTILS ---
 inline void WriteBankString(std::ofstream& out, const std::string& s) {
@@ -381,8 +378,6 @@ inline void SaveBigBank(LoadedBank* bank) {
                 }
 
                 // D. Compile Dialogue Bank (LipSync)
-                // --- FIX: Use global g_LipSyncState and avoid file locking conflicts ---
-
                 // 1. Check if dialogue.big is currently open in the Generic Viewer
                 LoadedBank* openDialogueBank = nullptr;
                 for (auto& b : g_OpenBanks) {
