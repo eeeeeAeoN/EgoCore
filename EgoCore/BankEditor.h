@@ -3,6 +3,7 @@
 #include "GltfExporter.h"
 #include "TextCompiler.h"
 #include "LipSyncCompiler.h"
+#include <thread>
 
 // --- UTILS ---
 inline void WriteBankString(std::ofstream& out, const std::string& s) {
@@ -24,14 +25,32 @@ inline uint32_t GetNextFreeID(LoadedBank* bank) {
     return (maxID > 0) ? maxID + 1 : 20000;
 }
 
+// --- NAMING HELPER FOR DIALOGUE FOLDERS ---
+inline std::string GetPrefixForSubBank(const std::string& folderName) {
+    std::string upper = folderName;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+
+    if (upper == "LIPSYNC_ENGLISH_MAIN") return "Dialogue";
+    if (upper == "LIPSYNC_ENGLISH_MAIN_2") return "Dialogue2";
+    if (upper == "LIPSYNC_ENGLISH_SCRIPT") return "ScriptDialogue";
+    if (upper == "LIPSYNC_ENGLISH_SCRIPT_2") return "ScriptDialogue2";
+    if (upper == "LIPSYNC_ENGLISH_GUILD") return "GuildDialogue";
+    if (upper == "LIPSYNC_ENGLISH_CREATURE") return "CreatureDialogue";
+
+    return folderName; // Fallback
+}
+
 // --- CREATION FUNCTIONS ---
 inline void CreateNewDialogueEntry(LoadedBank* bank) {
     if (!bank) return;
     uint32_t newID = GetNextFreeID(bank);
 
-    std::string stem = std::filesystem::path(bank->FileName).stem().string();
-    if (!stem.empty()) stem[0] = toupper(stem[0]);
-    std::string name = stem + "_" + std::to_string(newID);
+    // Determine Correct Prefix
+    std::string prefix = "Dialogue";
+    if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
+        prefix = GetPrefixForSubBank(bank->SubBanks[bank->ActiveSubBankIndex].Name);
+    }
+    std::string name = prefix + "_" + std::to_string(newID);
 
     auto blob = CLipSyncParser::GenerateEmpty(1.0f);
     BankEntry newEntry; newEntry.ID = newID; newEntry.Name = name; newEntry.FriendlyName = name; newEntry.Type = 1;
@@ -41,16 +60,15 @@ inline void CreateNewDialogueEntry(LoadedBank* bank) {
     int newIndex = (int)bank->Entries.size() - 1;
     bank->ModifiedEntryData[newIndex] = blob.Raw; bank->SubheaderCache[newIndex] = blob.Info;
 
-    // SYNC WITH COMPILER STATE
+    // SYNC
     if (bank->Type == EBankType::Dialogue && EnsureLipSyncLoaded()) {
         int sbIdx = 0;
         if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
-            std::string currentName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
-            if (g_LipSyncState.SubBankMap.count(currentName)) {
-                sbIdx = g_LipSyncState.SubBankMap[currentName];
-            }
+            std::string subName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
+            if (g_LipSyncState.SubBankMap.count(subName)) sbIdx = g_LipSyncState.SubBankMap[subName];
         }
-        AddedEntryData ae; ae.Type = 1; ae.NamePrefix = stem; ae.Raw = blob.Raw; ae.Info = blob.Info;
+
+        AddedEntryData ae; ae.Type = 1; ae.NamePrefix = prefix; ae.Raw = blob.Raw; ae.Info = blob.Info;
         g_LipSyncState.PendingAdds[sbIdx][newID] = ae;
     }
 
@@ -79,6 +97,7 @@ inline void CreateNewTextEntry(LoadedBank* bank, int type) {
 inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
     if (!bank || sourceIndex < 0 || sourceIndex >= bank->Entries.size()) return;
 
+    // AUDIO
     if (bank->Type == EBankType::Audio && bank->AudioParser) {
         if (bank->AudioParser->CloneEntry(sourceIndex)) {
             std::string headerName = GetHeaderName(bank->FileName);
@@ -96,14 +115,17 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
         return;
     }
 
+    // TEXT & DIALOGUE
     BankEntry newEntry = bank->Entries[sourceIndex];
     newEntry.ID = GetNextFreeID(bank);
 
-    // FIX: Naming Convention
+    // NAMING
+    std::string prefix = "Dialogue";
     if (bank->Type == EBankType::Dialogue) {
-        std::string stem = std::filesystem::path(bank->FileName).stem().string();
-        if (!stem.empty()) stem[0] = toupper(stem[0]);
-        newEntry.Name = stem + "_" + std::to_string(newEntry.ID);
+        if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
+            prefix = GetPrefixForSubBank(bank->SubBanks[bank->ActiveSubBankIndex].Name);
+        }
+        newEntry.Name = prefix + "_" + std::to_string(newEntry.ID);
         newEntry.FriendlyName = newEntry.Name;
     }
     else {
@@ -134,16 +156,14 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
         bank->SubheaderCache[newIndex] = infoData;
     }
 
+    // SYNC
     if (bank->Type == EBankType::Dialogue && EnsureLipSyncLoaded()) {
         int sbIdx = 0;
         if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
-            std::string currentName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
-            if (g_LipSyncState.SubBankMap.count(currentName)) sbIdx = g_LipSyncState.SubBankMap[currentName];
+            std::string subName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
+            if (g_LipSyncState.SubBankMap.count(subName)) sbIdx = g_LipSyncState.SubBankMap[subName];
         }
-        AddedEntryData ae; ae.Type = newEntry.Type;
-        std::string stem = std::filesystem::path(bank->FileName).stem().string();
-        if (!stem.empty()) stem[0] = toupper(stem[0]);
-        ae.NamePrefix = stem;
+        AddedEntryData ae; ae.Type = newEntry.Type; ae.NamePrefix = prefix;
         ae.Raw = sourceData; ae.Info = infoData;
         g_LipSyncState.PendingAdds[sbIdx][newEntry.ID] = ae;
     }
@@ -151,6 +171,7 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
     UpdateFilter(*bank); SelectEntry(bank, newIndex); g_BankStatus = "Duplicated Entry ID " + std::to_string(newEntry.ID);
 }
 
+// --- DELETE ENTRY (FIXED) ---
 inline void DeleteBankEntry(LoadedBank* bank, int index) {
     if (!bank || index < 0 || index >= (int)bank->Entries.size()) return;
     uint32_t targetID = bank->Entries[index].ID;
@@ -161,13 +182,31 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
     }
 
     if (bank->Type == EBankType::Dialogue) {
-        DeleteLipSyncEntry(bank->FileName, targetID);
+        // FIX: DIRECTLY UPDATE STATE USING SUB-BANK INDEX
+        if (EnsureLipSyncLoaded()) {
+            int sbIdx = 0;
+            // Identify the correct sub-bank index for the compiler state
+            if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
+                std::string currentName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
+                if (g_LipSyncState.SubBankMap.count(currentName)) {
+                    sbIdx = g_LipSyncState.SubBankMap[currentName];
+                }
+            }
+            // Register deletion
+            g_LipSyncState.PendingDeletes[sbIdx].insert(targetID);
+
+            // Also remove from PendingAdds if we just added it and haven't saved yet
+            if (g_LipSyncState.PendingAdds.count(sbIdx)) {
+                g_LipSyncState.PendingAdds[sbIdx].erase(targetID);
+            }
+        }
     }
 
     bank->Entries.erase(bank->Entries.begin() + index);
     if (bank->ModifiedEntryData.count(index)) bank->ModifiedEntryData.erase(index);
     if (bank->SubheaderCache.count(index)) bank->SubheaderCache.erase(index);
 
+    // Rebuild cache keys
     std::map<int, std::vector<uint8_t>> newCache; for (auto& [k, v] : bank->ModifiedEntryData) if (k < index) newCache[k] = v; else if (k > index) newCache[k - 1] = v;
     bank->ModifiedEntryData = newCache;
     std::map<int, std::vector<uint8_t>> newMeta; for (auto& [k, v] : bank->SubheaderCache) if (k < index) newMeta[k] = v; else if (k > index) newMeta[k - 1] = v;
@@ -180,7 +219,6 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
 inline void SaveLutBank(LoadedBank* bank) {
     if (!bank || bank->Type != EBankType::Audio || !bank->AudioParser) return;
 
-    // Release handles
     std::string key = bank->FileName;
     size_t dot = key.find_last_of('.'); if (dot != std::string::npos) key = key.substr(0, dot) + ".lut";
     std::transform(key.begin(), key.end(), key.begin(), ::tolower);
@@ -189,8 +227,7 @@ inline void SaveLutBank(LoadedBank* bank) {
     if (bank->AudioParser->SaveBank(bank->FullPath)) {
         g_BankStatus = "Audio Bank (.LUT) Recompiled.";
         ReloadBankInPlace(bank);
-        g_ShowSuccessPopup = true;
-        g_SuccessMessage = "Audio Bank Compiled Successfully!";
+        g_ShowSuccessPopup = true; g_SuccessMessage = "Audio Bank Compiled Successfully!";
     }
     else {
         g_BankStatus = "Error: Failed to save audio bank.";
@@ -199,7 +236,6 @@ inline void SaveLutBank(LoadedBank* bank) {
 
 // --- SAVE BIG BANK (Sync) ---
 inline void SaveBigBank(LoadedBank* bank) {
-    // 1. TEXT BANK
     if (bank->Type == EBankType::Text) {
         if (TextCompiler::CompileTextBank(bank)) {
             g_BankStatus = "Text Bank Recompiled.";
@@ -211,14 +247,11 @@ inline void SaveBigBank(LoadedBank* bank) {
 
             if (mediaModified) {
                 g_BankStatus = "Compiling Linked Media...";
-                // Headers
                 for (auto& en : g_DefWorkspace.AllEnums) {
                     if (en.FilePath.find("snds.h") != std::string::npos) { std::ofstream out(en.FilePath, std::ios::binary); if (out.is_open()) { out << en.FullContent; out.close(); } }
                 }
-                // Binaries
                 std::string log; std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
                 BinaryParser::CompileSoundBinaries(defsPath, log);
-                // Audio
                 for (auto& [key, parser] : g_BackgroundAudioBanks) {
                     if (!parser->ModifiedCache.empty()) { parser->SaveBank(parser->FileName); parser->ModifiedCache.clear(); }
                 }
@@ -236,34 +269,32 @@ inline void SaveBigBank(LoadedBank* bank) {
                     }
                 }
             }
-            g_ShowSuccessPopup = true;
-            g_SuccessMessage = "Text Bank (and chain) Compiled Successfully!";
+            g_ShowSuccessPopup = true; g_SuccessMessage = "Text Bank (and chain) Compiled Successfully!";
         }
         else {
             g_BankStatus = "Text Bank Compilation Failed.";
         }
     }
-    // 2. DIALOGUE BANK
+    // DIALOGUE BANK
     else if (bank->Type == EBankType::Dialogue) {
         if (g_LipSyncState.Stream && g_LipSyncState.Stream->is_open()) g_LipSyncState.Stream->close();
         if (bank->Stream && bank->Stream->is_open()) bank->Stream->close();
+
+        // Ensure State path matches current file
+        g_LipSyncState.FilePath = bank->FullPath;
 
         if (EnsureLipSyncLoaded()) {
             if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
                 g_BankStatus = "Dialogue Bank Recompiled Successfully.";
                 g_LipSyncState.PendingAdds.clear(); g_LipSyncState.PendingDeletes.clear(); g_LipSyncState.CachedSubBankIndex = -1;
                 ReloadBankInPlace(bank);
-                g_ShowSuccessPopup = true;
-                g_SuccessMessage = "Dialogue Bank Compiled Successfully!";
+                g_ShowSuccessPopup = true; g_SuccessMessage = "Dialogue Bank Compiled Successfully!";
             }
             else {
                 g_BankStatus = "Error: Failed to recompile dialogue.big.";
                 ReloadBankInPlace(bank);
             }
         }
-    }
-    else {
-        g_BankStatus = "Recompilation not supported for this bank type.";
     }
 }
 
@@ -295,9 +326,8 @@ inline void SaveEntryChanges(LoadedBank* bank) {
                     if (g_LipSyncState.SubBankMap.count(currentName)) sbIdx = g_LipSyncState.SubBankMap[currentName];
                 }
 
-                AddedEntryData ae; ae.Type = e.Type;
-                std::string prefix = "Dialogue"; size_t u = e.Name.find('_'); if (u != std::string::npos) prefix = e.Name.substr(0, u);
-                ae.NamePrefix = prefix; ae.Raw = newBytes; ae.Info = newInfo;
+                std::string prefix = GetPrefixForSubBank(bank->SubBanks[bank->ActiveSubBankIndex].Name);
+                AddedEntryData ae; ae.Type = e.Type; ae.NamePrefix = prefix; ae.Raw = newBytes; ae.Info = newInfo;
                 g_LipSyncState.PendingAdds[sbIdx][e.ID] = ae;
             }
             g_BankStatus = "LipSync Entry Saved to Memory (Pending Recompile).";
