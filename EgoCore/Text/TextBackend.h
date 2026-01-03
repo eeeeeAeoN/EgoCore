@@ -63,6 +63,7 @@ static std::string FormatAudioTime(float seconds) {
     return std::string(buf);
 }
 
+// Maps "SpeechBank" from text (e.g. "dialogue") to header file
 inline std::string GetHeaderName(const std::string& speechBank) {
     std::string stem = speechBank;
     size_t lastDot = stem.find_last_of('.');
@@ -74,6 +75,15 @@ inline std::string GetHeaderName(const std::string& speechBank) {
     if (stem == "scriptdialogue")       return "scriptdialoguesnds.h";
     if (stem == "scriptdialogue2")      return "scriptdialoguesnds2.h";
     return stem + "snds.h";
+}
+
+// Maps Internal SubBank Name (e.g. "LIPSYNC_ENGLISH_MAIN") to header file
+inline std::string GetHeaderForSubBank(const std::string& subBankName) {
+    if (subBankName == "LIPSYNC_ENGLISH_MAIN") return "dialoguesnds.h";
+    if (subBankName == "LIPSYNC_ENGLISH_MAIN_2") return "dialoguesnds2.h";
+    if (subBankName == "LIPSYNC_ENGLISH_SCRIPT") return "scriptdialoguesnds.h";
+    if (subBankName == "LIPSYNC_ENGLISH_SCRIPT_2") return "scriptdialoguesnds2.h";
+    return "";
 }
 
 inline int FindHeaderIndex(const std::string& headerName) {
@@ -104,6 +114,27 @@ inline int32_t ResolveAudioID(const std::string& speechBank, const std::string& 
         }
     }
     return -1;
+}
+
+// Reverse Lookup: ID -> Name (e.g. 20001 -> "SND_QUEST_START")
+inline std::string ResolveNameFromID(const std::string& headerName, uint32_t id) {
+    int enumIdx = FindHeaderIndex(headerName);
+    if (enumIdx == -1) return "";
+
+    const std::string& content = g_DefWorkspace.AllEnums[enumIdx].FullContent;
+
+    // Regex: Find (Word) = (ID),
+    // Be careful with whitespace and commas
+    std::string patternStr = "([A-Z0-9_]+)\\s*=\\s*" + std::to_string(id) + "[,\\s]";
+    std::regex re(patternStr);
+    std::smatch match;
+
+    if (std::regex_search(content, match, re)) {
+        if (match.size() >= 2) {
+            return match[1].str();
+        }
+    }
+    return "";
 }
 
 inline uint32_t GetNextIDFromHeader(const std::string& speechBank) {

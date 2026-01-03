@@ -24,10 +24,12 @@
     <ClInclude Include="Audio\AudioBackend.h" />
     <ClInclude Include="Audio\AudioExplorer.h" />
     <ClInclude Include="Audio\AudioHelpers.h" />
+    <ClInclude Include="BankEditor.h" />
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankExplorer.h" />
-    <ClInclude Include="Banks\BankLogic.h" />
+    <ClInclude Include="Banks\BankLoader.h" />
     <ClInclude Include="Banks\BinaryParser.h" />
+    <ClInclude Include="BankTabUI.h" />
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />

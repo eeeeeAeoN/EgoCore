@@ -3,8 +3,6 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
-#include "BankBackend.h"
-#include "DefBackend.h"
 
 namespace fs = std::filesystem;
 
@@ -13,14 +11,15 @@ struct AppConfig {
     std::vector<std::string> AutoLoadBanks;
     bool IsConfigured = false;
 
-    // --- NEW FLAGS ---
-    bool ShowDeleteConfirm = true;     // For Defs
-    bool ShowAddConfirm = true;        // For Defs
-    bool ShowBankDeleteConfirm = true; // NEW: For Bank Entries
+    // --- FLAGS ---
+    bool ShowDeleteConfirm = true;
+    bool ShowAddConfirm = true;
+    bool ShowBankDeleteConfirm = true;
     bool ShowUnsavedChangesWarning = true;
 };
 
-static AppConfig g_AppConfig;
+// FIX: 'inline' ensures only ONE config exists across the whole app
+inline AppConfig g_AppConfig;
 static const std::string CONFIG_FILENAME = "egocore_config.ini";
 
 static const std::vector<std::string> DEFAULT_BANKS = {
@@ -34,7 +33,7 @@ static const std::vector<std::string> DEFAULT_BANKS = {
     "\\Data\\shaders\\pc\\shaders.big"
 };
 
-static void SaveConfig() {
+inline void SaveConfig() {
     std::ofstream file(CONFIG_FILENAME);
     if (file.is_open()) {
         file << "Root=" << g_AppConfig.GameRootPath << "\n";
@@ -43,13 +42,13 @@ static void SaveConfig() {
         }
         file << "ShowDeleteConfirm=" << (g_AppConfig.ShowDeleteConfirm ? "1" : "0") << "\n";
         file << "ShowAddConfirm=" << (g_AppConfig.ShowAddConfirm ? "1" : "0") << "\n";
-        file << "ShowBankDeleteConfirm=" << (g_AppConfig.ShowBankDeleteConfirm ? "1" : "0") << "\n"; // Save new flag
+        file << "ShowBankDeleteConfirm=" << (g_AppConfig.ShowBankDeleteConfirm ? "1" : "0") << "\n";
         file << "ShowUnsavedChangesWarning=" << (g_AppConfig.ShowUnsavedChangesWarning ? "1" : "0") << "\n";
         file.close();
     }
 }
 
-static void LoadConfig() {
+inline void LoadConfig() {
     std::ifstream file(CONFIG_FILENAME);
     g_AppConfig.AutoLoadBanks.clear();
     g_AppConfig.IsConfigured = false;
@@ -74,26 +73,9 @@ static void LoadConfig() {
             else if (line.find("Bank=") == 0) g_AppConfig.AutoLoadBanks.push_back(line.substr(5));
             else if (line.find("ShowDeleteConfirm=") == 0) g_AppConfig.ShowDeleteConfirm = (line.substr(18) == "1");
             else if (line.find("ShowAddConfirm=") == 0) g_AppConfig.ShowAddConfirm = (line.substr(15) == "1");
-            else if (line.find("ShowBankDeleteConfirm=") == 0) g_AppConfig.ShowBankDeleteConfirm = (line.substr(22) == "1"); // Load new flag
+            else if (line.find("ShowBankDeleteConfirm=") == 0) g_AppConfig.ShowBankDeleteConfirm = (line.substr(22) == "1");
             else if (line.find("ShowUnsavedChangesWarning=") == 0) g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
         }
         file.close();
     }
-}
-
-static void PerformAutoLoad() {
-    if (!g_AppConfig.IsConfigured) return;
-    LoadDefsFromFolder(g_AppConfig.GameRootPath);
-    for (const auto& relativePath : g_AppConfig.AutoLoadBanks) {
-        std::string fullPath = g_AppConfig.GameRootPath + relativePath;
-        if (fs::exists(fullPath)) LoadBank(fullPath);
-    }
-}
-
-static void InitializeSetup(const std::string& selectedPath) {
-    g_AppConfig.GameRootPath = selectedPath;
-    g_AppConfig.AutoLoadBanks = DEFAULT_BANKS;
-    g_AppConfig.IsConfigured = true;
-    SaveConfig();
-    PerformAutoLoad();
 }

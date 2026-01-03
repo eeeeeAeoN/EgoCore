@@ -48,8 +48,9 @@ static void DrawAudioProperties(LoadedBank* bank) {
         ImGui::SameLine();
         ImGui::Text("%s / %s", FormatTime(currentT).c_str(), FormatTime(totalT).c_str());
 
-        // Standard Buttons
-        float buttonWidth = 65; // Slightly smaller to fit 5 buttons (Play, Exp, Imp, Clone, Del)
+        // Buttons
+        // Adjusted width to fit just Play, Exp, Imp
+        float buttonWidth = 80;
 
         // Play/Pause
         const char* label = player.IsPlaying() ? "Pause" : "Play";
@@ -88,81 +89,8 @@ static void DrawAudioProperties(LoadedBank* bank) {
                 }
             }
         }
-
-        ImGui::SameLine();
-
-        // --- CLONE BUTTON ---
-        if (ImGui::Button("Clone", ImVec2(buttonWidth, 0))) {
-            if (bank->AudioParser->CloneEntry(bank->SelectedEntryIndex)) {
-                std::cout << "[INFO] Entry Cloned. New ID generated." << std::endl;
-            }
-        }
-
-        ImGui::SameLine();
-
-        // Delete
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-        if (ImGui::Button("Delete", ImVec2(buttonWidth, 0))) {
-            bank->AudioParser->DeleteEntry(bank->SelectedEntryIndex);
-            bank->SelectedEntryIndex = -1; // Deselect to avoid crash
-            player.Reset();
-        }
-        ImGui::PopStyleColor(2);
     }
     else {
         ImGui::TextDisabled("Select an audio entry to view details.");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-
-    // --- ADD NEW ENTRY ---
-    if (ImGui::Button("+ Add New Entry (From WAV)", ImVec2(-FLT_MIN, 30))) {
-        std::string openPath = OpenFileDialog("WAV File\0*.wav\0");
-        if (!openPath.empty()) {
-            // 1. Calculate Next Available ID (Max + 1)
-            uint32_t maxID = 0;
-            for (const auto& e : bank->AudioParser->Entries) {
-                if (e.SoundID > maxID) maxID = e.SoundID;
-            }
-            uint32_t nextID = (maxID > 0) ? maxID + 1 : 20000;
-
-            // 2. Add Entry
-            if (bank->AudioParser->AddEntry(nextID, openPath)) {
-                std::cout << "[INFO] Added new entry ID: " << nextID << std::endl;
-            }
-        }
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-
-    // --- DEBUGGING TOOLS ---
-    ImGui::TextColored(ImVec4(1, 0, 1, 1), "Debug Actions");
-
-    if (ImGui::Button("Recompile Bank (Force Save Copy)", ImVec2(-FLT_MIN, 40))) {
-        std::cout << "[DEBUG] Force Recompiling Bank: " << bank->FileName << std::endl;
-
-        std::string originalPath = bank->AudioParser->FileName;
-        std::string debugPath = originalPath;
-
-        // Simple string replacement for extension
-        size_t dotPos = debugPath.find_last_of('.');
-        if (dotPos != std::string::npos) {
-            debugPath = debugPath.substr(0, dotPos) + "_copy.lut";
-        }
-        else {
-            debugPath += "_copy.lut";
-        }
-
-        bool success = bank->AudioParser->SaveBank(debugPath);
-
-        if (success) {
-            std::cout << "[DEBUG] Recompile Success! Saved to: " << debugPath << std::endl;
-        }
-        else {
-            std::cout << "[DEBUG] Recompile Failed." << std::endl;
-        }
     }
 }

@@ -12,6 +12,7 @@
 #include <memory>
 #include <filesystem>
 #include <cctype> // for toupper
+#include <cmath>
 
 static CLipSyncParser g_LipSyncParser;
 
@@ -250,62 +251,178 @@ inline std::string GetSymbol(uint8_t id, const std::vector<CLipSyncPhonemeRef>& 
     return "??";
 }
 
-inline void RenderLipSyncFrames(const CLipSyncData& d) {
+// Look up or Add a symbol to the dictionary
+inline uint8_t GetOrAddPhonemeID(const std::string& symbol, std::vector<CLipSyncPhonemeRef>& dict) {
+    // 1. Check exists
+    for (const auto& p : dict) {
+        if (p.Symbol == symbol) return p.ID;
+    }
+
+    // 2. Find next free ID (0-255)
+    std::set<uint8_t> used;
+    for (const auto& p : dict) used.insert(p.ID);
+
+    uint8_t nextID = 0;
+    while (used.count(nextID)) {
+        if (nextID == 255) break;
+        nextID++;
+    }
+
+    // 3. Add to Dict
+    CLipSyncPhonemeRef newRef;
+    newRef.ID = nextID;
+    newRef.Symbol = symbol;
+    dict.push_back(newRef);
+
+    return nextID;
+}
+
+static const std::vector<std::string> FABLE_PHONEMES = { "AH", "EE", "MM", "OH", "SZ" };
+
+inline void RenderLipSyncFrames(CLipSyncData& d) {
+    // Top Bar Actions
+    if (ImGui::Button("+ Add Frame End")) {
+        CLipSyncFrame newFrame;
+        d.Frames.push_back(newFrame);
+        // Recalc Duration
+        if (d.FPS > 0.0f) d.Duration = (float)d.Frames.size() / d.FPS;
+        d.FrameCount = (uint32_t)d.Frames.size();
+    }
+
     if (ImGui::BeginChild("FrameStream", ImVec2(0, 300), true)) {
         if (ImGui::BeginTable("FrameTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-            ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthFixed, 60);
-            ImGui::TableSetupColumn("Active Phonemes", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("Phonemes", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
 
+            int frameToDelete = -1;
+
             for (size_t i = 0; i < d.Frames.size(); i++) {
-                const auto& frame = d.Frames[i];
+                auto& frame = d.Frames[i];
+                ImGui::PushID((int)i);
                 ImGui::TableNextRow();
+
+                // Column 1: Frame Number + Delete
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextDisabled("%03zu", i);
-                ImGui::TableSetColumnIndex(1);
-                if (frame.Keys.empty()) {
-                    ImGui::TextDisabled("-");
+                ImGui::Text("%03zu", i);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("X")) {
+                    frameToDelete = (int)i;
                 }
-                else {
-                    for (const auto& key : frame.Keys) {
-                        std::string symbol = GetSymbol(key.ID, d.Dictionary);
-                        float intensity = key.WeightFloat;
-                        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 0.4f + (intensity * 0.6f)),
-                            "[%s : %3.0f%%]", symbol.c_str(), intensity * 100.0f);
-                        ImGui::SameLine();
+
+                // Column 2: Phonemes
+                ImGui::TableSetColumnIndex(1);
+
+                int keyToDelete = -1;
+                for (size_t k = 0; k < frame.Keys.size(); k++) {
+                    auto& key = frame.Keys[k];
+                    ImGui::PushID((int)k);
+
+                    std::string symbol = GetSymbol(key.ID, d.Dictionary);
+
+                    // Label
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "%s", symbol.c_str());
+                    ImGui::SameLine();
+
+                    // Slider
+                    float w = key.WeightFloat;
+                    ImGui::SetNextItemWidth(100);
+                    if (ImGui::SliderFloat("##w", &w, 0.0f, 1.0f, "%.2f")) {
+                        key.WeightFloat = w;
+                        key.WeightByte = (uint8_t)(w * 255.0f);
+                    }
+                    ImGui::SameLine();
+
+                    // Delete Key
+                    if (ImGui::SmallButton("x")) keyToDelete = (int)k;
+
+                    ImGui::SameLine();
+                    ImGui::Dummy(ImVec2(10, 0)); // Spacing
+                    ImGui::SameLine();
+
+                    ImGui::PopID();
+                }
+
+                // Delete Phoneme Logic
+                if (keyToDelete != -1) {
+                    frame.Keys.erase(frame.Keys.begin() + keyToDelete);
+                }
+
+                // Add Phoneme Button (Limit to 3)
+                if (frame.Keys.size() < 3) {
+                    if (ImGui::Button("+")) {
+                        ImGui::OpenPopup("AddPhonemePopup");
+                    }
+
+                    if (ImGui::BeginPopup("AddPhonemePopup")) {
+                        for (const auto& ph : FABLE_PHONEMES) {
+                            if (ImGui::Selectable(ph.c_str())) {
+                                uint8_t pid = GetOrAddPhonemeID(ph, d.Dictionary);
+                                CLipSyncFrameKey newKey;
+                                newKey.ID = pid;
+                                newKey.WeightFloat = 1.0f;
+                                newKey.WeightByte = 255;
+                                frame.Keys.push_back(newKey);
+                                ImGui::CloseCurrentPopup();
+                            }
+                        }
+                        ImGui::EndPopup();
                     }
                 }
+
+                ImGui::PopID();
             }
+
+            // Delete Frame Logic
+            if (frameToDelete != -1) {
+                d.Frames.erase(d.Frames.begin() + frameToDelete);
+                // Recalc Duration
+                if (d.FPS > 0.0f) d.Duration = (float)d.Frames.size() / d.FPS;
+                d.FrameCount = (uint32_t)d.Frames.size();
+            }
+
             ImGui::EndTable();
         }
     }
     ImGui::EndChild();
 }
 
-inline void DrawLipSyncProperties() {
+inline void DrawLipSyncProperties(LoadedBank* bank, std::function<void()> onSave, std::function<void()> onRecompile) {
     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "LipSync Bank Controls");
-    if (ImGui::Button("FORCE RECOMPILE dialogue.big")) {
-        // ...
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Test Add (ID 999999)")) {
-        AddLipSyncEntry("dialogue.lut", 999999, 2.5f);
-    }
     ImGui::Separator();
 
     if (!g_LipSyncParser.IsParsed && !g_LipSyncParser.Data.IsParsed) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to parse LipSync data.");
         return;
     }
-    const auto& d = g_LipSyncParser.Data;
+
+    // --- ACTIONS BAR ---
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+    if (ImGui::Button("Save Entry (Memory)", ImVec2(160, 30))) {
+        if (onSave) onSave();
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Recompile via Sidebar)");
+
+    ImGui::Separator();
+
+    auto& d = g_LipSyncParser.Data;
+
     if (ImGui::CollapsingHeader("Header Info", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::BeginTable("HeaderTable", 2, ImGuiTableFlags_Borders)) {
-            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Duration"); ImGui::TableSetColumnIndex(1); ImGui::TextColored(ImVec4(0, 1, 1, 1), "%.3f sec", d.Duration);
-            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Frames"); ImGui::TableSetColumnIndex(1); ImGui::Text("%u", d.FrameCount);
-            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("FPS"); ImGui::TableSetColumnIndex(1); ImGui::Text("%.2f", d.FPS);
+            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Duration");
+            ImGui::TableSetColumnIndex(1); ImGui::TextColored(ImVec4(0, 1, 1, 1), "%.3f sec", d.Duration);
+
+            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Frames");
+            ImGui::TableSetColumnIndex(1); ImGui::Text("%u", d.FrameCount);
+
             ImGui::EndTable();
         }
     }
+
     if (ImGui::CollapsingHeader("Animation Frames", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
         RenderLipSyncFrames(d);

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <algorithm>
 
 namespace LipSyncCompiler {
 
@@ -21,278 +22,250 @@ namespace LipSyncCompiler {
         out.write(s.c_str(), s.length() + 1);
     }
 
-    // --- HELPER: GET ENTRY DATA ---
     struct EntryWriteData {
+        uint32_t ID;
+        int32_t Type;
+        uint32_t CRC;
+        std::string Name;
         std::vector<uint8_t> Raw;
         std::vector<uint8_t> Info;
-        bool IsModified;
+        std::vector<std::string> Deps;
     };
 
-    // Helper to fetch data from the state or file
-    inline EntryWriteData GetEntryDataFromState(LipSyncState& state, int sbIdx, uint32_t id, uint32_t offset, uint32_t size, uint32_t infoOffset, uint32_t infoSize) {
-        EntryWriteData result;
-        result.IsModified = false;
-
-        // 1. Check Pending Adds (Modified/New Data)
-        if (state.PendingAdds.count(sbIdx) && state.PendingAdds[sbIdx].count(id)) {
-            const auto& added = state.PendingAdds[sbIdx][id];
-            result.Raw = added.Raw;
-            result.Info = added.Info;
-            result.IsModified = true;
-            return result;
-        }
-
-        // 2. Fallback: Read from Original File
-        if (result.Raw.empty() && size > 0) {
-            result.Raw.resize(size);
-            state.Stream->clear();
-            state.Stream->seekg(offset, std::ios::beg);
-            state.Stream->read((char*)result.Raw.data(), size);
-        }
-
-        if (result.Info.empty() && infoSize > 0) {
-            result.Info.resize(infoSize);
-            state.Stream->clear();
-            state.Stream->seekg(infoOffset, std::ios::beg);
-            state.Stream->read((char*)result.Info.data(), infoSize);
-        }
-
-        return result;
-    }
-
-    // --- MAIN COMPILER FUNCTION FOR STATE ---
     inline bool CompileLipSyncFromState(LipSyncState& state) {
-        std::cout << "[COMPILER] Starting Recompile of: " << state.FilePath << std::endl;
-
-        if (!state.Stream || !state.Stream->is_open()) {
-            std::cout << "[COMPILER] ERROR: Input stream not open." << std::endl;
-            return false;
-        }
+        if (!state.Stream || !state.Stream->is_open()) return false;
 
         std::string tempPath = state.FilePath + ".tmp";
         std::ofstream out(tempPath, std::ios::binary);
-        if (!out.is_open()) {
-            std::cout << "[COMPILER] ERROR: Could not open temp file: " << tempPath << std::endl;
-            return false;
-        }
+        if (!out.is_open()) return false;
 
-        // 1. HEADER
-        // FIX: Version is now 100 (0x64), not 1
+        // 1. HEADER PLACEHOLDER
         struct TempHeaderBIG { char m[4]; uint32_t v; uint32_t footOff; uint32_t footSz; };
-        TempHeaderBIG header = { {'B','I','G','B'}, 100, 0, 0 };
+        TempHeaderBIG header = { {'B','I','G','B'}, 2, 0, 0 };
         out.write((char*)&header, sizeof(header));
 
-        std::vector<std::vector<BankEntry>> finalSubBankEntries;
-        state.Stream->clear();
+        std::vector<uint32_t> entryTableOffsets;
+        std::vector<uint32_t> entryTableSizes;
+        std::vector<std::vector<EntryWriteData>> finalSubBankEntries;
 
-        // 2. WRITE DATA BLOBS
-        std::cout << "[COMPILER] Processing " << state.SubBanks.size() << " subbanks..." << std::endl;
+        // 2. PROCESS EACH SUB-BANK
+        for (int i = 0; i < (int)state.SubBanks.size(); i++) {
+            InternalBankInfo& info = state.SubBanks[i];
 
-        for (int sbIdx = 0; sbIdx < (int)state.SubBanks.size(); sbIdx++) {
-            const auto& info = state.SubBanks[sbIdx];
-            std::cout << "[COMPILER]   SubBank " << sbIdx << ": " << info.Name << " (" << info.EntryCount << " entries)" << std::endl;
+            // Map to store Final Entries for this sub-bank (ID -> Data)
+            std::map<uint32_t, EntryWriteData> mergedEntries;
 
-            std::vector<BankEntry> currentEntries;
-            uint32_t align = info.Align;
-            if (align < 1) align = 2048;
-
-            // Read original entries list
+            // A. READ EXISTING ENTRIES FROM DISK
+            state.Stream->clear();
             state.Stream->seekg(info.Offset, std::ios::beg);
-            uint32_t val = 0; state.Stream->read((char*)&val, 4);
-            if (val == 42) state.Stream->seekg(-4, std::ios::cur);
-            else if (val < 1000) state.Stream->seekg(val * 8, std::ios::cur);
+
+            // Skip stats header
+            uint32_t checkVal = 0; state.Stream->read((char*)&checkVal, 4);
+            if (checkVal == 42) state.Stream->seekg(-4, std::ios::cur);
+            else if (checkVal < 1000) state.Stream->seekg(checkVal * 8, std::ios::cur);
             else state.Stream->seekg(-4, std::ios::cur);
 
             for (uint32_t k = 0; k < info.EntryCount; k++) {
-                BankEntry e; uint32_t magic;
-                state.Stream->read((char*)&magic, 4); state.Stream->read((char*)&e.ID, 4);
-                state.Stream->read((char*)&e.Type, 4); state.Stream->read((char*)&e.Size, 4);
-                state.Stream->read((char*)&e.Offset, 4); state.Stream->read((char*)&e.CRC, 4);
+                EntryWriteData e;
+                uint32_t magicE;
+                state.Stream->read((char*)&magicE, 4);
+                state.Stream->read((char*)&e.ID, 4);
+                state.Stream->read((char*)&e.Type, 4);
 
-                if (magic == 42) {
-                    e.Name = ReadBankString(*state.Stream);
-                    state.Stream->seekg(4, std::ios::cur);
-                    uint32_t depC = 0; state.Stream->read((char*)&depC, 4);
-                    for (uint32_t d = 0; d < depC; d++) e.Dependencies.push_back(ReadBankString(*state.Stream));
-                }
-                state.Stream->read((char*)&e.InfoSize, 4);
-                e.SubheaderFileOffset = (uint32_t)state.Stream->tellg();
-                if (e.InfoSize > 0) state.Stream->seekg(e.InfoSize, std::ios::cur);
-                currentEntries.push_back(e);
+                uint32_t size, offset;
+                state.Stream->read((char*)&size, 4);
+                state.Stream->read((char*)&offset, 4);
+                state.Stream->read((char*)&e.CRC, 4);
+
+                if (magicE != 42) continue; // Skip garbage
+
+                // Read Metadata
+                e.Name = ReadBankString(*state.Stream);
+
+                // Read Dependencies
+                state.Stream->seekg(4, std::ios::cur); // unknown
+                uint32_t depCount = 0; state.Stream->read((char*)&depCount, 4);
+                for (uint32_t d = 0; d < depCount; d++) e.Deps.push_back(ReadBankString(*state.Stream));
+
+                // Read Info
+                uint32_t infoSize = 0; state.Stream->read((char*)&infoSize, 4);
+                std::streampos infoPos = state.Stream->tellg();
+
+                // --- LOAD RAW DATA ---
+                // Store file coordinates to read later (optimization) OR read now.
+                // For safety, let's read now (memory intensive but safer).
+                e.Raw.resize(size);
+                std::streampos retPos = state.Stream->tellg();
+
+                state.Stream->seekg(offset, std::ios::beg);
+                state.Stream->read((char*)e.Raw.data(), size);
+
+                state.Stream->seekg(infoPos, std::ios::beg);
+                e.Info.resize(infoSize);
+                state.Stream->read((char*)e.Info.data(), infoSize);
+
+                mergedEntries[e.ID] = e;
             }
 
-            // Write Data & Apply Pending Changes
-            std::vector<BankEntry> writtenEntries;
+            // B. APPLY PENDING ADDS/MODIFICATIONS
+            // This overwrites existing IDs and adds new ones
+            if (state.PendingAdds.count(i)) {
+                for (const auto& [id, addData] : state.PendingAdds[i]) {
+                    EntryWriteData newItem;
+                    newItem.ID = id;
+                    newItem.Type = addData.Type;
+                    // Name construction: PREFIX_ID
+                    newItem.Name = addData.NamePrefix + "_" + std::to_string(id);
+                    // CRC needs to be calculated? The game might ignore it or we can calc it.
+                    // For now use 0 or calc simple hash.
+                    newItem.CRC = 0;
+                    newItem.Raw = addData.Raw;
+                    newItem.Info = addData.Info;
 
-            // Process Existing
-            for (const auto& e : currentEntries) {
-                if (state.PendingDeletes[sbIdx].count(e.ID)) {
-                    std::cout << "[COMPILER]     Skipping Deleted ID: " << e.ID << std::endl;
-                    continue;
-                }
-
-                // Alignment
-                uint32_t currentPos = (uint32_t)out.tellp();
-                if (align > 1 && (currentPos % align) != 0) {
-                    uint32_t padBytes = align - (currentPos % align);
-                    std::vector<char> zeros(padBytes, 0);
-                    out.write(zeros.data(), padBytes);
-                }
-
-                BankEntry finalE = e;
-                finalE.Offset = (uint32_t)out.tellp();
-
-                EntryWriteData data = GetEntryDataFromState(state, sbIdx, e.ID, e.Offset, e.Size, e.SubheaderFileOffset, e.InfoSize);
-
-                if (!data.Raw.empty()) out.write((char*)data.Raw.data(), data.Raw.size());
-
-                finalE.Size = (uint32_t)data.Raw.size();
-                finalE.InfoSize = (uint32_t)data.Info.size();
-                writtenEntries.push_back(finalE);
-            }
-
-            // Process New Adds
-            if (state.PendingAdds.count(sbIdx)) {
-                for (const auto& [id, data] : state.PendingAdds[sbIdx]) {
-                    // Check if we already wrote it (overwrite case)
-                    bool alreadyWritten = false;
-                    for (const auto& w : writtenEntries) if (w.ID == id) alreadyWritten = true;
-
-                    if (!alreadyWritten) {
-                        std::cout << "[COMPILER]     Writing NEW ID: " << id << std::endl;
-
-                        BankEntry newE;
-                        newE.ID = id;
-                        newE.Type = data.Type;
-
-                        // FIX: Standard naming [BankName]_[ID]
-                        newE.Name = data.NamePrefix + "_" + std::to_string(id);
-
-                        // FIX: Hardcoded Speaker
-                        newE.Dependencies.push_back("SPEAKER_FEMALE1");
-
-                        // Alignment
-                        uint32_t currentPos = (uint32_t)out.tellp();
-                        if (align > 1 && (currentPos % align) != 0) {
-                            uint32_t padBytes = align - (currentPos % align);
-                            std::vector<char> zeros(padBytes, 0);
-                            out.write(zeros.data(), padBytes);
-                        }
-
-                        newE.Offset = (uint32_t)out.tellp();
-                        out.write((char*)data.Raw.data(), data.Raw.size());
-                        newE.Size = (uint32_t)data.Raw.size();
-                        newE.InfoSize = (uint32_t)data.Info.size();
-                        writtenEntries.push_back(newE);
+                    // Dependencies? Usually none for raw lipsync unless linked.
+                    // We preserve deps if it was an edit, otherwise empty.
+                    if (mergedEntries.count(id)) {
+                        newItem.Deps = mergedEntries[id].Deps;
                     }
+
+                    mergedEntries[id] = newItem; // Insert or Overwrite
                 }
             }
-            finalSubBankEntries.push_back(writtenEntries);
+
+            // C. APPLY PENDING DELETES
+            if (state.PendingDeletes.count(i)) {
+                for (uint32_t delID : state.PendingDeletes[i]) {
+                    mergedEntries.erase(delID);
+                }
+            }
+
+            // D. WRITE DATA BLOBS
+            std::vector<EntryWriteData> sortedList;
+            for (auto& pair : mergedEntries) sortedList.push_back(pair.second);
+
+            // Write Raw Blobs immediately to linear space
+            for (auto& entry : sortedList) {
+                // Align 2048
+                uint32_t pos = (uint32_t)out.tellp();
+                uint32_t pad = (pos % 2048 != 0) ? (2048 - (pos % 2048)) : 0;
+                if (pad > 0) { std::vector<char> z(pad, 0); out.write(z.data(), pad); }
+
+                uint32_t writeOffset = (uint32_t)out.tellp();
+                out.write((char*)entry.Raw.data(), entry.Raw.size());
+            }
+
+            finalSubBankEntries.push_back(sortedList);
         }
 
-        // 3. WRITE ENTRY TABLES
-        std::cout << "[COMPILER] Writing Entry Tables..." << std::endl;
-        std::vector<uint32_t> entryTableOffsets;
-        std::vector<uint32_t> entryTableSizes;
+        // Reset OUT to after header
+        out.seekp(sizeof(TempHeaderBIG), std::ios::beg);
 
-        for (int sbIdx = 0; sbIdx < (int)finalSubBankEntries.size(); sbIdx++) {
-            // Align Table
-            uint32_t align = state.SubBanks[sbIdx].Align;
-            if (align < 1) align = 2048;
+        std::vector<std::vector<uint32_t>> savedOffsets; // [BankIdx][EntryIdx]
 
-            uint32_t currentPos = (uint32_t)out.tellp();
-            if (align > 1 && (currentPos % align) != 0) {
-                uint32_t padBytes = align - (currentPos % align);
-                std::vector<char> zeros(padBytes, 0);
-                out.write(zeros.data(), padBytes);
+        for (int i = 0; i < (int)finalSubBankEntries.size(); i++) {
+            std::vector<uint32_t> bankOffsets;
+            for (auto& entry : finalSubBankEntries[i]) {
+                uint32_t pos = (uint32_t)out.tellp();
+                uint32_t pad = (pos % 2048 != 0) ? (2048 - (pos % 2048)) : 0;
+                if (pad > 0) { std::vector<char> z(pad, 0); out.write(z.data(), pad); }
+
+                uint32_t finalOffset = (uint32_t)out.tellp();
+                bankOffsets.push_back(finalOffset);
+
+                out.write((char*)entry.Raw.data(), entry.Raw.size());
             }
-
-            uint32_t startPos = (uint32_t)out.tellp();
-            entryTableOffsets.push_back(startPos);
-
-            const auto& entries = finalSubBankEntries[sbIdx];
-
-            // Map
-            std::map<uint32_t, uint32_t> typeCounts;
-            for (const auto& e : entries) typeCounts[e.Type]++;
-            uint32_t mapSize = (uint32_t)typeCounts.size();
-            out.write((char*)&mapSize, 4);
-            for (const auto& [type, count] : typeCounts) {
-                out.write((char*)&type, 4);
-                out.write((char*)&count, 4);
-            }
-
-            // Entries
-            for (const auto& e : entries) {
-                uint32_t magic = 42;
-                out.write((char*)&magic, 4); out.write((char*)&e.ID, 4);
-                out.write((char*)&e.Type, 4); out.write((char*)&e.Size, 4);
-                out.write((char*)&e.Offset, 4); out.write((char*)&e.CRC, 4);
-                WriteBankString(out, e.Name);
-                uint32_t pad = 0; out.write((char*)&pad, 4);
-                uint32_t depCount = (uint32_t)e.Dependencies.size();
-                out.write((char*)&depCount, 4);
-                for (const auto& s : e.Dependencies) WriteBankString(out, s);
-                out.write((char*)&e.InfoSize, 4);
-
-                if (e.InfoSize > 0) {
-                    bool infoWritten = false;
-                    if (state.PendingAdds.count(sbIdx) && state.PendingAdds[sbIdx].count(e.ID)) {
-                        const auto& info = state.PendingAdds[sbIdx][e.ID].Info;
-                        out.write((char*)info.data(), info.size());
-                        infoWritten = true;
-                    }
-                    if (!infoWritten) {
-                        std::vector<uint8_t> infoBuf(e.InfoSize);
-                        state.Stream->clear();
-                        state.Stream->seekg(e.SubheaderFileOffset, std::ios::beg);
-                        state.Stream->read((char*)infoBuf.data(), e.InfoSize);
-                        out.write((char*)infoBuf.data(), e.InfoSize);
-                    }
-                }
-            }
-
-            uint32_t endPos = (uint32_t)out.tellp();
-            uint32_t tableSize = endPos - startPos;
-            entryTableSizes.push_back(tableSize);
-            std::cout << "[COMPILER]   Table " << sbIdx << " written. Size: " << tableSize << " Offset: " << startPos << std::endl;
+            savedOffsets.push_back(bankOffsets);
         }
 
-        // 4. FOOTER
-        std::cout << "[COMPILER] Writing Footer..." << std::endl;
+        // 4. WRITE FOOTER
         header.footOff = (uint32_t)out.tellp();
         uint32_t bankCount = (uint32_t)state.SubBanks.size();
         out.write((char*)&bankCount, 4);
 
         for (int i = 0; i < (int)state.SubBanks.size(); i++) {
             InternalBankInfo info = state.SubBanks[i];
-            info.EntryCount = (uint32_t)finalSubBankEntries[i].size();
-            info.Offset = entryTableOffsets[i];
-            info.Size = entryTableSizes[i];
-
-            WriteNullTermString(out, info.Name);
-            out.write((char*)&info.Version, 4); out.write((char*)&info.EntryCount, 4);
-            out.write((char*)&info.Offset, 4); out.write((char*)&info.Size, 4); out.write((char*)&info.Align, 4);
         }
 
-        // 5. FINALIZE
-        std::streampos endPos = out.tellp();
-        header.footSz = (uint32_t)(endPos - (std::streampos)header.footOff);
+        std::vector<uint32_t> tableOffsets;
+        std::vector<uint32_t> tableSizes;
+
+        for (int i = 0; i < (int)finalSubBankEntries.size(); i++) {
+            uint32_t tStart = (uint32_t)out.tellp();
+
+            // Write Stats (dummy)
+            uint32_t stats = 0; out.write((char*)&stats, 4);
+
+            auto& entries = finalSubBankEntries[i];
+            auto& offsets = savedOffsets[i];
+
+            for (size_t k = 0; k < entries.size(); k++) {
+                EntryWriteData& e = entries[k];
+                uint32_t magic = 42;
+                out.write((char*)&magic, 4);
+                out.write((char*)&e.ID, 4);
+                out.write((char*)&e.Type, 4);
+
+                uint32_t sz = (uint32_t)e.Raw.size();
+                out.write((char*)&sz, 4);
+                out.write((char*)&offsets[k], 4); // The calculated data offset
+                out.write((char*)&e.CRC, 4);
+
+                WriteBankString(out, e.Name);
+
+                uint32_t unk = 0; out.write((char*)&unk, 4);
+
+                uint32_t depCount = (uint32_t)e.Deps.size();
+                out.write((char*)&depCount, 4);
+                for (const auto& d : e.Deps) WriteBankString(out, d);
+
+                uint32_t infoSz = (uint32_t)e.Info.size();
+                out.write((char*)&infoSz, 4);
+                out.write((char*)e.Info.data(), infoSz);
+            }
+
+            uint32_t tEnd = (uint32_t)out.tellp();
+            tableOffsets.push_back(tStart);
+            tableSizes.push_back(tEnd - tStart);
+        }
+
+        // NOW write the Bank List (The Footer proper)
+        uint32_t realFootOff = (uint32_t)out.tellp();
+        header.footOff = realFootOff;
+
+        out.write((char*)&bankCount, 4);
+
+        for (int i = 0; i < (int)state.SubBanks.size(); i++) {
+            InternalBankInfo info = state.SubBanks[i];
+            info.EntryCount = (uint32_t)finalSubBankEntries[i].size();
+            info.Offset = tableOffsets[i];
+            info.Size = tableSizes[i]; // Size of the table, not the data
+
+            WriteNullTermString(out, info.Name);
+            out.write((char*)&info.Version, 4);
+            out.write((char*)&info.EntryCount, 4);
+            out.write((char*)&info.Offset, 4);
+            out.write((char*)&info.Size, 4);
+            out.write((char*)&info.Align, 4);
+        }
+
+        std::streampos finalPos = out.tellp();
+        header.footSz = (uint32_t)(finalPos - (std::streampos)realFootOff);
+
+        // Update Header
         out.seekp(0);
         out.write((char*)&header, sizeof(header));
         out.close();
+
+        // CLOSE INPUT
         state.Stream->close();
 
-        std::cout << "[COMPILER] Replacing file..." << std::endl;
+        // RENAME
         try {
             std::filesystem::remove(state.FilePath);
             std::filesystem::rename(tempPath, state.FilePath);
-            std::cout << "[COMPILER] Success!" << std::endl;
-            state.Stream = std::make_unique<std::fstream>(state.FilePath, std::ios::binary | std::ios::in);
             return true;
         }
-        catch (const std::filesystem::filesystem_error& e) {
-            std::cout << "[COMPILER] FileSystem Error: " << e.what() << std::endl;
+        catch (...) {
             return false;
         }
     }

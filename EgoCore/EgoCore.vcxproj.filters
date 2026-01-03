@@ -129,7 +129,7 @@
     <ClInclude Include="Banks\BinaryParser.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
-    <ClInclude Include="Banks\BankLogic.h">
+    <ClInclude Include="Banks\BankLoader.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
     <ClInclude Include="Audio\AudioBackend.h">
@@ -170,6 +170,12 @@
     </ClInclude>
     <ClInclude Include="Audio\AudioHelpers.h">
       <Filter>Source Files\Audio</Filter>
+    </ClInclude>
+    <ClInclude Include="BankTabUI.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="BankEditor.h">
+      <Filter>Source Files\Banks</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

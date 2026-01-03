@@ -3,6 +3,7 @@
 #include "TextBackend.h" 
 #include "FileDialogs.h"
 #include "LipSyncCompiler.h"
+#include <functional> // Added for std::function
 
 static bool g_ShowAddGroupItemPopup = false;
 static char g_GroupSearchBuf[128] = "";
@@ -18,27 +19,24 @@ inline bool InputString(const char* label, std::string& str, float width = 0.0f)
     return changed;
 }
 
-// Helper to ensure extension is .lug (Vanilla convention)
-// This handles the user's request to swap .lut -> .lug dynamically
 inline std::string EnforceLugExtension(const std::string& bankName) {
     std::string fixed = bankName;
     size_t lastDot = fixed.find_last_of('.');
     if (lastDot != std::string::npos) {
         std::string ext = fixed.substr(lastDot);
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        // If sound.def defines it as .lut or .bin, we force it to .lug for the text entry
         if (ext == ".lut" || ext == ".bin") {
             fixed = fixed.substr(0, lastDot) + ".lug";
         }
     }
     else if (!fixed.empty()) {
-        // If no extension is provided, append .lug
         fixed += ".lug";
     }
     return fixed;
 }
 
-inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
+// Updated Signature to include onJump callback
+inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, std::function<void(std::string, uint32_t, std::string)> onJump) {
     if (!g_TextParser.IsParsed) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to parse text entry.");
         return;
@@ -53,7 +51,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         if (g_TextParser.IsParsed) g_OriginalIdentifier = g_TextParser.TextData.Identifier;
     }
 
-    // Check for modifications
     bool isAudioModified = false;
     if (g_TextParser.IsParsed && !g_TextParser.IsGroup && !g_TextParser.IsNarratorList) {
         if (!g_TextParser.TextData.SpeechBank.empty()) {
@@ -65,21 +62,17 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         }
     }
 
-    // Check for LipSync modifications
     bool isLipSyncModified = !g_LipSyncState.PendingAdds.empty() || !g_LipSyncState.PendingDeletes.empty();
 
     if (g_IsTextDirty || isAudioModified || isLipSyncModified) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
 
-        // Unified Save Button & Shortcut Logic
         bool triggered = ImGui::Button("SAVE ENTRY CHANGES (Ctrl+S)", ImVec2(-FLT_MIN, 40));
         if ((ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) || triggered) {
             if (onSave) {
-                // 1. FIX: Enforce .lug extension for the Payload
                 g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
 
-                // 2. Update Definitions
                 if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
                     if (!g_TextParser.TextData.SpeechBank.empty()) {
                         UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
@@ -90,7 +83,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                     g_OriginalIdentifier = g_TextParser.TextData.Identifier;
                 }
 
-                // 3. FIX: SYNC DEPENDENCIES
                 if (bank && bank->SelectedEntryIndex >= 0) {
                     auto& entry = bank->Entries[bank->SelectedEntryIndex];
                     std::string currentBank = g_TextParser.TextData.SpeechBank;
@@ -108,13 +100,10 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                     }
                 }
 
-                // 4. Save
                 onSave();
 
-                // 5. Save Audio
                 if (isAudioModified) {
                     std::string key = g_TextParser.TextData.SpeechBank;
-                    // Map back to .lut for file saving
                     size_t dot = key.find_last_of('.');
                     if (dot != std::string::npos) key = key.substr(0, dot) + ".lut";
 
@@ -146,6 +135,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
     }
 
     if (g_TextParser.IsGroup) {
+        // ... (Group logic same as before) ...
         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Group Entry (%zu Items)", g_TextParser.GroupData.Items.size());
         ImGui::Separator();
 
@@ -186,6 +176,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         }
 
         if (ImGui::BeginPopupModal("Add Group Item", &g_ShowAddGroupItemPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+            // ... (Popup logic same as before) ...
             ImGui::Text("Search for an entry to add:");
             ImGui::InputText("##search", g_GroupSearchBuf, 128);
             ImGui::Separator();
@@ -228,9 +219,9 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
         ImGui::Spacing(); ImGui::Separator();
     }
     else if (g_TextParser.IsNarratorList) {
+        // ... (Narrator logic same as before) ...
         ImGui::Text("Narrator List");
         ImGui::Separator();
-        // ... Narrator code omitted for brevity (no changes) ...
         if (ImGui::BeginTable("NarratorTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
             ImGui::TableSetupColumn("Index", ImGuiTableColumnFlags_WidthFixed, 50);
             ImGui::TableSetupColumn("String ID", ImGuiTableColumnFlags_WidthStretch);
@@ -269,17 +260,13 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 if (ImGui::BeginCombo("##soundbank", e.SpeechBank.c_str())) {
                     for (const auto& sb : g_AvailableSoundBanks) {
-                        // --- FIX START: DYNAMICALLY REPLACE EXTENSION ---
-                        // Sound.def may provide .lut, but we need to display and save .lug
                         std::string cleanName = EnforceLugExtension(sb);
-
                         bool isSelected = (e.SpeechBank == cleanName);
                         if (ImGui::Selectable(cleanName.c_str(), isSelected)) {
                             e.SpeechBank = cleanName;
                             g_IsTextDirty = true;
                         }
                         if (isSelected) ImGui::SetItemDefaultFocus();
-                        // --- FIX END ---
                     }
                     ImGui::EndCombo();
                 }
@@ -335,7 +322,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
             int32_t soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
 
             if (soundID != -1) {
-                // Fix: Try to load .lut if SpeechBank says .lug
                 std::string loadPath = e.SpeechBank;
                 if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
 
@@ -354,6 +340,22 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                         if (audioBank->ModifiedCache.count(audioIndex)) {
                             ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[PENDING SAVE]");
                         }
+
+                        // --- NEW BUTTONS START ---
+                        if (ImGui::Button("Go to Phonemes (Dialogue)", ImVec2(200, 0))) {
+                            if (onJump) onJump("dialogue.big", (uint32_t)soundID, e.SpeechBank);
+                        }
+
+                        if (ImGui::Button("Go to Sample (Audio)", ImVec2(200, 0))) {
+                            std::string lut = e.SpeechBank;
+                            if (lut.find(".lug") != std::string::npos) lut = lut.substr(0, lut.find(".lug")) + ".lut";
+                            else if (lut.find(".") == std::string::npos) lut += ".lut";
+
+                            if (onJump) onJump(lut, (uint32_t)soundID, ""); // No sub-bank hint needed for .lut
+                        }
+                        // --- NEW BUTTONS END ---
+
+                        ImGui::Spacing();
 
                         auto& player = audioBank->Player;
                         float currentT = player.GetCurrentTime();
@@ -406,27 +408,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave) {
                 else {
                     ImGui::TextDisabled("Audio bank not found on disk (.lut missing).");
                 }
-
-                ImGui::Separator();
-                ImGui::Text("LipSync Data:");
-                static std::unique_ptr<CLipSyncData> cachedLipSync = nullptr;
-                static int32_t lastCachedID = -1;
-
-                if (lastCachedID != soundID) {
-                    cachedLipSync = FetchLipSyncData(soundID, e.SpeechBank);
-                    lastCachedID = soundID;
-                }
-
-                if (cachedLipSync && cachedLipSync->IsParsed) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0, 1, 1, 1), "Found (%.2fs)", cachedLipSync->Duration);
-                    RenderLipSyncFrames(*cachedLipSync);
-                }
-                else {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("Not found or failed to load (dialogue.big)");
-                }
-
             }
             else {
                 ImGui::TextDisabled("No match for '%s' in %s", e.Identifier.c_str(), GetHeaderName(e.SpeechBank).c_str());

@@ -60,38 +60,24 @@ public:
         Stream.open(path, std::ios::binary | std::ios::in);
         if (!Stream.is_open()) return false;
 
-        // FIX 1: Check Magic Signature (Critical for offset alignment)
+        // Check Magic Signature
         char magic[8];
         Stream.read(magic, 8);
-        if (memcmp(magic, "LiOnHeAd", 8) != 0) {
-            // If signature missing, it might be a corrupted save or different format.
-            // For now, we fail to avoid reading garbage.
-            return false;
-        }
+        if (memcmp(magic, "LiOnHeAd", 8) != 0) return false;
 
-        // 1. Read CompData Segment Header
-        // Now we are correctly at Offset 8
         Stream.read((char*)&CompDataHeader, sizeof(LHFileSegmentHeader));
-
-        // Audio Data starts immediately after this header
         AudioBlobStart = (uint32_t)Stream.tellg();
 
-        // Safety Check: PayloadSize shouldn't be larger than file
         Stream.seekg(0, std::ios::end);
         size_t fileSize = (size_t)Stream.tellg();
         if (AudioBlobStart + CompDataHeader.PayloadSize > fileSize) return false;
 
-        // 2. Jump to Lookup Table Segment
         uint32_t tableOffset = AudioBlobStart + CompDataHeader.PayloadSize;
         Stream.seekg(tableOffset, std::ios::beg);
 
-        // 3. Read Lookup Table Header
         Stream.read((char*)&TableSegmentHeader, sizeof(LHFileSegmentHeader));
-
-        // 4. Read Lookup Table Content
         Stream.read((char*)&TableContent, sizeof(LHAudioLookupContent));
 
-        // FIX 2: Sanity Check NumEntries to prevent infinite loops/alloc crashes
         if (TableContent.NumEntries > 100000) return false;
 
         Entries.clear();
@@ -105,7 +91,6 @@ public:
             if (entry.SoundID > InitialMaxID) InitialMaxID = entry.SoundID;
         }
 
-        // 5. Read Footer
         std::streampos currentPos = Stream.tellg();
         Stream.seekg(0, std::ios::end);
         size_t footerSize = (size_t)(Stream.tellg() - currentPos);
@@ -131,14 +116,14 @@ public:
         if (ModifiedCache.count(id)) ModifiedCache.erase(id);
     }
 
-    // --- STRATEGY: COPY & PATCH ---
+    // --- UPDATED: COPY & PATCH WITH CORRECT ID LOGIC ---
     bool CloneEntry(int sourceIndex) {
         if (sourceIndex < 0 || sourceIndex >= (int)Entries.size()) return false;
 
-        // 1. Generate New ID
+        // 1. Generate New ID (Matches Add Logic: Max + 1)
         uint32_t maxID = 0;
         for (const auto& e : Entries) if (e.SoundID > maxID) maxID = e.SoundID;
-        uint32_t newID = (maxID >= 20000) ? maxID + 1 : 20000;
+        uint32_t newID = (maxID > 0) ? maxID + 1 : 20000;
 
         // 2. Get Source Blob
         std::vector<uint8_t> blob = GetRawBlob(sourceIndex);
@@ -158,7 +143,6 @@ public:
         return true;
     }
 
-    // --- IMPORT EXISTING ENTRY ---
     bool ImportWav(int index, const std::string& wavPath) {
         if (index < 0 || index >= (int)Entries.size()) return false;
 
@@ -170,7 +154,6 @@ public:
         return true;
     }
 
-    // --- ADD NEW ENTRY ---
     bool AddEntry(uint32_t newID, const std::string& wavPath) {
         std::vector<uint8_t> finalBlob = CreateAudioBlob(newID, wavPath);
         if (finalBlob.empty()) return false;
@@ -178,15 +161,13 @@ public:
         LookupEntry newEntry;
         newEntry.SoundID = newID;
         newEntry.Length = (uint32_t)finalBlob.size();
-        newEntry.Offset = 0; // Calculated on Save
+        newEntry.Offset = 0;
         Entries.push_back(newEntry);
 
         ModifiedCache[newID] = finalBlob;
         return true;
     }
 
-    // --- RESTORED: GetWavDuration ---
-    // Required by TextProperties.h to calculate LipSync duration
     static float GetWavDuration(const std::string& wavPath) {
         std::ifstream f(wavPath, std::ios::binary);
         if (!f.is_open()) return 0.0f;
@@ -197,12 +178,6 @@ public:
         std::vector<uint8_t> h(44);
         f.read((char*)h.data(), 44);
         if (memcmp(&h[0], "RIFF", 4) != 0) return 0.0f;
-
-        // Offset 24 is Sample Rate (uint32)
-        // Offset 28 is ByteRate (uint32)
-        // Offset 34 is BitsPerSample (uint16)
-        // Duration = (FileSize - 44) / ByteRate
-        // BUT safer: (FileSize - 44) / (SampleRate * Channels * Bits/8)
 
         uint32_t byteRate = *(uint32_t*)&h[28];
         if (byteRate == 0) return 0.0f;
@@ -215,27 +190,19 @@ public:
         std::ofstream out(target, std::ios::binary);
         if (!out.is_open()) return false;
 
-        // FIX 3: Write Magic Signature First!
         out.write("LiOnHeAd", 8);
-
-        // 1. Write CompData Header
         out.write((char*)&CompDataHeader, sizeof(CompDataHeader));
 
-        // Sort entries by ID
         std::sort(Entries.begin(), Entries.end(),
             [](const LookupEntry& a, const LookupEntry& b) { return a.SoundID < b.SoundID; });
 
         std::vector<LookupEntry> finalEntries;
         uint32_t currentOffset = 0;
 
-        // 2. Write Audio Blobs
         for (int i = 0; i < (int)Entries.size(); i++) {
-            // New entries get DVD sector alignment (2048) for safety.
             uint32_t requiredAlign = 4;
             if (Entries[i].SoundID > InitialMaxID) requiredAlign = 2048;
 
-            // Padding calculation
-            // Note: tellp() includes the 8-byte magic + 36-byte header + previous data
             uint32_t currentAbsPos = (uint32_t)out.tellp();
             uint32_t pad = 0;
             if (currentAbsPos % requiredAlign != 0) {
@@ -247,10 +214,7 @@ public:
                 currentOffset += pad;
             }
 
-            // Fetch Data
             std::vector<uint8_t> data = GetRawBlob(i);
-
-            // Safety: Ensure ID in blob matches Entry ID
             if (data.size() >= 4) {
                 memcpy(data.data(), &Entries[i].SoundID, 4);
             }
@@ -258,24 +222,20 @@ public:
             out.write((char*)data.data(), data.size());
             uint32_t sizeWritten = (uint32_t)data.size();
 
-            // Record Entry
             LookupEntry e = Entries[i];
-            e.Offset = currentOffset; // Offset is relative to Payload Start (after CompData header)
+            e.Offset = currentOffset;
             e.Length = sizeWritten;
             finalEntries.push_back(e);
 
             currentOffset += sizeWritten;
         }
 
-        // 3. Update CompData Header Size
         CompDataHeader.PayloadSize = currentOffset;
 
-        // Seek back to write header. Offset 8 (after Magic)!
         out.seekp(8, std::ios::beg);
         out.write((char*)&CompDataHeader, sizeof(CompDataHeader));
         out.seekp(0, std::ios::end);
 
-        // 4. Write Lookup Table Header
         uint32_t pos = (uint32_t)out.tellp();
         uint32_t tablePad = (pos % 4 != 0) ? (4 - (pos % 4)) : 0;
         if (tablePad > 0) { const char z[4] = { 0 }; out.write(z, tablePad); }
@@ -284,14 +244,11 @@ public:
         TableSegmentHeader.PayloadSize = sizeof(LHAudioLookupContent) + (TableContent.NumEntries * sizeof(LookupEntry));
 
         out.write((char*)&TableSegmentHeader, sizeof(TableSegmentHeader));
-
-        // 5. Write Lookup Table Content
         out.write((char*)&TableContent, sizeof(TableContent));
         for (const auto& e : finalEntries) {
             out.write((char*)&e, sizeof(LookupEntry));
         }
 
-        // 6. Write Footer
         if (!FooterData.empty()) {
             out.write((char*)FooterData.data(), FooterData.size());
         }
@@ -321,7 +278,6 @@ public:
     }
 
 private:
-    // Helper to get raw data from disk or cache
     std::vector<uint8_t> GetRawBlob(int index) {
         if (index < 0 || index >= (int)Entries.size()) return {};
         uint32_t id = Entries[index].SoundID;
@@ -340,7 +296,6 @@ private:
         return buf;
     }
 
-    // Helper to construct the 36-byte header + RIFF from a WAV file
     std::vector<uint8_t> CreateAudioBlob(uint32_t id, const std::string& wavPath) {
         std::ifstream f(wavPath, std::ios::binary);
         if (!f.is_open()) return {};
@@ -382,7 +337,6 @@ private:
 
         std::vector<uint8_t> adpcm = XboxAdpcmEncoder::Encode(pcm16);
 
-        // 2. Build RIFF Chunk
         uint32_t riffPayloadSize = 36 + 4 + (uint32_t)adpcm.size();
         std::vector<uint8_t> riff;
         riff.reserve(riffPayloadSize + 8);
@@ -396,32 +350,22 @@ private:
         str("data"); u32((uint32_t)adpcm.size());
         riff.insert(riff.end(), adpcm.begin(), adpcm.end());
 
-        // 3. Build Entry Header (36 Bytes)
         std::vector<uint8_t> header;
         header.reserve(36);
 
         auto h_u32 = [&](uint32_t v) { header.insert(header.end(), (uint8_t*)&v, (uint8_t*)&v + 4); };
         auto h_u16 = [&](uint16_t v) { header.insert(header.end(), (uint8_t*)&v, (uint8_t*)&v + 2); };
 
-        h_u32(id);                  // [0x00] ID
-        h_u16(0x0001);              // [0x04] Magic
-        h_u16((uint16_t)rate);      // [0x06] Rate
+        h_u32(id);
+        h_u16(0x0001);
+        h_u16((uint16_t)rate);
 
-        // [0x08] Buffer Size
         if (adpcm.size() < 0x2000) h_u16((uint16_t)adpcm.size());
         else h_u16(0x9C40);
 
-        h_u16(0x0001);              // [0x0A] Buffer Magic
-        h_u32(0x01010000);          // [0x0C] Pattern 1
-        h_u16(0x5806);              // [0x10] Pattern 2
-        h_u32(0x00000064);          // [0x12] Volume
-        h_u32(0x00003FC0);          // [0x16] MinDist
-        h_u16(0x4190);              // [0x1A] Magic Flag
-        h_u16((uint16_t)TableContent.Priority); // [0x1C] Priority
-        h_u16(0x0000);              // [0x1E] Padding
-        h_u32(0xFFFFFFFF);          // [0x20] Terminator
+        h_u16(0x0001); h_u32(0x01010000); h_u16(0x5806); h_u32(0x00000064); h_u32(0x00003FC0); h_u16(0x4190);
+        h_u16((uint16_t)TableContent.Priority); h_u16(0x0000); h_u32(0xFFFFFFFF);
 
-        // Combine
         std::vector<uint8_t> finalBlob;
         finalBlob.reserve(header.size() + riff.size());
         finalBlob.insert(finalBlob.end(), header.begin(), header.end());
