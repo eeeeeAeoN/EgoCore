@@ -1,14 +1,19 @@
 #pragma once
 #include "imgui.h"
 #include "TextBackend.h" 
+// #include "BankEditor.h" <--- REMOVED TO PREVENT CIRCULAR DEPENDENCY
 #include "FileDialogs.h"
 #include "LipSyncCompiler.h"
-#include <functional> // Added for std::function
+#include <functional> 
 
 static bool g_ShowAddGroupItemPopup = false;
 static char g_GroupSearchBuf[128] = "";
 
 static std::string g_OriginalIdentifier = "";
+
+// --- FORWARD DECLARATION ---
+// This tells the compiler the function exists elsewhere (in BankEditor.h), so we can call it here.
+void DeleteLinkedMedia(const std::string& speechBankName, const std::string& identifier);
 
 inline bool InputString(const char* label, std::string& str, float width = 0.0f) {
     static char buffer[1024];
@@ -135,7 +140,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
     }
 
     if (g_TextParser.IsGroup) {
-        // ... (Group logic same as before) ...
+        // ... (Group Logic) ...
         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Group Entry (%zu Items)", g_TextParser.GroupData.Items.size());
         ImGui::Separator();
 
@@ -176,7 +181,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         }
 
         if (ImGui::BeginPopupModal("Add Group Item", &g_ShowAddGroupItemPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-            // ... (Popup logic same as before) ...
             ImGui::Text("Search for an entry to add:");
             ImGui::InputText("##search", g_GroupSearchBuf, 128);
             ImGui::Separator();
@@ -219,7 +223,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         ImGui::Spacing(); ImGui::Separator();
     }
     else if (g_TextParser.IsNarratorList) {
-        // ... (Narrator logic same as before) ...
         ImGui::Text("Narrator List");
         ImGui::Separator();
         if (ImGui::BeginTable("NarratorTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
@@ -341,7 +344,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                             ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[PENDING SAVE]");
                         }
 
-                        // --- NEW BUTTONS START ---
+                        // --- BUTTONS ---
                         if (ImGui::Button("Go to Phonemes (Dialogue)", ImVec2(200, 0))) {
                             if (onJump) onJump("dialogue.big", (uint32_t)soundID, e.SpeechBank);
                         }
@@ -350,11 +353,8 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                             std::string lut = e.SpeechBank;
                             if (lut.find(".lug") != std::string::npos) lut = lut.substr(0, lut.find(".lug")) + ".lut";
                             else if (lut.find(".") == std::string::npos) lut += ".lut";
-
-                            if (onJump) onJump(lut, (uint32_t)soundID, ""); // No sub-bank hint needed for .lut
+                            if (onJump) onJump(lut, (uint32_t)soundID, "");
                         }
-                        // --- NEW BUTTONS END ---
-
                         ImGui::Spacing();
 
                         auto& player = audioBank->Player;
@@ -363,9 +363,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                         float progress = player.GetProgress();
 
                         ImGui::PushItemWidth(300);
-                        if (ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "")) {
-                            player.Seek(progress);
-                        }
+                        if (ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "")) { player.Seek(progress); }
                         ImGui::PopItemWidth();
                         ImGui::SameLine();
                         ImGui::Text("%s / %s", FormatAudioTime(currentT).c_str(), FormatAudioTime(totalT).c_str());
@@ -375,9 +373,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                                 auto pcm = audioBank->GetDecodedAudio(audioIndex);
                                 if (!pcm.empty()) player.PlayPCM(pcm, 22050);
                             }
-                            else {
-                                if (player.IsPlaying()) player.Pause(); else player.Play();
-                            }
+                            else { if (player.IsPlaying()) player.Pause(); else player.Play(); }
                         }
                         ImGui::SameLine();
                         if (ImGui::Button("Export Wav", ImVec2(80, 0))) {
@@ -400,6 +396,16 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                                 }
                             }
                         }
+
+                        // --- REMOVE LINKED MEDIA BUTTON ---
+                        ImGui::Dummy(ImVec2(0, 10));
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+                        if (ImGui::Button("Remove Linked Media", ImVec2(200, 0))) {
+                            DeleteLinkedMedia(e.SpeechBank, e.Identifier);
+                            ImGui::PopStyleColor();
+                            return; // Return immediately after deleting to prevent UI from accessing invalid pointers
+                        }
+                        ImGui::PopStyleColor();
                     }
                     else {
                         ImGui::TextColored(ImVec4(1, 0, 0, 1), "ID %d found in Defs, but not in Audio Bank.", soundID);

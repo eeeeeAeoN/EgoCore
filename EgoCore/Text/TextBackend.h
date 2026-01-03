@@ -18,12 +18,12 @@
 
 inline CTextParser g_TextParser;
 
-// --- PERSISTENT STATE (Fixed: inline for linkage) ---
+// --- PERSISTENT STATE ---
 inline bool g_IsTextDirty = false;
 inline int g_LastEntryID = -1;
 inline void* g_LastBankPtr = nullptr;
 
-// --- BACKGROUND AUDIO STATE (Fixed: inline for linkage) ---
+// --- BACKGROUND AUDIO STATE ---
 inline std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
 
 // --- HELPERS ---
@@ -122,9 +122,6 @@ inline std::string ResolveNameFromID(const std::string& headerName, uint32_t id)
     if (enumIdx == -1) return "";
 
     const std::string& content = g_DefWorkspace.AllEnums[enumIdx].FullContent;
-
-    // Regex: Find (Word) = (ID),
-    // Be careful with whitespace and commas
     std::string patternStr = "([A-Z0-9_]+)\\s*=\\s*" + std::to_string(id) + "[,\\s]";
     std::regex re(patternStr);
     std::smatch match;
@@ -252,36 +249,27 @@ inline void SaveAssociatedHeader(const std::string& speechBank) {
     }
 }
 
-inline void DeleteLinkedMedia(const std::string& speechBank, const std::string& identifier) {
+// --- NEW HELPER: Remove Definition ---
+inline void RemoveHeaderDefinition(const std::string& speechBank, const std::string& identifier) {
     if (speechBank.empty() || identifier.empty()) return;
 
-    int32_t soundID = ResolveAudioID(speechBank, identifier);
-    if (soundID == -1) return;
-
-    auto audioBank = GetOrLoadAudioBank(speechBank);
-    if (audioBank) {
-        for (int i = 0; i < (int)audioBank->Entries.size(); i++) {
-            if (audioBank->Entries[i].SoundID == (uint32_t)soundID) {
-                audioBank->DeleteEntry(i);
-                break;
-            }
-        }
-    }
-
-    DeleteLipSyncEntry(speechBank, (uint32_t)soundID);
-
     std::string headerName = GetHeaderName(speechBank);
-    int hIdx = FindHeaderIndex(headerName);
-    if (hIdx != -1) {
-        auto& entry = g_DefWorkspace.AllEnums[hIdx];
-        std::string idSafe = identifier;
-        std::string pattern = "\\s*(SND_|TEXT_SND_)" + idSafe + "\\s*=\\s*" + std::to_string(soundID) + "\\s*,?\\n?";
-        std::regex re(pattern);
-        entry.FullContent = std::regex_replace(entry.FullContent, re, "\n");
+    int idx = FindHeaderIndex(headerName);
+    if (idx == -1) return;
 
-        if (!g_DefWorkspace.ShowDefsMode && g_DefWorkspace.SelectedEnumIndex == hIdx) {
-            g_DefWorkspace.Editor.SetText(entry.FullContent);
-            g_DefWorkspace.OriginalContent = entry.FullContent;
+    auto& entry = g_DefWorkspace.AllEnums[idx];
+
+    std::string patternStr = "\\s*(SND_|TEXT_SND_)" + identifier + "\\s*=\\s*\\d+,?";
+    std::regex re(patternStr);
+
+    std::string newContent = std::regex_replace(entry.FullContent, re, "");
+
+    if (newContent != entry.FullContent) {
+        entry.FullContent = newContent;
+        std::ofstream outFile(entry.FilePath, std::ios::binary);
+        if (outFile.is_open()) {
+            outFile << entry.FullContent;
+            outFile.close();
         }
     }
 }
