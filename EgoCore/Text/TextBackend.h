@@ -22,6 +22,8 @@ inline CTextParser g_TextParser;
 inline bool g_IsTextDirty = false;
 inline int g_LastEntryID = -1;
 inline void* g_LastBankPtr = nullptr;
+// Moved here so BankEditor can track renames
+inline std::string g_OriginalIdentifier = "";
 
 // --- BACKGROUND AUDIO STATE ---
 inline std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
@@ -53,6 +55,22 @@ inline std::string PeekEntryName(LoadedBank* bank, uint32_t id) {
 }
 
 // --- AUDIO LOGIC HELPERS ---
+
+inline std::string EnforceLugExtension(const std::string& bankName) {
+    std::string fixed = bankName;
+    size_t lastDot = fixed.find_last_of('.');
+    if (lastDot != std::string::npos) {
+        std::string ext = fixed.substr(lastDot);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".lut" || ext == ".bin") {
+            fixed = fixed.substr(0, lastDot) + ".lug";
+        }
+    }
+    else if (!fixed.empty()) {
+        fixed += ".lug";
+    }
+    return fixed;
+}
 
 static std::string FormatAudioTime(float seconds) {
     int m = (int)seconds / 60;

@@ -138,9 +138,6 @@
     <ClInclude Include="Text\TextParser.h">
       <Filter>Source Files\Text</Filter>
     </ClInclude>
-    <ClInclude Include="Text\TextProperties.h">
-      <Filter>Source Files\Text</Filter>
-    </ClInclude>
     <ClInclude Include="Utilities\FileDialogs.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
@@ -171,14 +168,14 @@
     <ClInclude Include="Banks\BankLoader.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
-    <ClInclude Include="BankEditor.h">
-      <Filter>Source Files\Banks</Filter>
-    </ClInclude>
-    <ClInclude Include="BankTabUI.h">
-      <Filter>Source Files\Banks</Filter>
-    </ClInclude>
     <ClInclude Include="Lipsync\SpeechAnalyzer.h">
       <Filter>Source Files\LipSync</Filter>
+    </ClInclude>
+    <ClInclude Include="Banks\BankEditor.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Banks\BankTabUI.h">
+      <Filter>Source Files\Banks</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

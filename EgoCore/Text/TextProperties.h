@@ -8,8 +8,6 @@
 static bool g_ShowAddGroupItemPopup = false;
 static char g_GroupSearchBuf[128] = "";
 
-static std::string g_OriginalIdentifier = "";
-
 // --- FORWARD DECLARATION ---
 void DeleteLinkedMedia(const std::string& speechBankName, const std::string& identifier);
 
@@ -22,25 +20,7 @@ inline bool InputString(const char* label, std::string& str, float width = 0.0f)
     return changed;
 }
 
-inline std::string EnforceLugExtension(const std::string& bankName) {
-    std::string fixed = bankName;
-    size_t lastDot = fixed.find_last_of('.');
-    if (lastDot != std::string::npos) {
-        std::string ext = fixed.substr(lastDot);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext == ".lut" || ext == ".bin") {
-            fixed = fixed.substr(0, lastDot) + ".lug";
-        }
-    }
-    else if (!fixed.empty()) {
-        fixed += ".lug";
-    }
-    return fixed;
-}
-
 // --- NEW TAG UI LOGIC ---
-
-// Removed CameraShot from Enum
 enum class TagMode { Custom, Attitude, Animation, Camera };
 
 inline void RenderTagEditor(CTextTag& tag) {
@@ -48,13 +28,13 @@ inline void RenderTagEditor(CTextTag& tag) {
     TagMode mode = TagMode::Custom;
     if (tag.Name.rfind("ANIM:", 0) == 0) mode = TagMode::Animation;
     else if (tag.Name.rfind("CAM:", 0) == 0) mode = TagMode::Camera;
-    // Removed CAM_SHOT check
     else if (tag.Name.rfind("CONVERSATION_ATTITUDE_", 0) == 0) mode = TagMode::Attitude;
 
     // 2. Render UI
     if (mode == TagMode::Animation) {
-        std::string animName = tag.Name.substr(5); // Remove "ANIM:"
-        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "ANIM:");
+        std::string animName = tag.Name.substr(5);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("ANIM:");
         ImGui::SameLine();
         if (InputString("##anim", animName)) {
             tag.Name = "ANIM:" + animName;
@@ -65,7 +45,8 @@ inline void RenderTagEditor(CTextTag& tag) {
         static std::vector<std::string> attitudes;
         if (attitudes.empty()) attitudes = GetEnumMembers("EConversationAttitude");
 
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "MOOD:");
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("MOOD:");
         ImGui::SameLine();
 
         if (ImGui::BeginCombo("##att", tag.Name.c_str())) {
@@ -80,47 +61,30 @@ inline void RenderTagEditor(CTextTag& tag) {
         }
     }
     else if (mode == TagMode::Camera) {
-        // Parse: CAM:(PosP, Pos) (FocP, Foc) (Zoom)
-        // Robust parsing that handles missing Zoom group
         std::string s = tag.Name.substr(4);
-
-        // Defaults
         std::string posP = "SPEAKER", pos = "IN_FRONT_OF_FACE";
         std::string focP = "SPEAKER", foc = "FOCUS_FACE";
         std::string zoom = "NO_ZOOM";
 
-        // Try extract Group 1: Position
-        size_t p1 = s.find('(');
-        size_t p2 = s.find(')');
-        if (p1 != std::string::npos && p2 != std::string::npos && p2 > p1) {
-            std::string g1 = s.substr(p1 + 1, p2 - p1 - 1); // Content inside first ()
+        size_t p1 = s.find('('); size_t p2 = s.find(')');
+        if (p1 != std::string::npos && p2 != std::string::npos) {
+            std::string g1 = s.substr(p1 + 1, p2 - p1 - 1);
             size_t c = g1.find(',');
-            if (c != std::string::npos) {
-                posP = g1.substr(0, c);
-                pos = g1.substr(c + 1);
-            }
+            if (c != std::string::npos) { posP = g1.substr(0, c); pos = g1.substr(c + 1); }
 
-            // Try extract Group 2: Focus
-            size_t p3 = s.find('(', p2);
-            size_t p4 = s.find(')', p2 + 1);
-            if (p3 != std::string::npos && p4 != std::string::npos && p4 > p3) {
+            size_t p3 = s.find('(', p2); size_t p4 = s.find(')', p2 + 1);
+            if (p3 != std::string::npos && p4 != std::string::npos) {
                 std::string g2 = s.substr(p3 + 1, p4 - p3 - 1);
                 size_t c2 = g2.find(',');
-                if (c2 != std::string::npos) {
-                    focP = g2.substr(0, c2);
-                    foc = g2.substr(c2 + 1);
-                }
+                if (c2 != std::string::npos) { focP = g2.substr(0, c2); foc = g2.substr(c2 + 1); }
 
-                // Try extract Group 3: Zoom (Optional)
-                size_t p5 = s.find('(', p4);
-                size_t p6 = s.find(')', p4 + 1);
-                if (p5 != std::string::npos && p6 != std::string::npos && p6 > p5) {
+                size_t p5 = s.find('(', p4); size_t p6 = s.find(')', p4 + 1);
+                if (p5 != std::string::npos && p6 != std::string::npos) {
                     zoom = s.substr(p5 + 1, p6 - p5 - 1);
                 }
             }
         }
 
-        // Dropdowns
         static std::vector<std::string> protags, camPos, camFoc, camZoom;
         if (protags.empty()) protags = GetEnumMembers("EConversationProtagonist");
         if (camPos.empty()) camPos = GetEnumMembers("EConversationCameraPosition");
@@ -128,6 +92,7 @@ inline void RenderTagEditor(CTextTag& tag) {
         if (camZoom.empty()) camZoom = GetEnumMembers("EConversationCameraZoomType");
 
         bool changed = false;
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("Pos:"); ImGui::SameLine();
         ImGui::SetNextItemWidth(100);
         if (ImGui::BeginCombo("##pp", posP.c_str())) { for (auto& x : protags) if (ImGui::Selectable(x.c_str())) { posP = x; changed = true; } ImGui::EndCombo(); }
@@ -147,18 +112,15 @@ inline void RenderTagEditor(CTextTag& tag) {
         if (ImGui::BeginCombo("##z", zoom.c_str())) { for (auto& x : camZoom) if (ImGui::Selectable(x.c_str())) { zoom = x; changed = true; } ImGui::EndCombo(); }
 
         if (changed) {
-            // Reconstruct with all 3 groups to ensure validity
             tag.Name = "CAM:(" + posP + "," + pos + ")(" + focP + "," + foc + ")(" + zoom + ")";
             g_IsTextDirty = true;
         }
     }
     else {
-        // Custom
         if (InputString("##raw", tag.Name, -FLT_MIN)) g_IsTextDirty = true;
     }
 }
 
-// Updated Signature to include onJump callback
 inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, std::function<void(std::string, uint32_t, std::string)> onJump) {
     if (!g_TextParser.IsParsed) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to parse text entry.");
@@ -170,91 +132,11 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         g_LastBankPtr = bank;
         if (bank) g_LastEntryID = bank->SelectedEntryIndex;
         for (auto& [k, p] : g_BackgroundAudioBanks) p->Player.Reset();
-
         if (g_TextParser.IsParsed) g_OriginalIdentifier = g_TextParser.TextData.Identifier;
     }
 
-    bool isAudioModified = false;
-    if (g_TextParser.IsParsed && !g_TextParser.IsGroup && !g_TextParser.IsNarratorList) {
-        if (!g_TextParser.TextData.SpeechBank.empty()) {
-            std::string key = g_TextParser.TextData.SpeechBank;
-            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-            if (g_BackgroundAudioBanks.count(key)) {
-                if (!g_BackgroundAudioBanks[key]->ModifiedCache.empty()) isAudioModified = true;
-            }
-        }
-    }
-
-    bool isLipSyncModified = !g_LipSyncState.PendingAdds.empty() || !g_LipSyncState.PendingDeletes.empty();
-
-    if (g_IsTextDirty || isAudioModified || isLipSyncModified) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
-
-        bool triggered = ImGui::Button("SAVE ENTRY CHANGES (Ctrl+S)", ImVec2(-FLT_MIN, 40));
-        if ((ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) || triggered) {
-            if (onSave) {
-                g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
-
-                if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
-                    if (!g_TextParser.TextData.SpeechBank.empty()) {
-                        UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
-                    }
-                    if (bank && bank->SelectedEntryIndex >= 0) {
-                        bank->Entries[bank->SelectedEntryIndex].Name = g_TextParser.TextData.Identifier;
-                    }
-                    g_OriginalIdentifier = g_TextParser.TextData.Identifier;
-                }
-
-                if (bank && bank->SelectedEntryIndex >= 0) {
-                    auto& entry = bank->Entries[bank->SelectedEntryIndex];
-                    std::string currentBank = g_TextParser.TextData.SpeechBank;
-
-                    if (!currentBank.empty()) {
-                        bool exists = false;
-                        for (const auto& d : entry.Dependencies) {
-                            if (d == currentBank) exists = true;
-                        }
-
-                        if (!exists) {
-                            entry.Dependencies.clear();
-                            entry.Dependencies.push_back(currentBank);
-                        }
-                    }
-                }
-
-                onSave();
-
-                if (isAudioModified) {
-                    std::string key = g_TextParser.TextData.SpeechBank;
-                    size_t dot = key.find_last_of('.');
-                    if (dot != std::string::npos) key = key.substr(0, dot) + ".lut";
-
-                    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-                    if (g_BackgroundAudioBanks.count(key)) {
-                        g_BackgroundAudioBanks[key]->SaveBank(g_BackgroundAudioBanks[key]->FileName);
-                        g_BackgroundAudioBanks[key]->ModifiedCache.clear();
-                    }
-                }
-
-                if (isLipSyncModified) {
-                    if (EnsureLipSyncLoaded()) {
-                        if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
-                            g_LipSyncState.PendingAdds.clear();
-                            g_LipSyncState.PendingDeletes.clear();
-                            g_LipSyncState.CachedSubBankIndex = -1;
-                        }
-                    }
-                }
-
-                if (!g_TextParser.TextData.SpeechBank.empty()) {
-                    SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
-                }
-
-                g_IsTextDirty = false;
-            }
-        }
-        ImGui::PopStyleColor(2);
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+        if (onSave) onSave();
     }
 
     if (g_TextParser.IsGroup) {
@@ -356,239 +238,212 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
     }
     else {
         CTextEntry& e = g_TextParser.TextData;
-        ImGui::TextColored(ImVec4(0, 1, 1, 1), "Text Entry Editor");
-        ImGui::Separator();
 
-        if (InputString("Identifier", e.Identifier)) g_IsTextDirty = true;
-        ImGui::SameLine(); ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Internal ID used by scripts.");
+        // 1. Identifier
+        ImGui::Text("Identifier");
+        if (InputString("##id", e.Identifier, -FLT_MIN)) g_IsTextDirty = true;
 
         ImGui::Spacing();
-        if (ImGui::BeginTable("MetaTable", 2, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthFixed, 100);
-            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Speaker");
-            ImGui::TableSetColumnIndex(1); if (InputString("##speaker", e.Speaker, -FLT_MIN)) g_IsTextDirty = true;
+        // 2. Speaker & SoundBank (Fixed Horizontal Alignment)
+        float avail = ImGui::GetContentRegionAvail().x;
+        float colWidth = (avail - ImGui::GetStyle().ItemSpacing.x) / 2.0f;
 
-            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Sound Bank");
-            ImGui::TableSetColumnIndex(1);
-            if (g_AvailableSoundBanks.empty()) {
-                if (InputString("##soundbank", e.SpeechBank, -FLT_MIN)) g_IsTextDirty = true;
-            }
-            else {
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                if (ImGui::BeginCombo("##soundbank", e.SpeechBank.c_str())) {
-                    for (const auto& sb : g_AvailableSoundBanks) {
-                        std::string cleanName = EnforceLugExtension(sb);
-                        bool isSelected = (e.SpeechBank == cleanName);
-                        if (ImGui::Selectable(cleanName.c_str(), isSelected)) {
-                            e.SpeechBank = cleanName;
-                            g_IsTextDirty = true;
-                        }
-                        if (isSelected) ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-            }
-            ImGui::EndTable();
+        // Column 1
+        ImGui::BeginGroup();
+        ImGui::Text("Speaker");
+        if (InputString("##speaker", e.Speaker, colWidth)) g_IsTextDirty = true;
+        ImGui::EndGroup();
+
+        ImGui::SameLine();
+
+        // Column 2
+        ImGui::BeginGroup();
+        ImGui::Text("Sound Bank");
+        ImGui::SetNextItemWidth(colWidth);
+        if (g_AvailableSoundBanks.empty()) {
+            if (InputString("##soundbank", e.SpeechBank)) g_IsTextDirty = true;
         }
+        else {
+            if (ImGui::BeginCombo("##soundbank", e.SpeechBank.c_str())) {
+                for (const auto& sb : g_AvailableSoundBanks) {
+                    std::string cleanName = EnforceLugExtension(sb);
+                    bool isSelected = (e.SpeechBank == cleanName);
+                    if (ImGui::Selectable(cleanName.c_str(), isSelected)) {
+                        e.SpeechBank = cleanName;
+                        g_IsTextDirty = true;
+                    }
+                    if (isSelected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::EndGroup();
 
         ImGui::Spacing(); ImGui::Separator();
+
+        // 3. Content
         static char contentBuf[8192];
         std::string utf8Content = WStringToString(e.Content);
         strncpy_s(contentBuf, sizeof(contentBuf), utf8Content.c_str(), _TRUNCATE);
 
-        ImGui::Text("Content:");
+        ImGui::Text("Content");
         if (ImGui::InputTextMultiline("##content", contentBuf, sizeof(contentBuf), ImVec2(-FLT_MIN, 100))) {
             e.Content = StringToWString(contentBuf);
             g_IsTextDirty = true;
         }
 
-        ImGui::Spacing(); ImGui::Separator();
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Tags / Modifiers (%zu)", e.Tags.size());
+        ImGui::Spacing();
 
-        if (ImGui::BeginTable("TagsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-            ImGui::TableSetupColumn("Tag Data", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 50);
-            ImGui::TableHeadersRow();
+        // 4. Tags
+        if (ImGui::CollapsingHeader("Tags / Modifiers")) {
+            if (ImGui::BeginTable("TagsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                ImGui::TableSetupColumn("Tag Data", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 50);
+                // No Headers
 
-            int tagToDelete = -1;
-            for (int i = 0; i < e.Tags.size(); i++) {
-                ImGui::PushID(i);
-                ImGui::TableNextRow();
-
-                ImGui::TableSetColumnIndex(0);
-                RenderTagEditor(e.Tags[i]);
-
-                ImGui::TableSetColumnIndex(1);
-                if (ImGui::Button("X")) tagToDelete = i;
-
-                ImGui::PopID();
-            }
-            ImGui::EndTable();
-            if (tagToDelete != -1) { e.Tags.erase(e.Tags.begin() + tagToDelete); g_IsTextDirty = true; }
-        }
-
-        static bool showTagPopup = false;
-        if (ImGui::Button("+ Add New Tag")) {
-            showTagPopup = true;
-            ImGui::OpenPopup("New Tag Type");
-        }
-
-        if (ImGui::BeginPopupModal("New Tag Type", &showTagPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Select Tag Type:");
-            ImGui::Separator();
-
-            auto AddT = [&](std::string n) {
-                CTextTag t; t.Position = 0; t.Name = n; e.Tags.push_back(t);
-                g_IsTextDirty = true; showTagPopup = false; ImGui::CloseCurrentPopup();
-                };
-
-            if (ImGui::Button("Attitude / Mood", ImVec2(200, 0))) AddT("CONVERSATION_ATTITUDE_NEUTRAL");
-            if (ImGui::Button("Animation (ANIM)", ImVec2(200, 0))) AddT("ANIM:SCRIPT_IDLE");
-            if (ImGui::Button("Camera (Detailed)", ImVec2(200, 0))) AddT("CAM:(SPEAKER,IN_FRONT_OF_FACE)(SPEAKER,FOCUS_FACE)(NO_ZOOM)");
-            // Removed CAM_SHOT button
-            if (ImGui::Button("Custom / Manual", ImVec2(200, 0))) AddT("NEW_TAG");
-
-            ImGui::Separator();
-            if (ImGui::Button("Cancel", ImVec2(200, 0))) { showTagPopup = false; ImGui::CloseCurrentPopup(); }
-            ImGui::EndPopup();
-        }
-
-        ImGui::Spacing(); ImGui::Separator();
-        ImGui::TextColored(ImVec4(0, 1, 1, 1), "Linked Media");
-        ImGui::Separator();
-
-        bool audioFound = false;
-        std::shared_ptr<AudioBankParser> audioBank = nullptr;
-        int audioIndex = -1;
-
-        if (!e.SpeechBank.empty() && !e.Identifier.empty()) {
-            int32_t soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
-
-            if (soundID != -1) {
-                std::string loadPath = e.SpeechBank;
-                if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
-
-                audioBank = GetOrLoadAudioBank(loadPath);
-                if (audioBank) {
-                    for (int i = 0; i < (int)audioBank->Entries.size(); i++) {
-                        if (audioBank->Entries[i].SoundID == (uint32_t)soundID) {
-                            audioIndex = i;
-                            audioFound = true;
-                            break;
-                        }
-                    }
-
-                    if (audioFound) {
-                        ImGui::Text("Linked ID: %d", soundID);
-                        if (audioBank->ModifiedCache.count(audioIndex)) {
-                            ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[PENDING SAVE]");
-                        }
-
-                        // --- BUTTONS ---
-                        if (ImGui::Button("Go to Phonemes (Dialogue)", ImVec2(200, 0))) {
-                            if (onJump) onJump("dialogue.big", (uint32_t)soundID, e.SpeechBank);
-                        }
-
-                        if (ImGui::Button("Go to Sample (Audio)", ImVec2(200, 0))) {
-                            std::string lut = e.SpeechBank;
-                            if (lut.find(".lug") != std::string::npos) lut = lut.substr(0, lut.find(".lug")) + ".lut";
-                            else if (lut.find(".") == std::string::npos) lut += ".lut";
-                            if (onJump) onJump(lut, (uint32_t)soundID, "");
-                        }
-                        ImGui::Spacing();
-
-                        auto& player = audioBank->Player;
-                        float currentT = player.GetCurrentTime();
-                        float totalT = player.GetTotalDuration();
-                        float progress = player.GetProgress();
-
-                        ImGui::PushItemWidth(300);
-                        if (ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "")) { player.Seek(progress); }
-                        ImGui::PopItemWidth();
-                        ImGui::SameLine();
-                        ImGui::Text("%s / %s", FormatAudioTime(currentT).c_str(), FormatAudioTime(totalT).c_str());
-
-                        if (ImGui::Button(player.IsPlaying() ? "Pause" : "Play", ImVec2(80, 0))) {
-                            if (totalT == 0.0f) {
-                                auto pcm = audioBank->GetDecodedAudio(audioIndex);
-                                if (!pcm.empty()) player.PlayPCM(pcm, 22050);
-                            }
-                            else { if (player.IsPlaying()) player.Pause(); else player.Play(); }
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Export Wav", ImVec2(80, 0))) {
-                            auto pcm = audioBank->GetDecodedAudio(audioIndex);
-                            if (!pcm.empty()) {
-                                std::string savePath = SaveFileDialog("WAV File\0*.wav\0");
-                                if (!savePath.empty()) {
-                                    if (savePath.find(".wav") == std::string::npos) savePath += ".wav";
-                                    WriteWavFile(savePath, pcm, 22050, 1);
-                                }
-                            }
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Import Wav", ImVec2(80, 0))) {
-                            std::string openPath = OpenFileDialog("WAV File\0*.wav\0All Files\0*.*\0");
-                            if (!openPath.empty()) {
-                                if (audioBank->ImportWav(audioIndex, openPath)) {
-                                    player.Reset();
-                                    g_IsTextDirty = true;
-                                }
-                            }
-                        }
-
-                        ImGui::Dummy(ImVec2(0, 10));
-                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-                        if (ImGui::Button("Remove Linked Media", ImVec2(200, 0))) {
-                            DeleteLinkedMedia(e.SpeechBank, e.Identifier);
-                            ImGui::PopStyleColor();
-                            return;
-                        }
-                        ImGui::PopStyleColor();
-                    }
-                    else {
-                        ImGui::TextColored(ImVec4(1, 0, 0, 1), "ID %d found in Defs, but not in Audio Bank.", soundID);
-                    }
+                int tagToDelete = -1;
+                for (int i = 0; i < e.Tags.size(); i++) {
+                    ImGui::PushID(i);
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    RenderTagEditor(e.Tags[i]);
+                    ImGui::TableSetColumnIndex(1);
+                    if (ImGui::Button("X")) tagToDelete = i;
+                    ImGui::PopID();
                 }
-                else {
-                    ImGui::TextDisabled("Audio bank not found on disk (.lut missing).");
-                }
+                ImGui::EndTable();
+                if (tagToDelete != -1) { e.Tags.erase(e.Tags.begin() + tagToDelete); g_IsTextDirty = true; }
             }
-            else {
-                ImGui::TextDisabled("No match for '%s' in %s", e.Identifier.c_str(), GetHeaderName(e.SpeechBank).c_str());
-                ImGui::Spacing();
 
-                if (ImGui::Button("Create Linked Media (Import Wav)", ImVec2(-FLT_MIN, 40))) {
+            static bool showTagPopup = false;
+            if (ImGui::Button("+ Add New Tag")) { showTagPopup = true; ImGui::OpenPopup("New Tag Type"); }
+
+            if (ImGui::BeginPopupModal("New Tag Type", &showTagPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                auto AddT = [&](std::string n) {
+                    CTextTag t; t.Position = 0; t.Name = n; e.Tags.push_back(t);
+                    g_IsTextDirty = true; showTagPopup = false; ImGui::CloseCurrentPopup();
+                    };
+                if (ImGui::Button("Attitude / Mood", ImVec2(200, 0))) AddT("CONVERSATION_ATTITUDE_NEUTRAL");
+                if (ImGui::Button("Animation (ANIM)", ImVec2(200, 0))) AddT("ANIM:SCRIPT_IDLE");
+                if (ImGui::Button("Camera (Detailed)", ImVec2(200, 0))) AddT("CAM:(SPEAKER,IN_FRONT_OF_FACE)(SPEAKER,FOCUS_FACE)(NO_ZOOM)");
+                if (ImGui::Button("Custom / Manual", ImVec2(200, 0))) AddT("NEW_TAG");
+                ImGui::Separator();
+                if (ImGui::Button("Cancel", ImVec2(200, 0))) { showTagPopup = false; ImGui::CloseCurrentPopup(); }
+                ImGui::EndPopup();
+            }
+        }
+
+        ImGui::Spacing();
+
+        // 5. Linked Media (Modified Order)
+        if (ImGui::CollapsingHeader("Linked Media", ImGuiTreeNodeFlags_DefaultOpen)) {
+            bool audioFound = false;
+            std::shared_ptr<AudioBankParser> audioBank = nullptr;
+            int audioIndex = -1;
+
+            if (!e.SpeechBank.empty() && !e.Identifier.empty()) {
+                int32_t soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
+
+                if (soundID != -1) {
                     std::string loadPath = e.SpeechBank;
                     if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
-
                     audioBank = GetOrLoadAudioBank(loadPath);
                     if (audioBank) {
-                        uint32_t nextID = GetNextIDFromHeader(e.SpeechBank);
+                        for (int i = 0; i < (int)audioBank->Entries.size(); i++) {
+                            if (audioBank->Entries[i].SoundID == (uint32_t)soundID) { audioIndex = i; audioFound = true; break; }
+                        }
 
-                        std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
-                        if (!wavPath.empty()) {
-                            std::string hName = GetHeaderName(e.SpeechBank);
-                            int hIdx = FindHeaderIndex(hName);
-                            if (hIdx != -1) {
-                                std::string defName = "SND_" + e.Identifier;
-                                InjectHeaderDefinition(hIdx, defName, nextID);
-                                if (audioBank->AddEntry(nextID, wavPath)) {
-                                    // --- USE ANALYZER ---
-                                    AddLipSyncEntryFromWav(e.SpeechBank, nextID, wavPath);
-                                    g_IsTextDirty = true;
+                        if (audioFound) {
+                            if (audioBank->ModifiedCache.count(audioIndex)) ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[PENDING SAVE]");
+
+                            // PLAYER CONTROLS (Row 1)
+                            auto& player = audioBank->Player;
+                            float progress = player.GetProgress();
+
+                            // Seek Bar (300 width)
+                            ImGui::PushItemWidth(300);
+                            if (ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "")) { player.Seek(progress); }
+                            ImGui::PopItemWidth();
+
+                            // Player Buttons
+                            ImGui::SameLine();
+                            if (ImGui::Button(player.IsPlaying() ? "Pause" : "Play", ImVec2(50, 0))) {
+                                if (player.GetTotalDuration() == 0.0f) {
+                                    auto pcm = audioBank->GetDecodedAudio(audioIndex);
+                                    if (!pcm.empty()) player.PlayPCM(pcm, 22050);
+                                }
+                                else { if (player.IsPlaying()) player.Pause(); else player.Play(); }
+                            }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("Export", ImVec2(50, 0))) {
+                                auto pcm = audioBank->GetDecodedAudio(audioIndex);
+                                if (!pcm.empty()) {
+                                    std::string savePath = SaveFileDialog("WAV File\0*.wav\0");
+                                    if (!savePath.empty()) {
+                                        if (savePath.find(".wav") == std::string::npos) savePath += ".wav";
+                                        WriteWavFile(savePath, pcm, 22050, 1);
+                                    }
+                                }
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Import", ImVec2(50, 0))) {
+                                std::string openPath = OpenFileDialog("WAV File\0*.wav\0All Files\0*.*\0");
+                                if (!openPath.empty()) {
+                                    if (audioBank->ImportWav(audioIndex, openPath)) { player.Reset(); g_IsTextDirty = true; }
+                                }
+                            }
+
+                            // ACTION BUTTONS (Row 2, Below Player)
+                            ImGui::Dummy(ImVec2(0, 5)); // Small spacing
+                            if (ImGui::Button("Phonemes", ImVec2(80, 0))) { if (onJump) onJump("dialogue.big", (uint32_t)soundID, e.SpeechBank); }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Sample", ImVec2(80, 0))) {
+                                std::string lut = e.SpeechBank;
+                                if (lut.find(".lug") != std::string::npos) lut = lut.substr(0, lut.find(".lug")) + ".lut";
+                                else if (lut.find(".") == std::string::npos) lut += ".lut";
+                                if (onJump) onJump(lut, (uint32_t)soundID, "");
+                            }
+                            ImGui::SameLine();
+                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+                            if (ImGui::Button("Remove", ImVec2(80, 0))) {
+                                DeleteLinkedMedia(e.SpeechBank, e.Identifier);
+                                ImGui::PopStyleColor();
+                                return;
+                            }
+                            ImGui::PopStyleColor();
+                        }
+                        else ImGui::TextColored(ImVec4(1, 0, 0, 1), "ID %d found in Defs, but not in Audio Bank.", soundID);
+                    }
+                    else ImGui::TextDisabled("Audio bank not found on disk (.lut missing).");
+                }
+                else {
+                    // Create Link Button
+                    if (ImGui::Button("Create Linked Media (Import Wav)", ImVec2(-FLT_MIN, 30))) {
+                        std::string loadPath = e.SpeechBank;
+                        if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
+                        audioBank = GetOrLoadAudioBank(loadPath);
+                        if (audioBank) {
+                            uint32_t nextID = GetNextIDFromHeader(e.SpeechBank);
+                            std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
+                            if (!wavPath.empty()) {
+                                std::string hName = GetHeaderName(e.SpeechBank);
+                                int hIdx = FindHeaderIndex(hName);
+                                if (hIdx != -1) {
+                                    std::string defName = "SND_" + e.Identifier;
+                                    InjectHeaderDefinition(hIdx, defName, nextID);
+                                    if (audioBank->AddEntry(nextID, wavPath)) {
+                                        AddLipSyncEntryFromWav(e.SpeechBank, nextID, wavPath);
+                                        g_IsTextDirty = true;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-        else {
-            ImGui::TextDisabled("Assign a SpeechBank and Identifier to link media.");
+            else ImGui::TextDisabled("Assign a SpeechBank and Identifier to link media.");
         }
     }
 }

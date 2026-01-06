@@ -361,7 +361,40 @@ static void DrawBankTab() {
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
 
+                    ImGui::AlignTextToFramePadding();
                     ImGui::Text("ID: %d | Type: %d | Size: %d bytes", e.ID, e.Type, e.Size);
+
+                    // Right: Actions
+                    ImGui::SameLine();
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    float buttonsWidth = 140.0f; // Save(70) + Delete(60) + Spacing
+                    if (avail > buttonsWidth) {
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonsWidth);
+                    }
+
+                    // Save Button
+                    if (ImGui::Button("Save", ImVec2(60, 0))) {
+                        SaveEntryChanges(&bank);
+                    }
+
+                    ImGui::SameLine();
+
+                    // Delete Button
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+                    if (ImGui::Button("Delete", ImVec2(60, 0))) {
+                        if (g_AppConfig.ShowBankDeleteConfirm) {
+                            g_ContextEntryIndex = bank.SelectedEntryIndex;
+                            g_ShowDeleteBankEntryPopup = true;
+                            ImGui::OpenPopup("Delete Bank Entry?");
+                        }
+                        else {
+                            DeleteBankEntry(&bank, bank.SelectedEntryIndex);
+                        }
+                    }
+                    ImGui::PopStyleColor();
+                    // -------------------------
+
+                    ImGui::Separator();
 
                     if (e.Name != e.FriendlyName) {
                         ImGui::TextDisabled("Internal File Name: %s", e.Name.c_str());
