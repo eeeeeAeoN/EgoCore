@@ -1,7 +1,6 @@
 #pragma once
 #include "imgui.h"
 #include "TextBackend.h" 
-// #include "BankEditor.h" <--- REMOVED TO PREVENT CIRCULAR DEPENDENCY
 #include "FileDialogs.h"
 #include "LipSyncCompiler.h"
 #include <functional> 
@@ -12,7 +11,6 @@ static char g_GroupSearchBuf[128] = "";
 static std::string g_OriginalIdentifier = "";
 
 // --- FORWARD DECLARATION ---
-// This tells the compiler the function exists elsewhere (in BankEditor.h), so we can call it here.
 void DeleteLinkedMedia(const std::string& speechBankName, const std::string& identifier);
 
 inline bool InputString(const char* label, std::string& str, float width = 0.0f) {
@@ -38,6 +36,126 @@ inline std::string EnforceLugExtension(const std::string& bankName) {
         fixed += ".lug";
     }
     return fixed;
+}
+
+// --- NEW TAG UI LOGIC ---
+
+// Removed CameraShot from Enum
+enum class TagMode { Custom, Attitude, Animation, Camera };
+
+inline void RenderTagEditor(CTextTag& tag) {
+    // 1. Detect Mode
+    TagMode mode = TagMode::Custom;
+    if (tag.Name.rfind("ANIM:", 0) == 0) mode = TagMode::Animation;
+    else if (tag.Name.rfind("CAM:", 0) == 0) mode = TagMode::Camera;
+    // Removed CAM_SHOT check
+    else if (tag.Name.rfind("CONVERSATION_ATTITUDE_", 0) == 0) mode = TagMode::Attitude;
+
+    // 2. Render UI
+    if (mode == TagMode::Animation) {
+        std::string animName = tag.Name.substr(5); // Remove "ANIM:"
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "ANIM:");
+        ImGui::SameLine();
+        if (InputString("##anim", animName)) {
+            tag.Name = "ANIM:" + animName;
+            g_IsTextDirty = true;
+        }
+    }
+    else if (mode == TagMode::Attitude) {
+        static std::vector<std::string> attitudes;
+        if (attitudes.empty()) attitudes = GetEnumMembers("EConversationAttitude");
+
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "MOOD:");
+        ImGui::SameLine();
+
+        if (ImGui::BeginCombo("##att", tag.Name.c_str())) {
+            for (const auto& a : attitudes) {
+                bool isSel = (tag.Name == a);
+                if (ImGui::Selectable(a.c_str(), isSel)) {
+                    tag.Name = a;
+                    g_IsTextDirty = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    else if (mode == TagMode::Camera) {
+        // Parse: CAM:(PosP, Pos) (FocP, Foc) (Zoom)
+        // Robust parsing that handles missing Zoom group
+        std::string s = tag.Name.substr(4);
+
+        // Defaults
+        std::string posP = "SPEAKER", pos = "IN_FRONT_OF_FACE";
+        std::string focP = "SPEAKER", foc = "FOCUS_FACE";
+        std::string zoom = "NO_ZOOM";
+
+        // Try extract Group 1: Position
+        size_t p1 = s.find('(');
+        size_t p2 = s.find(')');
+        if (p1 != std::string::npos && p2 != std::string::npos && p2 > p1) {
+            std::string g1 = s.substr(p1 + 1, p2 - p1 - 1); // Content inside first ()
+            size_t c = g1.find(',');
+            if (c != std::string::npos) {
+                posP = g1.substr(0, c);
+                pos = g1.substr(c + 1);
+            }
+
+            // Try extract Group 2: Focus
+            size_t p3 = s.find('(', p2);
+            size_t p4 = s.find(')', p2 + 1);
+            if (p3 != std::string::npos && p4 != std::string::npos && p4 > p3) {
+                std::string g2 = s.substr(p3 + 1, p4 - p3 - 1);
+                size_t c2 = g2.find(',');
+                if (c2 != std::string::npos) {
+                    focP = g2.substr(0, c2);
+                    foc = g2.substr(c2 + 1);
+                }
+
+                // Try extract Group 3: Zoom (Optional)
+                size_t p5 = s.find('(', p4);
+                size_t p6 = s.find(')', p4 + 1);
+                if (p5 != std::string::npos && p6 != std::string::npos && p6 > p5) {
+                    zoom = s.substr(p5 + 1, p6 - p5 - 1);
+                }
+            }
+        }
+
+        // Dropdowns
+        static std::vector<std::string> protags, camPos, camFoc, camZoom;
+        if (protags.empty()) protags = GetEnumMembers("EConversationProtagonist");
+        if (camPos.empty()) camPos = GetEnumMembers("EConversationCameraPosition");
+        if (camFoc.empty()) camFoc = GetEnumMembers("EConversationCameraFocus");
+        if (camZoom.empty()) camZoom = GetEnumMembers("EConversationCameraZoomType");
+
+        bool changed = false;
+        ImGui::Text("Pos:"); ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::BeginCombo("##pp", posP.c_str())) { for (auto& x : protags) if (ImGui::Selectable(x.c_str())) { posP = x; changed = true; } ImGui::EndCombo(); }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::BeginCombo("##p", pos.c_str())) { for (auto& x : camPos) if (ImGui::Selectable(x.c_str())) { pos = x; changed = true; } ImGui::EndCombo(); }
+
+        ImGui::Text("Look:"); ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::BeginCombo("##fp", focP.c_str())) { for (auto& x : protags) if (ImGui::Selectable(x.c_str())) { focP = x; changed = true; } ImGui::EndCombo(); }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::BeginCombo("##f", foc.c_str())) { for (auto& x : camFoc) if (ImGui::Selectable(x.c_str())) { foc = x; changed = true; } ImGui::EndCombo(); }
+
+        ImGui::Text("Zoom:"); ImGui::SameLine();
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::BeginCombo("##z", zoom.c_str())) { for (auto& x : camZoom) if (ImGui::Selectable(x.c_str())) { zoom = x; changed = true; } ImGui::EndCombo(); }
+
+        if (changed) {
+            // Reconstruct with all 3 groups to ensure validity
+            tag.Name = "CAM:(" + posP + "," + pos + ")(" + focP + "," + foc + ")(" + zoom + ")";
+            g_IsTextDirty = true;
+        }
+    }
+    else {
+        // Custom
+        if (InputString("##raw", tag.Name, -FLT_MIN)) g_IsTextDirty = true;
+    }
 }
 
 // Updated Signature to include onJump callback
@@ -140,7 +258,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
     }
 
     if (g_TextParser.IsGroup) {
-        // ... (Group Logic) ...
         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Group Entry (%zu Items)", g_TextParser.GroupData.Items.size());
         ImGui::Separator();
 
@@ -290,27 +407,53 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
 
         ImGui::Spacing(); ImGui::Separator();
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Tags / Modifiers (%zu)", e.Tags.size());
+
         if (ImGui::BeginTable("TagsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-            ImGui::TableSetupColumn("Tag Name", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 50);
+            ImGui::TableSetupColumn("Tag Data", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 50);
             ImGui::TableHeadersRow();
 
             int tagToDelete = -1;
             for (int i = 0; i < e.Tags.size(); i++) {
                 ImGui::PushID(i);
                 ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0); if (InputString("##name", e.Tags[i].Name, -FLT_MIN)) g_IsTextDirty = true;
-                ImGui::TableSetColumnIndex(1); if (ImGui::Button("X")) tagToDelete = i;
+
+                ImGui::TableSetColumnIndex(0);
+                RenderTagEditor(e.Tags[i]);
+
+                ImGui::TableSetColumnIndex(1);
+                if (ImGui::Button("X")) tagToDelete = i;
+
                 ImGui::PopID();
             }
             ImGui::EndTable();
             if (tagToDelete != -1) { e.Tags.erase(e.Tags.begin() + tagToDelete); g_IsTextDirty = true; }
         }
 
+        static bool showTagPopup = false;
         if (ImGui::Button("+ Add New Tag")) {
-            CTextTag newTag; newTag.Position = 0; newTag.Name = "NEW_TAG";
-            e.Tags.push_back(newTag);
-            g_IsTextDirty = true;
+            showTagPopup = true;
+            ImGui::OpenPopup("New Tag Type");
+        }
+
+        if (ImGui::BeginPopupModal("New Tag Type", &showTagPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Select Tag Type:");
+            ImGui::Separator();
+
+            auto AddT = [&](std::string n) {
+                CTextTag t; t.Position = 0; t.Name = n; e.Tags.push_back(t);
+                g_IsTextDirty = true; showTagPopup = false; ImGui::CloseCurrentPopup();
+                };
+
+            if (ImGui::Button("Attitude / Mood", ImVec2(200, 0))) AddT("CONVERSATION_ATTITUDE_NEUTRAL");
+            if (ImGui::Button("Animation (ANIM)", ImVec2(200, 0))) AddT("ANIM:SCRIPT_IDLE");
+            if (ImGui::Button("Camera (Detailed)", ImVec2(200, 0))) AddT("CAM:(SPEAKER,IN_FRONT_OF_FACE)(SPEAKER,FOCUS_FACE)(NO_ZOOM)");
+            // Removed CAM_SHOT button
+            if (ImGui::Button("Custom / Manual", ImVec2(200, 0))) AddT("NEW_TAG");
+
+            ImGui::Separator();
+            if (ImGui::Button("Cancel", ImVec2(200, 0))) { showTagPopup = false; ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
         }
 
         ImGui::Spacing(); ImGui::Separator();
@@ -397,13 +540,12 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                             }
                         }
 
-                        // --- REMOVE LINKED MEDIA BUTTON ---
                         ImGui::Dummy(ImVec2(0, 10));
                         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
                         if (ImGui::Button("Remove Linked Media", ImVec2(200, 0))) {
                             DeleteLinkedMedia(e.SpeechBank, e.Identifier);
                             ImGui::PopStyleColor();
-                            return; // Return immediately after deleting to prevent UI from accessing invalid pointers
+                            return;
                         }
                         ImGui::PopStyleColor();
                     }
@@ -435,8 +577,8 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                                 std::string defName = "SND_" + e.Identifier;
                                 InjectHeaderDefinition(hIdx, defName, nextID);
                                 if (audioBank->AddEntry(nextID, wavPath)) {
-                                    float dur = AudioBankParser::GetWavDuration(wavPath);
-                                    AddLipSyncEntry(e.SpeechBank, nextID, dur);
+                                    // --- USE ANALYZER ---
+                                    AddLipSyncEntryFromWav(e.SpeechBank, nextID, wavPath);
                                     g_IsTextDirty = true;
                                 }
                             }

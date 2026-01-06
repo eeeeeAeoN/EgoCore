@@ -78,12 +78,6 @@
     <ClInclude Include="Animations\AnimProperties.h">
       <Filter>Source Files\Animations</Filter>
     </ClInclude>
-    <ClInclude Include="Banks\BankExplorer.h">
-      <Filter>Source Files\Banks</Filter>
-    </ClInclude>
-    <ClInclude Include="Banks\BankBackend.h">
-      <Filter>Source Files\Banks</Filter>
-    </ClInclude>
     <ClInclude Include="Meshes\BBMParser.h">
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>
@@ -129,9 +123,6 @@
     <ClInclude Include="Banks\BinaryParser.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
-    <ClInclude Include="Banks\BankLoader.h">
-      <Filter>Source Files\Banks</Filter>
-    </ClInclude>
     <ClInclude Include="Audio\AudioBackend.h">
       <Filter>Source Files\Audio</Filter>
     </ClInclude>
@@ -171,11 +162,23 @@
     <ClInclude Include="Audio\AudioHelpers.h">
       <Filter>Source Files\Audio</Filter>
     </ClInclude>
-    <ClInclude Include="BankTabUI.h">
+    <ClInclude Include="Banks\BankBackend.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Banks\BankExplorer.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Banks\BankLoader.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
     <ClInclude Include="BankEditor.h">
       <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="BankTabUI.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Lipsync\SpeechAnalyzer.h">
+      <Filter>Source Files\LipSync</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

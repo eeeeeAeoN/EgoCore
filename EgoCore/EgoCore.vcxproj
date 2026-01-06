@@ -36,6 +36,7 @@
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
+    <ClInclude Include="Lipsync\SpeechAnalyzer.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />

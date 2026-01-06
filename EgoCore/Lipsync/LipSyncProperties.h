@@ -3,6 +3,7 @@
 #include "LipSyncParser.h"
 #include "BankBackend.h"
 #include "ConfigBackend.h"
+#include "SpeechAnalyzer.h"
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -11,20 +12,17 @@
 #include <fstream>
 #include <memory>
 #include <filesystem>
-#include <cctype> // for toupper
+#include <cctype> 
 #include <cmath>
 
 static CLipSyncParser g_LipSyncParser;
 
-// =========================================================
-// LIPSYNC BACKEND STATE
-// =========================================================
 struct AddedEntryData {
     uint32_t Type;
     std::string NamePrefix;
-    // Removed Speaker
     std::vector<uint8_t> Raw;
     std::vector<uint8_t> Info;
+    std::vector<std::string> Dependencies;
 };
 
 struct LipSyncState {
@@ -41,10 +39,6 @@ struct LipSyncState {
 };
 
 static LipSyncState g_LipSyncState;
-
-// =========================================================
-// LIPSYNC BACKEND FUNCTIONS
-// =========================================================
 
 inline std::string GetSubBankNameForSpeech(const std::string& speechBank) {
     std::string stem = speechBank;
@@ -128,55 +122,73 @@ inline void LoadLipSyncSubBankEntries(int sbIdx) {
     g_LipSyncState.CachedSubBankIndex = sbIdx;
 }
 
-// --- NEW: Generate binary data AND INFO data ---
 inline void AddLipSyncEntry(const std::string& speechBank, uint32_t newID, float duration) {
-    std::cout << "[DEBUG] AddLipSyncEntry START. Bank: " << speechBank << " ID: " << newID << std::endl;
-
     if (!EnsureLipSyncLoaded()) return;
     std::string subName = GetSubBankNameForSpeech(speechBank);
     if (subName.empty()) return;
-    if (g_LipSyncState.SubBankMap.find(subName) == g_LipSyncState.SubBankMap.end()) return;
     int sbIdx = g_LipSyncState.SubBankMap[subName];
 
-    // 1. Find Neighbor (for Type and Data cloning)
-    LoadLipSyncSubBankEntries(sbIdx);
-    if (g_LipSyncState.CachedEntries.empty()) {
-        std::cout << "[DEBUG] No neighbors found!" << std::endl;
-        return;
-    }
-    const BankEntry* neighbor = &g_LipSyncState.CachedEntries[0];
+    // Generate Empty Content (4-Byte Info + Sorted Raw)
+    auto blob = CLipSyncParser::GenerateEmpty(duration);
 
-    // 2. Clone Raw Data
-    std::vector<uint8_t> newRaw(neighbor->Size);
-    if (neighbor->Size > 0) {
-        g_LipSyncState.Stream->clear();
-        g_LipSyncState.Stream->seekg(neighbor->Offset, std::ios::beg);
-        g_LipSyncState.Stream->read((char*)newRaw.data(), neighbor->Size);
-    }
-
-    // 3. Clone Info Data
-    std::vector<uint8_t> newInfo(neighbor->InfoSize);
-    if (neighbor->InfoSize > 0) {
-        g_LipSyncState.Stream->clear();
-        g_LipSyncState.Stream->seekg(neighbor->SubheaderFileOffset, std::ios::beg);
-        g_LipSyncState.Stream->read((char*)newInfo.data(), neighbor->InfoSize);
-    }
-
-    // 4. Patch Duration
-    if (newInfo.size() >= 4) {
-        float* pDur = (float*)newInfo.data();
-        *pDur = duration;
-    }
-
-    // 5. Prepare Metadata: Name and Prefix
+    // Prepare Name Prefix
     std::filesystem::path p(speechBank);
     std::string prefix = p.stem().string();
-    if (!prefix.empty()) prefix[0] = toupper(prefix[0]); // Capitalize first letter
+    if (!prefix.empty()) prefix[0] = toupper(prefix[0]);
 
-    // 6. Store in PendingAdds (Speaker hardcoded in compiler now)
-    g_LipSyncState.PendingAdds[sbIdx][newID] = { (uint32_t)neighbor->Type, prefix, newRaw, newInfo };
+    // Store
+    AddedEntryData ae;
+    ae.Type = 1;
+    ae.NamePrefix = prefix;
+    ae.Raw = blob.Raw;
+    ae.Info = blob.Info;
+    ae.Dependencies.push_back("SPEAKER_FEMALE1");
 
-    std::cout << "[DEBUG] AddLipSyncEntry SUCCESS. Type: " << neighbor->Type << " Prefix: " << prefix << std::endl;
+    g_LipSyncState.PendingAdds[sbIdx][newID] = ae;
+}
+
+inline void AddLipSyncEntryFromWav(const std::string& speechBank, uint32_t newID, const std::string& wavPath) {
+    if (!EnsureLipSyncLoaded()) return;
+    std::string subName = GetSubBankNameForSpeech(speechBank);
+    if (subName.empty()) return;
+    int sbIdx = g_LipSyncState.SubBankMap[subName];
+
+    // 1. Load WAV Data
+    std::vector<int16_t> pcm;
+    int sampleRate = 0;
+    if (!CSpeechAnalyzer::LoadWav(wavPath, pcm, sampleRate)) {
+        // Fallback to empty if load fails
+        AddLipSyncEntry(speechBank, newID, 1.0f);
+        return;
+    }
+
+    // 2. Analyze
+    CLipSyncData lsData = CSpeechAnalyzer::AnalyzeWav(pcm, sampleRate);
+
+    // 3. Serialize using Parser (ensures sorting and format)
+    CLipSyncParser parser;
+    parser.Data = lsData;
+    std::vector<uint8_t> newRaw = parser.Recompile();
+
+    // 4. Create Info (4 bytes duration)
+    std::vector<uint8_t> newInfo(4);
+    memcpy(newInfo.data(), &lsData.Duration, 4);
+
+    // 5. Prepare Prefix
+    std::filesystem::path p(speechBank);
+    std::string prefix = p.stem().string();
+    if (!prefix.empty()) prefix[0] = toupper(prefix[0]);
+
+    // 6. Store
+    AddedEntryData ae;
+    ae.Type = 1;
+    ae.NamePrefix = prefix;
+    ae.Raw = newRaw;
+    ae.Info = newInfo;
+    ae.Dependencies.push_back("SPEAKER_FEMALE1");
+
+    g_LipSyncState.PendingAdds[sbIdx][newID] = ae;
+    std::cout << "[LipSync] Auto-generated from WAV for ID " << newID << std::endl;
 }
 
 inline void DeleteLipSyncEntry(const std::string& speechBank, uint32_t id) {
@@ -240,10 +252,6 @@ inline std::unique_ptr<CLipSyncData> FetchLipSyncData(int32_t soundID, const std
     return result;
 }
 
-// =========================================================
-// UI HELPERS
-// =========================================================
-
 inline std::string GetSymbol(uint8_t id, const std::vector<CLipSyncPhonemeRef>& dict) {
     for (const auto& p : dict) {
         if (p.ID == id) return p.Symbol;
@@ -251,40 +259,30 @@ inline std::string GetSymbol(uint8_t id, const std::vector<CLipSyncPhonemeRef>& 
     return "??";
 }
 
-// Look up or Add a symbol to the dictionary
 inline uint8_t GetOrAddPhonemeID(const std::string& symbol, std::vector<CLipSyncPhonemeRef>& dict) {
-    // 1. Check exists
     for (const auto& p : dict) {
         if (p.Symbol == symbol) return p.ID;
     }
-
-    // 2. Find next free ID (0-255)
     std::set<uint8_t> used;
     for (const auto& p : dict) used.insert(p.ID);
-
     uint8_t nextID = 0;
     while (used.count(nextID)) {
         if (nextID == 255) break;
         nextID++;
     }
-
-    // 3. Add to Dict
     CLipSyncPhonemeRef newRef;
     newRef.ID = nextID;
     newRef.Symbol = symbol;
     dict.push_back(newRef);
-
     return nextID;
 }
 
 static const std::vector<std::string> FABLE_PHONEMES = { "AH", "EE", "MM", "OH", "SZ" };
 
 inline void RenderLipSyncFrames(CLipSyncData& d) {
-    // Top Bar Actions
     if (ImGui::Button("+ Add Frame End")) {
         CLipSyncFrame newFrame;
         d.Frames.push_back(newFrame);
-        // Recalc Duration
         if (d.FPS > 0.0f) d.Duration = (float)d.Frames.size() / d.FPS;
         d.FrameCount = (uint32_t)d.Frames.size();
     }
@@ -302,7 +300,6 @@ inline void RenderLipSyncFrames(CLipSyncData& d) {
                 ImGui::PushID((int)i);
                 ImGui::TableNextRow();
 
-                // Column 1: Frame Number + Delete
                 ImGui::TableSetColumnIndex(0);
                 ImGui::Text("%03zu", i);
                 ImGui::SameLine();
@@ -310,22 +307,15 @@ inline void RenderLipSyncFrames(CLipSyncData& d) {
                     frameToDelete = (int)i;
                 }
 
-                // Column 2: Phonemes
                 ImGui::TableSetColumnIndex(1);
-
                 int keyToDelete = -1;
                 for (size_t k = 0; k < frame.Keys.size(); k++) {
                     auto& key = frame.Keys[k];
                     ImGui::PushID((int)k);
-
                     std::string symbol = GetSymbol(key.ID, d.Dictionary);
-
-                    // Label
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "%s", symbol.c_str());
                     ImGui::SameLine();
-
-                    // Slider
                     float w = key.WeightFloat;
                     ImGui::SetNextItemWidth(100);
                     if (ImGui::SliderFloat("##w", &w, 0.0f, 1.0f, "%.2f")) {
@@ -333,28 +323,19 @@ inline void RenderLipSyncFrames(CLipSyncData& d) {
                         key.WeightByte = (uint8_t)(w * 255.0f);
                     }
                     ImGui::SameLine();
-
-                    // Delete Key
                     if (ImGui::SmallButton("x")) keyToDelete = (int)k;
-
                     ImGui::SameLine();
-                    ImGui::Dummy(ImVec2(10, 0)); // Spacing
+                    ImGui::Dummy(ImVec2(10, 0));
                     ImGui::SameLine();
-
                     ImGui::PopID();
                 }
-
-                // Delete Phoneme Logic
                 if (keyToDelete != -1) {
                     frame.Keys.erase(frame.Keys.begin() + keyToDelete);
                 }
-
-                // Add Phoneme Button (Limit to 3)
                 if (frame.Keys.size() < 3) {
                     if (ImGui::Button("+")) {
                         ImGui::OpenPopup("AddPhonemePopup");
                     }
-
                     if (ImGui::BeginPopup("AddPhonemePopup")) {
                         for (const auto& ph : FABLE_PHONEMES) {
                             if (ImGui::Selectable(ph.c_str())) {
@@ -370,18 +351,13 @@ inline void RenderLipSyncFrames(CLipSyncData& d) {
                         ImGui::EndPopup();
                     }
                 }
-
                 ImGui::PopID();
             }
-
-            // Delete Frame Logic
             if (frameToDelete != -1) {
                 d.Frames.erase(d.Frames.begin() + frameToDelete);
-                // Recalc Duration
                 if (d.FPS > 0.0f) d.Duration = (float)d.Frames.size() / d.FPS;
                 d.FrameCount = (uint32_t)d.Frames.size();
             }
-
             ImGui::EndTable();
         }
     }
@@ -397,32 +373,25 @@ inline void DrawLipSyncProperties(LoadedBank* bank, std::function<void()> onSave
         return;
     }
 
-    // --- ACTIONS BAR ---
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
     if (ImGui::Button("Save Entry (Memory)", ImVec2(160, 30))) {
         if (onSave) onSave();
     }
     ImGui::PopStyleColor();
-
     ImGui::SameLine();
     ImGui::TextDisabled("(Recompile via Sidebar)");
-
     ImGui::Separator();
 
     auto& d = g_LipSyncParser.Data;
-
     if (ImGui::CollapsingHeader("Header Info", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::BeginTable("HeaderTable", 2, ImGuiTableFlags_Borders)) {
             ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Duration");
             ImGui::TableSetColumnIndex(1); ImGui::TextColored(ImVec4(0, 1, 1, 1), "%.3f sec", d.Duration);
-
             ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("Frames");
             ImGui::TableSetColumnIndex(1); ImGui::Text("%u", d.FrameCount);
-
             ImGui::EndTable();
         }
     }
-
     if (ImGui::CollapsingHeader("Animation Frames", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
         RenderLipSyncFrames(d);

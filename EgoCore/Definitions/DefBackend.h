@@ -49,6 +49,12 @@ struct DefContext {
     std::string Name;
     std::string RelativePath;
     std::string AddonFileName;
+
+    // Constructor to satisfy vector initialization
+    DefContext(std::string n, std::string r, std::string a)
+        : Name(n), RelativePath(r), AddonFileName(a) {
+    }
+    DefContext() {}
 };
 
 struct DefWorkspace {
@@ -56,11 +62,7 @@ struct DefWorkspace {
     bool IsLoaded = false;
 
     int ActiveContextIndex = 0;
-    std::vector<DefContext> Contexts = {
-        { "Game Defs",     "Defs",              "EgoCoreDefs_Addons.def" },
-        { "Script Defs",   "Defs\\ScriptDefs",   "EgoCoreScriptDefs_Addons.def" },
-        { "Frontend Defs", "Defs\\FrontEndDefs", "EgoCoreFrontEndDefs_Addons.def" }
-    };
+    std::vector<DefContext> Contexts;
 
     // --- DEFS STATE ---
     std::map<std::string, std::vector<DefEntry>> CategorizedDefs;
@@ -85,6 +87,12 @@ struct DefWorkspace {
     TextEditor Editor;
 
     DefWorkspace() {
+        Contexts = {
+            { "Game Defs",     "Defs",              "EgoCoreDefs_Addons.def" },
+            { "Script Defs",   "Defs\\ScriptDefs",   "EgoCoreScriptDefs_Addons.def" },
+            { "Frontend Defs", "Defs\\FrontEndDefs", "EgoCoreFrontEndDefs_Addons.def" }
+        };
+
         auto lang = TextEditor::LanguageDefinition::CPlusPlus();
         Editor.SetLanguageDefinition(lang);
         Editor.SetPalette(TextEditor::GetDarkPalette());
@@ -102,22 +110,18 @@ struct DefWorkspace {
     }
 };
 
-static DefWorkspace g_DefWorkspace;
+// --- GLOBALS (Must be inline to be shared) ---
+inline DefWorkspace g_DefWorkspace;
+inline std::vector<std::string> g_AvailableSoundBanks;
 
-// <--- NEW: Global list of detected .lut files from SOUND_SETUP --->
-static std::vector<std::string> g_AvailableSoundBanks;
+// --- FUNCTIONS (Must be inline to avoid multiple definition errors) ---
 
-static void ScanSoundBanks() {
+inline void ScanSoundBanks() {
     g_AvailableSoundBanks.clear();
-
-    // 1. Check if we have SOUND_SETUP definitions
     if (g_DefWorkspace.CategorizedDefs.count("SOUND_SETUP")) {
         const auto& entries = g_DefWorkspace.CategorizedDefs["SOUND_SETUP"];
-
-        // 2. Look for ENGLISH_SOUND_SETUP
         for (const auto& entry : entries) {
             if (entry.Name == "ENGLISH_SOUND_SETUP") {
-                // 3. Read the definition content
                 std::ifstream file(entry.SourceFile, std::ios::binary);
                 if (file.is_open()) {
                     file.seekg(entry.StartOffset);
@@ -126,36 +130,29 @@ static void ScanSoundBanks() {
                     file.read(&content[0], len);
                     file.close();
 
-                    // 4. Regex to find .lut filenames
-                    // Matches: "filename.lut" inside CSoundBankEntry(...)
-                    // Looking for the pattern: "some_name.lut"
                     std::regex lutRegex(R"(\"([a-zA-Z0-9_\-\.]+\.lut)\")", std::regex::icase);
-
                     auto begin = std::sregex_iterator(content.begin(), content.end(), lutRegex);
                     auto end = std::sregex_iterator();
 
                     for (std::sregex_iterator i = begin; i != end; ++i) {
                         std::smatch match = *i;
                         std::string val = match[1].str();
-                        // Avoid duplicates
                         bool exists = false;
                         for (const auto& s : g_AvailableSoundBanks) if (s == val) exists = true;
                         if (!exists) g_AvailableSoundBanks.push_back(val);
                     }
                 }
-                break; // Found English setup, stop looking
+                break;
             }
         }
     }
-
-    // Fallback if empty (so the list isn't blank)
     if (g_AvailableSoundBanks.empty()) {
         g_AvailableSoundBanks.push_back("dialogue.lut");
         g_AvailableSoundBanks.push_back("scriptdialogue.lut");
     }
 }
 
-static void LoadHeadersFromDir(const std::string& rootPath) {
+inline void LoadHeadersFromDir(const std::string& rootPath) {
     g_DefWorkspace.AllEnums.clear();
     std::set<std::string> visitedFiles;
     std::regex enumRegex(R"(enum\s+(\w+)\s*(\{[\s\S]*?\};))");
@@ -196,7 +193,41 @@ static void LoadHeadersFromDir(const std::string& rootPath) {
     std::sort(g_DefWorkspace.AllEnums.begin(), g_DefWorkspace.AllEnums.end(), [](const EnumEntry& a, const EnumEntry& b) { return a.Name < b.Name; });
 }
 
-static void ScanFileForDefs(const fs::path& filePath) {
+inline std::vector<std::string> GetEnumMembers(const std::string& enumName) {
+    std::vector<std::string> members;
+
+    int idx = -1;
+    for (int i = 0; i < (int)g_DefWorkspace.AllEnums.size(); i++) {
+        if (g_DefWorkspace.AllEnums[i].Name == enumName) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx == -1) return members;
+
+    std::string content = g_DefWorkspace.AllEnums[idx].FullContent;
+
+    size_t openBrace = content.find('{');
+    size_t closeBrace = content.rfind('}');
+    if (openBrace == std::string::npos || closeBrace == std::string::npos) return members;
+
+    std::string body = content.substr(openBrace + 1, closeBrace - openBrace - 1);
+
+    std::regex re(R"(([A-Z0-9_]+)\s*(?:=.*?)?(?:,|$))");
+    auto begin = std::sregex_iterator(body.begin(), body.end(), re);
+    auto end = std::sregex_iterator();
+
+    for (auto i = begin; i != end; ++i) {
+        std::smatch match = *i;
+        std::string val = match[1].str();
+        if (val != "force_dword" && val != "FORCE_DWORD") {
+            members.push_back(val);
+        }
+    }
+    return members;
+}
+
+inline void ScanFileForDefs(const fs::path& filePath) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) return;
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -222,7 +253,7 @@ static void ScanFileForDefs(const fs::path& filePath) {
     }
 }
 
-static void LoadDefsFromFolder(const std::string& rootPath) {
+inline void LoadDefsFromFolder(const std::string& rootPath) {
     g_DefWorkspace.IsLoaded = false;
     g_DefWorkspace.CategorizedDefs.clear();
     g_DefWorkspace.RootPath = rootPath;
@@ -251,15 +282,12 @@ static void LoadDefsFromFolder(const std::string& rootPath) {
         }
     }
     LoadHeadersFromDir(rootPath);
-
-    // <--- NEW: Scan for Sound Banks after loading defs
     ScanSoundBanks();
-
     g_DefWorkspace.SelectedType = ""; g_DefWorkspace.SelectedEntryIndex = -1; g_DefWorkspace.Editor.SetText("");
     g_DefWorkspace.IsLoaded = true;
 }
 
-static void CreateNewDef(const std::string& type) {
+inline void CreateNewDef(const std::string& type) {
     if (g_DefWorkspace.RootPath.empty()) return;
     std::string baseName = "New_Entry";
     std::string candidateName = baseName;
@@ -286,7 +314,7 @@ static void CreateNewDef(const std::string& type) {
     }
 }
 
-static void DeleteDefEntry(const DefEntry& entry) {
+inline void DeleteDefEntry(const DefEntry& entry) {
     std::ifstream inFile(entry.SourceFile, std::ios::binary);
     if (!inFile.is_open()) return;
     std::string content((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
@@ -332,9 +360,7 @@ static void DeleteDefEntry(const DefEntry& entry) {
     g_DefWorkspace.SelectedEntryIndex = -1; g_DefWorkspace.SelectedType = ""; g_DefWorkspace.Editor.SetText("");
 }
 
-// --- SAVE & LOAD ---
-
-static void SaveDefEntry(DefEntry& entry) {
+inline void SaveDefEntry(DefEntry& entry) {
     std::string newContent = g_DefWorkspace.Editor.GetText();
     std::ifstream inFile(entry.SourceFile, std::ios::binary);
     std::string fileContent((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
@@ -354,11 +380,8 @@ static void SaveDefEntry(DefEntry& entry) {
         }
     }
     entry.EndOffset += sizeDiff;
-
-    // Normalization Fix:
     g_DefWorkspace.Editor.SetText(newContent);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
-
     std::stringstream ss(newContent);
     std::string line;
     while (std::getline(ss, line)) {
@@ -371,7 +394,7 @@ static void SaveDefEntry(DefEntry& entry) {
     }
 }
 
-static void SaveHeaderEntry(EnumEntry& entry) {
+inline void SaveHeaderEntry(EnumEntry& entry) {
     std::string newContent = g_DefWorkspace.Editor.GetText();
     std::ifstream inFile(entry.FilePath, std::ios::binary);
     std::string fileContent((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
@@ -390,32 +413,27 @@ static void SaveHeaderEntry(EnumEntry& entry) {
     }
     entry.EndOffset += sizeDiff;
     entry.FullContent = newContent;
-
-    // Normalization Fix:
     g_DefWorkspace.Editor.SetText(newContent);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
 }
 
-static void LoadDefContent(DefEntry& entry) {
+inline void LoadDefContent(DefEntry& entry) {
     std::ifstream file(entry.SourceFile, std::ios::binary);
     if (!file.is_open()) return;
     file.seekg(entry.StartOffset);
     size_t len = entry.EndOffset - entry.StartOffset;
     std::string buffer(len, '\0');
     file.read(&buffer[0], len);
-
-    // Normalization Fix:
     g_DefWorkspace.Editor.SetText(buffer);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
 }
 
-static void LoadHeaderContent(EnumEntry& entry) {
-    // Normalization Fix:
+inline void LoadHeaderContent(EnumEntry& entry) {
     g_DefWorkspace.Editor.SetText(entry.FullContent);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
 }
 
-static void FindNextInEditor() {
+inline void FindNextInEditor() {
     if (!g_DefWorkspace.IsLoaded) return;
     std::string query = g_DefWorkspace.SearchBuffer;
     if (query.empty()) return;

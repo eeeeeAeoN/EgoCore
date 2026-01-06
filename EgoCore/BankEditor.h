@@ -174,6 +174,9 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
         }
         AddedEntryData ae; ae.Type = newEntry.Type; ae.NamePrefix = prefix;
         ae.Raw = sourceData; ae.Info = infoData;
+
+        ae.Dependencies = newEntry.Dependencies;
+
         g_LipSyncState.PendingAdds[sbIdx][newEntry.ID] = ae;
     }
 
@@ -344,47 +347,93 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     BankEntry& e = bank->Entries[bank->SelectedEntryIndex];
     std::vector<uint8_t> newBytes;
 
+    // --- ANIMATION ---
     if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
         newBytes = g_ActiveAnim.Serialize();
     }
+    // --- TEXT ---
     else if (bank->Type == EBankType::Text) {
         newBytes = g_TextParser.Recompile();
-        if (e.Type == 0 && !g_TextParser.TextData.Identifier.empty()) e.Name = g_TextParser.TextData.Identifier;
-    }
-    else if (bank->Type == EBankType::Dialogue) {
-        if (g_LipSyncParser.IsParsed) {
-            newBytes = g_LipSyncParser.Recompile();
-            bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-            bank->CurrentEntryRawData = newBytes;
-            e.Size = (uint32_t)newBytes.size();
-            std::vector<uint8_t> newInfo(4); memcpy(newInfo.data(), &g_LipSyncParser.Data.Duration, 4);
-            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo; e.InfoSize = 4;
-
-            if (EnsureLipSyncLoaded()) {
-                int sbIdx = 0;
-                if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
-                    std::string currentName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
-                    if (g_LipSyncState.SubBankMap.count(currentName)) sbIdx = g_LipSyncState.SubBankMap[currentName];
-                }
-
-                std::string prefix = GetPrefixForSubBank(bank->SubBanks[bank->ActiveSubBankIndex].Name);
-                AddedEntryData ae; ae.Type = e.Type; ae.NamePrefix = prefix; ae.Raw = newBytes; ae.Info = newInfo;
-                g_LipSyncState.PendingAdds[sbIdx][e.ID] = ae;
-            }
-            g_BankStatus = "LipSync Entry Saved to Memory (Pending Recompile).";
-            return;
+        if (e.Type == 0 && !g_TextParser.TextData.Identifier.empty()) {
+            e.Name = g_TextParser.TextData.Identifier;
         }
     }
-    else return;
+    // --- LIPSYNC (DIALOGUE) ---
+    else if (bank->Type == EBankType::Dialogue) {
+        if (g_LipSyncParser.IsParsed) {
+            // 1. Recompile Raw Data (Dictionary is now sorted inside Recompile)
+            newBytes = g_LipSyncParser.Recompile();
 
+            // 2. Construct Info Block (Strictly 4-Byte Float Duration)
+            std::vector<uint8_t> newInfo(4);
+            float dur = g_LipSyncParser.Data.Duration;
+            memcpy(newInfo.data(), &dur, 4);
+
+            // 3. Update LoadedBank State (Immediate Editor Feedback)
+            bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+            bank->CurrentEntryRawData = newBytes;
+            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
+            e.Size = (uint32_t)newBytes.size();
+            e.InfoSize = 4;
+
+            // 4. Update Backend State (PendingAdds) for Compilation
+            // We treat Edits as "Adds" that overwrite the ID in the compiler map.
+            if (EnsureLipSyncLoaded()) {
+                std::string currentSubName = "";
+                int sbIdx = 0;
+
+                if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
+                    currentSubName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
+                    if (g_LipSyncState.SubBankMap.count(currentSubName)) {
+                        sbIdx = g_LipSyncState.SubBankMap[currentSubName];
+                    }
+                }
+
+                // Determine Prefix (Preserve "ScriptDialogue" vs "Dialogue")
+                // We split the existing name (e.g. "ScriptDialogue_123") to get the prefix.
+                std::string prefix;
+                size_t us = e.Name.find_last_of('_');
+                if (us != std::string::npos) {
+                    prefix = e.Name.substr(0, us);
+                }
+                else {
+                    // Fallback if name format is unexpected
+                    prefix = GetPrefixForSubBank(currentSubName);
+                }
+
+                AddedEntryData ae;
+                ae.Type = e.Type;
+                ae.NamePrefix = prefix;
+                ae.Raw = newBytes;
+                ae.Info = newInfo;
+
+                // CRITICAL: Ensure Dependency is present
+                if (!e.Dependencies.empty()) {
+                    ae.Dependencies = e.Dependencies;
+                }
+                else {
+                    // Hardcode the vanilla default if missing
+                    ae.Dependencies.push_back("SPEAKER_FEMALE1");
+                }
+
+                g_LipSyncState.PendingAdds[sbIdx][e.ID] = ae;
+            }
+
+            g_BankStatus = "LipSync Entry Saved to Memory (Pending Recompile).";
+            return; // Return early as we handled the specific LipSync logic
+        }
+    }
+    else {
+        return; // Unknown bank type
+    }
+
+    // --- GENERIC UPDATE (For Text/Anim) ---
     bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
     bank->CurrentEntryRawData = newBytes;
     e.Size = (uint32_t)newBytes.size();
     UpdateFilter(*bank);
     g_BankStatus = "Saved to Memory (Size: " + std::to_string(newBytes.size()) + ")";
 }
-
-// --- LINKED MEDIA DELETION HELPERS ---
 
 inline void DeleteLinkedMedia(const std::string& speechBankName, const std::string& identifier) {
     // 1. Resolve ID
