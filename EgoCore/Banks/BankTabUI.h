@@ -361,13 +361,26 @@ static void DrawBankTab() {
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
 
+                    // Resolve Type Name
+                    std::string typeName = "Unknown";
+                    if (bank.Type == EBankType::Text) {
+                        if (e.Type == 0) typeName = "Text Entry";
+                        else if (e.Type == 1) typeName = "Text Group";
+                        else if (e.Type == 2) typeName = "Narrator List";
+                        else typeName = "Type " + std::to_string(e.Type);
+                    }
+                    else {
+                        typeName = "Type " + std::to_string(e.Type);
+                    }
+
                     ImGui::AlignTextToFramePadding();
-                    ImGui::Text("ID: %d | Type: %d | Size: %d bytes", e.ID, e.Type, e.Size);
+                    // Display Name instead of Number
+                    ImGui::Text("ID: %d | %s | Size: %d bytes", e.ID, typeName.c_str(), e.Size);
 
                     // Right: Actions
                     ImGui::SameLine();
                     float avail = ImGui::GetContentRegionAvail().x;
-                    float buttonsWidth = 140.0f; // Save(70) + Delete(60) + Spacing
+                    float buttonsWidth = 140.0f;
                     if (avail > buttonsWidth) {
                         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonsWidth);
                     }
@@ -392,7 +405,6 @@ static void DrawBankTab() {
                         }
                     }
                     ImGui::PopStyleColor();
-                    // -------------------------
 
                     ImGui::Separator();
 

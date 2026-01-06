@@ -102,7 +102,7 @@ public:
 
     // --- MAIN FUNCTIONS ---
 
-    void Parse(const std::vector<uint8_t>& data, int entryType) {
+    bool Parse(const std::vector<uint8_t>& data, int entryType) {
         IsParsed = false;
         IsGroup = false;
         IsNarratorList = false;
@@ -113,7 +113,7 @@ public:
         DebugLog = "";
         NarratorStartID = 0;
 
-        if (data.empty()) return;
+        if (data.empty()) return false;
 
         size_t cursor = 0;
         size_t size = data.size();
@@ -154,18 +154,20 @@ public:
                 if (foundOffset != -1) {
                     cursor = foundOffset + sigLen;
 
-                    // SKIP PADDING (00 00 00 00) - Confirmed by hex dump
-                    if (cursor + 4 <= size) cursor += 4;
+                    // SKIP 8 BYTES PADDING (Confirmed by Hex: 00 00 00 00 00 00 00 00)
+                    if (cursor + 8 <= size) cursor += 8;
 
-                    uint32_t count = 0;
+                    // READ TOTAL DATA SIZE (e.g. 14 15 00 00)
+                    uint32_t dataSize = 0;
                     if (cursor + 4 <= size) {
-                        count = *(uint32_t*)(ptr + cursor);
+                        dataSize = *(uint32_t*)(ptr + cursor);
                         cursor += 4;
                     }
 
-                    // READ START ID (e.g. 7B 01 00 00) - Confirmed by hex dump
+                    // READ COUNT (Num Entries, e.g. 7B 01 00 00)
+                    uint32_t count = 0;
                     if (cursor + 4 <= size) {
-                        NarratorStartID = *(uint32_t*)(ptr + cursor);
+                        count = *(uint32_t*)(ptr + cursor);
                         cursor += 4;
                     }
 
@@ -182,7 +184,6 @@ public:
             else { // TYPE_TEXT (Default - Type 0)
                 IsGroup = false;
 
-                // ORIGINAL ORDER (Correct)
                 TextData.Content = ReadWString(ptr, cursor, size);
                 TextData.SpeechBank = ReadPresizedString(ptr, cursor, size);
                 TextData.Speaker = ReadPresizedString(ptr, cursor, size);
@@ -207,6 +208,8 @@ public:
             DebugLog = "Exception during parsing.";
             IsParsed = false;
         }
+
+        return IsParsed;
     }
 
     // --- RECOMPILE ---
@@ -225,24 +228,29 @@ public:
             std::string sig = "[NarratorList]";
             buf.insert(buf.end(), sig.begin(), sig.end());
 
-            // 4 bytes padding
-            uint32_t pad = 0;
-            buf.insert(buf.end(), (uint8_t*)&pad, (uint8_t*)&pad + 4);
+            // 8 bytes padding
+            uint64_t pad = 0;
+            buf.insert(buf.end(), (uint8_t*)&pad, (uint8_t*)&pad + 8);
 
-            // Count
+            // Calculate Data Size first
+            uint32_t dataSize = 0;
+            for (const auto& str : NarratorStrings) {
+                dataSize += (uint32_t)str.length() + 1; // +1 for null term
+            }
+
+            // Write Size
+            buf.insert(buf.end(), (uint8_t*)&dataSize, (uint8_t*)&dataSize + 4);
+
+            // Write Count
             uint32_t count = (uint32_t)NarratorStrings.size();
             buf.insert(buf.end(), (uint8_t*)&count, (uint8_t*)&count + 4);
 
-            // Start ID (Preserve the one we read)
-            buf.insert(buf.end(), (uint8_t*)&NarratorStartID, (uint8_t*)&NarratorStartID + 4);
-
-            // Strings
+            // Write Strings
             for (const auto& str : NarratorStrings) {
                 WriteNullTermString(buf, str);
             }
         }
         else {
-            // Type 0 - ORIGINAL ORDER (Correct)
             WriteWString(buf, TextData.Content);
             WritePresizedString(buf, TextData.SpeechBank);
             WritePresizedString(buf, TextData.Speaker);

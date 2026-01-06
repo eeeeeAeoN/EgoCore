@@ -49,6 +49,7 @@
     <ClInclude Include="Text\TextBackend.h" />
     <ClInclude Include="Text\TextCompiler.h" />
     <ClInclude Include="Text\TextParser.h" />
+    <ClInclude Include="Text\TextProperties.h" />
     <ClInclude Include="Utilities\ConfigBackend.h" />
     <ClInclude Include="Utilities\FileDialogs.h" />
     <ClInclude Include="Utilities\GltfExporter.h" />

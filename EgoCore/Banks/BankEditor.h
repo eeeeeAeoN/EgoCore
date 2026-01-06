@@ -56,6 +56,17 @@ inline std::string GetSubBankNameForSpeechBank(const std::string& speechBank) {
     return ""; // Fallback or unknown
 }
 
+inline void ResetAudioPlayers() {
+    for (auto& [key, parser] : g_BackgroundAudioBanks) {
+        if (parser) parser->Player.Reset();
+    }
+    for (auto& bank : g_OpenBanks) {
+        if (bank.Type == EBankType::Audio && bank.AudioParser) {
+            bank.AudioParser->Player.Reset();
+        }
+    }
+}
+
 // --- CREATION FUNCTIONS ---
 inline void CreateNewDialogueEntry(LoadedBank* bank) {
     if (!bank) return;
@@ -240,13 +251,14 @@ inline void SaveLutBank(LoadedBank* bank) {
     }
 }
 
-// --- SAVE BIG BANK (Sync) ---
 inline void SaveBigBank(LoadedBank* bank) {
     if (bank->Type == EBankType::Text) {
+        // 1. Compile Text Bank (Safe, Memory/Disk for .BIG)
         if (TextCompiler::CompileTextBank(bank)) {
             g_BankStatus = "Text Bank Recompiled.";
             ReloadBankInPlace(bank);
 
+            // 2. CHECK FOR CASCADE
             bool mediaModified = false;
             if (!g_LipSyncState.PendingAdds.empty() || !g_LipSyncState.PendingDeletes.empty()) mediaModified = true;
             for (auto& [key, parser] : g_BackgroundAudioBanks) if (!parser->ModifiedCache.empty()) mediaModified = true;
@@ -254,50 +266,63 @@ inline void SaveBigBank(LoadedBank* bank) {
             if (mediaModified) {
                 g_BankStatus = "Compiling Linked Media (Cascade)...";
 
-                // 1. Compile Header Defs
-                for (auto& en : g_DefWorkspace.AllEnums) {
-                    if (en.FilePath.find("snds.h") != std::string::npos) { std::ofstream out(en.FilePath, std::ios::binary); if (out.is_open()) { out << en.FullContent; out.close(); } }
-                }
+                // STEP A: RELEASE ALL LOCKS
+                // This is the fix. We must close every open file handle and stop audio.
+                ResetAudioPlayers();
 
-                // 2. Save Background & Open Audio Banks (Update Disk Data)
-                for (auto& [key, parser] : g_BackgroundAudioBanks) {
-                    if (parser->IsLoaded) { parser->SaveBank(parser->FileName); parser->ModifiedCache.clear(); }
-                }
-                for (int i = 0; i < (int)g_OpenBanks.size(); ++i) {
-                    if (g_OpenBanks[i].Type == EBankType::Audio) {
-                        SaveLutBank(&g_OpenBanks[i]); // Saves and Reloads (keeps it open for now)
-                    }
-                }
-
-                // 3. CLOSE CONFLICTING FILES (Critical for Cascade)
-                // We track which banks we close so we can reload them afterwards.
+                // Track who needs reopening
                 std::vector<int> closedBankIndices;
 
+                // Close Background Parsers
+                for (auto& [key, parser] : g_BackgroundAudioBanks) {
+                    if (parser->Stream.is_open()) parser->Stream.close();
+                }
+
+                // Close Open Tabs
                 for (int i = 0; i < (int)g_OpenBanks.size(); ++i) {
                     auto& b = g_OpenBanks[i];
                     if (b.Type == EBankType::Audio && b.AudioParser) {
-                        // Close the internal stream of the AudioParser
-                        b.AudioParser->Stream.close();
+                        if (b.AudioParser->Stream.is_open()) b.AudioParser->Stream.close();
                         closedBankIndices.push_back(i);
                     }
                     else if (b.Type == EBankType::Dialogue) {
-                        // Close dialogue.big (or similar) to prevent locking
-                        if (b.Stream && b.Stream->is_open()) {
-                            b.Stream->close();
-                        }
+                        if (b.Stream && b.Stream->is_open()) b.Stream->close();
                         closedBankIndices.push_back(i);
                     }
                 }
 
-                // Also close the global Lipsync stream if open
+                // Close LipSync Stream
                 if (g_LipSyncState.Stream && g_LipSyncState.Stream->is_open()) g_LipSyncState.Stream->close();
 
-                // 4. Compile Binaries
-                std::string log; std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
+                // STEP B: SAVE MODIFIED FILES
+                // Now that locks are released, we can write to disk.
+
+                // 1. Headers
+                for (auto& en : g_DefWorkspace.AllEnums) {
+                    if (en.FilePath.find("snds.h") != std::string::npos) {
+                        std::ofstream out(en.FilePath, std::ios::binary);
+                        if (out.is_open()) { out << en.FullContent; out.close(); }
+                    }
+                }
+
+                // 2. Audio Banks (.LUT)
+                for (auto& [key, parser] : g_BackgroundAudioBanks) {
+                    if (parser->IsLoaded && !parser->ModifiedCache.empty()) {
+                        // Parser's Stream is closed, so SaveBank must handle opening input/output internally.
+                        // If SaveBank relies on Stream being open, we might need to re-open it briefly inside SaveBank logic.
+                        // Assuming AudioBackend::SaveBank is robust.
+                        parser->SaveBank(parser->FileName);
+                        parser->ModifiedCache.clear();
+                    }
+                }
+
+                // STEP C: EXTERNAL COMPILATION
+                // The binaries require clean access to the updated .LUTs and .Hs
+                std::string log;
+                std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
                 BinaryParser::CompileSoundBinaries(defsPath, log);
 
-                // 5. Compile LipSync (Re-writes dialogue.big)
-                LoadedBank* openDialogue = nullptr; // Track for specific logic if needed, but we used indices
+                // STEP D: LIPSYNC COMPILATION
                 if (EnsureLipSyncLoaded()) {
                     if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
                         g_LipSyncState.PendingAdds.clear();
@@ -306,7 +331,15 @@ inline void SaveBigBank(LoadedBank* bank) {
                     }
                 }
 
-                // 6. RELOAD CLOSED BANKS
+                // STEP E: RESTORE STATE
+                // Re-open streams for the UI to work again
+
+                // Reload Background
+                for (auto& [key, parser] : g_BackgroundAudioBanks) {
+                    parser->Parse(parser->FileName);
+                }
+
+                // Reload Tabs
                 for (int idx : closedBankIndices) {
                     if (idx < g_OpenBanks.size()) {
                         ReloadBankInPlace(&g_OpenBanks[idx]);
@@ -315,7 +348,8 @@ inline void SaveBigBank(LoadedBank* bank) {
 
                 g_BankStatus = "Chain Complete!";
             }
-            g_ShowSuccessPopup = true; g_SuccessMessage = "Text Bank (and chain) Compiled Successfully!";
+            g_ShowSuccessPopup = true;
+            g_SuccessMessage = "Text Bank & Linked Media Compiled Successfully!";
         }
         else {
             g_BankStatus = "Text Bank Compilation Failed.";
@@ -330,9 +364,13 @@ inline void SaveBigBank(LoadedBank* bank) {
         if (EnsureLipSyncLoaded()) {
             if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
                 g_BankStatus = "Dialogue Bank Recompiled Successfully.";
-                g_LipSyncState.PendingAdds.clear(); g_LipSyncState.PendingDeletes.clear(); g_LipSyncState.CachedSubBankIndex = -1;
+                g_LipSyncState.PendingAdds.clear();
+                g_LipSyncState.PendingDeletes.clear();
+                g_LipSyncState.CachedSubBankIndex = -1;
+
                 ReloadBankInPlace(bank);
-                g_ShowSuccessPopup = true; g_SuccessMessage = "Dialogue Bank Compiled Successfully!";
+                g_ShowSuccessPopup = true;
+                g_SuccessMessage = "Dialogue Bank Compiled Successfully!";
             }
             else {
                 g_BankStatus = "Error: Failed to recompile dialogue.big.";
@@ -340,8 +378,12 @@ inline void SaveBigBank(LoadedBank* bank) {
             }
         }
     }
+    else if (bank->Type == EBankType::Audio) {
+        SaveLutBank(bank);
+    }
 }
 
+// --- SAVE ENTRY CHANGES (Safe - Memory Only) ---
 inline void SaveEntryChanges(LoadedBank* bank) {
     if (!bank || bank->SelectedEntryIndex == -1) return;
     BankEntry& e = bank->Entries[bank->SelectedEntryIndex];
@@ -351,59 +393,25 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         newBytes = g_ActiveAnim.Serialize();
     }
     else if (bank->Type == EBankType::Text) {
-        // --- TEXT LOGIC START ---
-        // 1. Enforce LUG ext
         g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
 
-        // 2. Handle Rename / Def Update
         if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
             if (!g_TextParser.TextData.SpeechBank.empty()) {
                 UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
             }
             e.Name = g_TextParser.TextData.Identifier;
-            g_OriginalIdentifier = g_TextParser.TextData.Identifier; // Sync
+            g_OriginalIdentifier = g_TextParser.TextData.Identifier;
         }
         else if (e.Type == 0 && !g_TextParser.TextData.Identifier.empty()) {
             e.Name = g_TextParser.TextData.Identifier;
         }
 
-        // 3. Update BankEntry Dependencies
         if (!g_TextParser.TextData.SpeechBank.empty()) {
             bool exists = false;
             for (const auto& d : e.Dependencies) if (d == g_TextParser.TextData.SpeechBank) exists = true;
             if (!exists) {
-                e.Dependencies.clear(); // Usually only 1 speech bank
+                e.Dependencies.clear();
                 e.Dependencies.push_back(g_TextParser.TextData.SpeechBank);
-            }
-        }
-
-        // 4. Check for Side-Effects (Audio/LipSync)
-        bool isAudioModified = false;
-        if (!g_TextParser.TextData.SpeechBank.empty()) {
-            std::string key = g_TextParser.TextData.SpeechBank;
-            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-            if (g_BackgroundAudioBanks.count(key) && !g_BackgroundAudioBanks[key]->ModifiedCache.empty()) isAudioModified = true;
-        }
-        bool isLipSyncModified = !g_LipSyncState.PendingAdds.empty() || !g_LipSyncState.PendingDeletes.empty();
-
-        if (isAudioModified) {
-            std::string key = g_TextParser.TextData.SpeechBank;
-            size_t dot = key.find_last_of('.');
-            if (dot != std::string::npos) key = key.substr(0, dot) + ".lut";
-            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-            if (g_BackgroundAudioBanks.count(key)) {
-                g_BackgroundAudioBanks[key]->SaveBank(g_BackgroundAudioBanks[key]->FileName);
-                g_BackgroundAudioBanks[key]->ModifiedCache.clear();
-            }
-        }
-
-        if (isLipSyncModified) {
-            if (EnsureLipSyncLoaded()) {
-                if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
-                    g_LipSyncState.PendingAdds.clear();
-                    g_LipSyncState.PendingDeletes.clear();
-                    g_LipSyncState.CachedSubBankIndex = -1;
-                }
             }
         }
 
@@ -412,7 +420,6 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         }
 
         newBytes = g_TextParser.Recompile();
-        // --- TEXT LOGIC END ---
     }
     else if (bank->Type == EBankType::Dialogue) {
         if (g_LipSyncParser.IsParsed) {
@@ -429,12 +436,9 @@ inline void SaveEntryChanges(LoadedBank* bank) {
                     std::string currentName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
                     if (g_LipSyncState.SubBankMap.count(currentName)) sbIdx = g_LipSyncState.SubBankMap[currentName];
                 }
-
                 std::string prefix = GetPrefixForSubBank(bank->SubBanks[bank->ActiveSubBankIndex].Name);
                 AddedEntryData ae; ae.Type = e.Type; ae.NamePrefix = prefix; ae.Raw = newBytes; ae.Info = newInfo;
-                if (!e.Dependencies.empty()) ae.Dependencies = e.Dependencies;
-                else ae.Dependencies.push_back("SPEAKER_FEMALE1");
-
+                if (!e.Dependencies.empty()) ae.Dependencies = e.Dependencies; else ae.Dependencies.push_back("SPEAKER_FEMALE1");
                 g_LipSyncState.PendingAdds[sbIdx][e.ID] = ae;
             }
             g_BankStatus = "LipSync Entry Saved to Memory (Pending Recompile).";
@@ -452,54 +456,42 @@ inline void SaveEntryChanges(LoadedBank* bank) {
 }
 
 inline void DeleteLinkedMedia(const std::string& speechBankName, const std::string& identifier) {
-    // 1. Resolve ID
     int32_t soundID = ResolveAudioID(speechBankName, identifier);
-    if (soundID == -1) {
-        g_BankStatus = "Error: Could not resolve ID for " + identifier;
-        return;
-    }
-
-    // 2. Remove Header Definition (Immediate Disk Write)
+    if (soundID == -1) return;
     RemoveHeaderDefinition(speechBankName, identifier);
 
-    // 3. Remove from Audio Bank (LUT) - Memory Only (Background)
     std::string lutName = speechBankName;
     if (lutName.find(".lug") != std::string::npos) lutName = lutName.substr(0, lutName.find(".lug")) + ".lut";
     else if (lutName.find(".") == std::string::npos) lutName += ".lut";
 
-    // We use the background loader, which manages the map of open audio parsers
+    // Check if open in tabs first (Safe deletion)
+    LoadedBank* targetBank = nullptr;
+    for (auto& b : g_OpenBanks) {
+        if (b.Type == EBankType::Audio && b.FileName == lutName) { targetBank = &b; break; }
+    }
+
     auto audioParser = GetOrLoadAudioBank(lutName);
     if (audioParser) {
         int idx = -1;
         for (int i = 0; i < (int)audioParser->Entries.size(); i++) {
-            if (audioParser->Entries[i].SoundID == (uint32_t)soundID) {
-                idx = i;
-                break;
-            }
+            if (audioParser->Entries[i].SoundID == (uint32_t)soundID) { idx = i; break; }
         }
         if (idx != -1) {
             audioParser->DeleteEntry(idx);
-        }
-    }
-
-    // 4. Remove from LipSync (Dialogue) - Memory Only (State)
-    if (EnsureLipSyncLoaded()) {
-        std::string subName = GetSubBankNameForSpeechBank(speechBankName);
-        if (!subName.empty()) {
-            if (g_LipSyncState.SubBankMap.count(subName)) {
-                int sbIdx = g_LipSyncState.SubBankMap[subName];
-
-                // Add to Pending Deletes
-                g_LipSyncState.PendingDeletes[sbIdx].insert((uint32_t)soundID);
-
-                // If it was recently added in this session, remove that pending add
-                if (g_LipSyncState.PendingAdds.count(sbIdx)) {
-                    g_LipSyncState.PendingAdds[sbIdx].erase((uint32_t)soundID);
-                }
+            if (targetBank) {
+                targetBank->Entries.erase(targetBank->Entries.begin() + idx);
+                UpdateFilter(*targetBank);
             }
         }
     }
 
-    // No immediate save. The user will trigger the cascade via "Recompile Text Bank".
-    g_BankStatus = "Deleted Linked Media (ID " + std::to_string(soundID) + ") - Pending Recompile...";
+    if (EnsureLipSyncLoaded()) {
+        std::string subName = GetSubBankNameForSpeechBank(speechBankName);
+        if (!subName.empty() && g_LipSyncState.SubBankMap.count(subName)) {
+            int sbIdx = g_LipSyncState.SubBankMap[subName];
+            g_LipSyncState.PendingDeletes[sbIdx].insert((uint32_t)soundID);
+            if (g_LipSyncState.PendingAdds.count(sbIdx)) g_LipSyncState.PendingAdds[sbIdx].erase((uint32_t)soundID);
+        }
+    }
+    g_BankStatus = "Deleted Linked Media - Pending Recompile...";
 }

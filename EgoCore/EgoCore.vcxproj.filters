@@ -177,6 +177,9 @@
     <ClInclude Include="Banks\BankTabUI.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
+    <ClInclude Include="Text\TextProperties.h">
+      <Filter>Source Files\Text</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">
