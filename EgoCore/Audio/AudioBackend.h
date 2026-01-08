@@ -112,9 +112,18 @@ public:
     void DeleteEntry(int index) {
         if (index < 0 || index >= (int)Entries.size()) return;
         uint32_t id = Entries[index].SoundID;
+
         Entries.erase(Entries.begin() + index);
+
+        // Remove from cache if it was a new add
         if (ModifiedCache.count(id)) ModifiedCache.erase(id);
+
+        // CRITICAL: We need a way to tell the saver that this bank IS dirty, 
+        // even if ModifiedCache is empty (because we just removed something).
+        IsDirty = true;
     }
+
+    bool IsDirty = false;
 
     // --- UPDATED: COPY & PATCH WITH CORRECT ID LOGIC ---
     bool CloneEntry(int sourceIndex) {

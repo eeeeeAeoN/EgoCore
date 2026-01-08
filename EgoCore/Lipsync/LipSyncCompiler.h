@@ -182,7 +182,7 @@ namespace LipSyncCompiler {
 
             uint32_t tStart = (uint32_t)out.tellp();
 
-            // --- CRITICAL FIX: WRITE SUB-HEADER [1, 1, COUNT] ---
+            // --- CRITICAL: WRITE SUB-HEADER [1, 1, COUNT] ---
             uint32_t u1 = 1;
             uint32_t u2 = 1;
             uint32_t cnt = (uint32_t)finalSubBankEntries[i].size();
@@ -230,14 +230,19 @@ namespace LipSyncCompiler {
             tableSizes.push_back(tEnd - tStart);
         }
 
-        // 5. WRITE FOOTER
+        // 5. WRITE FOOTER AND UPDATE STATE
         uint32_t realFootOff = (uint32_t)out.tellp();
         header.footOff = realFootOff;
         uint32_t bankCount = (uint32_t)state.SubBanks.size();
         out.write((char*)&bankCount, 4);
 
         for (int i = 0; i < (int)state.SubBanks.size(); i++) {
-            InternalBankInfo info = state.SubBanks[i];
+            // !!! CRITICAL FIX !!!
+            // We use a reference (&) here so we update the LIVE state.
+            // Previously we were copying it, writing new values to the copy, 
+            // and leaving the memory state with old offsets.
+            InternalBankInfo& info = state.SubBanks[i];
+
             info.EntryCount = (uint32_t)finalSubBankEntries[i].size();
             info.Offset = tableOffsets[i];
             info.Size = tableSizes[i];
