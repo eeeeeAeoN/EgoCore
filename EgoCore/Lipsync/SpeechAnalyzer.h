@@ -240,6 +240,20 @@ public:
                     }
                 }
             }
+
+            // --- FIX: HANDLE SILENCE / EMPTY FRAMES ---
+            // The game engine treats 0 keys as uninitialized/invalid, causing the mouth to hang open.
+            // We must provide at least some keys (with 0 weight) to indicate "Mouth Closed".
+            if (lsFrame.Keys.empty()) {
+                for (uint8_t i = 0; i < 3; i++) {
+                    CLipSyncFrameKey key;
+                    key.ID = i;
+                    key.WeightFloat = 0.0f;
+                    key.WeightByte = 0;
+                    lsFrame.Keys.push_back(key);
+                }
+            }
+
             result.Frames.push_back(lsFrame);
         }
 

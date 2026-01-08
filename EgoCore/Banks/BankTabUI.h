@@ -268,8 +268,45 @@ static void DrawBankTab() {
                     ImGui::Separator();
                 }
 
-                ImGui::InputText("Search", bank.FilterText, 128);
-                if (ImGui::IsItemEdited()) UpdateFilter(bank);
+                // --- FILTER UI ---
+                if (bank.Type == EBankType::Text) {
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    float filterBtnWidth = 60.0f;
+
+                    // 1. Search Box (Wide, Clean, No Label)
+                    ImGui::SetNextItemWidth(avail - filterBtnWidth - ImGui::GetStyle().ItemSpacing.x);
+                    ImGui::InputText("##search", bank.FilterText, 128);
+
+                    if (ImGui::IsItemEdited()) UpdateFilter(bank);
+
+                    // 2. Filter Button (Small, Next to it)
+                    ImGui::SameLine();
+                    if (ImGui::Button("Filter", ImVec2(filterBtnWidth, 0))) {
+                        ImGui::OpenPopup("FilterOptionsPopup");
+                    }
+
+                    if (ImGui::BeginPopup("FilterOptionsPopup")) {
+                        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Search Mode:");
+                        if (ImGui::RadioButton("Search by Name", bank.FilterMode == EFilterMode::Name)) { bank.FilterMode = EFilterMode::Name; UpdateFilter(bank); }
+                        if (ImGui::RadioButton("Search by ID", bank.FilterMode == EFilterMode::ID)) { bank.FilterMode = EFilterMode::ID; UpdateFilter(bank); }
+                        if (ImGui::RadioButton("Search by Speaker", bank.FilterMode == EFilterMode::Speaker)) { bank.FilterMode = EFilterMode::Speaker; UpdateFilter(bank); }
+
+                        ImGui::Separator();
+                        ImGui::TextColored(ImVec4(0, 1, 1, 1), "Type Modifier:");
+                        if (ImGui::RadioButton("Show All Types", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
+                        if (ImGui::RadioButton("Text Entries (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
+                        if (ImGui::RadioButton("Groups (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
+                        if (ImGui::RadioButton("Narrator Lists (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+
+                        ImGui::EndPopup();
+                    }
+                }
+                else {
+                    // Standard Filter for other banks
+                    ImGui::InputText("Search", bank.FilterText, 128);
+                    if (ImGui::IsItemEdited()) UpdateFilter(bank);
+                }
+                // ---------------------
 
                 if (ImGui::BeginPopupModal("Add Entry Type", &g_ShowAddEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
                     ImGui::Text("Select Entry Type:");

@@ -6,6 +6,8 @@
 #include "AnimProperties.h"
 #include "TextureParser.h"
 #include "AudioBackend.h" 
+// NEW: Include TextParser for peeking speakers
+#include "TextParser.h" 
 #include <fstream>
 #include <vector>
 #include <string>
@@ -48,6 +50,9 @@ struct InternalBankInfo {
     uint32_t Align;
 };
 
+// NEW: Filter Modes
+enum class EFilterMode { Name, ID, Speaker };
+
 struct LoadedBank {
     std::string FileName;
     std::string FullPath;
@@ -65,7 +70,12 @@ struct LoadedBank {
 
     int SelectedEntryIndex = -1;
     int SelectedLOD = 0;
+
+    // --- UPDATED FILTER STATE ---
     char FilterText[128] = "";
+    EFilterMode FilterMode = EFilterMode::Name; // Default: Name
+    int FilterTypeMask = -1; // -1: All, 0: Text, 1: Group, 2: Narrator
+
     std::map<int, std::vector<uint8_t>> SubheaderCache;
     std::vector<uint8_t> CurrentEntryRawData;
     std::map<int, std::vector<uint8_t>> ModifiedEntryData;
@@ -132,21 +142,98 @@ inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) 
     return EBankType::Unknown;
 }
 
+// Helper to peek speaker without full parsing overhead
+inline std::string PeekSpeakerFast(LoadedBank& bank, int index) {
+    const auto& e = bank.Entries[index];
+    if (e.Type != 0) return ""; // Only Type 0 has Speaker
+
+    // 1. Check Modified Cache first
+    if (bank.ModifiedEntryData.count(index)) {
+        CTextParser p; p.Parse(bank.ModifiedEntryData[index], 0);
+        return p.IsParsed ? p.TextData.Speaker : "";
+    }
+
+    // 2. Read from Disk (Partial Read)
+    if (!bank.Stream->is_open()) return "";
+    bank.Stream->clear();
+    bank.Stream->seekg(e.Offset, std::ios::beg);
+
+    // Skip Content (WString)
+    // We need to read char-by-char to find double null terminator
+    // Optimization: Buffer small chunk
+    std::vector<uint8_t> buf(2048); // Should cover most entries
+    bank.Stream->read((char*)buf.data(), (std::min)((uint32_t)buf.size(), e.Size));
+
+    size_t cursor = 0;
+    size_t max = buf.size();
+
+    // Skip WString Content
+    while (cursor + 2 <= max) {
+        uint16_t c = *(uint16_t*)(buf.data() + cursor);
+        cursor += 2;
+        if (c == 0) break;
+    }
+
+    // Skip SpeechBank (Presized)
+    if (cursor + 4 > max) return "";
+    uint32_t len = *(uint32_t*)(buf.data() + cursor);
+    cursor += 4 + len;
+
+    // Read Speaker (Presized)
+    if (cursor + 4 > max) return "";
+    len = *(uint32_t*)(buf.data() + cursor);
+    cursor += 4;
+
+    if (len > 0 && cursor + len <= max) {
+        return std::string((char*)(buf.data() + cursor), len);
+    }
+    return "";
+}
+
 inline void UpdateFilter(LoadedBank& bank) {
     bank.FilteredIndices.clear();
     std::string filter = bank.FilterText;
     std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
     for (size_t i = 0; i < bank.Entries.size(); i++) {
-        if (filter.empty()) { bank.FilteredIndices.push_back((int)i); continue; }
-
-        std::string name = bank.Entries[i].Name;
-        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-
-        std::string friendly = bank.Entries[i].FriendlyName;
-        std::transform(friendly.begin(), friendly.end(), friendly.begin(), ::tolower);
-
-        if (name.find(filter) != std::string::npos || friendly.find(filter) != std::string::npos) {
-            bank.FilteredIndices.push_back((int)i);
+        // 1. FILTER BY TYPE (Modifier)
+        // If TypeMask is set (not -1), entry must match it.
+        if (bank.FilterTypeMask != -1) {
+            if (bank.Entries[i].Type != bank.FilterTypeMask) continue;
         }
+
+        // 2. FILTER BY TEXT
+        if (filter.empty()) {
+            bank.FilteredIndices.push_back((int)i);
+            continue;
+        }
+
+        bool match = false;
+
+        if (bank.FilterMode == EFilterMode::ID) {
+            std::string idStr = std::to_string(bank.Entries[i].ID);
+            if (idStr.find(filter) != std::string::npos) match = true;
+        }
+        else if (bank.FilterMode == EFilterMode::Speaker && bank.Type == EBankType::Text) {
+            // Only Type 0 supports Speaker search
+            if (bank.Entries[i].Type == 0) {
+                std::string spk = PeekSpeakerFast(bank, (int)i);
+                std::transform(spk.begin(), spk.end(), spk.begin(), ::tolower);
+                if (spk.find(filter) != std::string::npos) match = true;
+            }
+        }
+        else {
+            // Default: Name / Friendly Name
+            std::string name = bank.Entries[i].Name;
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            std::string friendly = bank.Entries[i].FriendlyName;
+            std::transform(friendly.begin(), friendly.end(), friendly.begin(), ::tolower);
+
+            if (name.find(filter) != std::string::npos || friendly.find(filter) != std::string::npos) {
+                match = true;
+            }
+        }
+
+        if (match) bank.FilteredIndices.push_back((int)i);
     }
 }
