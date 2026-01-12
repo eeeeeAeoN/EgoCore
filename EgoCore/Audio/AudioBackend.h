@@ -10,49 +10,189 @@
 
 #pragma pack(push, 1)
 
-// Generic Segment Header (36 bytes) used by the game's loop
 struct LHFileSegmentHeader {
-    char     Name[32];      // Null-terminated, padded with 0
+    char     Name[32];
     uint32_t PayloadSize;
 };
 
-// The content of the "LHAudioBankLookupTable" segment
 struct LHAudioLookupContent {
-    uint32_t Priority;      // Typically 500 (Dialogue) or 1000 (Script)
+    uint32_t Priority;
     uint32_t NumEntries;
 };
 
-// The Entry structure inside the Lookup Table
 struct LookupEntry {
     uint32_t SoundID;
-    uint32_t Length;        // Size of the Audio Blob (Header + RIFF)
-    uint32_t Offset;        // Relative to the start of the Audio Segment payload
+    uint32_t Length;
+    uint32_t Offset;
 };
 
 #pragma pack(pop)
 
+// --- PLAYER CLASS ---
+class AudioPlayer {
+    ma_device device;
+    bool isInit = false;
+    std::vector<int16_t> activeBuffer;
+    std::atomic<size_t> playCursor = 0;
+    int currentSampleRate = 22050;
+    int currentChannels = 1;
+
+    static void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+        AudioPlayer* player = (AudioPlayer*)pDevice->pUserData;
+        if (!player) return;
+        int16_t* out = (int16_t*)pOutput;
+        size_t cursor = player->playCursor.load();
+
+        size_t totalSamples = player->activeBuffer.size();
+        size_t framesAvailable = (totalSamples - cursor) / player->currentChannels;
+        size_t framesToCopy = (std::min)((size_t)frameCount, framesAvailable);
+
+        if (framesToCopy > 0) {
+            size_t samplesToCopy = framesToCopy * player->currentChannels;
+
+            // Apply Hardcoded 50% Volume
+            for (size_t i = 0; i < samplesToCopy; i++) {
+                int32_t sample = player->activeBuffer[cursor + i];
+                sample = sample / 2; // Hardcoded 0.5 gain
+                out[i] = (int16_t)sample;
+            }
+
+            player->playCursor.store(cursor + samplesToCopy);
+        }
+
+        if (framesToCopy < frameCount) {
+            size_t samplesRemaining = (frameCount - framesToCopy) * player->currentChannels;
+            memset(out + (framesToCopy * player->currentChannels), 0, samplesRemaining * sizeof(int16_t));
+        }
+    }
+
+public:
+    AudioPlayer() { memset(&device, 0, sizeof(device)); }
+    ~AudioPlayer() { Reset(); }
+
+    void Reset() {
+        if (isInit) { ma_device_uninit(&device); isInit = false; }
+        activeBuffer.clear(); playCursor = 0;
+    }
+
+    void PlayPCM(const std::vector<int16_t>& pcm, int sampleRate, int channels = 1) {
+        Reset();
+        activeBuffer = pcm;
+        currentSampleRate = sampleRate;
+        currentChannels = channels;
+
+        ma_device_config config = ma_device_config_init(ma_device_type_playback);
+        config.playback.format = ma_format_s16;
+        config.playback.channels = channels;
+        config.sampleRate = sampleRate;
+        config.dataCallback = data_callback;
+        config.pUserData = this;
+
+        if (ma_device_init(NULL, &config, &device) == MA_SUCCESS) {
+            isInit = true;
+            ma_device_start(&device);
+        }
+    }
+
+    void PlayWav(const std::vector<uint8_t>& fileData) {
+        if (fileData.size() < 12) return;
+        const uint8_t* d = fileData.data();
+
+        if (memcmp(d, "RIFF", 4) != 0 || memcmp(d + 8, "WAVE", 4) != 0) return;
+
+        uint16_t formatTag = 1;
+        int channels = 1;
+        int rate = 22050;
+        int blockAlign = 0;
+        std::vector<int16_t> pcm;
+
+        size_t cursor = 12;
+        size_t size = fileData.size();
+
+        while (cursor + 8 < size) {
+            uint32_t chunkID = *(uint32_t*)(d + cursor);
+            uint32_t chunkSz = *(uint32_t*)(d + cursor + 4);
+            cursor += 8;
+
+            if (memcmp(&chunkID, "fmt ", 4) == 0) {
+                if (chunkSz >= 16) {
+                    formatTag = *(uint16_t*)(d + cursor);
+                    channels = *(uint16_t*)(d + cursor + 2);
+                    rate = *(uint32_t*)(d + cursor + 4);
+                    blockAlign = *(uint16_t*)(d + cursor + 12);
+                }
+            }
+            else if (memcmp(&chunkID, "data", 4) == 0) {
+                if (cursor + chunkSz <= size) {
+                    if (formatTag == 0x0069) { // Xbox ADPCM
+                        std::vector<uint8_t> adpcmData(d + cursor, d + cursor + chunkSz);
+                        pcm = XboxAdpcmDecoder::Decode(adpcmData, channels, blockAlign);
+                    }
+                    else { // Assume PCM
+                        size_t sampleCount = chunkSz / 2;
+                        pcm.resize(sampleCount);
+                        memcpy(pcm.data(), d + cursor, chunkSz);
+                    }
+                    PlayPCM(pcm, rate, channels);
+                }
+                return;
+            }
+            cursor += chunkSz;
+        }
+    }
+
+    void Play() { if (isInit) ma_device_start(&device); }
+    void Pause() { if (isInit) ma_device_stop(&device); }
+
+    // --- ADDED STOP METHOD ---
+    void Stop() {
+        if (isInit) {
+            ma_device_stop(&device);
+            playCursor = 0; // Rewind to beginning
+        }
+    }
+
+    bool IsPlaying() { return isInit && ma_device_is_started(&device); }
+
+    float GetProgress() {
+        return activeBuffer.empty() ? 0.0f : (float)playCursor / activeBuffer.size();
+    }
+
+    float GetTotalDuration() {
+        return activeBuffer.empty() ? 0.0f : (float)(activeBuffer.size() / currentChannels) / currentSampleRate;
+    }
+
+    float GetCurrentTime() {
+        return activeBuffer.empty() ? 0.0f : (float)(playCursor / currentChannels) / currentSampleRate;
+    }
+
+    void Seek(float p) {
+        if (!activeBuffer.empty()) {
+            size_t target = (size_t)(p * activeBuffer.size());
+            target = target - (target % currentChannels);
+            playCursor = target;
+        }
+    }
+};
+
+// --- BANK PARSER CLASS ---
 class AudioBankParser {
 public:
     std::string FileName;
     std::fstream Stream;
     uint32_t AudioBlobStart = 0;
 
-    // Headers
     LHFileSegmentHeader CompDataHeader;
     LHFileSegmentHeader TableSegmentHeader;
     LHAudioLookupContent TableContent;
-
-    // The "BankInfo" segment (Footer)
     std::vector<uint8_t> FooterData;
 
     std::vector<LookupEntry> Entries;
     bool IsLoaded = false;
-
-    // Cache for Modified/New Entries (Contains full 36-byte header + RIFF)
     std::map<uint32_t, std::vector<uint8_t>> ModifiedCache;
     uint32_t InitialMaxID = 0;
+    bool IsDirty = false;
 
-    // The Player Instance
     AudioPlayer Player;
 
     bool Parse(const std::string& path) {
@@ -60,7 +200,6 @@ public:
         Stream.open(path, std::ios::binary | std::ios::in);
         if (!Stream.is_open()) return false;
 
-        // Check Magic Signature
         char magic[8];
         Stream.read(magic, 8);
         if (memcmp(magic, "LiOnHeAd", 8) != 0) return false;
@@ -87,7 +226,6 @@ public:
             LookupEntry entry;
             Stream.read((char*)&entry, sizeof(LookupEntry));
             Entries.push_back(entry);
-
             if (entry.SoundID > InitialMaxID) InitialMaxID = entry.SoundID;
         }
 
@@ -112,52 +250,34 @@ public:
     void DeleteEntry(int index) {
         if (index < 0 || index >= (int)Entries.size()) return;
         uint32_t id = Entries[index].SoundID;
-
         Entries.erase(Entries.begin() + index);
-
-        // Remove from cache if it was a new add
         if (ModifiedCache.count(id)) ModifiedCache.erase(id);
-
-        // CRITICAL: We need a way to tell the saver that this bank IS dirty, 
-        // even if ModifiedCache is empty (because we just removed something).
         IsDirty = true;
     }
 
-    bool IsDirty = false;
-
-    // --- UPDATED: COPY & PATCH WITH CORRECT ID LOGIC ---
     bool CloneEntry(int sourceIndex) {
         if (sourceIndex < 0 || sourceIndex >= (int)Entries.size()) return false;
-
-        // 1. Generate New ID (Matches Add Logic: Max + 1)
         uint32_t maxID = 0;
         for (const auto& e : Entries) if (e.SoundID > maxID) maxID = e.SoundID;
         uint32_t newID = (maxID > 0) ? maxID + 1 : 20000;
 
-        // 2. Get Source Blob
         std::vector<uint8_t> blob = GetRawBlob(sourceIndex);
         if (blob.size() < 4) return false;
-
-        // 3. Patch ID (First 4 bytes)
         memcpy(blob.data(), &newID, 4);
 
-        // 4. Add to List
         LookupEntry newEntry;
         newEntry.SoundID = newID;
         newEntry.Length = (uint32_t)blob.size();
-        newEntry.Offset = 0; // Calculated on Save
+        newEntry.Offset = 0;
         Entries.push_back(newEntry);
-
         ModifiedCache[newID] = blob;
         return true;
     }
 
     bool ImportWav(int index, const std::string& wavPath) {
         if (index < 0 || index >= (int)Entries.size()) return false;
-
         std::vector<uint8_t> finalBlob = CreateAudioBlob(Entries[index].SoundID, wavPath);
         if (finalBlob.empty()) return false;
-
         Entries[index].Length = (uint32_t)finalBlob.size();
         ModifiedCache[Entries[index].SoundID] = finalBlob;
         return true;
@@ -166,32 +286,13 @@ public:
     bool AddEntry(uint32_t newID, const std::string& wavPath) {
         std::vector<uint8_t> finalBlob = CreateAudioBlob(newID, wavPath);
         if (finalBlob.empty()) return false;
-
         LookupEntry newEntry;
         newEntry.SoundID = newID;
         newEntry.Length = (uint32_t)finalBlob.size();
         newEntry.Offset = 0;
         Entries.push_back(newEntry);
-
         ModifiedCache[newID] = finalBlob;
         return true;
-    }
-
-    static float GetWavDuration(const std::string& wavPath) {
-        std::ifstream f(wavPath, std::ios::binary);
-        if (!f.is_open()) return 0.0f;
-        f.seekg(0, std::ios::end);
-        size_t s = f.tellg();
-        f.seekg(0, std::ios::beg);
-        if (s < 44) return 0.0f;
-        std::vector<uint8_t> h(44);
-        f.read((char*)h.data(), 44);
-        if (memcmp(&h[0], "RIFF", 4) != 0) return 0.0f;
-
-        uint32_t byteRate = *(uint32_t*)&h[28];
-        if (byteRate == 0) return 0.0f;
-
-        return (float)(s - 44) / byteRate;
     }
 
     bool SaveBank(const std::string& path) {
@@ -202,8 +303,7 @@ public:
         out.write("LiOnHeAd", 8);
         out.write((char*)&CompDataHeader, sizeof(CompDataHeader));
 
-        std::sort(Entries.begin(), Entries.end(),
-            [](const LookupEntry& a, const LookupEntry& b) { return a.SoundID < b.SoundID; });
+        std::sort(Entries.begin(), Entries.end(), [](const LookupEntry& a, const LookupEntry& b) { return a.SoundID < b.SoundID; });
 
         std::vector<LookupEntry> finalEntries;
         uint32_t currentOffset = 0;
@@ -224,9 +324,7 @@ public:
             }
 
             std::vector<uint8_t> data = GetRawBlob(i);
-            if (data.size() >= 4) {
-                memcpy(data.data(), &Entries[i].SoundID, 4);
-            }
+            if (data.size() >= 4) memcpy(data.data(), &Entries[i].SoundID, 4);
 
             out.write((char*)data.data(), data.size());
             uint32_t sizeWritten = (uint32_t)data.size();
@@ -235,12 +333,10 @@ public:
             e.Offset = currentOffset;
             e.Length = sizeWritten;
             finalEntries.push_back(e);
-
             currentOffset += sizeWritten;
         }
 
         CompDataHeader.PayloadSize = currentOffset;
-
         out.seekp(8, std::ios::beg);
         out.write((char*)&CompDataHeader, sizeof(CompDataHeader));
         out.seekp(0, std::ios::end);
@@ -254,16 +350,11 @@ public:
 
         out.write((char*)&TableSegmentHeader, sizeof(TableSegmentHeader));
         out.write((char*)&TableContent, sizeof(TableContent));
-        for (const auto& e : finalEntries) {
-            out.write((char*)&e, sizeof(LookupEntry));
-        }
+        for (const auto& e : finalEntries) out.write((char*)&e, sizeof(LookupEntry));
 
-        if (!FooterData.empty()) {
-            out.write((char*)FooterData.data(), FooterData.size());
-        }
+        if (!FooterData.empty()) out.write((char*)FooterData.data(), FooterData.size());
 
         out.close();
-
         if (path == FileName) {
             Stream.close();
             std::filesystem::remove(path);
@@ -275,29 +366,24 @@ public:
 
     std::vector<int16_t> GetDecodedAudio(int index) {
         if (index < 0 || index >= (int)Entries.size()) return {};
-
         std::vector<uint8_t> buf = GetRawBlob(index);
+
         int ds = -1;
         for (size_t i = 0; i < buf.size() - 8; i++) {
             if (memcmp(&buf[i], "data", 4) == 0) { ds = (int)i + 8; break; }
         }
         if (ds == -1) return {};
 
-        return XboxAdpcmDecoder::Decode(std::vector<uint8_t>(buf.begin() + ds, buf.end()));
+        return XboxAdpcmDecoder::Decode(std::vector<uint8_t>(buf.begin() + ds, buf.end()), 1, 36);
     }
 
 private:
     std::vector<uint8_t> GetRawBlob(int index) {
         if (index < 0 || index >= (int)Entries.size()) return {};
         uint32_t id = Entries[index].SoundID;
-
-        if (ModifiedCache.count(id)) {
-            return ModifiedCache[id];
-        }
-
+        if (ModifiedCache.count(id)) return ModifiedCache[id];
         const auto& e = Entries[index];
         if (e.Length == 0) return {};
-
         std::vector<uint8_t> buf(e.Length);
         Stream.clear();
         Stream.seekg(AudioBlobStart + e.Offset, std::ios::beg);
@@ -308,7 +394,6 @@ private:
     std::vector<uint8_t> CreateAudioBlob(uint32_t id, const std::string& wavPath) {
         std::ifstream f(wavPath, std::ios::binary);
         if (!f.is_open()) return {};
-
         f.seekg(0, std::ios::end);
         std::vector<uint8_t> raw((size_t)f.tellg());
         f.seekg(0, std::ios::beg);
@@ -333,18 +418,14 @@ private:
             }
             c += 8 + sz;
         }
-        if (!pcm) return {};
+        if (!pcm || bits != 16) return {};
 
         std::vector<int16_t> pcm16;
-        if (bits == 16) {
-            size_t count = pcmSz / 2;
-            const int16_t* s = (const int16_t*)pcm;
-            if (chans == 1) pcm16.assign(s, s + count);
-            else for (size_t i = 0; i < count / 2; i++) pcm16.push_back(s[i * 2]);
-        }
-        else return {};
+        size_t count = pcmSz / 2;
+        const int16_t* s = (const int16_t*)pcm;
+        pcm16.assign(s, s + count);
 
-        std::vector<uint8_t> adpcm = XboxAdpcmEncoder::Encode(pcm16);
+        std::vector<uint8_t> adpcm = XboxAdpcmEncoder::Encode(pcm16, chans);
 
         uint32_t riffPayloadSize = 36 + 4 + (uint32_t)adpcm.size();
         std::vector<uint8_t> riff;
@@ -354,24 +435,20 @@ private:
         auto u16 = [&](uint16_t v) { riff.insert(riff.end(), (uint8_t*)&v, (uint8_t*)&v + 2); };
         auto str = [&](const char* s) { riff.insert(riff.end(), s, s + 4); };
 
+        uint16_t blockAlign = (chans == 2) ? 72 : 36;
+
         str("RIFF"); u32(riffPayloadSize); str("WAVE");
-        str("fmt "); u32(20); u16(0x0069); u16(1); u32(rate); u32((rate * 36) / 64); u16(36); u16(4); u16(2); u16(64);
+        str("fmt "); u32(20); u16(0x0069); u16(chans); u32(rate); u32((rate * blockAlign) / 64); u16(blockAlign); u16(4); u16(2); u16(64);
         str("data"); u32((uint32_t)adpcm.size());
         riff.insert(riff.end(), adpcm.begin(), adpcm.end());
 
         std::vector<uint8_t> header;
         header.reserve(36);
-
         auto h_u32 = [&](uint32_t v) { header.insert(header.end(), (uint8_t*)&v, (uint8_t*)&v + 4); };
         auto h_u16 = [&](uint16_t v) { header.insert(header.end(), (uint8_t*)&v, (uint8_t*)&v + 2); };
 
-        h_u32(id);
-        h_u16(0x0001);
-        h_u16((uint16_t)rate);
-
-        if (adpcm.size() < 0x2000) h_u16((uint16_t)adpcm.size());
-        else h_u16(0x9C40);
-
+        h_u32(id); h_u16(0x0001); h_u16((uint16_t)rate);
+        if (adpcm.size() < 0x2000) h_u16((uint16_t)adpcm.size()); else h_u16(0x9C40);
         h_u16(0x0001); h_u32(0x01010000); h_u16(0x5806); h_u32(0x00000064); h_u32(0x00003FC0); h_u16(0x4190);
         h_u16((uint16_t)TableContent.Priority); h_u16(0x0000); h_u32(0xFFFFFFFF);
 
@@ -379,7 +456,9 @@ private:
         finalBlob.reserve(header.size() + riff.size());
         finalBlob.insert(finalBlob.end(), header.begin(), header.end());
         finalBlob.insert(finalBlob.end(), riff.begin(), riff.end());
-
         return finalBlob;
     }
 };
+
+// --- GLOBAL PLAYER INSTANCE ---
+inline AudioPlayer player;

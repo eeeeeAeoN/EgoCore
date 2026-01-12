@@ -23,7 +23,7 @@ static const int IndexTable[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
-// --- WAV WRITER (ADDED FIX) ---
+// --- WAV WRITER ---
 static void WriteWavFile(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate, int channels) {
     std::ofstream f(path, std::ios::binary);
     if (!f.is_open()) return;
@@ -58,7 +58,7 @@ static void WriteWavFile(const std::string& path, const std::vector<int16_t>& pc
     f.close();
 }
 
-// --- ADPCM CLASSES ---
+// --- ADPCM ENCODER ---
 class XboxAdpcmEncoder {
     struct State {
         int16_t sample = 0;
@@ -91,142 +91,184 @@ class XboxAdpcmEncoder {
     }
 
 public:
-    static std::vector<uint8_t> Encode(const std::vector<int16_t>& pcm) {
+    static std::vector<uint8_t> Encode(const std::vector<int16_t>& pcm, int channels = 1) {
         std::vector<uint8_t> out;
         if (pcm.empty()) return out;
 
         const int SamplesPerBlock = 65;
-        size_t totalSamples = pcm.size();
-        size_t numBlocks = (totalSamples + SamplesPerBlock - 1) / SamplesPerBlock;
+        // Total Frames = Samples / Channels
+        size_t totalFrames = pcm.size() / channels;
+        size_t numBlocks = (totalFrames + SamplesPerBlock - 1) / SamplesPerBlock;
 
-        out.reserve(numBlocks * 36);
+        int stride = (channels == 2) ? 72 : 36;
+        out.reserve(numBlocks * stride);
 
-        State state;
+        State stateL, stateR;
         size_t cursor = 0;
 
         for (size_t b = 0; b < numBlocks; b++) {
-            int16_t headerSample = (cursor < totalSamples) ? pcm[cursor] : 0;
-            state.sample = headerSample;
-            state.index = (b == 0) ? 0 : state.index;
+            if (channels == 1) {
+                // MONO ENCODING
+                int16_t headerSample = (cursor < totalFrames) ? pcm[cursor] : 0;
+                stateL.sample = headerSample;
+                if (b == 0) stateL.index = 0;
 
-            out.push_back(state.sample & 0xFF);
-            out.push_back((state.sample >> 8) & 0xFF);
-            out.push_back(state.index);
-            out.push_back(0);
+                out.push_back(stateL.sample & 0xFF);
+                out.push_back((stateL.sample >> 8) & 0xFF);
+                out.push_back(stateL.index);
+                out.push_back(0); // Pad
 
-            cursor++;
+                cursor++; // Skip header sample
 
-            for (int i = 0; i < 32; i++) {
-                int16_t s1 = (cursor < totalSamples) ? pcm[cursor++] : 0;
-                int16_t s2 = (cursor < totalSamples) ? pcm[cursor++] : 0;
-                uint8_t n1 = EncodeNibble(state, s1);
-                uint8_t n2 = EncodeNibble(state, s2);
-                out.push_back(n1 | (n2 << 4));
+                for (int i = 0; i < 32; i++) { // 64 samples packed into 32 bytes
+                    int16_t s1 = (cursor < totalFrames) ? pcm[cursor++] : 0;
+                    int16_t s2 = (cursor < totalFrames) ? pcm[cursor++] : 0;
+                    uint8_t n1 = EncodeNibble(stateL, s1);
+                    uint8_t n2 = EncodeNibble(stateL, s2);
+                    out.push_back(n1 | (n2 << 4)); // Low nibble first
+                }
+            }
+            else {
+                // STEREO ENCODING (MULTIPLEXED)
+                // Samples are interleaved in PCM: L0, R0, L1, R1...
+                // Header L
+                int16_t headL = (cursor < totalFrames) ? pcm[cursor * 2] : 0;
+                int16_t headR = (cursor < totalFrames) ? pcm[cursor * 2 + 1] : 0;
+
+                stateL.sample = headL;
+                stateR.sample = headR;
+                if (b == 0) { stateL.index = 0; stateR.index = 0; }
+
+                // Write Headers
+                out.push_back(stateL.sample & 0xFF); out.push_back((stateL.sample >> 8) & 0xFF);
+                out.push_back(stateL.index); out.push_back(0);
+
+                out.push_back(stateR.sample & 0xFF); out.push_back((stateR.sample >> 8) & 0xFF);
+                out.push_back(stateR.index); out.push_back(0);
+
+                cursor++; // Skip L0, R0
+
+                // Write 8 chunks of (4 bytes L, 4 bytes R)
+                for (int i = 0; i < 8; i++) {
+                    // Buffering approach is cleaner
+                    int16_t bufL[8] = { 0 }, bufR[8] = { 0 };
+                    for (int k = 0; k < 8; k++) {
+                        if (cursor < totalFrames) {
+                            bufL[k] = pcm[cursor * 2];
+                            bufR[k] = pcm[cursor * 2 + 1];
+                            cursor++;
+                        }
+                    }
+
+                    // Encode 4 bytes Left
+                    for (int k = 0; k < 4; k++) {
+                        uint8_t n1 = EncodeNibble(stateL, bufL[k * 2]);
+                        uint8_t n2 = EncodeNibble(stateL, bufL[k * 2 + 1]);
+                        out.push_back(n1 | (n2 << 4));
+                    }
+
+                    // Encode 4 bytes Right
+                    for (int k = 0; k < 4; k++) {
+                        uint8_t n1 = EncodeNibble(stateR, bufR[k * 2]);
+                        uint8_t n2 = EncodeNibble(stateR, bufR[k * 2 + 1]);
+                        out.push_back(n1 | (n2 << 4));
+                    }
+                }
             }
         }
         return out;
     }
 };
 
+// --- ADPCM DECODER ---
 class XboxAdpcmDecoder {
+private:
+    static int16_t DecodeSample(int nibble, int16_t pred, int step) {
+        int diff = step >> 3;
+        if (nibble & 4) diff += step;
+        if (nibble & 2) diff += step >> 1;
+        if (nibble & 1) diff += step >> 2;
+
+        if (nibble & 8) pred -= diff;
+        else pred += diff;
+
+        return (std::clamp)(pred, (int16_t)-32768, (int16_t)32767);
+    }
+
+    static void DecodeMonoBlock(const uint8_t* block, std::vector<int16_t>& outPcm) {
+        int16_t predictor = (int16_t)(block[0] | (block[1] << 8));
+        int stepIndex = (int)block[2];
+        stepIndex = (std::clamp)(stepIndex, 0, 88);
+
+        outPcm.push_back(predictor);
+
+        for (int i = 4; i < 36; i++) {
+            uint8_t byte = block[i];
+
+            int step = StepTable[stepIndex];
+            int nibble = byte & 0x0F;
+            predictor = DecodeSample(nibble, predictor, step);
+            outPcm.push_back(predictor);
+            stepIndex = (std::clamp)(stepIndex + IndexTable[nibble], 0, 88);
+
+            step = StepTable[stepIndex];
+            nibble = (byte >> 4) & 0x0F;
+            predictor = DecodeSample(nibble, predictor, step);
+            outPcm.push_back(predictor);
+            stepIndex = (std::clamp)(stepIndex + IndexTable[nibble], 0, 88);
+        }
+    }
+
+    static void DecodeStereoBlock(const uint8_t* block, std::vector<int16_t>& outPcm) {
+        int16_t predL = (int16_t)(block[0] | (block[1] << 8));
+        int idxL = (int)block[2];
+        idxL = (std::clamp)(idxL, 0, 88);
+
+        int16_t predR = (int16_t)(block[4] | (block[5] << 8));
+        int idxR = (int)block[6];
+        idxR = (std::clamp)(idxR, 0, 88);
+
+        outPcm.push_back(predL);
+        outPcm.push_back(predR);
+
+        const uint8_t* data = block + 8;
+
+        for (int i = 0; i < 8; i++) {
+            uint32_t chunkL = *(uint32_t*)(data);
+            uint32_t chunkR = *(uint32_t*)(data + 4);
+            data += 8;
+
+            for (int k = 0; k < 8; k++) {
+                int nibbleL = chunkL & 0xF;
+                predL = DecodeSample(nibbleL, predL, StepTable[idxL]);
+                idxL = (std::clamp)(idxL + IndexTable[nibbleL], 0, 88);
+                outPcm.push_back(predL);
+                chunkL >>= 4;
+
+                int nibbleR = chunkR & 0xF;
+                predR = DecodeSample(nibbleR, predR, StepTable[idxR]);
+                idxR = (std::clamp)(idxR + IndexTable[nibbleR], 0, 88);
+                outPcm.push_back(predR);
+                chunkR >>= 4;
+            }
+        }
+    }
+
 public:
-    static std::vector<int16_t> Decode(const std::vector<uint8_t>& adpcmData) {
+    static std::vector<int16_t> Decode(const std::vector<uint8_t>& adpcmData, int channels = 1, int blockAlign = 36) {
         std::vector<int16_t> pcm;
         if (adpcmData.empty()) return pcm;
 
-        int blockSize = 36;
-        int numBlocks = (int)adpcmData.size() / blockSize;
-        pcm.reserve(numBlocks * 65);
+        int stride = (channels == 2) ? 72 : 36;
+        int numBlocks = (int)adpcmData.size() / stride;
+
+        pcm.reserve(numBlocks * 65 * channels);
 
         for (int b = 0; b < numBlocks; b++) {
-            const uint8_t* block = &adpcmData[b * blockSize];
-
-            int16_t predictor = (int16_t)(block[0] | (block[1] << 8));
-            uint16_t stepIndex = (uint16_t)(block[2]);
-            stepIndex = (std::clamp)((int)stepIndex, 0, 88);
-
-            int32_t currentVal = predictor;
-            pcm.push_back((int16_t)currentVal);
-
-            for (int i = 4; i < 36; i++) {
-                uint8_t byte = block[i];
-                for (int nibble = 0; nibble < 2; nibble++) {
-                    int step = StepTable[stepIndex];
-                    int delta = (nibble == 0) ? (byte & 0x0F) : ((byte >> 4) & 0x0F);
-
-                    int diff = step >> 3;
-                    if (delta & 4) diff += step;
-                    if (delta & 2) diff += step >> 1;
-                    if (delta & 1) diff += step >> 2;
-                    if (delta & 8) currentVal -= diff; else currentVal += diff;
-
-                    currentVal = (std::clamp)(currentVal, -32768, 32767);
-                    pcm.push_back((int16_t)currentVal);
-
-                    stepIndex = (std::clamp)((int)stepIndex + IndexTable[delta], 0, 88);
-                }
-            }
+            const uint8_t* blockData = &adpcmData[b * stride];
+            if (channels == 2) DecodeStereoBlock(blockData, pcm);
+            else DecodeMonoBlock(blockData, pcm);
         }
         return pcm;
     }
-};
-
-// --- AUDIO PLAYER ---
-class AudioPlayer {
-    ma_device device;
-    bool isInit = false;
-    std::vector<int16_t> activeBuffer;
-    std::atomic<size_t> playCursor = 0;
-    int currentSampleRate = 22050;
-
-    static void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-        AudioPlayer* player = (AudioPlayer*)pDevice->pUserData;
-        if (!player) return;
-        int16_t* out = (int16_t*)pOutput;
-        size_t cursor = player->playCursor.load();
-        size_t total = player->activeBuffer.size();
-        size_t available = (total > cursor) ? (total - cursor) : 0;
-        size_t toCopy = (std::min)((size_t)frameCount, available);
-
-        if (toCopy > 0) {
-            memcpy(out, &player->activeBuffer[cursor], toCopy * sizeof(int16_t));
-            player->playCursor.store(cursor + toCopy);
-        }
-        if (toCopy < frameCount) {
-            memset(out + toCopy, 0, (frameCount - toCopy) * sizeof(int16_t));
-        }
-    }
-
-public:
-    AudioPlayer() { memset(&device, 0, sizeof(device)); }
-    ~AudioPlayer() { Reset(); }
-
-    void Reset() {
-        if (isInit) { ma_device_uninit(&device); isInit = false; }
-        activeBuffer.clear(); playCursor = 0;
-    }
-
-    void PlayPCM(const std::vector<int16_t>& pcm, int sampleRate) {
-        Reset();
-        activeBuffer = pcm;
-        currentSampleRate = sampleRate;
-        ma_device_config config = ma_device_config_init(ma_device_type_playback);
-        config.playback.format = ma_format_s16;
-        config.playback.channels = 1;
-        config.sampleRate = sampleRate;
-        config.dataCallback = data_callback;
-        config.pUserData = this;
-        if (ma_device_init(NULL, &config, &device) == MA_SUCCESS) {
-            isInit = true;
-            ma_device_start(&device);
-        }
-    }
-
-    void Play() { if (isInit) ma_device_start(&device); }
-    void Pause() { if (isInit) ma_device_stop(&device); }
-    bool IsPlaying() { return isInit && ma_device_is_started(&device); }
-    float GetProgress() { return activeBuffer.empty() ? 0.0f : (float)playCursor / activeBuffer.size(); }
-    float GetTotalDuration() { return activeBuffer.empty() ? 0.0f : (float)activeBuffer.size() / currentSampleRate; }
-    float GetCurrentTime() { return activeBuffer.empty() ? 0.0f : (float)playCursor / currentSampleRate; }
-    void Seek(float p) { if (!activeBuffer.empty()) playCursor = (size_t)(p * activeBuffer.size()); }
 };

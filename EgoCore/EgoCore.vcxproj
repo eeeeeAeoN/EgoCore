@@ -24,6 +24,8 @@
     <ClInclude Include="Audio\AudioBackend.h" />
     <ClInclude Include="Audio\AudioExplorer.h" />
     <ClInclude Include="Audio\AudioHelpers.h" />
+    <ClInclude Include="Audio\LugParser.h" />
+    <ClInclude Include="Audio\MetParser.h" />
     <ClInclude Include="Banks\BankBackend.h" />
     <ClInclude Include="Banks\BankEditor.h" />
     <ClInclude Include="Banks\BankExplorer.h" />

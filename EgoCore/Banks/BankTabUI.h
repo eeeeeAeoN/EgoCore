@@ -257,7 +257,8 @@ static void DrawBankTab() {
                                     if (friendlyNames.count(be.ID)) be.FriendlyName = friendlyNames[be.ID];
                                     else be.FriendlyName = be.Name;
 
-                                    be.Size = ae.Length; be.Offset = ae.Offset; be.Type = 999;
+                                    be.Size = ae.Length; be.Offset = ae.Offset;
+
                                     bank.Entries.push_back(be);
                                     bank.FilteredIndices.push_back((int)k);
                                 }
@@ -273,15 +274,13 @@ static void DrawBankTab() {
                     float avail = ImGui::GetContentRegionAvail().x;
                     float filterBtnWidth = 60.0f;
 
-                    // 1. Search Box (Wide, Clean, No Label)
                     ImGui::SetNextItemWidth(avail - filterBtnWidth - ImGui::GetStyle().ItemSpacing.x);
                     ImGui::InputText("##search", bank.FilterText, 128);
 
                     if (ImGui::IsItemEdited()) UpdateFilter(bank);
 
-                    // 2. Filter Button (Small, Next to it)
                     ImGui::SameLine();
-                    if (ImGui::Button("Filter", ImVec2(filterBtnWidth, 0))) {
+                    if (ImGui::Button("Filters", ImVec2(filterBtnWidth, 0))) {
                         ImGui::OpenPopup("FilterOptionsPopup");
                     }
 
@@ -302,11 +301,9 @@ static void DrawBankTab() {
                     }
                 }
                 else {
-                    // Standard Filter for other banks
                     ImGui::InputText("Search", bank.FilterText, 128);
                     if (ImGui::IsItemEdited()) UpdateFilter(bank);
                 }
-                // ---------------------
 
                 if (ImGui::BeginPopupModal("Add Entry Type", &g_ShowAddEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
                     ImGui::Text("Select Entry Type:");
@@ -356,7 +353,10 @@ static void DrawBankTab() {
                     for (int idx : bank.FilteredIndices) {
                         const auto& e = bank.Entries[idx];
 
-                        std::string label = e.FriendlyName + "##" + std::to_string(e.ID);
+                        // FIX: Use push ID based on index to prevent ImGui freakout on duplicate names
+                        ImGui::PushID(idx);
+
+                        std::string label = e.FriendlyName; // ##ID is usually handled, but PushID is safer
 
                         if (ImGui::Selectable(label.c_str(), bank.SelectedEntryIndex == idx)) {
                             SelectEntry(&bank, idx);
@@ -382,6 +382,8 @@ static void DrawBankTab() {
                         if (bank.SelectedEntryIndex == idx) {
                             ImGui::SetItemDefaultFocus();
                         }
+
+                        ImGui::PopID(); // POP
                     }
                     ImGui::EndChild();
                 }
@@ -398,7 +400,6 @@ static void DrawBankTab() {
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
 
-                    // Resolve Type Name
                     std::string typeName = "Unknown";
                     if (bank.Type == EBankType::Text) {
                         if (e.Type == 0) typeName = "Text Entry";
@@ -406,15 +407,16 @@ static void DrawBankTab() {
                         else if (e.Type == 2) typeName = "Narrator List";
                         else typeName = "Type " + std::to_string(e.Type);
                     }
+                    else if (bank.Type == EBankType::Audio) {
+                        typeName = "Audio Clip";
+                    }
                     else {
                         typeName = "Type " + std::to_string(e.Type);
                     }
 
                     ImGui::AlignTextToFramePadding();
-                    // Display Name instead of Number
                     ImGui::Text("ID: %d | %s | Size: %d bytes", e.ID, typeName.c_str(), e.Size);
 
-                    // Right: Actions
                     ImGui::SameLine();
                     float avail = ImGui::GetContentRegionAvail().x;
                     float buttonsWidth = 140.0f;
@@ -422,14 +424,12 @@ static void DrawBankTab() {
                         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonsWidth);
                     }
 
-                    // Save Button
                     if (ImGui::Button("Save", ImVec2(60, 0))) {
                         SaveEntryChanges(&bank);
                     }
 
                     ImGui::SameLine();
 
-                    // Delete Button
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
                     if (ImGui::Button("Delete", ImVec2(60, 0))) {
                         if (g_AppConfig.ShowBankDeleteConfirm) {
@@ -450,7 +450,12 @@ static void DrawBankTab() {
                     }
 
                     if (bank.Type == EBankType::Audio) {
-                        DrawAudioProperties(&bank);
+                        if (bank.LugParserPtr) {
+                            DrawLugAudioProperties(&bank);
+                        }
+                        else {
+                            DrawAudioProperties(&bank);
+                        }
                     }
                     else if (IsSupportedMesh(e.Type) && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
                         std::string lodPreview = "LOD " + std::to_string(bank.SelectedLOD);
@@ -535,8 +540,8 @@ static void DrawBankTab() {
 
         g_ForceTabSwitch = false;
 
-        if (ImGui::TabItemButton("+ Load Bank (.BIG / .LUT)", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
-            std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut\0All Files\0*.*\0");
+        if (ImGui::TabItemButton("+ Load Bank (.BIG / .LUT / .LUG)", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+            std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut;*.lug\0All Files\0*.*\0");
             if (!path.empty()) LoadBank(path);
         }
 

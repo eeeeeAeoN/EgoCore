@@ -180,6 +180,12 @@
     <ClInclude Include="Text\TextProperties.h">
       <Filter>Source Files\Text</Filter>
     </ClInclude>
+    <ClInclude Include="Audio\LugParser.h">
+      <Filter>Source Files\Audio</Filter>
+    </ClInclude>
+    <ClInclude Include="Audio\MetParser.h">
+      <Filter>Source Files\Audio</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

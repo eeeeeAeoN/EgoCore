@@ -6,8 +6,9 @@
 #include "AnimProperties.h"
 #include "TextureParser.h"
 #include "AudioBackend.h" 
-// NEW: Include TextParser for peeking speakers
 #include "TextParser.h" 
+#include "LugParser.h"
+#include "MetParser.h"
 #include <fstream>
 #include <vector>
 #include <string>
@@ -67,6 +68,8 @@ struct LoadedBank {
 
     std::unique_ptr<std::fstream> Stream;
     std::shared_ptr<AudioBankParser> AudioParser;
+    std::shared_ptr<LugParser> LugParserPtr;
+    std::shared_ptr<MetParser> MetParserPtr;
 
     int SelectedEntryIndex = -1;
     int SelectedLOD = 0;
