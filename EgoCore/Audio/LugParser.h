@@ -85,6 +85,10 @@ public:
     std::string BankTitle = "Default Bank";
     uint32_t WaveDataStart = 0;
 
+    // Store the mysterious high-word from the count header (e.g. 0x00CD)
+    // to preserve it exactly during Save.
+    uint16_t OriginalHeaderHigh = 0;
+
     struct ParsedLugEntry {
         int OriginalIndex = -1;
         bool IsDeleted = false;
@@ -155,6 +159,7 @@ public:
         GhostSlots.clear();
         Scripts.clear();
         WaveDataStart = 0;
+        OriginalHeaderHigh = 0;
 
         Stream.seekg(0, std::ios::end);
         uint32_t fileSize = (uint32_t)Stream.tellg();
@@ -182,13 +187,15 @@ public:
             else if (strcmp(segName, SEG_TABLE_NAME) == 0) {
                 uint32_t countCombined;
                 Stream.read((char*)&countCombined, 4);
+
                 uint16_t totalSlots = (uint16_t)(countCombined & 0xFFFF);
+                OriginalHeaderHigh = (uint16_t)(countCombined >> 16); // Preserve the high word
 
                 for (uint32_t i = 0; i < totalSlots; i++) {
                     LugEntryRaw raw;
                     Stream.read((char*)&raw, sizeof(LugEntryRaw));
 
-                    if (raw.ID == 0 && raw.Length == 0) {
+                    if (raw.ID == 0) {
                         GhostSlots[i] = raw;
                     }
                     else {
@@ -258,10 +265,8 @@ public:
         if (!e.CachedData.empty()) return e.CachedData;
 
         uint32_t absoluteStart = WaveDataStart + e.Offset;
-
-        // Use a generous scan window (4096) to find RIFF headers even with large padding/misalignment
         uint32_t scanCap = 4096;
-        uint32_t scanSize = (std::min)(scanCap, e.Length + 2048);
+        uint32_t scanSize = (std::min)(scanCap, e.Length + 4096);
         if (scanSize < 512) scanSize = 512;
 
         std::vector<uint8_t> scanBuf(scanSize);
@@ -279,12 +284,13 @@ public:
             }
         }
 
-        // Fallback: No RIFF found, just read strict e.Length
         if (riffOffset == -1) {
-            std::vector<uint8_t> blob(e.Length);
+            uint32_t fallbackLen = (e.Length > 0) ? e.Length : 0;
+            if (fallbackLen == 0) return {};
+            std::vector<uint8_t> blob(fallbackLen);
             Stream.clear();
             Stream.seekg(absoluteStart, std::ios::beg);
-            Stream.read((char*)blob.data(), e.Length);
+            Stream.read((char*)blob.data(), fallbackLen);
             return blob;
         }
 
@@ -301,19 +307,23 @@ public:
 
         uint32_t exactSize = riffChunkSize + 8;
 
-        // --- FIX: TRUST RIFF HEADER OVER TABLE LENGTH ---
-        // If the table metadata says Length is 0 (or very small), but we found a valid 
-        // RIFF header that is larger, we trust the RIFF header.
-        // This handles cases where Fable allocated large chunks but recorded 0 length in the table.
-        if (e.Length < exactSize) {
-            // We trust the RIFF size, but we cap it to a sanity limit (e.g. 10MB) just in case
-            if (exactSize > 10 * 1024 * 1024) exactSize = e.Length;
+        if (e.Length > 0) {
+            if (exactSize > e.Length + 4096) exactSize = e.Length;
         }
-        else if (exactSize > e.Length + 4096) {
-            // If RIFF says it's WAY bigger than Table + Padding, it might be reading garbage.
-            // But if e.Length was 0, the first check would have handled it.
-            exactSize = e.Length;
+        else {
+            if (exactSize > 20 * 1024 * 1024) exactSize = 0;
         }
+
+        if (exactSize < 44) {
+            for (int i = riffOffset + 4; i < maxLoop; i++) {
+                if (memcmp(&scanBuf[i], "RIFF", 4) == 0) {
+                    exactSize = i - riffOffset;
+                    break;
+                }
+            }
+        }
+
+        if (exactSize == 0) return {};
 
         std::vector<uint8_t> blob(exactSize);
         Stream.clear();
@@ -352,25 +362,41 @@ public:
         };
         std::vector<UniqueBlob> uniqueBlobs;
         std::vector<int> entryToBlobIndex(Entries.size(), -1);
+        std::map<uint32_t, int> originalOffsetMap;
 
         for (size_t i = 0; i < Entries.size(); i++) {
-            std::vector<uint8_t> data = GetAudioBlob((int)i);
+            const auto& e = Entries[i];
+
+            // Strategy: Use OFFSET for original, unmodified entries.
+            // This prevents merging two different "Empty" placeholders into one.
+            bool isOriginal = (e.Offset > 0 && e.CachedData.empty());
             int foundIdx = -1;
-            // Only deduplicate if the blob isn't empty. 
-            // If it IS empty (size 0), we treat it as unique to avoid weird mapping issues?
-            // Actually, deduplicating empty blobs is fine.
-            for (int b = 0; b < (int)uniqueBlobs.size(); b++) {
-                if (uniqueBlobs[b].data == data) {
-                    foundIdx = b;
-                    break;
+
+            if (isOriginal) {
+                if (originalOffsetMap.count(e.Offset)) {
+                    foundIdx = originalOffsetMap[e.Offset];
                 }
             }
+            else {
+                // For new entries, use Content Deduplication
+                std::vector<uint8_t> data = GetAudioBlob((int)i);
+                for (int b = 0; b < (int)uniqueBlobs.size(); b++) {
+                    if (uniqueBlobs[b].data == data) {
+                        foundIdx = b;
+                        break;
+                    }
+                }
+            }
+
             if (foundIdx != -1) {
                 entryToBlobIndex[i] = foundIdx;
             }
             else {
+                std::vector<uint8_t> data = GetAudioBlob((int)i);
                 uniqueBlobs.push_back({ data, 0 });
-                entryToBlobIndex[i] = (int)uniqueBlobs.size() - 1;
+                int newIdx = (int)uniqueBlobs.size() - 1;
+                entryToBlobIndex[i] = newIdx;
+                if (isOriginal) originalOffsetMap[e.Offset] = newIdx;
             }
         }
 
@@ -420,7 +446,14 @@ public:
                 strncpy_s(raw.SourcePath, e.FullPath.c_str(), 260);
                 strncpy_s(raw.GroupName, e.GroupName.c_str(), 256);
                 raw.ID = e.SoundID;
-                raw.ID_Repeat = e.SoundID;
+
+                // --- FIX: Preserve ID_REPEAT ---
+                // If ID_Repeat was already valid (non-zero) in the original, keep it.
+                // We only overwrite it if this is a new entry or it was 0.
+                if (raw.ID_Repeat == 0 && e.SoundID != 0) {
+                    raw.ID_Repeat = e.SoundID;
+                }
+
                 if (entryToBlobIndex[i] != -1) {
                     const auto& blob = uniqueBlobs[entryToBlobIndex[i]];
                     raw.Offset = blob.offset;
@@ -461,14 +494,18 @@ public:
             }
 
             uint32_t finalTotal = (uint32_t)WriteMap.size();
-            uint32_t finalActive = (uint32_t)Entries.size();
+            // If the map is empty, use entries size (new file case)
+            if (finalTotal == 0) finalTotal = (uint32_t)Entries.size();
+
             uint32_t entriesSize = finalTotal * sizeof(LugEntryRaw);
             uint32_t totalPayload = 4 + entriesSize;
 
             char name[32] = { 0 }; strcpy_s(name, SEG_TABLE_NAME);
             out.write(name, 32); out.write((char*)&totalPayload, 4);
 
-            uint32_t countField = (finalActive << 16) | finalTotal;
+            // --- FIX: WRITE PRESERVED HIGH WORD ---
+            // Combine OriginalHeaderHigh (0x00CD) with our FinalTotal (0x0932)
+            uint32_t countField = ((uint32_t)OriginalHeaderHigh << 16) | finalTotal;
             out.write((char*)&countField, 4);
 
             for (auto const& [idx, ptr] : WriteMap) {
