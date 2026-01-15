@@ -42,7 +42,7 @@ struct LugEntryRaw {
     uint16_t cbSize;
     uint16_t PadEx;
 
-    // Terminators
+    // Terminators (8 bytes)
     uint32_t Term1;
     uint32_t Term2;
 
@@ -66,7 +66,7 @@ struct LugEntryRaw {
     uint8_t  F_PadEnd[8];
 };
 
-static_assert(sizeof(LugEntryRaw) == 652, "LugEntryRaw size mismatch!");
+static_assert(sizeof(LugEntryRaw) == 652, "LugEntryRaw size mismatch! Must be 652 bytes.");
 
 #pragma pack(pop)
 
@@ -86,35 +86,61 @@ public:
     uint32_t WaveDataStart = 0;
 
     struct ParsedLugEntry {
-        uint32_t SoundID;
+        int OriginalIndex = -1;
+        bool IsDeleted = false;
+
+        uint32_t SoundID = 0;
         std::string Name;
         std::string FullPath;
         std::string GroupName;
-        uint32_t Offset;
-        uint32_t Length;
+        uint32_t Offset = 0;
+        uint32_t Length = 0;
 
-        uint16_t FormatTag;
-        uint16_t Channels;
-        uint32_t SampleRate;
+        uint16_t FormatTag = 0;
+        uint16_t Channels = 0;
+        uint32_t SampleRate = 0;
 
-        uint32_t SoundType;
-        uint32_t Priority;
-        uint32_t Volume;
-        uint32_t PitchVar;
-        uint32_t Probability;
-        uint32_t InstanceLimit;
-        float MinDist;
-        float MaxDist;
-        uint32_t FlagsA;
-        uint32_t FlagsB;
+        uint32_t SoundType = 0;
+        uint32_t Priority = 0;
+        uint32_t Volume = 0;
+        uint32_t PitchVar = 0;
+        uint32_t Probability = 0;
+        uint32_t InstanceLimit = 0;
+        float MinDist = 0;
+        float MaxDist = 0;
+        uint32_t FlagsA = 0;
+        uint32_t FlagsB = 0;
 
-        LugEntryRaw RawMeta;
+        LugEntryRaw RawMeta = { 0 };
 
         std::vector<uint8_t> CachedData;
     };
 
     std::vector<ParsedLugEntry> Entries;
+    std::map<int, LugEntryRaw> GhostSlots;
     std::vector<LugScript> Scripts;
+
+    // --- MANIPULATION METHODS ---
+
+    void DeleteEntry(int index) {
+        if (index >= 0 && index < (int)Entries.size()) {
+            ParsedLugEntry& e = Entries[index];
+            LugEntryRaw ghost = { 0 };
+            if (e.OriginalIndex != -1) GhostSlots[e.OriginalIndex] = ghost;
+            Entries.erase(Entries.begin() + index);
+            IsDirty = true;
+        }
+    }
+
+    void CloneEntry(int index) {
+        if (index < 0 || index >= (int)Entries.size()) return;
+        ParsedLugEntry e = Entries[index];
+        e.OriginalIndex = -1;
+        Entries.push_back(e);
+        IsDirty = true;
+    }
+
+    // --- PARSING ---
 
     bool Parse(const std::string& path) {
         FileName = path;
@@ -126,6 +152,7 @@ public:
         if (memcmp(magic, LUG_SIG, 8) != 0) return false;
 
         Entries.clear();
+        GhostSlots.clear();
         Scripts.clear();
         WaveDataStart = 0;
 
@@ -143,76 +170,65 @@ public:
             uint32_t payloadStart = (uint32_t)Stream.tellg();
 
             if (strcmp(segName, SEG_INFO_NAME) == 0) {
-                Stream.seekg(4, std::ios::cur);
-                char title[260] = { 0 };
-                Stream.read(title, 260);
-                BankTitle = title;
+                if (segSize > 0) {
+                    std::vector<char> titleBuf(segSize + 1, 0);
+                    Stream.read(titleBuf.data(), segSize);
+                    BankTitle = titleBuf.data();
+                }
             }
             else if (strcmp(segName, SEG_WAVE_NAME) == 0) {
-                // Wave payload starts at payloadStart (0x258)
                 WaveDataStart = payloadStart;
             }
             else if (strcmp(segName, SEG_TABLE_NAME) == 0) {
-                // --- FIX: NO PADDING SKIP ---
-                // The 32 bytes read into segName INCLUDED the padding.
-                // The stream is now pointing directly at the 'Count'.
-                // 'segSize' from header is the size of the payload.
-
                 uint32_t countCombined;
                 Stream.read((char*)&countCombined, 4);
-                uint16_t count = (uint16_t)(countCombined & 0xFFFF);
+                uint16_t totalSlots = (uint16_t)(countCombined & 0xFFFF);
 
-                for (uint32_t i = 0; i < count; i++) {
+                for (uint32_t i = 0; i < totalSlots; i++) {
                     LugEntryRaw raw;
                     Stream.read((char*)&raw, sizeof(LugEntryRaw));
 
-                    ParsedLugEntry e;
-                    e.SoundID = raw.ID;
-                    e.FullPath = raw.SourcePath;
-                    e.GroupName = raw.GroupName;
-                    e.Offset = raw.Offset;
-                    e.Length = raw.Length;
+                    if (raw.ID == 0 && raw.Length == 0) {
+                        GhostSlots[i] = raw;
+                    }
+                    else {
+                        ParsedLugEntry e;
+                        e.OriginalIndex = i;
+                        e.RawMeta = raw;
 
-                    e.FormatTag = raw.wFormatTag;
-                    e.Channels = raw.nChannels;
-                    e.SampleRate = raw.nSamplesPerSec;
+                        e.SoundID = raw.ID;
+                        e.FullPath = raw.SourcePath;
+                        e.GroupName = raw.GroupName;
+                        e.Offset = raw.Offset;
+                        e.Length = raw.Length;
 
-                    e.SoundType = raw.SoundType;
-                    e.Priority = raw.Priority;
-                    e.Volume = raw.Volume;
-                    e.PitchVar = raw.PitchVar;
-                    e.Probability = raw.Probability;
-                    e.InstanceLimit = raw.InstanceLimit;
-                    e.MinDist = raw.MinDist;
-                    e.MaxDist = raw.MaxDist;
-                    e.FlagsA = raw.FlagsA;
-                    e.FlagsB = raw.FlagsB;
+                        e.FormatTag = raw.wFormatTag;
+                        e.Channels = raw.nChannels;
+                        e.SampleRate = raw.nSamplesPerSec;
 
-                    e.RawMeta = raw;
+                        e.SoundType = raw.SoundType;
+                        e.Priority = raw.Priority;
+                        e.Volume = raw.Volume;
+                        e.PitchVar = raw.PitchVar;
+                        e.Probability = raw.Probability;
+                        e.InstanceLimit = raw.InstanceLimit;
+                        e.MinDist = raw.MinDist;
+                        e.MaxDist = raw.MaxDist;
+                        e.FlagsA = raw.FlagsA;
+                        e.FlagsB = raw.FlagsB;
 
-                    std::string s = e.FullPath;
-                    size_t lastSlash = s.find_last_of("\\/");
-                    if (lastSlash != std::string::npos) e.Name = s.substr(lastSlash + 1);
-                    else e.Name = s;
+                        std::string s = e.FullPath;
+                        size_t lastSlash = s.find_last_of("\\/");
+                        if (lastSlash != std::string::npos) e.Name = s.substr(lastSlash + 1);
+                        else e.Name = s;
 
-                    Entries.push_back(e);
+                        Entries.push_back(e);
+                    }
                 }
             }
             else if (strcmp(segName, SEG_CRITERIA_NAME) == 0) {
-                // Same logic here: No padding skip unless observed otherwise
-                uint32_t rs; // Actually, Criteria might have the extra size field
-                // Based on previous code: 10 bytes pad, 4 real size, 4 count.
-                // Let's stick to the previous logic for Criteria unless proven wrong.
-                // Actually, if Table doesn't have it, Criteria likely doesn't either.
-                // Let's assume standard layout: Just Count.
-
-                // User Dump for Criteria:
-                // "4C 48 ... (Name) 00 ... (Pad inside name) 30 42 01 00 (Size) D2 05 00 00 (Count)"
-                // This matches Table: Name(32) + Size(4) + Payload(Count + Data).
-
                 uint32_t critCount;
                 Stream.read((char*)&critCount, 4);
-
                 for (uint32_t i = 0; i < critCount; i++) {
                     LugScript s;
                     uint32_t l; Stream.read((char*)&l, 4);
@@ -241,9 +257,13 @@ public:
         const auto& e = Entries[index];
         if (!e.CachedData.empty()) return e.CachedData;
 
-        // Scan logic from previous step is good
         uint32_t absoluteStart = WaveDataStart + e.Offset;
-        uint32_t scanSize = (std::min)((uint32_t)256, e.Length + 128);
+
+        // Use a generous scan window (4096) to find RIFF headers even with large padding/misalignment
+        uint32_t scanCap = 4096;
+        uint32_t scanSize = (std::min)(scanCap, e.Length + 2048);
+        if (scanSize < 512) scanSize = 512;
+
         std::vector<uint8_t> scanBuf(scanSize);
 
         Stream.clear();
@@ -251,77 +271,59 @@ public:
         Stream.read((char*)scanBuf.data(), scanSize);
 
         int riffOffset = -1;
-        for (int i = 0; i < (int)scanBuf.size() - 4; i++) {
+        int maxLoop = (int)scanBuf.size() - 4;
+        for (int i = 0; i < maxLoop; i++) {
             if (memcmp(&scanBuf[i], "RIFF", 4) == 0) {
                 riffOffset = i;
                 break;
             }
         }
-        if (riffOffset == -1) riffOffset = 0;
+
+        // Fallback: No RIFF found, just read strict e.Length
+        if (riffOffset == -1) {
+            std::vector<uint8_t> blob(e.Length);
+            Stream.clear();
+            Stream.seekg(absoluteStart, std::ios::beg);
+            Stream.read((char*)blob.data(), e.Length);
+            return blob;
+        }
 
         uint32_t realStart = absoluteStart + riffOffset;
-        std::vector<uint8_t> blob(e.Length);
+        uint32_t riffChunkSize = 0;
+
+        if (riffOffset + 8 <= (int)scanBuf.size()) {
+            memcpy(&riffChunkSize, &scanBuf[riffOffset + 4], 4);
+        }
+        else {
+            Stream.seekg(realStart + 4, std::ios::beg);
+            Stream.read((char*)&riffChunkSize, 4);
+        }
+
+        uint32_t exactSize = riffChunkSize + 8;
+
+        // --- FIX: TRUST RIFF HEADER OVER TABLE LENGTH ---
+        // If the table metadata says Length is 0 (or very small), but we found a valid 
+        // RIFF header that is larger, we trust the RIFF header.
+        // This handles cases where Fable allocated large chunks but recorded 0 length in the table.
+        if (e.Length < exactSize) {
+            // We trust the RIFF size, but we cap it to a sanity limit (e.g. 10MB) just in case
+            if (exactSize > 10 * 1024 * 1024) exactSize = e.Length;
+        }
+        else if (exactSize > e.Length + 4096) {
+            // If RIFF says it's WAY bigger than Table + Padding, it might be reading garbage.
+            // But if e.Length was 0, the first check would have handled it.
+            exactSize = e.Length;
+        }
+
+        std::vector<uint8_t> blob(exactSize);
         Stream.clear();
         Stream.seekg(realStart, std::ios::beg);
-        Stream.read((char*)blob.data(), e.Length);
+        Stream.read((char*)blob.data(), exactSize);
+
         return blob;
     }
 
-    // --- WRITE LOGIC ---
-    void AddEntry(uint32_t id, const std::string& wavPath) {
-        std::ifstream f(wavPath, std::ios::binary);
-        if (!f.is_open()) return;
-        f.seekg(0, std::ios::end);
-        std::vector<uint8_t> data((size_t)f.tellg());
-        f.seekg(0, std::ios::beg);
-        f.read((char*)data.data(), data.size());
-
-        ParsedLugEntry e;
-        memset(&e.RawMeta, 0, sizeof(LugEntryRaw));
-
-        e.SoundID = id;
-        e.FullPath = wavPath;
-        e.Name = std::filesystem::path(wavPath).filename().string();
-        e.CachedData = data;
-        e.Length = (uint32_t)data.size();
-
-        if (data.size() >= 36 && memcmp(data.data(), "RIFF", 4) == 0) {
-            e.FormatTag = *(uint16_t*)(data.data() + 20);
-            e.Channels = *(uint16_t*)(data.data() + 22);
-            e.SampleRate = *(uint32_t*)(data.data() + 24);
-        }
-        else {
-            e.FormatTag = 1; e.Channels = 1; e.SampleRate = 22050;
-        }
-
-        e.SoundType = 0; e.Priority = 10000; e.Volume = 1500;
-        e.MinDist = 3.0f; e.MaxDist = 10.0f; e.FlagsA = 2; e.FlagsB = 1;
-        Entries.push_back(e);
-        IsDirty = true;
-    }
-
-    void CloneEntry(int index) {
-        if (index < 0 || index >= Entries.size()) return;
-        ParsedLugEntry copy = Entries[index];
-        uint32_t maxID = 0;
-        for (const auto& e : Entries) if (e.SoundID > maxID) maxID = e.SoundID;
-        copy.SoundID = maxID + 1;
-        copy.Name += "_Copy";
-        if (copy.CachedData.empty()) copy.CachedData = GetAudioBlob(index);
-        Entries.push_back(copy);
-        IsDirty = true;
-    }
-
-    void DeleteEntry(int index) {
-        if (index < 0 || index >= Entries.size()) return;
-        uint32_t idToRemove = Entries[index].SoundID;
-        for (auto& s : Scripts) {
-            auto it = std::remove(s.SoundIDs.begin(), s.SoundIDs.end(), idToRemove);
-            if (it != s.SoundIDs.end()) s.SoundIDs.erase(it, s.SoundIDs.end());
-        }
-        Entries.erase(Entries.begin() + index);
-        IsDirty = true;
-    }
+    // --- SAVING ---
 
     bool Save(const std::string& path) {
         std::string tempPath = path + ".tmp";
@@ -335,75 +337,142 @@ public:
         {
             char name[32] = { 0 }; strcpy_s(name, SEG_INFO_NAME);
             out.write(name, 32); out.write((char*)&infoPayloadSize, 4);
-            uint32_t ver = 0x00000208; out.write((char*)&ver, 4);
             out.write(BankTitle.c_str(), BankTitle.length() + 1);
-            uint32_t written = 4 + (uint32_t)BankTitle.length() + 1;
+            uint32_t written = (uint32_t)BankTitle.length() + 1;
             if (written < infoPayloadSize) {
                 std::vector<char> pad(infoPayloadSize - written, 0);
                 out.write(pad.data(), pad.size());
             }
         }
 
-        // 2. WAVE DATA
-        std::vector<uint32_t> newOffsets;
-        uint32_t currentOffset = 0;
+        // 2. DEDUPLICATION & WAVE WRITING
+        struct UniqueBlob {
+            std::vector<uint8_t> data;
+            uint32_t offset;
+        };
+        std::vector<UniqueBlob> uniqueBlobs;
+        std::vector<int> entryToBlobIndex(Entries.size(), -1);
 
-        for (const auto& e : Entries) {
-            if (currentOffset % 4 != 0) currentOffset += (4 - (currentOffset % 4));
-            newOffsets.push_back(currentOffset);
-            if (!e.CachedData.empty()) currentOffset += (uint32_t)e.CachedData.size();
-            else currentOffset += e.Length;
+        for (size_t i = 0; i < Entries.size(); i++) {
+            std::vector<uint8_t> data = GetAudioBlob((int)i);
+            int foundIdx = -1;
+            // Only deduplicate if the blob isn't empty. 
+            // If it IS empty (size 0), we treat it as unique to avoid weird mapping issues?
+            // Actually, deduplicating empty blobs is fine.
+            for (int b = 0; b < (int)uniqueBlobs.size(); b++) {
+                if (uniqueBlobs[b].data == data) {
+                    foundIdx = b;
+                    break;
+                }
+            }
+            if (foundIdx != -1) {
+                entryToBlobIndex[i] = foundIdx;
+            }
+            else {
+                uniqueBlobs.push_back({ data, 0 });
+                entryToBlobIndex[i] = (int)uniqueBlobs.size() - 1;
+            }
         }
-        if (currentOffset % 4 != 0) currentOffset += (4 - (currentOffset % 4));
-        uint32_t totalWavePayload = 8 + currentOffset;
+
+        uint32_t currentOffset = 0;
+        for (auto& blob : uniqueBlobs) {
+            if (currentOffset % 2 != 0) currentOffset += (2 - (currentOffset % 2));
+            blob.offset = currentOffset;
+            currentOffset += (uint32_t)blob.data.size();
+        }
+        if (currentOffset % 2 != 0) currentOffset += (2 - (currentOffset % 2));
+        uint32_t totalWavePayload = currentOffset;
 
         {
             char name[32] = { 0 }; strcpy_s(name, SEG_WAVE_NAME);
             out.write(name, 32); out.write((char*)&totalWavePayload, 4);
-            uint32_t pad = 0; out.write((char*)&pad, 4);
-            out.write((char*)&currentOffset, 4);
+            long payloadStartPos = 0x234 + 36;
 
-            for (size_t i = 0; i < Entries.size(); i++) {
+            for (const auto& blob : uniqueBlobs) {
                 long currentPos = (long)out.tellp();
-                long relPos = currentPos - (0x234 + 36 + 8);
-                while (relPos % 4 != 0) { out.put(0); currentPos++; relPos++; }
-                std::vector<uint8_t> data = GetAudioBlob((int)i);
-                if (!data.empty()) out.write((char*)data.data(), data.size());
+                long relPos = currentPos - payloadStartPos;
+                while (relPos % 2 != 0) { out.put(0); currentPos++; relPos++; }
+                if (!blob.data.empty()) out.write((char*)blob.data.data(), blob.data.size());
             }
             long currentPos = (long)out.tellp();
-            long relPos = currentPos - (0x234 + 36 + 8);
-            while (relPos % 4 != 0) { out.put(0); relPos++; }
+            long relPos = currentPos - payloadStartPos;
+            while (relPos % 2 != 0) { out.put(0); relPos++; }
         }
 
-        // 3. TABLE
-        // No Padding Skip in Read means No Padding Write here!
+        // 3. TABLE SEGMENT
         {
-            uint32_t count = (uint32_t)Entries.size();
-            uint32_t entriesSize = count * sizeof(LugEntryRaw);
-            uint32_t totalPayload = 4 + entriesSize; // Just Count + Entries
+            std::map<int, LugEntryRaw*> WriteMap;
+
+            for (auto& g : GhostSlots) {
+                WriteMap[g.first] = &g.second;
+            }
+
+            std::vector<LugEntryRaw> activeRaw(Entries.size());
+            int maxIndex = -1;
+            if (!WriteMap.empty()) maxIndex = WriteMap.rbegin()->first;
+
+            for (size_t i = 0; i < Entries.size(); i++) {
+                LugEntryRaw& raw = activeRaw[i];
+                const auto& e = Entries[i];
+
+                raw = e.RawMeta;
+
+                strncpy_s(raw.SourcePath, e.FullPath.c_str(), 260);
+                strncpy_s(raw.GroupName, e.GroupName.c_str(), 256);
+                raw.ID = e.SoundID;
+                raw.ID_Repeat = e.SoundID;
+                if (entryToBlobIndex[i] != -1) {
+                    const auto& blob = uniqueBlobs[entryToBlobIndex[i]];
+                    raw.Offset = blob.offset;
+                    raw.Length = (uint32_t)blob.data.size();
+                }
+                raw.SoundType = e.SoundType;
+                raw.Priority = e.Priority;
+                raw.Volume = e.Volume;
+                raw.PitchVar = e.PitchVar;
+                raw.Probability = e.Probability;
+                raw.InstanceLimit = e.InstanceLimit;
+                raw.MinDist = e.MinDist;
+                raw.MaxDist = e.MaxDist;
+                raw.FlagsA = e.FlagsA;
+                raw.FlagsB = e.FlagsB;
+
+                if (e.FormatTag == 1) {
+                    raw.wFormatTag = 1; raw.nChannels = e.Channels; raw.nSamplesPerSec = e.SampleRate;
+                    raw.nAvgBytesPerSec = e.SampleRate * e.Channels * 2; raw.nBlockAlign = e.Channels * 2;
+                    raw.wBitsPerSample = 16;
+                }
+
+                if (raw.Term1 == 0 && raw.Term2 == 0) {
+                    raw.Term1 = 0xFFFFFFFF; raw.Term2 = 0xFFFFFFFF;
+                    if (raw.FooterTerm == 0) raw.FooterTerm = 1;
+                    uint32_t* pEndPad = (uint32_t*)raw.F_PadEnd;
+                    pEndPad[0] = 0xFFFFFFFF; pEndPad[1] = 0x00000000;
+                }
+
+                int targetIdx = e.OriginalIndex;
+                if (targetIdx == -1 || WriteMap.count(targetIdx)) {
+                    targetIdx = ++maxIndex;
+                }
+                else {
+                    if (targetIdx > maxIndex) maxIndex = targetIdx;
+                }
+                WriteMap[targetIdx] = &raw;
+            }
+
+            uint32_t finalTotal = (uint32_t)WriteMap.size();
+            uint32_t finalActive = (uint32_t)Entries.size();
+            uint32_t entriesSize = finalTotal * sizeof(LugEntryRaw);
+            uint32_t totalPayload = 4 + entriesSize;
+
             char name[32] = { 0 }; strcpy_s(name, SEG_TABLE_NAME);
             out.write(name, 32); out.write((char*)&totalPayload, 4);
 
-            uint32_t countField = (count << 16) | count; out.write((char*)&countField, 4);
+            uint32_t countField = (finalActive << 16) | finalTotal;
+            out.write((char*)&countField, 4);
 
-            for (size_t i = 0; i < Entries.size(); i++) {
-                const auto& e = Entries[i];
-                LugEntryRaw raw = e.RawMeta;
-                strncpy_s(raw.SourcePath, e.FullPath.c_str(), 259);
-                strncpy_s(raw.GroupName, e.GroupName.c_str(), 259);
-                raw.ID = e.SoundID; raw.ID_Repeat = e.SoundID;
-                raw.Length = (!e.CachedData.empty()) ? (uint32_t)e.CachedData.size() : e.Length;
-                raw.Offset = newOffsets[i];
-                raw.SoundType = e.SoundType;
-                raw.wFormatTag = e.FormatTag; raw.nChannels = e.Channels; raw.nSamplesPerSec = e.SampleRate;
-                raw.nAvgBytesPerSec = e.SampleRate * e.Channels * 2;
-                raw.nBlockAlign = e.Channels * 2; raw.wBitsPerSample = 16;
-                raw.Priority = e.Priority; raw.Volume = e.Volume; raw.PitchVar = e.PitchVar;
-                raw.Probability = e.Probability; raw.InstanceLimit = e.InstanceLimit;
-                raw.MinDist = e.MinDist; raw.MaxDist = e.MaxDist;
-                raw.FlagsA = e.FlagsA; raw.FlagsB = e.FlagsB;
-                raw.Term1 = 0xFFFFFFFF; raw.Term2 = 0xFFFFFFFF; raw.FooterTerm = 0xFFFFFFFF;
-                out.write((char*)&raw, sizeof(raw));
+            for (auto const& [idx, ptr] : WriteMap) {
+                out.write((char*)ptr, sizeof(LugEntryRaw));
             }
         }
 
@@ -415,12 +484,12 @@ public:
                 critDataSize += 4 + (uint32_t)(s.SoundIDs.size() * 4);
             }
             uint32_t count = (uint32_t)Scripts.size();
-            uint32_t realSize = critDataSize; // Just Data
-            uint32_t totalPayload = 4 + realSize; // Count + Data
+            uint32_t totalPayload = 4 + critDataSize;
 
             char name[32] = { 0 }; strcpy_s(name, SEG_CRITERIA_NAME);
             out.write(name, 32); out.write((char*)&totalPayload, 4);
             out.write((char*)&count, 4);
+
             for (const auto& s : Scripts) {
                 uint32_t l = (uint32_t)s.Name.length(); out.write((char*)&l, 4);
                 if (l > 0) out.write(s.Name.c_str(), l);
@@ -431,6 +500,7 @@ public:
 
         out.close();
         Stream.close();
+
         if (path == FileName) {
             std::filesystem::remove(path);
             std::filesystem::rename(tempPath, path);
