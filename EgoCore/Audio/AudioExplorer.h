@@ -8,10 +8,10 @@
 #include <iostream>
 #include <algorithm> 
 #include <fstream>
-#include <cstring> 
+#include <cstring>
+#include "MetParser.h"
 
-// --- HELPER FOR STRINGS ---
-static bool InputString(const char* label, std::string& str, int maxLen = 255) {
+static bool InputString(const char* label, std::string & str, int maxLen = 255) {
     static char buf[1024];
     strncpy_s(buf, str.c_str(), _TRUNCATE);
     if (ImGui::InputText(label, buf, maxLen)) {
@@ -30,32 +30,21 @@ static std::string FormatTime(float seconds) {
     return std::string(buf);
 }
 
-// --- LUG (.LUG) PROPERTIES & EDITING ---
 static void DrawLugAudioProperties(LoadedBank* bank) {
     if (!bank || !bank->LugParserPtr) return;
     auto& lug = bank->LugParserPtr;
 
-    ImGui::TextDisabled("LUG Audio Bank (.lug)");
-    ImGui::SameLine();
-
-    if (ImGui::Button("Save / Recompile Bank", ImVec2(180, 0))) {
-        if (lug->Save(lug->FileName)) {
-            g_SuccessMessage = "Bank recompiled successfully!";
-            g_ShowSuccessPopup = true;
-        }
-    }
-
+    ImGui::TextDisabled("LUG Script Bank (.lug)");
     ImGui::Separator();
 
-    if (bank->SelectedEntryIndex == -1) {
+    if (bank->SelectedEntryIndex == -1 || bank->SelectedEntryIndex >= lug->Entries.size()) {
         ImGui::Text("Select a sound to view properties.");
         return;
     }
 
-    if (bank->SelectedEntryIndex >= lug->Entries.size()) return;
     auto& e = lug->Entries[bank->SelectedEntryIndex];
 
-    // --- PLAYER UI (Unified) ---
+    // --- PLAYER UI ---
     float currentT = player.GetCurrentTime();
     float totalT = player.GetTotalDuration();
     float progress = player.GetProgress();
@@ -65,7 +54,7 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
     ImGui::SameLine();
     ImGui::Text("%s / %s", FormatTime(currentT).c_str(), FormatTime(totalT).c_str());
 
-    if (ImGui::Button(player.IsPlaying() ? "Pause" : "Play", ImVec2(80, 0))) {
+    if (ImGui::Button(player.IsPlaying() ? "Pause" : "Play", ImVec2(50, 0))) {
         if (totalT == 0.0f) {
             auto blob = lug->GetAudioBlob(bank->SelectedEntryIndex);
             if (!blob.empty()) player.PlayWav(blob);
@@ -74,122 +63,113 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
             if (player.IsPlaying()) player.Pause(); else player.Play();
         }
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Stop", ImVec2(50, 0))) player.Stop();
+
+    // Helper to sync UI list
+    auto SyncUIList = [&]() {
+        bank->Entries.clear();
+        bank->FilteredIndices.clear();
+        for (size_t i = 0; i < lug->Entries.size(); i++) {
+            BankEntry be; be.ID = lug->Entries[i].SoundID; be.Name = lug->Entries[i].Name;
+            be.FriendlyName = be.Name; be.Size = lug->Entries[i].Length; be.Offset = lug->Entries[i].Offset;
+            be.Dependencies.push_back(lug->Entries[i].FullPath);
+            bank->Entries.push_back(be); bank->FilteredIndices.push_back((int)i);
+        }
+        UpdateFilter(*bank);
+        };
 
     ImGui::SameLine();
-    if (ImGui::Button("Stop", ImVec2(80, 0))) {
-        player.Stop();
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Export", ImVec2(80, 0))) {
+    if (ImGui::Button("Export", ImVec2(60, 0))) {
         auto blob = lug->GetAudioBlob(bank->SelectedEntryIndex);
         if (!blob.empty()) {
             std::string p = SaveFileDialog("WAV File\0*.wav\0");
             if (!p.empty()) {
                 if (p.find(".wav") == std::string::npos) p += ".wav";
-                std::ofstream out(p, std::ios::binary);
-                out.write((char*)blob.data(), blob.size());
-                out.close();
+                std::ofstream out(p, std::ios::binary); out.write((char*)blob.data(), blob.size()); out.close();
             }
         }
     }
-
-    ImGui::Separator();
-
-    // --- EDITING CONTROLS ---
-    if (ImGui::Button("Clone Entry")) {
-        lug->CloneEntry(bank->SelectedEntryIndex);
-        bank->SelectedEntryIndex = (int)lug->Entries.size() - 1;
-    }
     ImGui::SameLine();
-    if (ImGui::Button("Delete Entry")) {
-        lug->DeleteEntry(bank->SelectedEntryIndex);
-        bank->SelectedEntryIndex = -1;
-        return;
+    if (ImGui::Button("Import", ImVec2(60, 0))) {
+        std::string p = OpenFileDialog("WAV File\0*.wav\0");
+        if (!p.empty()) {
+            if (lug->ImportWav(bank->SelectedEntryIndex, p)) {
+                player.Reset();
+                SyncUIList();
+                g_SuccessMessage = "WAV file replaced successfully (Memory).\nRecompile to save to disk.";
+                g_ShowSuccessPopup = true;
+            }
+        }
     }
 
     ImGui::Separator();
 
     // --- PROPERTIES ---
     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Sound ID: %d", e.SoundID);
-    InputString("Name", e.Name);
-    InputString("Source Path", e.FullPath);
-    InputString("Group/Context", e.GroupName);
+    if (InputString("Name", e.Name)) lug->IsDirty = true;
+    if (InputString("Source Path", e.FullPath)) lug->IsDirty = true;
+    if (InputString("Group/Context", e.GroupName)) lug->IsDirty = true;
 
     ImGui::Separator();
     ImGui::Text("Playback Logic:");
 
-    int sType = (int)e.SoundType;
-    if (ImGui::InputInt("Sound Type", &sType)) e.SoundType = (uint32_t)sType;
-
     int prio = (int)e.Priority;
-    if (ImGui::InputInt("Priority", &prio)) e.Priority = (uint32_t)prio;
+    if (ImGui::InputInt("Priority", &prio)) { e.Priority = (uint32_t)prio; lug->IsDirty = true; }
 
-    int vol = (int)e.Volume;
-    if (ImGui::InputInt("Volume", &vol)) e.Volume = (uint32_t)vol;
+    int loops = (int)e.LoopCount;
+    if (ImGui::InputInt("Loop Count", &loops)) { e.LoopCount = (uint32_t)loops; lug->IsDirty = true; }
 
-    ImGui::DragFloat("Min Dist", &e.MinDist, 0.5f, 0.0f, 1000.0f);
-    ImGui::DragFloat("Max Dist", &e.MaxDist, 0.5f, 0.0f, 1000.0f);
+    if (ImGui::SliderFloat("Volume", &e.Volume, 0.0f, 1.0f, "%.2f")) { e.ExplicitVolume = true; lug->IsDirty = true; }
+    if (ImGui::DragFloat("Pitch", &e.Pitch, 0.01f, 0.1f, 4.0f, "%.2f")) { e.ExplicitPitch = true; lug->IsDirty = true; }
+    if (ImGui::DragFloat("Pitch Var", &e.PitchVar, 0.01f, 0.0f, 1.0f, "%.2f")) lug->IsDirty = true;
+    if (ImGui::DragFloat("Probability %%", &e.Probability, 0.5f, 0.0f, 100.0f, "%.1f")) lug->IsDirty = true;
 
-    int prob = (int)e.Probability;
-    if (ImGui::InputInt("Probability", &prob)) e.Probability = (uint32_t)prob;
+    ImGui::Separator();
+    ImGui::Text("3D & Distances:");
+    if (ImGui::DragFloat("Min Dist", &e.MinDist, 0.5f, 0.0f, 5000.0f)) { e.Flag_UseMinDist = true; lug->IsDirty = true; }
+    if (ImGui::DragFloat("Max Dist", &e.MaxDist, 0.5f, 0.0f, 5000.0f)) { e.Flag_UseMaxDist = true; lug->IsDirty = true; }
 
-    int inst = (int)e.InstanceLimit;
-    if (ImGui::InputInt("Max Instances", &inst)) e.InstanceLimit = (uint32_t)inst;
+    ImGui::Text("Flags:");
+    if (ImGui::Checkbox("Interruptable", &e.Flag_Interrupt)) lug->IsDirty = true; ImGui::SameLine();
+    if (ImGui::Checkbox("Occlusion", &e.Flag_Occlusion)) lug->IsDirty = true; ImGui::SameLine();
+    if (ImGui::Checkbox("Reverb", &e.Flag_Reverb)) lug->IsDirty = true;
+
+    if (ImGui::Checkbox("Use MinDist", &e.Flag_UseMinDist)) lug->IsDirty = true; ImGui::SameLine();
+    if (ImGui::Checkbox("Use MaxDist", &e.Flag_UseMaxDist)) lug->IsDirty = true;
 
     ImGui::Separator();
     ImGui::TextDisabled("WAV Info:");
-    ImGui::Text("Rate: %d Hz", e.SampleRate);
-    ImGui::Text("Channels: %d", e.Channels);
-    ImGui::Text("Format Tag: %d", e.FormatTag);
-    ImGui::Text("Size: %d bytes", e.Length);
+    ImGui::Text("Rate: %d Hz | Channels: %d", e.SampleRate, e.Channels);
+    ImGui::Text("Size: %d bytes | Loops: %d - %d", e.Length, e.LoopStart, e.LoopEnd);
 }
 
-// --- STANDARD BANK (.LUT) PLAYER ---
 static void DrawAudioProperties(LoadedBank* bank) {
     if (!bank || bank->Type != EBankType::Audio || !bank->AudioParser) return;
-
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Fable Audio Bank (.LUT)");
     ImGui::Separator();
-
     if (bank->SelectedEntryIndex >= 0 && bank->SelectedEntryIndex < bank->AudioParser->Entries.size()) {
         const auto& entry = bank->AudioParser->Entries[bank->SelectedEntryIndex];
-        ImGui::Text("ID: %d", entry.SoundID);
-        ImGui::Text("Size: %d bytes", entry.Length);
-        ImGui::Text("Offset: %d", entry.Offset);
-
-        auto& player = bank->AudioParser->Player;
-        float currentT = player.GetCurrentTime();
-        float totalT = player.GetTotalDuration();
-        float progress = player.GetProgress();
-
-        ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "");
-        if (ImGui::IsItemActive()) player.Seek(progress);
-        ImGui::SameLine();
-        ImGui::Text("%s / %s", FormatTime(currentT).c_str(), FormatTime(totalT).c_str());
-
-        if (ImGui::Button(player.IsPlaying() ? "Pause" : "Play", ImVec2(80, 0))) {
-            if (totalT == 0.0f) {
+        ImGui::Text("ID: %d | Size: %d | Offset: %d", entry.SoundID, entry.Length, entry.Offset);
+        auto& p = bank->AudioParser->Player;
+        float prog = p.GetProgress();
+        ImGui::SliderFloat("##seek", &prog, 0.0f, 1.0f, "");
+        if (ImGui::IsItemActive()) p.Seek(prog);
+        ImGui::SameLine(); ImGui::Text("%s / %s", FormatTime(p.GetCurrentTime()).c_str(), FormatTime(p.GetTotalDuration()).c_str());
+        if (ImGui::Button(p.IsPlaying() ? "Pause" : "Play", ImVec2(80, 0))) {
+            if (p.GetTotalDuration() == 0.0f) {
                 auto pcm = bank->AudioParser->GetDecodedAudio(bank->SelectedEntryIndex);
-                if (!pcm.empty()) player.PlayPCM(pcm, 22050);
+                if (!pcm.empty()) p.PlayPCM(pcm, 22050);
             }
-            else {
-                if (player.IsPlaying()) player.Pause(); else player.Play();
-            }
+            else { if (p.IsPlaying()) p.Pause(); else p.Play(); }
         }
         ImGui::SameLine();
         if (ImGui::Button("Export", ImVec2(80, 0))) {
             auto pcm = bank->AudioParser->GetDecodedAudio(bank->SelectedEntryIndex);
             if (!pcm.empty()) {
-                std::string p = SaveFileDialog("WAV File\0*.wav\0");
-                if (!p.empty()) {
-                    if (p.find(".wav") == std::string::npos) p += ".wav";
-                    WriteWavFile(p, pcm, 22050, 1);
-                }
+                std::string pth = SaveFileDialog("WAV File\0*.wav\0");
+                if (!pth.empty()) { if (pth.find(".wav") == std::string::npos) pth += ".wav"; WriteWavFile(pth, pcm, 22050, 1); }
             }
         }
-    }
-    else {
-        ImGui::TextDisabled("Select an audio entry to view details.");
     }
 }

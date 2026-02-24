@@ -88,11 +88,9 @@ inline void ResolveGroupMetadata(LoadedBank* bank) {
 inline void SelectEntry(LoadedBank* bank, int idx) {
     if (!bank || idx < 0 || idx >= (int)bank->Entries.size()) return;
 
-    // --- FIX: RESET PLAYER ON SELECTION CHANGE ---
-    // This forces the Play button to load the new blob instead of resuming the old one.
     if (bank->Type == EBankType::Audio) {
-        if (bank->AudioParser) bank->AudioParser->Player.Reset(); // For .LUT
-        player.Reset(); // For .LUG (Global Player)
+        if (bank->AudioParser) bank->AudioParser->Player.Reset();
+        player.Reset();
     }
 
     g_TextureParser.DecodedPixels.clear(); g_TextureParser.IsParsed = false;
@@ -237,34 +235,15 @@ inline std::unique_ptr<LoadedBank> CreateBankFromDisk(const std::string& path) {
         }
         return nullptr;
     }
-    // --- HANDLE .LUG (With .MET linking) ---
+    // --- HANDLE .LUG ---
     else if (ext == ".lug") {
         newBank->Type = EBankType::Audio;
         newBank->LugParserPtr = std::make_shared<LugParser>();
         newBank->AudioParser = std::make_shared<AudioBankParser>(); // Init player
 
         if (newBank->LugParserPtr->Parse(path)) {
-
-            // --- TRY AUTO-LOAD .MET ---
-            std::filesystem::path metPath = path;
-            metPath.replace_extension(".met");
-            if (std::filesystem::exists(metPath)) {
-                newBank->MetParserPtr = std::make_shared<MetParser>();
-                if (newBank->MetParserPtr->Parse(metPath.string())) {
-                    // Sync .MET data to .LUG entries
-                    for (auto& lugEntry : newBank->LugParserPtr->Entries) {
-                        for (const auto& metRes : newBank->MetParserPtr->Resources) {
-                            if (metRes.ID == lugEntry.SoundID) {
-                                // Overwrite/Verify props from MET (FIXED: Access via Data)
-                                lugEntry.Channels = metRes.Data.Channels;
-                                lugEntry.FormatTag = metRes.Data.FormatTag;
-                                lugEntry.SampleRate = metRes.Data.SampleRate;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            // FIXED: Removed the auto-loading of .MET file logic here.
+            // We trust the .LUG parser to get all metadata (channels, rate, etc.) directly.
 
             // Populate UI List
             for (size_t i = 0; i < newBank->LugParserPtr->Entries.size(); i++) {
@@ -357,7 +336,6 @@ inline void JumpToBankEntry(const std::string& targetFile, uint32_t id, const st
     g_BankStatus = "Jump failed: ID " + std::to_string(id) + " not found.";
 }
 
-// --- PARSE LOD (Moved here to break dependency cycle) ---
 inline void ParseSelectedLOD(LoadedBank* bank) {
     if (!bank || bank->CurrentEntryRawData.empty()) return;
     size_t offset = 0; size_t size = bank->CurrentEntryRawData.size();
@@ -374,7 +352,6 @@ inline void ParseSelectedLOD(LoadedBank* bank) {
     g_MeshUploadNeeded = true;
 }
 
-// --- RELOAD HELPER ---
 inline void ReloadBankInPlace(LoadedBank* bank) {
     if (!bank) return;
     std::string path = bank->FullPath;

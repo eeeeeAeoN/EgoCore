@@ -129,6 +129,15 @@ inline std::string ReadBankString(std::fstream& file) {
     return "";
 }
 
+inline bool HasUnsavedBankChanges() {
+    for (const auto& b : g_OpenBanks) {
+        if (b.Type == EBankType::Audio && b.LugParserPtr && b.LugParserPtr->IsDirty) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) {
     std::set<std::string> folders;
     for (const auto& sb : subBanks) folders.insert(sb.Name);

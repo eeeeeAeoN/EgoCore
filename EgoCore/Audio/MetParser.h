@@ -4,273 +4,181 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-#include <cstring>
-
-#pragma pack(push, 1)
-
-// --- RAW STRUCTURES (On Disk) ---
-
-struct MetFileHeader {
-    uint32_t Version;
-    uint32_t ResourceCount;
-};
-
-struct MetResourceHeader {
-    uint32_t ResourceID;
-    uint32_t PathLength;
-};
-
-struct MetResourceData {
-    uint32_t LugSize;
-    uint32_t LugOffset;
-    uint16_t Channels;
-    uint16_t FormatTag;
-    uint32_t SampleRate;
-    uint32_t Term1;
-    uint32_t Term2;
-};
-
-// 32-Byte Common Body
-struct MetLogicBodyCommon {
-    uint16_t Gain;          // Offset 0
-    uint16_t Pitch;         // Offset 2
-    uint16_t PitchVar;      // Offset 4
-    uint16_t Flags;         // Offset 6
-    float    MinDist;       // Offset 8
-    float    MaxDist;       // Offset 12
-    uint32_t SoundID;       // Offset 16
-    uint32_t ResourceID;    // Offset 20
-    uint32_t ResourceID_2;  // Offset 24
-    uint32_t DependencyLen; // Offset 28
-};
-
-struct MetCurveEntry {
-    uint32_t ID_A; uint32_t Z1; uint32_t Z2;
-    uint16_t VMax; uint16_t VDef; uint16_t VMin;
-    uint32_t Flags; float FA; float FB; uint16_t UnkS;
-    uint32_t S1; uint32_t S2; uint32_t P1; uint32_t P2;
-};
-
-#pragma pack(pop)
-
-// --- PARSED DATA (In Memory) ---
-
-struct MetResource {
-    uint32_t ID;
-    std::string SourcePath;
-    MetResourceData Data;
-};
-
-struct MetLogic {
-    uint32_t LoopCount = 0; // In Format C, this holds Priority
-    MetLogicBodyCommon Body;
-    std::string DependencyName;
-    std::vector<uint8_t> TailData;
-};
-
-struct MetScript {
-    std::string Name;
-    std::vector<uint32_t> SoundIDs;
-};
+#include <map>
+#include <filesystem>
+#include "LugParser.h"
 
 class MetParser {
-public:
-    std::string FileName;
-    bool IsLoaded = false;
-
-    std::string CategoryName;
-    uint32_t GlobalPriority = 0;
-    uint32_t HeaderTerminator = 0xFFFFFFFF;
-
-    // 0 = Standard (12 byte tail)
-    // 1 = Extended (16 byte tail) 
-    // 2 = Generic  (12 byte header, conditional tail)
-    int FormatType = 0;
-
-    std::vector<MetResource> Resources;
-    std::vector<MetLogic> LogicEntries;
-    std::vector<MetCurveEntry> Curves;
-    std::vector<MetScript> Scripts;
-
-    bool Parse(const std::string& path) {
-        std::ifstream f(path, std::ios::binary);
-        if (!f.is_open()) return false;
-        FileName = path;
-
-        Resources.clear();
-        LogicEntries.clear();
-        Curves.clear();
-        Scripts.clear();
-
-        // 1. FILE HEADER
-        MetFileHeader fh;
-        f.read((char*)&fh, sizeof(fh));
-        if (fh.ResourceCount > 50000) return false;
-
-        // 2. RESOURCES
-        for (uint32_t i = 0; i < fh.ResourceCount; i++) {
-            MetResource r;
-            MetResourceHeader rh;
-            f.read((char*)&rh, sizeof(rh));
-            r.ID = rh.ResourceID;
-
-            if (rh.PathLength > 0 && rh.PathLength < 2048) {
-                std::vector<char> buf(rh.PathLength);
-                f.read(buf.data(), rh.PathLength);
-                r.SourcePath.assign(buf.data(), rh.PathLength);
-            }
-            f.read((char*)&r.Data, sizeof(MetResourceData));
-            Resources.push_back(r);
-        }
-
-        // 3. LOGIC HEADER
-        if (f.peek() == EOF) { IsLoaded = true; return true; }
-
-        uint32_t logicCount = 0;
-        f.read((char*)&logicCount, 4);
-        if (logicCount > 200000) return false;
-
-        uint32_t unk1 = 0;
-        f.read((char*)&unk1, 4);
-
-        if (unk1 == 1) {
-            // STANDARD / EXTENDED FORMAT
-            uint32_t unk2; f.read((char*)&unk2, 4);
-
-            uint32_t nameLen; f.read((char*)&nameLen, 4);
-            if (nameLen > 0 && nameLen < 1024) {
-                std::vector<char> buf(nameLen);
-                f.read(buf.data(), nameLen);
-                CategoryName.assign(buf.data(), nameLen);
-            }
-
-            uint32_t unk3; f.read((char*)&unk3, 4);
-            f.read((char*)&GlobalPriority, 4);
-            f.read((char*)&HeaderTerminator, 4);
-
-            // DETECTION LOGIC
-            if (HeaderTerminator == 0) FormatType = 2; // Generic (Rare case)
-            else if (unk3 == 1) FormatType = 1;        // Extended (16 Byte Tail)
-            else FormatType = 0;                       // Standard (12 Byte Tail)
-        }
-        else {
-            // GENERIC FORMAT (Format C)
-            // Rewind the 4 bytes we peeked (they belong to Entry 1 Header)
-            FormatType = 2;
-            f.seekg(-4, std::ios::cur);
-        }
-
-        // 4. LOGIC ENTRIES
-        for (uint32_t i = 0; i < logicCount; i++) {
-            MetLogic l;
-
-            // ENTRY HEADER
-            if (FormatType == 2) {
-                // 12 Bytes: [Priority] [0] [0]
-                uint32_t v1, v2, v3;
-                f.read((char*)&v1, 4);
-                f.read((char*)&v2, 4);
-                f.read((char*)&v3, 4);
-                l.LoopCount = v1;
-            }
-            else {
-                // 4 Bytes: [LoopCount]
-                f.read((char*)&l.LoopCount, 4);
-            }
-
-            // BODY
-            f.read((char*)&l.Body, sizeof(MetLogicBodyCommon));
-
-            // STRING
-            if (l.Body.DependencyLen > 0 && l.Body.DependencyLen < 2048) {
-                std::vector<char> buf(l.Body.DependencyLen);
-                f.read(buf.data(), l.Body.DependencyLen);
-                l.DependencyName.assign(buf.data(), l.Body.DependencyLen);
-            }
-            else if (l.Body.DependencyLen >= 2048) {
-                l.Body.DependencyLen = 0; // Safety skip
-            }
-
-            // TAIL
-            if (FormatType == 2) {
-                // Generic: 4 bytes ONLY if string exists
-                if (l.Body.DependencyLen > 0) {
-                    l.TailData.resize(4);
-                    f.read((char*)l.TailData.data(), 4);
-                }
-            }
-            else if (FormatType == 1) {
-                // Extended: 16 bytes tail (Matches Dumps #1, #3)
-                l.TailData.resize(16);
-                f.read((char*)l.TailData.data(), 16);
-            }
-            else {
-                // Standard: 12 bytes tail
-                l.TailData.resize(12);
-                f.read((char*)l.TailData.data(), 12);
-            }
-
-            LogicEntries.push_back(l);
-        }
-
-        // 5. SCRIPTS / CURVES
-        if (f.peek() == EOF) { IsLoaded = true; return true; }
-
-        uint32_t nextCount = 0;
-        f.read((char*)&nextCount, 4);
-
-        std::streampos pos = f.tellg();
-        uint32_t peekVal = 0;
-        f.read((char*)&peekVal, 4);
-        f.seekg(pos);
-
-        bool isScriptTable = (peekVal > 0 && peekVal < 500);
-
-        if (!isScriptTable) {
-            // Parse Curves
-            uint32_t curveCount = nextCount;
-            if (curveCount < 20000) {
-                for (uint32_t k = 0; k < curveCount; k++) {
-                    MetCurveEntry c;
-                    f.read((char*)&c, sizeof(MetCurveEntry));
-                    Curves.push_back(c);
-                }
-            }
-            if (f.peek() != EOF) f.read((char*)&nextCount, 4);
-            else nextCount = 0;
-        }
-
-        // Parse Scripts
-        uint32_t scriptCount = nextCount;
-        if (scriptCount > 0 && scriptCount < 50000) {
-            for (uint32_t k = 0; k < scriptCount; k++) {
-                MetScript s;
-                uint32_t nLen = 0;
-                f.read((char*)&nLen, 4);
-                if (nLen > 0 && nLen < 512) {
-                    std::vector<char> buf(nLen);
-                    f.read(buf.data(), nLen);
-                    s.Name.assign(buf.data(), nLen);
-                }
-                uint32_t idCount = 0;
-                f.read((char*)&idCount, 4);
-
-                if (idCount > 0 && idCount < 2000) {
-                    s.SoundIDs.resize(idCount);
-                    f.read((char*)s.SoundIDs.data(), idCount * 4);
-                }
-                Scripts.push_back(s);
-            }
-        }
-
-        IsLoaded = true;
-        return true;
+private:
+    static void WriteString(std::ofstream& out, const std::string& s) {
+        uint32_t len = (uint32_t)s.length();
+        out.write((char*)&len, 4);
+        if (len > 0) out.write(s.data(), len);
     }
 
-    const MetLogic* FindLogicForResource(uint32_t resID) {
-        for (const auto& l : LogicEntries) {
-            if (l.Body.ResourceID == resID) return &l;
+public:
+    static bool GenerateMetFile(const std::string& lugPath, LugParser& lugParser) {
+        std::filesystem::path p(lugPath);
+        p.replace_extension(".met");
+        std::string metPath = p.string();
+
+        std::ofstream out(metPath, std::ios::binary);
+        if (!out.is_open()) return false;
+
+        std::sort(lugParser.Scripts.begin(), lugParser.Scripts.end(),
+            [](const LugScript& a, const LugScript& b) { return a.Name < b.Name; });
+
+        // 1. VERSION
+        uint32_t version = 1;
+        out.write((char*)&version, 4);
+
+        // --- RESOURCE MAP ---
+        std::map<uint32_t, LugEntryRaw> uniqueResources;
+        for (const auto& e : lugParser.Entries) {
+            if (uniqueResources.find(e.RawMeta.ResID_B) == uniqueResources.end()) {
+                uniqueResources[e.RawMeta.ResID_B] = e.RawMeta;
+            }
         }
-        return nullptr;
+
+        for (const auto& g : lugParser.GhostSlots) {
+            if (g.second.ResID_B != 0 && g.second.Length > 0) {
+                if (uniqueResources.find(g.second.ResID_B) == uniqueResources.end()) {
+                    uniqueResources[g.second.ResID_B] = g.second;
+                }
+            }
+        }
+
+        uint32_t resCount = (uint32_t)uniqueResources.size();
+        out.write((char*)&resCount, 4);
+
+        for (const auto& pair : uniqueResources) {
+            uint32_t resID = pair.first;
+            const LugEntryRaw& raw = pair.second;
+
+            out.write((char*)&resID, 4);
+            WriteString(out, std::string(raw.SourcePath));
+            out.write((char*)&raw.Length, 4);
+
+            uint32_t absOffset = lugParser.WaveDataStart + raw.Offset;
+            out.write((char*)&absOffset, 4);
+
+            out.write((char*)&raw.nChannels, 2);
+            out.write((char*)&raw.wFormatTag, 2);
+            out.write((char*)&raw.nSamplesPerSec, 4);
+            out.write((char*)&raw.LoopStartByte, 4);
+            out.write((char*)&raw.LoopEndByte, 4);
+        }
+
+        // --- DRIVER MAP ---
+        std::map<uint32_t, const LugParser::ParsedLugEntry*> sortedDrivers;
+        for (const auto& e : lugParser.Entries) {
+            sortedDrivers[e.RawMeta.ResID_A] = &e;
+        }
+
+        uint32_t driverCount = (uint32_t)sortedDrivers.size();
+        out.write((char*)&driverCount, 4);
+
+        for (const auto& pair : sortedDrivers) {
+            uint32_t driverID = pair.first; // ResID_A
+            const auto& e = *pair.second;
+
+            out.write((char*)&driverID, 4);
+            out.write((char*)&e.RawMeta.ResID_B, 4);
+            WriteString(out, e.GroupName);
+
+            uint16_t s6 = 1;
+            uint16_t s7 = 0;
+            if (e.OriginalIndex != -1) {
+                s6 = (uint16_t)(e.RawMeta.Unk_Res[1] >> 16);
+                s7 = (uint16_t)(e.RawMeta.Unk_Res[1] & 0xFFFF);
+            }
+            out.write((char*)&s6, 2);
+            out.write((char*)&s7, 2);
+
+            uint32_t outPrio = (e.Priority == 0) ? 1 : e.Priority;
+            out.write((char*)&outPrio, 4);
+
+            out.write((char*)&e.LoopCount, 4);
+            out.write((char*)&e.PitchSend, 2);
+            out.write((char*)&e.GainSend, 2);
+
+            uint16_t vol = (uint16_t)(e.Volume * 127.0f + 0.5f);
+            uint16_t pit = (uint16_t)(e.Pitch * 100.0f + 0.5f);
+            uint16_t pvar = (uint16_t)(e.PitchVar * 100.0f + 0.5f);
+
+            out.write((char*)&vol, 2);
+            out.write((char*)&pit, 2);
+            out.write((char*)&pvar, 2);
+
+            uint16_t flags = 0;
+
+            if (e.OriginalIndex != -1) {
+                // 1. Reverb (0x01) and Occlusion (0x02) 
+                if (e.RawMeta.Driver.ControlMask & 0x10) {
+                    if (e.RawMeta.Driver.Flags & 1) flags |= 0x01;
+                    if (e.RawMeta.Driver.Flags & 2) flags |= 0x02;
+                }
+
+                // 2. The Active Gate (0x04)
+                // Offset 158 * 4 = 632 (FlagCheck2)
+                if (e.RawMeta.Driver.FlagCheck2 != 0) {
+                    flags |= 0x04;
+                }
+
+                // 3. The Interruptible Bit (0x08)
+                // Offset 145 * 4 = 580 (ControlMask)
+                // Offset 157 * 4 = 628 (FlagCheck1)
+                if ((e.RawMeta.Driver.ControlMask & 0x400) == 0 || e.RawMeta.Driver.FlagCheck1 != 2) {
+                    flags |= 0x08;
+                }
+
+                // 4. Min Dist (0x10)
+                // 0x80 is the little-endian sign bit check from the pseudocode (char < 0)
+                if (e.RawMeta.Driver.ControlMask & 0x80) {
+                    flags |= 0x10;
+                }
+
+                // 5. Max Dist (0x20)
+                if (e.RawMeta.Driver.ControlMask & 0x100) {
+                    flags |= 0x20;
+                }
+            }
+            else {
+                // Sane defaults for brand new custom sounds
+                if (e.Flag_Reverb) flags |= 0x01;
+                if (e.Flag_Occlusion) flags |= 0x02;
+                flags |= 0x04; // Assume active gate
+                if (e.Flag_Interrupt) flags |= 0x08;
+                if (e.Flag_UseMinDist) flags |= 0x10;
+                if (e.Flag_UseMaxDist) flags |= 0x20;
+            }
+
+            out.write((char*)&flags, 2);
+
+            out.write((char*)&e.MinDist, 4);
+            out.write((char*)&e.MaxDist, 4);
+
+            uint32_t prob = (e.Probability != 100.0f) ? (uint32_t)(100.0f / e.Probability) : e.RawProbability;
+            if (prob == 0xFFFFFFFF || prob == 0) {
+                prob = 1;
+            }
+            out.write((char*)&prob, 4);
+        }
+
+        // --- TRIGGER MAP ---
+        uint32_t trigCount = (uint32_t)lugParser.Scripts.size();
+        out.write((char*)&trigCount, 4);
+
+        for (const auto& s : lugParser.Scripts) {
+            WriteString(out, s.Name);
+            uint32_t memCount = (uint32_t)s.SoundIDs.size();
+            out.write((char*)&memCount, 4);
+            for (uint32_t id : s.SoundIDs) {
+                out.write((char*)&id, 4);
+            }
+        }
+
+        out.close();
+        return true;
     }
 };

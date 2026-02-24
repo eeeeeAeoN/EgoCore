@@ -130,8 +130,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         break;
 
     case WM_CLOSE:
-        // Check global config instead of workspace
-        if (g_DefWorkspace.IsDirty() && g_AppConfig.ShowUnsavedChangesWarning) {
+        if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
             g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
             g_DefWorkspace.TriggerUnsavedPopup = true;
             return 0;

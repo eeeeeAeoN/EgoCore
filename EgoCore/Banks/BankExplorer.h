@@ -67,7 +67,7 @@ static void DrawBankExplorer() {
             ImGui::Separator();
 
             if (ImGui::MenuItem("Exit")) {
-                if (g_DefWorkspace.IsDirty() && g_AppConfig.ShowUnsavedChangesWarning) {
+                if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
                     g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
                     g_DefWorkspace.TriggerUnsavedPopup = true;
                 }
@@ -111,7 +111,7 @@ static void DrawBankExplorer() {
     }
 
     if (ImGui::BeginPopupModal("UnsavedChangesGlobal", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("You have unsaved changes.");
+        ImGui::Text("You have unsaved changes in your Definitions or Banks.");
         ImGui::Text("What would you like to do?");
         ImGui::Separator();
 
@@ -120,6 +120,7 @@ static void DrawBankExplorer() {
         ImGui::Dummy(ImVec2(0, 10));
 
         if (ImGui::Button("Save & Continue", ImVec2(140, 0))) {
+            // Save Defs
             if (g_DefWorkspace.ShowDefsMode) {
                 if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1)
                     SaveDefEntry(g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType][g_DefWorkspace.SelectedEntryIndex]);
@@ -128,15 +129,19 @@ static void DrawBankExplorer() {
                 if (g_DefWorkspace.SelectedEnumIndex != -1)
                     SaveHeaderEntry(g_DefWorkspace.AllEnums[g_DefWorkspace.SelectedEnumIndex]);
             }
+            // Save Dirty Banks
+            for (auto& b : g_OpenBanks) {
+                if (b.Type == EBankType::Audio && b.LugParserPtr && b.LugParserPtr->IsDirty) {
+                    SaveAudioBank(&b);
+                }
+            }
 
             if (dontShowUnsaved) {
                 g_AppConfig.ShowUnsavedChangesWarning = false;
                 SaveConfig();
             }
 
-            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) {
-                exit(0);
-            }
+            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
             ImGui::CloseCurrentPopup();
         }
 
@@ -147,10 +152,7 @@ static void DrawBankExplorer() {
                 g_AppConfig.ShowUnsavedChangesWarning = false;
                 SaveConfig();
             }
-
-            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) {
-                exit(0);
-            }
+            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
             ImGui::CloseCurrentPopup();
         }
 
