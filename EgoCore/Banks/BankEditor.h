@@ -1,5 +1,6 @@
 #pragma once
 #include "BankLoader.h"
+#include "BigBankCompiler.h"
 #include "GltfExporter.h"
 #include "TextCompiler.h"
 #include "LipSyncCompiler.h"
@@ -521,6 +522,18 @@ inline void SaveBigBank(LoadedBank* bank) {
     }
     else if (bank->Type == EBankType::Audio) {
         SaveAudioBank(bank);
+    }
+    else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || bank->Type == EBankType::Graphics || bank->Type == EBankType::Effects || bank->Type == EBankType::Fonts || bank->Type == EBankType::Shaders) {
+        // Use the new generic BigBankCompiler
+        if (BigBankCompiler::Compile(bank)) {
+            g_BankStatus = "Bank Recompiled Successfully.";
+            ReloadBankInPlace(bank);
+            g_ShowSuccessPopup = true;
+            g_SuccessMessage = "Bank Compiled Successfully!";
+        }
+        else {
+            g_BankStatus = "Error: Failed to compile bank.";
+        }
     }
 }
 

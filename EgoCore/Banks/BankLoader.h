@@ -151,38 +151,89 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
     if (!bank->Stream->is_open()) return;
 
     bank->ActiveSubBankIndex = subBankIndex;
-    bank->Entries.clear(); bank->FilteredIndices.clear(); bank->SubheaderCache.clear();
-    const auto& info = bank->SubBanks[subBankIndex];
+    bank->Entries.clear();
+    bank->FilteredIndices.clear();
+    bank->SubheaderCache.clear();
+
+    // We modify the info struct to store the header data, so we use a reference
+    auto& info = bank->SubBanks[subBankIndex];
+
     bank->Stream->seekg(info.Offset, std::ios::beg);
 
+    // --- [FIX] CAPTURE HEADER DATA (Partition Info) ---
+    uint32_t statsCount = 0;
+    bank->Stream->read((char*)&statsCount, 4);
+
+    info.HeaderData.clear(); // Ensure clean slate
+
+    if (statsCount < 1000) {
+        // Valid Partition Header: Store Count + Pairs
+        info.HeaderData.push_back(statsCount);
+        for (uint32_t k = 0; k < statsCount * 2; ++k) {
+            uint32_t val = 0;
+            bank->Stream->read((char*)&val, 4);
+            info.HeaderData.push_back(val);
+        }
+    }
+    else {
+        // No Header (or weird legacy format), rewind the 4 bytes we read
+        bank->Stream->seekg(-4, std::ios::cur);
+        info.HeaderData.push_back(0); // Treat as 0 count for compilation
+    }
+
+    // Prepare Friendly Names
     std::string headerFile = GetHeaderForSubBank(info.Name);
     std::map<uint32_t, std::string> friendlyNames;
     if (!headerFile.empty()) friendlyNames = BuildFriendlyNameMap(headerFile);
 
-    uint32_t statsCount = 0; bank->Stream->read((char*)&statsCount, 4);
-    if (statsCount < 1000) bank->Stream->seekg(statsCount * 8, std::ios::cur); else bank->Stream->seekg(-4, std::ios::cur);
-
+    // --- READ ENTRIES ---
     for (uint32_t i = 0; i < info.EntryCount; i++) {
-        BankEntry e; uint32_t magicE;
-        bank->Stream->read((char*)&magicE, 4); bank->Stream->read((char*)&e.ID, 4);
-        bank->Stream->read((char*)&e.Type, 4); bank->Stream->read((char*)&e.Size, 4);
-        bank->Stream->read((char*)&e.Offset, 4); bank->Stream->read((char*)&e.CRC, 4);
-        if (magicE != 42) continue;
-        e.Name = ReadBankString(*bank->Stream);
-        if (friendlyNames.count(e.ID)) e.FriendlyName = friendlyNames[e.ID]; else e.FriendlyName = e.Name;
+        BankEntry e;
+        uint32_t magicE;
 
-        bank->Stream->seekg(4, std::ios::cur);
-        uint32_t depCount = 0; bank->Stream->read((char*)&depCount, 4);
-        for (uint32_t d = 0; d < depCount; d++) e.Dependencies.push_back(ReadBankString(*bank->Stream));
-        bank->Stream->read((char*)&e.InfoSize, 4); e.SubheaderFileOffset = (uint32_t)bank->Stream->tellg();
+        bank->Stream->read((char*)&magicE, 4);
+        bank->Stream->read((char*)&e.ID, 4);
+        bank->Stream->read((char*)&e.Type, 4);
+        bank->Stream->read((char*)&e.Size, 4);
+        bank->Stream->read((char*)&e.Offset, 4);
+        bank->Stream->read((char*)&e.CRC, 4);
+
+        // Fable Magic Number Check
+        if (magicE != 42) {
+            // If magic is wrong, we might need to skip bytes or abort, 
+            // but usually we just skip adding it to the list.
+            // We continue reading to maintain file pointer consistency for now.
+        }
+
+        e.Name = ReadBankString(*bank->Stream);
+        if (friendlyNames.count(e.ID)) e.FriendlyName = friendlyNames[e.ID];
+        else e.FriendlyName = e.Name;
+
+        // [FIX] Read Timestamp
+        bank->Stream->read((char*)&e.Timestamp, 4);
+
+        uint32_t depCount = 0;
+        bank->Stream->read((char*)&depCount, 4);
+        for (uint32_t d = 0; d < depCount; d++) {
+            e.Dependencies.push_back(ReadBankString(*bank->Stream));
+        }
+
+        bank->Stream->read((char*)&e.InfoSize, 4);
+        e.SubheaderFileOffset = (uint32_t)bank->Stream->tellg();
+
         if (e.InfoSize > 0) {
             std::vector<uint8_t> infoBuf(e.InfoSize);
             bank->Stream->read((char*)infoBuf.data(), e.InfoSize);
             bank->SubheaderCache[i] = infoBuf;
         }
-        bank->Entries.push_back(e);
-        bank->FilteredIndices.push_back((int)bank->Entries.size() - 1);
+
+        // Only add if valid
+        if (magicE == 42) {
+            bank->Entries.push_back(e);
+            bank->FilteredIndices.push_back((int)bank->Entries.size() - 1);
+        }
     }
+
     UpdateFilter(*bank);
     g_BankStatus = "Loaded: " + info.Name;
 }

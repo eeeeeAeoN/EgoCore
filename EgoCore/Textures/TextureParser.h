@@ -72,31 +72,44 @@ public:
     }
 
     void DecodeFormat(bool isBump) {
+        // [FIX] MATCHING GAME ASSEMBLY LOGIC (CGraphicDataBank::GetTextureType)
+        // 1. Check Compression Status first (heuristic via ColourDepth).
+        // 32-bit is definitively Uncompressed ARGB in Fable 1 contexts.
+        bool isUncompressed = (FormatInfo.ColourDepth == 32);
+
+        if (isUncompressed) {
+            // If it's bump mapped but uncompressed, Fable treats it as specialized uncompressed bump.
+            // For viewer purposes, treating as ARGB8888 is usually correct for raw visualization.
+            DecodedFormat = ETextureFormat::ARGB8888;
+            return;
+        }
+
+        // 2. If Compressed, switch on TransparencyType
         if (isBump) {
             switch (Header.TransparencyType) {
             case 0: case 2: DecodedFormat = ETextureFormat::NormalMap_DXT1; break;
             default:        DecodedFormat = ETextureFormat::NormalMap_DXT5; break;
             }
-            return;
         }
-
-        switch (Header.TransparencyType) {
-        case 0: DecodedFormat = ETextureFormat::DXT1; break;
-        case 1: DecodedFormat = ETextureFormat::DXT3; break;
-        case 4: DecodedFormat = ETextureFormat::DXT3; break;
-        case 2: DecodedFormat = ETextureFormat::DXT1; break;
-        case 3: DecodedFormat = ETextureFormat::DXT5; break;
-        default:
-            if (FormatInfo.ColourDepth == 32) DecodedFormat = ETextureFormat::ARGB8888;
-            else DecodedFormat = ETextureFormat::Unknown;
-            break;
+        else {
+            switch (Header.TransparencyType) {
+            case 0: DecodedFormat = ETextureFormat::DXT1; break;
+            case 1: DecodedFormat = ETextureFormat::DXT3; break; // Explicit Alpha (4-bit)
+            case 2: DecodedFormat = ETextureFormat::DXT1; break; // 1-bit Alpha
+            case 3: DecodedFormat = ETextureFormat::DXT5; break; // Interpolated Alpha
+            case 4: DecodedFormat = ETextureFormat::DXT3; break; // Unknown, typically DXT3 in fallback
+            default:
+                // Fallback for weird types, but we already handled 32-bit above.
+                // If it ends up here with < 32 bits and unknown type, default to DXT1 or Unknown.
+                DecodedFormat = ETextureFormat::DXT1;
+                break;
+            }
         }
     }
 
     uint32_t CalculateTotalFrameSize() {
         uint32_t totalSize = 0;
-        // [FIX] CRITICAL: Use Physical Dimensions (Width/Height) not Logical (FrameWidth)
-        // Memory is allocated based on the power-of-two container.
+        // Use Physical Dimensions (Width/Height) not Logical (FrameWidth)
         uint32_t w = Header.Width;
         uint32_t h = Header.Height;
 
@@ -123,7 +136,15 @@ public:
 
         if (metadata.size() < 28) return;
         memcpy(&Header, metadata.data(), 28);
-        if (metadata.size() >= 34) memcpy(&FormatInfo, metadata.data() + 28, 6);
+
+        // Ensure we actually have the PixelFormatInit struct (6 bytes)
+        if (metadata.size() >= 34) {
+            memcpy(&FormatInfo, metadata.data() + 28, 6);
+        }
+        else {
+            // Fallback if missing (shouldn't happen in standard .BIG files)
+            FormatInfo = { 0, 0, 0, 0, 0, 0 };
+        }
 
         bool isBump = (entryType == 0x2 || entryType == 0x3);
         DecodeFormat(isBump);
@@ -148,7 +169,7 @@ public:
         int mips = (Header.MipmapLevels > 0) ? Header.MipmapLevels : 1;
 
         for (uint32_t f = 0; f < frames; f++) {
-            // [FIX] Use Physical Dimensions for Loop state
+            // Use Physical Dimensions for Loop state
             uint32_t w = Header.Width;
             uint32_t h = Header.Height;
             if (w == 0) w = Header.FrameWidth;
@@ -167,6 +188,7 @@ public:
                     }
                 }
                 else {
+                    // LZO Header handling
                     if (inputCursor + 2 > inputSize) break;
                     uint32_t compSize = *(uint16_t*)(src + inputCursor);
                     inputCursor += 2;
@@ -188,6 +210,7 @@ public:
                         LZO1X_Decompress(src + inputCursor, compSize, DecodedPixels.data() + outputOffset, &outLen);
                         inputCursor += compSize;
 
+                        // LZO Trailing Bytes
                         if (inputCursor + 3 <= inputSize && mipVolumeSize >= 3) {
                             uint8_t* destEnd = DecodedPixels.data() + outputOffset + mipVolumeSize - 3;
                             memcpy(destEnd, src + inputCursor, 3);

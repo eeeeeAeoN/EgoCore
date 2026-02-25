@@ -186,6 +186,9 @@
     <ClInclude Include="Audio\MetParser.h">
       <Filter>Source Files\Audio</Filter>
     </ClInclude>
+    <ClInclude Include="BigBankCompiler.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

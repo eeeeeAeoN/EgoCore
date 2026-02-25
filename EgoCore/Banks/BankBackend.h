@@ -38,6 +38,7 @@ struct BankEntry {
     uint32_t CRC = 0;
     uint32_t InfoSize = 0;
     uint32_t SubheaderFileOffset = 0;
+    uint32_t Timestamp = 0; // [NEW] Preserved timestamp/reserved field
 
     std::vector<std::string> Dependencies;
 };
@@ -49,6 +50,7 @@ struct InternalBankInfo {
     uint32_t Offset;
     uint32_t Size;
     uint32_t Align;
+    std::vector<uint32_t> HeaderData; // [NEW] Preserves the "statsCount" block
 };
 
 // NEW: Filter Modes
@@ -209,7 +211,6 @@ inline void UpdateFilter(LoadedBank& bank) {
 
     for (size_t i = 0; i < bank.Entries.size(); i++) {
         // 1. FILTER BY TYPE (Modifier)
-        // If TypeMask is set (not -1), entry must match it.
         if (bank.FilterTypeMask != -1) {
             if (bank.Entries[i].Type != bank.FilterTypeMask) continue;
         }
@@ -227,7 +228,6 @@ inline void UpdateFilter(LoadedBank& bank) {
             if (idStr.find(filter) != std::string::npos) match = true;
         }
         else if (bank.FilterMode == EFilterMode::Speaker && bank.Type == EBankType::Text) {
-            // Only Type 0 supports Speaker search
             if (bank.Entries[i].Type == 0) {
                 std::string spk = PeekSpeakerFast(bank, (int)i);
                 std::transform(spk.begin(), spk.end(), spk.begin(), ::tolower);
@@ -235,7 +235,6 @@ inline void UpdateFilter(LoadedBank& bank) {
             }
         }
         else {
-            // Default: Name / Friendly Name
             std::string name = bank.Entries[i].Name;
             std::transform(name.begin(), name.end(), name.begin(), ::tolower);
             std::string friendly = bank.Entries[i].FriendlyName;

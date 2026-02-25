@@ -197,6 +197,13 @@ static void DrawBankTab() {
                     ImGui::PopStyleColor();
                     ImGui::Separator();
                 }
+                else {
+                    // Generic Recompile Button
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.0f, 0.5f, 1.0f));
+                    if (ImGui::Button("Recompile Bank (.BIG)", ImVec2(-FLT_MIN, 30))) SaveBigBank(&bank);
+                    ImGui::PopStyleColor();
+                    ImGui::Separator();
+                }
 
                 if (bank.Type != EBankType::Audio && !bank.SubBanks.empty()) {
                     float avail = ImGui::GetContentRegionAvail().x;

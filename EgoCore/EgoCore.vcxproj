@@ -32,6 +32,7 @@
     <ClInclude Include="Banks\BankLoader.h" />
     <ClInclude Include="Banks\BankTabUI.h" />
     <ClInclude Include="Banks\BinaryParser.h" />
+    <ClInclude Include="BigBankCompiler.h" />
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
