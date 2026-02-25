@@ -3,12 +3,16 @@
 #include "BankBackend.h"
 #include "TextureParser.h"
 #include "TextureExporter.h"
+#include "ImageBackend.h" 
 #include <d3d11.h>
 #include <string>
 #include <vector>
-#include <sstream>
-#include <iomanip>
-#include <algorithm>
+
+// Forward Declarations
+void AddTextureFrame(LoadedBank * bank, int entryIdx, const std::string & filePath);
+void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx);
+void RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName);
+void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath);
 
 extern ID3D11Device* g_pd3dDevice;
 
@@ -17,11 +21,11 @@ static int g_SelectedSlice = 0;
 static int g_ViewChannel = 0;
 static ID3D11ShaderResourceView* g_BackgroundSRV = nullptr;
 
+// [FIX] Ensure this function is present
 inline void CreateBackgroundTexture() {
     if (g_BackgroundSRV) return;
     const int W = 32, H = 32;
     uint32_t pixelData[W * H];
-    // Solid Dark Grey Background (R:16, G:16, B:16)
     const uint32_t flatColor = 0xFF101010;
     for (int i = 0; i < W * H; i++) pixelData[i] = flatColor;
 
@@ -38,93 +42,6 @@ inline void CreateBackgroundTexture() {
     if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &initData, &tex))) {
         g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &g_BackgroundSRV);
         tex->Release();
-    }
-}
-
-struct Color32 { uint8_t r, g, b, a; };
-
-inline void GetColorBlockColors(Color32* colors, const uint8_t* block) {
-    uint16_t c0 = *(uint16_t*)(block);
-    uint16_t c1 = *(uint16_t*)(block + 2);
-
-    colors[0].r = (c0 >> 11) * 255 / 31;
-    colors[0].g = ((c0 >> 5) & 0x3F) * 255 / 63;
-    colors[0].b = (c0 & 0x1F) * 255 / 31;
-    colors[0].a = 255;
-
-    colors[1].r = (c1 >> 11) * 255 / 31;
-    colors[1].g = ((c1 >> 5) & 0x3F) * 255 / 63;
-    colors[1].b = (c1 & 0x1F) * 255 / 31;
-    colors[1].a = 255;
-
-    if (c0 > c1) {
-        colors[2].r = (2 * colors[0].r + colors[1].r) / 3;
-        colors[2].g = (2 * colors[0].g + colors[1].g) / 3;
-        colors[2].b = (2 * colors[0].b + colors[1].b) / 3;
-        colors[2].a = 255;
-
-        colors[3].r = (colors[0].r + 2 * colors[1].r) / 3;
-        colors[3].g = (colors[0].g + 2 * colors[1].g) / 3;
-        colors[3].b = (colors[0].b + 2 * colors[1].b) / 3;
-        colors[3].a = 255;
-    }
-    else {
-        colors[2].r = (colors[0].r + colors[1].r) / 2;
-        colors[2].g = (colors[0].g + colors[1].g) / 2;
-        colors[2].b = (colors[0].b + colors[1].b) / 2;
-        colors[2].a = 255;
-
-        colors[3].r = 0; colors[3].g = 0; colors[3].b = 0; colors[3].a = 0;
-    }
-}
-
-inline void DecompressDXT1Block(const uint8_t* block, Color32* output, uint32_t stride) {
-    Color32 colors[4];
-    GetColorBlockColors(colors, block);
-    uint32_t indices = *(uint32_t*)(block + 4);
-
-    for (int y = 0; y < 4; y++) {
-        for (int x = 0; x < 4; x++) {
-            uint8_t idx = (indices >> (2 * (4 * y + x))) & 0x03;
-            output[y * stride + x] = colors[idx];
-        }
-    }
-}
-
-inline void DecompressDXT3Block(const uint8_t* block, Color32* output, uint32_t stride) {
-    DecompressDXT1Block(block + 8, output, stride);
-    for (int y = 0; y < 4; y++) {
-        uint16_t alphaRow = *(uint16_t*)(block + 2 * y);
-        for (int x = 0; x < 4; x++) {
-            uint8_t alpha = (alphaRow >> (4 * x)) & 0x0F;
-            output[y * stride + x].a = (alpha * 255) / 15;
-        }
-    }
-}
-
-inline void DecompressDXT5Block(const uint8_t* block, Color32* output, uint32_t stride) {
-    DecompressDXT1Block(block + 8, output, stride);
-    uint8_t a0 = block[0];
-    uint8_t a1 = block[1];
-    uint64_t alphaMask = (*(uint64_t*)(block)) >> 16;
-
-    uint8_t alphas[8];
-    alphas[0] = a0;
-    alphas[1] = a1;
-    if (a0 > a1) {
-        for (int i = 2; i < 8; i++) alphas[i] = ((8 - i) * a0 + (i - 1) * a1) / 7;
-    }
-    else {
-        for (int i = 2; i < 6; i++) alphas[i] = ((6 - i) * a0 + (i - 1) * a1) / 5;
-        alphas[6] = 0;
-        alphas[7] = 255;
-    }
-
-    for (int y = 0; y < 4; y++) {
-        for (int x = 0; x < 4; x++) {
-            uint8_t idx = (uint8_t)((alphaMask >> (3 * (4 * y + x))) & 0x07);
-            output[y * stride + x].a = alphas[idx];
-        }
     }
 }
 
@@ -165,10 +82,8 @@ struct TextureViewport {
         default: return false;
         }
 
-        uint32_t width = parser.Header.Width;
-        uint32_t height = parser.Header.Height;
-        if (width == 0) width = parser.Header.FrameWidth;
-        if (height == 0) height = parser.Header.FrameHeight;
+        uint32_t width = parser.Header.Width ? parser.Header.Width : parser.Header.FrameWidth;
+        uint32_t height = parser.Header.Height ? parser.Header.Height : parser.Header.FrameHeight;
 
         if (width == 0 || height == 0) return false;
 
@@ -200,7 +115,6 @@ struct TextureViewport {
             std::vector<Color32> rgbaPixels(width * height);
 
             if (blockWidth == 4) {
-                // Decompress DXT
                 uint32_t blocksX = (width + 3) / 4;
                 uint32_t blocksY = (height + 3) / 4;
                 uint32_t blockSize = (dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16;
@@ -210,11 +124,11 @@ struct TextureViewport {
                     for (uint32_t x = 0; x < blocksX; x++) {
                         Color32 blockOut[16];
                         if (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1)
-                            DecompressDXT1Block(blockSrc, blockOut, 4);
+                            TextureUtils::DecompressDXT1Block(blockSrc, blockOut, 4);
                         else if (fmt == ETextureFormat::DXT3)
-                            DecompressDXT3Block(blockSrc, blockOut, 4);
+                            TextureUtils::DecompressDXT3Block(blockSrc, blockOut, 4);
                         else
-                            DecompressDXT5Block(blockSrc, blockOut, 4);
+                            TextureUtils::DecompressDXT5Block(blockSrc, blockOut, 4);
 
                         for (int py = 0; py < 4; py++) {
                             for (int px = 0; px < 4; px++) {
@@ -274,145 +188,179 @@ inline void DrawTextureProperties() {
     CreateBackgroundTexture();
 
     if (!g_TextureParser.IsParsed) {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "Parse Failed: %s", g_TextureParser.DebugLog.c_str());
-        g_TexViewport.Release();
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "Parse Failed or Empty.");
         return;
     }
 
-    // [FIX] Use the NEW multi-bank system to get the entry details
-    // g_CurrentBank was replaced by g_OpenBanks[g_ActiveBankIndex]
     if (g_ActiveBankIndex == -1 || g_ActiveBankIndex >= g_OpenBanks.size()) return;
-    const auto& bank = g_OpenBanks[g_ActiveBankIndex];
+    auto& bank = g_OpenBanks[g_ActiveBankIndex];
+    if (bank.SelectedEntryIndex == -1) return;
+    auto& entry = bank.Entries[bank.SelectedEntryIndex];
 
-    if (bank.SelectedEntryIndex == -1 || bank.SelectedEntryIndex >= bank.Entries.size()) return;
-    const auto& entry = bank.Entries[bank.SelectedEntryIndex];
+    static char nameBuf[128] = "";
+    static int lastEntryID = -1;
+    if (lastEntryID != entry.ID) {
+        strncpy_s(nameBuf, entry.Name.c_str(), 128);
+        lastEntryID = entry.ID;
+    }
 
+    if (ImGui::InputText("Name", nameBuf, 128)) {
+        g_TextureParser.PendingName = nameBuf;
+    }
+
+    ImGui::Separator();
+
+    // --- DIMENSIONS ---
     bool isVolume = (g_TextureParser.Header.Depth > 1);
     bool isFlatSeq = (entry.Type == 0x5);
 
-    int physW = g_TextureParser.Header.Width;
-    int physH = g_TextureParser.Header.Height;
-    if (physW == 0) physW = g_TextureParser.Header.FrameWidth;
-    if (physH == 0) physH = g_TextureParser.Header.FrameHeight;
-
+    int physW = g_TextureParser.Header.Width ? g_TextureParser.Header.Width : g_TextureParser.Header.FrameWidth;
+    int physH = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
     int logW = g_TextureParser.Header.FrameWidth;
     int logH = g_TextureParser.Header.FrameHeight;
-    if (logW == 0) logW = physW;
-    if (logH == 0) logH = physH;
 
-    int cols = (logW > 0) ? physW / logW : 1;
-    int rows = (logH > 0) ? physH / logH : 1;
-    int flatFrameCount = cols * rows;
+    ImGui::Text("Physical: %d x %d", physW, physH);
 
-    ImGui::BeginGroup();
+    bool dimChanged = false;
+    // [FIX] Update parser header only. Removed the SubheaderCache memcpy autosave.
+    if (ImGui::InputInt("Frame Width", &logW)) {
+        if (logW > 0) g_TextureParser.Header.FrameWidth = (uint16_t)logW;
+    }
+    if (ImGui::InputInt("Frame Height", &logH)) {
+        if (logH > 0) g_TextureParser.Header.FrameHeight = (uint16_t)logH;
+    }
+
+    if (dimChanged && bank.SubheaderCache.count(bank.SelectedEntryIndex)) {
+        memcpy(bank.SubheaderCache[bank.SelectedEntryIndex].data(), &g_TextureParser.Header, sizeof(CGraphicHeader));
+    }
+
+    ImGui::Separator();
 
     int maxFrames = (std::max)(1, (int)g_TextureParser.Header.FrameCount);
-    if (isFlatSeq) maxFrames = flatFrameCount;
+
+    ImGui::BeginGroup();
+    ImGui::Text("Frames: %d", maxFrames);
 
     if (maxFrames > 1) {
-        ImGui::PushItemWidth(100);
         if (g_SelectedFrame >= maxFrames) g_SelectedFrame = 0;
-        ImGui::SliderInt("Frame", &g_SelectedFrame, 0, maxFrames - 1);
-        ImGui::PopItemWidth();
+        ImGui::SliderInt("##FrameSlider", &g_SelectedFrame, 0, maxFrames - 1);
         ImGui::SameLine();
+        // [FIX] Unique Label
+        if (ImGui::Button("Delete Frame")) {
+            DeleteTextureFrame(&bank, bank.SelectedEntryIndex, g_SelectedFrame);
+            g_TexViewport.Release();
+        }
     }
     else { g_SelectedFrame = 0; }
 
+    if (ImGui::Button("Add Frame...")) {
+        std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
+        if (!path.empty()) {
+            AddTextureFrame(&bank, bank.SelectedEntryIndex, path);
+            g_TexViewport.Release(); // Force Refresh
+        }
+    }
+
     if (isVolume) {
         int maxDepth = (std::max)(1, (int)g_TextureParser.Header.Depth);
-        ImGui::PushItemWidth(100);
         if (g_SelectedSlice >= maxDepth) g_SelectedSlice = 0;
         ImGui::SliderInt("Z-Slice", &g_SelectedSlice, 0, maxDepth - 1);
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
     }
-    else { g_SelectedSlice = 0; }
 
-    ImGui::PushItemWidth(100);
     const char* viewModes[] = { "RGB", "Alpha", "Red", "Green", "Blue" };
     ImGui::Combo("##channel", &g_ViewChannel, viewModes, IM_ARRAYSIZE(viewModes));
-    ImGui::PopItemWidth();
-
     ImGui::EndGroup();
 
+    // --- VIEWPORT ---
     int uploadFrameIdx = isFlatSeq ? 0 : g_SelectedFrame;
     g_TexViewport.Update(g_pd3dDevice, g_TextureParser, entry.ID, uploadFrameIdx, g_SelectedSlice, g_ViewChannel);
 
     if (g_TexViewport.SRV) {
-        float availWidth = ImGui::GetContentRegionAvail().x;
+        float availW = ImGui::GetContentRegionAvail().x;
+        float ratio = (float)physH / (float)physW;
+        if (physW == 0) ratio = 1.0f;
+        float h = (std::min)(400.0f, availW * ratio);
+        float w = h / ratio;
 
-        ImVec2 uv0(0, 0);
-        ImVec2 uv1(1, 1);
-        float displayAspect = (float)physH / (float)physW;
+        ImGui::BeginChild("TexView", ImVec2(0, h + 20), true);
+        ImVec2 p = ImGui::GetCursorScreenPos();
 
-        if (isFlatSeq && cols > 0 && rows > 0) {
-            int c = g_SelectedFrame % cols;
-            int r = g_SelectedFrame / cols;
-            uv0.x = (float)(c * logW) / (float)physW;
-            uv0.y = (float)(r * logH) / (float)physH;
-            uv1.x = (float)((c + 1) * logW) / (float)physW;
-            uv1.y = (float)((r + 1) * logH) / (float)physH;
-            displayAspect = (float)logH / (float)logW;
+        if (g_BackgroundSRV) ImGui::GetWindowDrawList()->AddImage((void*)g_BackgroundSRV, p, ImVec2(p.x + w, p.y + h));
+        ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p, ImVec2(p.x + w, p.y + h));
+
+        if (logW > 0 && logH > 0 && (logW != physW || logH != physH)) {
+            float sx = w / physW;
+            float sy = h / physH;
+            ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + logW * sx, p.y + logH * sy), 0xFF00FFFF, 0.0f, 0, 2.0f);
         }
-
-        float displayH = (std::min)(400.0f, availWidth * displayAspect);
-        float displayW = displayH / displayAspect;
-
-        ImGui::BeginChild("TexView", ImVec2(0, displayH + 20), true);
-        ImVec2 p_min = ImGui::GetCursorScreenPos();
-        ImVec2 p_max = ImVec2(p_min.x + displayW, p_min.y + displayH);
-
-        if (g_BackgroundSRV) {
-            ImGui::GetWindowDrawList()->AddImage((void*)g_BackgroundSRV, p_min, p_max, ImVec2(0, 0), ImVec2(1, 1));
-        }
-
-        ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p_min, p_max, uv0, uv1);
-
-        bool hasPadding = (logW < physW) || (logH < physH);
-
-        if (!isFlatSeq && hasPadding) {
-            float scaleX = displayW / physW;
-            float scaleY = displayH / physH;
-            float boxW = logW * scaleX;
-            float boxH = logH * scaleY;
-            ImGui::GetWindowDrawList()->AddRect(
-                p_min,
-                ImVec2(p_min.x + boxW, p_min.y + boxH),
-                0xFF0000FF
-            );
-        }
-
         ImGui::EndChild();
     }
 
-    // Export Button (Hidden for Volumes)
-    if (!isVolume) {
-        if (ImGui::Button("Export Frame (.DDS)")) {
-            OPENFILENAMEA ofn;
-            char szFile[260] = { 0 };
-            std::string defaultName = entry.Name + "_F" + std::to_string(g_SelectedFrame) + ".dds";
-            strcpy_s(szFile, defaultName.c_str());
+    // --- EXPORT / REPLACE ---
+    if (ImGui::Button("Export Frame...")) {
+        std::string path = SaveFileDialog("PNG Image\0*.png\0TGA Image\0*.tga\0DDS Texture\0*.dds\0");
+        if (!path.empty()) {
+            std::string ext = std::filesystem::path(path).extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext.empty()) { path += ".png"; ext = ".png"; }
 
-            ZeroMemory(&ofn, sizeof(ofn));
-            ofn.lStructSize = sizeof(ofn);
-            ofn.hwndOwner = NULL;
-            ofn.lpstrFile = szFile;
-            ofn.nMaxFile = sizeof(szFile);
-            ofn.lpstrFilter = "DirectDraw Surface\0*.dds\0All Files\0*.*\0";
-            ofn.nFilterIndex = 1;
-            ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+            int expIdx = isFlatSeq ? 0 : g_SelectedFrame;
 
-            if (GetSaveFileNameA(&ofn) == TRUE) {
-                int exportIdx = isFlatSeq ? 0 : g_SelectedFrame;
-                bool success = TextureExporter::ExportDDS(g_TextureParser, ofn.lpstrFile, exportIdx);
-                if (!success) MessageBoxA(NULL, "Export Failed", "Error", MB_OK | MB_ICONERROR);
+            if (ext == ".dds") {
+                TextureExporter::ExportDDS(g_TextureParser, path, expIdx);
             }
+            else if (g_TextureParser.IsParsed && !g_TextureParser.DecodedPixels.empty()) {
+                uint32_t stride = g_TextureParser.TrueFrameStride;
+                uint32_t frameOffset = stride * expIdx;
+                std::vector<Color32> rgba(physW * physH);
+
+                if (frameOffset + stride <= g_TextureParser.DecodedPixels.size()) {
+                    const uint8_t* raw = g_TextureParser.DecodedPixels.data() + frameOffset;
+                    if (g_TextureParser.DecodedFormat == ETextureFormat::ARGB8888) {
+                        memcpy(rgba.data(), raw, physW * physH * 4);
+                    }
+                    else {
+                        // Decompress
+                        int blocksX = (physW + 3) / 4;
+                        int blocksY = (physH + 3) / 4;
+                        int blockSize = (g_TextureParser.DecodedFormat == ETextureFormat::DXT1 || g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT1) ? 8 : 16;
+                        for (int y = 0; y < blocksY; y++) {
+                            for (int x = 0; x < blocksX; x++) {
+                                Color32 blockOut[16];
+                                const uint8_t* blockSrc = raw + (y * blocksX + x) * blockSize;
+                                if (g_TextureParser.DecodedFormat == ETextureFormat::DXT1 || g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT1)
+                                    TextureUtils::DecompressDXT1Block(blockSrc, blockOut, 4);
+                                else if (g_TextureParser.DecodedFormat == ETextureFormat::DXT3)
+                                    TextureUtils::DecompressDXT3Block(blockSrc, blockOut, 4);
+                                else
+                                    TextureUtils::DecompressDXT5Block(blockSrc, blockOut, 4);
+                                for (int py = 0; py < 4; py++) {
+                                    for (int px = 0; px < 4; px++) {
+                                        if (x * 4 + px < physW && y * 4 + py < physH) rgba[(y * 4 + py) * physW + (x * 4 + px)] = blockOut[py * 4 + px];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (ext == ".png") stbi_write_png(path.c_str(), physW, physH, 4, rgba.data(), physW * 4);
+                    else if (ext == ".tga") stbi_write_tga(path.c_str(), physW, physH, 4, rgba.data());
+                }
+            }
+        }
+    }
+
+    ImGui::SameLine();
+
+    // Replace Frame + Refresh
+    if (ImGui::Button("Replace Frame...")) {
+        std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
+        if (!path.empty()) {
+            int targetFrame = isFlatSeq ? 0 : g_SelectedFrame;
+            ReplaceTextureFrame(&bank, bank.SelectedEntryIndex, targetFrame, path);
+            g_TexViewport.Release();
         }
     }
 
     ImGui::Separator();
     ImGui::Text("Format: %s", g_TextureParser.GetFormatString().c_str());
-    ImGui::Text("Phys: %d x %d", physW, physH);
-    ImGui::Text("Log:  %d x %d", logW, logH);
-    if (isFlatSeq) ImGui::Text("Grid: %d x %d", cols, rows);
 }

@@ -10,6 +10,11 @@ static int g_ContextEntryIndex = -1;
 static bool g_ShowDeleteBankEntryPopup = false;
 static bool g_ShowAddEntryPopup = false;
 
+// --- STATE FOR TEXTURE IMPORT POPUP ---
+static bool g_ShowTexImportPopup = false;
+static std::string g_PendingImportPath = "";
+static int g_ImportFormat = 1; // 0: DXT1, 1: DXT3, 2: DXT5, 3: ARGB
+
 static void DrawBinaryTab() {
     static bool isCompilingBins = false;
     static std::string compileBinStatus = "";
@@ -144,6 +149,45 @@ static void DrawBankTab() {
         ImGui::EndPopup();
     }
 
+    // --- TEXTURE IMPORT MODAL ---
+    if (g_ShowTexImportPopup) {
+        ImGui::OpenPopup("Import Texture Options");
+    }
+
+    if (ImGui::BeginPopupModal("Import Texture Options", &g_ShowTexImportPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("File: %s", std::filesystem::path(g_PendingImportPath).filename().string().c_str());
+        ImGui::Separator();
+
+        ImGui::Text("Compression Format:");
+        ImGui::RadioButton("DXT1 (Opaque/1-bit Alpha)", &g_ImportFormat, 0);
+        ImGui::RadioButton("DXT3 (Sharp Alpha)", &g_ImportFormat, 1);
+        ImGui::RadioButton("DXT5 (Smooth Alpha)", &g_ImportFormat, 2);
+        ImGui::RadioButton("ARGB (Uncompressed)", &g_ImportFormat, 3);
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Import", ImVec2(120, 0))) {
+            if (g_ActiveBankIndex != -1 && g_ActiveBankIndex < g_OpenBanks.size()) {
+                LoadedBank* b = &g_OpenBanks[g_ActiveBankIndex];
+
+                ETextureFormat fmt = ETextureFormat::DXT3;
+                if (g_ImportFormat == 0) fmt = ETextureFormat::DXT1;
+                else if (g_ImportFormat == 2) fmt = ETextureFormat::DXT5;
+                else if (g_ImportFormat == 3) fmt = ETextureFormat::ARGB8888;
+
+                CreateNewTextureEntry(b, g_PendingImportPath, fmt);
+            }
+            g_ShowTexImportPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowTexImportPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     if (ImGui::BeginTabBar("BankFiles", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
 
         for (int i = 0; i < (int)g_OpenBanks.size(); ) {
@@ -217,6 +261,15 @@ static void DrawBankTab() {
                     if (ImGui::Button("+", ImVec2(22, 0))) {
                         if (bank.Type == EBankType::Text) { g_ShowAddEntryPopup = true; ImGui::OpenPopup("Add Entry Type"); }
                         else if (bank.Type == EBankType::Dialogue) CreateNewDialogueEntry(&bank);
+                        else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+                            // TEXTURE IMPORT START
+                            std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
+                            if (!path.empty()) {
+                                g_PendingImportPath = path;
+                                g_ShowTexImportPopup = true;
+                                // Popup is drawn at top of function
+                            }
+                        }
                         else g_BankStatus = "Add Entry not implemented for this bank type.";
                     }
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add New Entry");
@@ -226,7 +279,6 @@ static void DrawBankTab() {
                 // --- SEARCH / LIST ---
                 float searchAvail = ImGui::GetContentRegionAvail().x;
                 if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
-                    // Make room for the + button
                     ImGui::SetNextItemWidth(searchAvail - 35.0f);
                 }
                 else if (bank.Type == EBankType::Text) {
@@ -246,7 +298,6 @@ static void DrawBankTab() {
                         std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
                         if (!wavPath.empty()) {
                             if (bank.LugParserPtr->AddEntryFromWav(wavPath)) {
-                                // Sync UI List immediately
                                 bank.Entries.clear();
                                 bank.FilteredIndices.clear();
                                 for (size_t k = 0; k < bank.LugParserPtr->Entries.size(); k++) {
@@ -260,7 +311,6 @@ static void DrawBankTab() {
                                     bank.FilteredIndices.push_back((int)k);
                                 }
                                 UpdateFilter(bank);
-                                // Select the newly created item
                                 bank.SelectedEntryIndex = (int)bank.Entries.size() - 1;
                                 g_SuccessMessage = "Entry created from WAV file.";
                                 g_ShowSuccessPopup = true;

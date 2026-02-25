@@ -189,6 +189,24 @@
     <ClInclude Include="BigBankCompiler.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
+    <ClInclude Include="Utilities\stb_image.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\stb_image_resize.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\stb_image_write.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="ImageBackend.h">
+      <Filter>Source Files\Textures</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureBuilder.h">
+      <Filter>Source Files\Textures</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\stb_dxt.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

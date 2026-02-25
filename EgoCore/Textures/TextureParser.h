@@ -23,6 +23,96 @@ struct CGraphicHeader {
 
 enum class ETextureFormat { Unknown, DXT1, DXT3, DXT5, ARGB8888, NormalMap_DXT1, NormalMap_DXT5 };
 
+struct Color32 { uint8_t r, g, b, a; };
+
+class TextureUtils {
+public:
+    static void GetColorBlockColors(Color32* colors, const uint8_t* block) {
+        uint16_t c0 = *(uint16_t*)(block);
+        uint16_t c1 = *(uint16_t*)(block + 2);
+
+        colors[0].r = (c0 >> 11) * 255 / 31;
+        colors[0].g = ((c0 >> 5) & 0x3F) * 255 / 63;
+        colors[0].b = (c0 & 0x1F) * 255 / 31;
+        colors[0].a = 255;
+
+        colors[1].r = (c1 >> 11) * 255 / 31;
+        colors[1].g = ((c1 >> 5) & 0x3F) * 255 / 63;
+        colors[1].b = (c1 & 0x1F) * 255 / 31;
+        colors[1].a = 255;
+
+        if (c0 > c1) {
+            colors[2].r = (2 * colors[0].r + colors[1].r) / 3;
+            colors[2].g = (2 * colors[0].g + colors[1].g) / 3;
+            colors[2].b = (2 * colors[0].b + colors[1].b) / 3;
+            colors[2].a = 255;
+
+            colors[3].r = (colors[0].r + 2 * colors[1].r) / 3;
+            colors[3].g = (colors[0].g + 2 * colors[1].g) / 3;
+            colors[3].b = (colors[0].b + 2 * colors[1].b) / 3;
+            colors[3].a = 255;
+        }
+        else {
+            colors[2].r = (colors[0].r + colors[1].r) / 2;
+            colors[2].g = (colors[0].g + colors[1].g) / 2;
+            colors[2].b = (colors[0].b + colors[1].b) / 2;
+            colors[2].a = 255;
+
+            colors[3].r = 0; colors[3].g = 0; colors[3].b = 0; colors[3].a = 0;
+        }
+    }
+
+    static void DecompressDXT1Block(const uint8_t* block, Color32* output, uint32_t stride) {
+        Color32 colors[4];
+        GetColorBlockColors(colors, block);
+        uint32_t indices = *(uint32_t*)(block + 4);
+
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                uint8_t idx = (indices >> (2 * (4 * y + x))) & 0x03;
+                output[y * stride + x] = colors[idx];
+            }
+        }
+    }
+
+    static void DecompressDXT3Block(const uint8_t* block, Color32* output, uint32_t stride) {
+        DecompressDXT1Block(block + 8, output, stride);
+        for (int y = 0; y < 4; y++) {
+            uint16_t alphaRow = *(uint16_t*)(block + 2 * y);
+            for (int x = 0; x < 4; x++) {
+                uint8_t alpha = (alphaRow >> (4 * x)) & 0x0F;
+                output[y * stride + x].a = (alpha * 255) / 15;
+            }
+        }
+    }
+
+    static void DecompressDXT5Block(const uint8_t* block, Color32* output, uint32_t stride) {
+        DecompressDXT1Block(block + 8, output, stride);
+        uint8_t a0 = block[0];
+        uint8_t a1 = block[1];
+        uint64_t alphaMask = (*(uint64_t*)(block)) >> 16;
+
+        uint8_t alphas[8];
+        alphas[0] = a0;
+        alphas[1] = a1;
+        if (a0 > a1) {
+            for (int i = 2; i < 8; i++) alphas[i] = ((8 - i) * a0 + (i - 1) * a1) / 7;
+        }
+        else {
+            for (int i = 2; i < 6; i++) alphas[i] = ((6 - i) * a0 + (i - 1) * a1) / 5;
+            alphas[6] = 0;
+            alphas[7] = 255;
+        }
+
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                uint8_t idx = (uint8_t)((alphaMask >> (3 * (4 * y + x))) & 0x07);
+                output[y * stride + x].a = alphas[idx];
+            }
+        }
+    }
+};
+
 class CTextureParser {
 public:
     CGraphicHeader Header;
@@ -31,8 +121,8 @@ public:
     std::vector<uint8_t> DecodedPixels;
     bool IsParsed = false;
     std::string DebugLog;
-
     uint32_t TrueFrameStride = 0;
+    std::string PendingName;
 
     void LogDebug(const std::string& msg) {
         DebugLog += msg + "\n";
@@ -133,6 +223,7 @@ public:
         IsParsed = false;
         DecodedPixels.clear();
         DebugLog = "";
+        PendingName = "";
 
         if (metadata.size() < 28) return;
         memcpy(&Header, metadata.data(), 28);

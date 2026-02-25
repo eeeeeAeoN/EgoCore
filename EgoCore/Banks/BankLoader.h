@@ -128,6 +128,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
 
     if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend) {
         if (bank->SubheaderCache.count(idx)) g_TextureParser.Parse(bank->SubheaderCache[idx], bank->CurrentEntryRawData, e.Type);
+        g_TextureParser.PendingName = e.Name;
     }
     else if (bank->Type == EBankType::Text || bank->Type == EBankType::Dialogue) {
         if (bank->Type == EBankType::Dialogue) g_LipSyncParser.Parse(bank->CurrentEntryRawData, bank->SubheaderCache[idx]);

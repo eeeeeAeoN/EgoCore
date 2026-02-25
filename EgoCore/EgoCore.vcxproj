@@ -36,6 +36,7 @@
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
+    <ClInclude Include="ImageBackend.h" />
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
@@ -46,6 +47,7 @@
     <ClInclude Include="Meshes\MeshRenderer.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
+    <ClInclude Include="TextureBuilder.h" />
     <ClInclude Include="Textures\TextureExporter.h" />
     <ClInclude Include="Textures\TextureParser.h" />
     <ClInclude Include="Textures\TextureProperties.h" />
@@ -65,6 +67,10 @@
     <ClInclude Include="Utilities\ImGUI\imstb_textedit.h" />
     <ClInclude Include="Utilities\ImGUI\imstb_truetype.h" />
     <ClInclude Include="Utilities\miniaudio.h" />
+    <ClInclude Include="Utilities\stb_dxt.h" />
+    <ClInclude Include="Utilities\stb_image.h" />
+    <ClInclude Include="Utilities\stb_image_resize.h" />
+    <ClInclude Include="Utilities\stb_image_write.h" />
     <ClInclude Include="Utilities\Utils.h" />
   </ItemGroup>
   <ItemGroup>
