@@ -8,8 +8,7 @@
 #include <string>
 #include <vector>
 
-// Forward Declarations
-void AddTextureFrame(LoadedBank * bank, int entryIdx, const std::string & filePath);
+void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& filePath);
 void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx);
 void RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName);
 void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath);
@@ -19,9 +18,9 @@ extern ID3D11Device* g_pd3dDevice;
 static int g_SelectedFrame = 0;
 static int g_SelectedSlice = 0;
 static int g_ViewChannel = 0;
+static float g_TexZoom = 1.0f; // Global zoom state
 static ID3D11ShaderResourceView* g_BackgroundSRV = nullptr;
 
-// [FIX] Ensure this function is present
 inline void CreateBackgroundTexture() {
     if (g_BackgroundSRV) return;
     const int W = 32, H = 32;
@@ -197,20 +196,20 @@ inline void DrawTextureProperties() {
     if (bank.SelectedEntryIndex == -1) return;
     auto& entry = bank.Entries[bank.SelectedEntryIndex];
 
-    static char nameBuf[128] = "";
+    static char nameBuf[512] = "";
     static int lastEntryID = -1;
     if (lastEntryID != entry.ID) {
-        strncpy_s(nameBuf, entry.Name.c_str(), 128);
+        strncpy_s(nameBuf, sizeof(nameBuf), entry.Name.c_str(), _TRUNCATE);
         lastEntryID = entry.ID;
+        g_TexZoom = 1.0f; // Reset zoom when opening a new texture
     }
 
-    if (ImGui::InputText("Name", nameBuf, 128)) {
+    if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) {
         g_TextureParser.PendingName = nameBuf;
     }
 
     ImGui::Separator();
 
-    // --- DIMENSIONS ---
     bool isVolume = (g_TextureParser.Header.Depth > 1);
     bool isFlatSeq = (entry.Type == 0x5);
 
@@ -218,60 +217,69 @@ inline void DrawTextureProperties() {
     int physH = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
     int logW = g_TextureParser.Header.FrameWidth;
     int logH = g_TextureParser.Header.FrameHeight;
+    int maxFrames = (std::max)(1, (int)g_TextureParser.Header.FrameCount);
 
-    ImGui::Text("Physical: %d x %d", physW, physH);
+    ImGui::Text("Physical: %dx%d | Format: %s | Frames: %d", physW, physH, g_TextureParser.GetFormatString().c_str(), maxFrames);
 
     bool dimChanged = false;
-    // [FIX] Update parser header only. Removed the SubheaderCache memcpy autosave.
+    ImGui::SetNextItemWidth(100.0f);
     if (ImGui::InputInt("Frame Width", &logW)) {
-        if (logW > 0) g_TextureParser.Header.FrameWidth = (uint16_t)logW;
+        if (logW > 0) { g_TextureParser.Header.FrameWidth = (uint16_t)logW; dimChanged = true; }
     }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
     if (ImGui::InputInt("Frame Height", &logH)) {
-        if (logH > 0) g_TextureParser.Header.FrameHeight = (uint16_t)logH;
+        if (logH > 0) { g_TextureParser.Header.FrameHeight = (uint16_t)logH; dimChanged = true; }
     }
 
     if (dimChanged && bank.SubheaderCache.count(bank.SelectedEntryIndex)) {
         memcpy(bank.SubheaderCache[bank.SelectedEntryIndex].data(), &g_TextureParser.Header, sizeof(CGraphicHeader));
     }
 
-    ImGui::Separator();
+    ImGui::SetNextItemWidth(100.0f);
+    const char* viewModes[] = { "RGB", "Alpha", "Red", "Green", "Blue" };
+    ImGui::Combo("##channel", &g_ViewChannel, viewModes, IM_ARRAYSIZE(viewModes));
 
-    int maxFrames = (std::max)(1, (int)g_TextureParser.Header.FrameCount);
+    // Disable Add/Remove on Types 4 and 5
+    if (entry.Type != 0x4 && entry.Type != 0x5) {
+        ImGui::SameLine();
+        if (ImGui::Button("Add Frame...")) {
+            std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
+            if (!path.empty()) {
+                AddTextureFrame(&bank, bank.SelectedEntryIndex, path);
+                g_TexViewport.Release();
+            }
+        }
 
-    ImGui::BeginGroup();
-    ImGui::Text("Frames: %d", maxFrames);
+        if (maxFrames > 1) {
+            ImGui::SameLine();
+            if (ImGui::Button("Delete Frame")) {
+                DeleteTextureFrame(&bank, bank.SelectedEntryIndex, g_SelectedFrame);
+                g_TexViewport.Release();
+            }
+        }
+    }
 
+    // Sliders for Z-Slice and Frames below the buttons
     if (maxFrames > 1) {
         if (g_SelectedFrame >= maxFrames) g_SelectedFrame = 0;
-        ImGui::SliderInt("##FrameSlider", &g_SelectedFrame, 0, maxFrames - 1);
-        ImGui::SameLine();
-        // [FIX] Unique Label
-        if (ImGui::Button("Delete Frame")) {
-            DeleteTextureFrame(&bank, bank.SelectedEntryIndex, g_SelectedFrame);
-            g_TexViewport.Release();
-        }
+        ImGui::SetNextItemWidth(200.0f);
+        ImGui::SliderInt("Frame Select", &g_SelectedFrame, 0, maxFrames - 1);
     }
     else { g_SelectedFrame = 0; }
-
-    if (ImGui::Button("Add Frame...")) {
-        std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
-        if (!path.empty()) {
-            AddTextureFrame(&bank, bank.SelectedEntryIndex, path);
-            g_TexViewport.Release(); // Force Refresh
-        }
-    }
 
     if (isVolume) {
         int maxDepth = (std::max)(1, (int)g_TextureParser.Header.Depth);
         if (g_SelectedSlice >= maxDepth) g_SelectedSlice = 0;
+        ImGui::SetNextItemWidth(200.0f);
         ImGui::SliderInt("Z-Slice", &g_SelectedSlice, 0, maxDepth - 1);
     }
 
-    const char* viewModes[] = { "RGB", "Alpha", "Red", "Green", "Blue" };
-    ImGui::Combo("##channel", &g_ViewChannel, viewModes, IM_ARRAYSIZE(viewModes));
-    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0, 5));
 
-    // --- VIEWPORT ---
+    // ==========================================
+    // VIEWPORT WITH PAN AND ZOOM
+    // ==========================================
     int uploadFrameIdx = isFlatSeq ? 0 : g_SelectedFrame;
     g_TexViewport.Update(g_pd3dDevice, g_TextureParser, entry.ID, uploadFrameIdx, g_SelectedSlice, g_ViewChannel);
 
@@ -279,24 +287,78 @@ inline void DrawTextureProperties() {
         float availW = ImGui::GetContentRegionAvail().x;
         float ratio = (float)physH / (float)physW;
         if (physW == 0) ratio = 1.0f;
-        float h = (std::min)(400.0f, availW * ratio);
-        float w = h / ratio;
 
-        ImGui::BeginChild("TexView", ImVec2(0, h + 20), true);
-        ImVec2 p = ImGui::GetCursorScreenPos();
+        // Base viewport max bounds
+        float baseH = (std::min)(510.0f, availW * ratio);
+        float baseW = baseH / ratio;
 
+        // Apply zoom scale
+        float w = baseW * g_TexZoom;
+        float h = baseH * g_TexZoom;
+
+        // Dynamic flags: If zooming, disable mouse scroll temporarily so the view doesn't jump
+        ImGuiWindowFlags viewFlags = ImGuiWindowFlags_HorizontalScrollbar;
+        if (ImGui::GetIO().KeyCtrl) viewFlags |= ImGuiWindowFlags_NoScrollWithMouse;
+
+        // [QoL 5] Create a scrollable region for the image
+        ImGui::BeginChild("TexView", ImVec2(0, baseH + 20), true, viewFlags);
+
+        // [QoL 4] Ctrl + Scroll to Zoom
+        if (ImGui::IsWindowHovered() && ImGui::GetIO().KeyCtrl) {
+            float wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f) {
+                // Smooth scaling
+                g_TexZoom += wheel * (g_TexZoom * 0.15f);
+                if (g_TexZoom < 0.1f) g_TexZoom = 0.1f;
+                if (g_TexZoom > 10.0f) g_TexZoom = 10.0f;
+            }
+        }
+
+        // [QoL 5] Left-Click + Drag to Pan
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            ImVec2 delta = ImGui::GetIO().MouseDelta;
+            ImGui::SetScrollX(ImGui::GetScrollX() - delta.x);
+            ImGui::SetScrollY(ImGui::GetScrollY() - delta.y);
+        }
+
+        ImVec2 p = ImGui::GetCursorScreenPos(); // Current position taking scrollbars into account
+
+        // Draw Background and Image
         if (g_BackgroundSRV) ImGui::GetWindowDrawList()->AddImage((void*)g_BackgroundSRV, p, ImVec2(p.x + w, p.y + h));
         ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p, ImVec2(p.x + w, p.y + h));
 
+        // Draw Flat Sequence Yellow Selection Box
         if (logW > 0 && logH > 0 && (logW != physW || logH != physH)) {
             float sx = w / physW;
             float sy = h / physH;
-            ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + logW * sx, p.y + logH * sy), 0xFF00FFFF, 0.0f, 0, 2.0f);
+
+            float boxX = 0;
+            float boxY = 0;
+
+            if (isFlatSeq && physW >= logW) {
+                int cols = physW / logW;
+                if (cols < 1) cols = 1;
+
+                int c = g_SelectedFrame % cols;
+                int r = g_SelectedFrame / cols;
+
+                boxX = c * logW;
+                boxY = r * logH;
+            }
+
+            ImGui::GetWindowDrawList()->AddRect(
+                ImVec2(p.x + boxX * sx, p.y + boxY * sy),
+                ImVec2(p.x + (boxX + logW) * sx, p.y + (boxY + logH) * sy),
+                0xFF00FFFF, 0.0f, 0, 2.0f);
         }
+
+        // This Dummy tells ImGui how big the custom-drawn content actually is to trigger the scrollbars
+        ImGui::Dummy(ImVec2(w, h));
+
         ImGui::EndChild();
     }
 
-    // --- EXPORT / REPLACE ---
+    // EXPORT
     if (ImGui::Button("Export Frame...")) {
         std::string path = SaveFileDialog("PNG Image\0*.png\0TGA Image\0*.tga\0DDS Texture\0*.dds\0");
         if (!path.empty()) {
@@ -320,7 +382,6 @@ inline void DrawTextureProperties() {
                         memcpy(rgba.data(), raw, physW * physH * 4);
                     }
                     else {
-                        // Decompress
                         int blocksX = (physW + 3) / 4;
                         int blocksY = (physH + 3) / 4;
                         int blockSize = (g_TextureParser.DecodedFormat == ETextureFormat::DXT1 || g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT1) ? 8 : 16;
@@ -350,8 +411,6 @@ inline void DrawTextureProperties() {
     }
 
     ImGui::SameLine();
-
-    // Replace Frame + Refresh
     if (ImGui::Button("Replace Frame...")) {
         std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
         if (!path.empty()) {
@@ -360,7 +419,4 @@ inline void DrawTextureProperties() {
             g_TexViewport.Release();
         }
     }
-
-    ImGui::Separator();
-    ImGui::Text("Format: %s", g_TextureParser.GetFormatString().c_str());
 }

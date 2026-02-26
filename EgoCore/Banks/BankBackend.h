@@ -79,7 +79,8 @@ struct LoadedBank {
     // --- UPDATED FILTER STATE ---
     char FilterText[128] = "";
     EFilterMode FilterMode = EFilterMode::Name; // Default: Name
-    int FilterTypeMask = -1; // -1: All, 0: Text, 1: Group, 2: Narrator
+    int FilterTypeMask = -1; // -1: All, (Maps to Type for Text/Textures)
+    int FilterTextureFormatMask = -1; // -1: All, 0: DXT1, 1: DXT3, 2: DXT5, 3: ARGB
 
     std::map<int, std::vector<uint8_t>> SubheaderCache;
     std::vector<uint8_t> CurrentEntryRawData;
@@ -161,39 +162,31 @@ inline std::string PeekSpeakerFast(LoadedBank& bank, int index) {
     const auto& e = bank.Entries[index];
     if (e.Type != 0) return ""; // Only Type 0 has Speaker
 
-    // 1. Check Modified Cache first
     if (bank.ModifiedEntryData.count(index)) {
         CTextParser p; p.Parse(bank.ModifiedEntryData[index], 0);
         return p.IsParsed ? p.TextData.Speaker : "";
     }
 
-    // 2. Read from Disk (Partial Read)
     if (!bank.Stream->is_open()) return "";
     bank.Stream->clear();
     bank.Stream->seekg(e.Offset, std::ios::beg);
 
-    // Skip Content (WString)
-    // We need to read char-by-char to find double null terminator
-    // Optimization: Buffer small chunk
-    std::vector<uint8_t> buf(2048); // Should cover most entries
+    std::vector<uint8_t> buf(2048);
     bank.Stream->read((char*)buf.data(), (std::min)((uint32_t)buf.size(), e.Size));
 
     size_t cursor = 0;
     size_t max = buf.size();
 
-    // Skip WString Content
     while (cursor + 2 <= max) {
         uint16_t c = *(uint16_t*)(buf.data() + cursor);
         cursor += 2;
         if (c == 0) break;
     }
 
-    // Skip SpeechBank (Presized)
     if (cursor + 4 > max) return "";
     uint32_t len = *(uint32_t*)(buf.data() + cursor);
     cursor += 4 + len;
 
-    // Read Speaker (Presized)
     if (cursor + 4 > max) return "";
     len = *(uint32_t*)(buf.data() + cursor);
     cursor += 4;
@@ -204,10 +197,44 @@ inline std::string PeekSpeakerFast(LoadedBank& bank, int index) {
     return "";
 }
 
+// Helper to peek Texture format without decompression
+inline ETextureFormat PeekTextureFormatFast(LoadedBank& bank, int index) {
+    if (!bank.SubheaderCache.count(index)) return ETextureFormat::Unknown;
+    const auto& meta = bank.SubheaderCache[index];
+    if (meta.size() < 28) return ETextureFormat::Unknown;
+
+    CGraphicHeader header;
+    memcpy(&header, meta.data(), 28);
+
+    CPixelFormatInit formatInfo = { 0, 0, 0, 0, 0, 0 };
+    if (meta.size() >= 34) memcpy(&formatInfo, meta.data() + 28, 6);
+
+    bool isBump = (bank.Entries[index].Type == 0x2 || bank.Entries[index].Type == 0x3);
+
+    if (formatInfo.ColourDepth == 32) return ETextureFormat::ARGB8888;
+
+    if (isBump) {
+        if (header.TransparencyType == 0 || header.TransparencyType == 2) return ETextureFormat::NormalMap_DXT1;
+        else return ETextureFormat::NormalMap_DXT5;
+    }
+    else {
+        switch (header.TransparencyType) {
+        case 0: return ETextureFormat::DXT1;
+        case 1: return ETextureFormat::DXT3;
+        case 2: return ETextureFormat::DXT1;
+        case 3: return ETextureFormat::DXT5;
+        case 4: return ETextureFormat::DXT3;
+        default: return ETextureFormat::DXT1;
+        }
+    }
+}
+
 inline void UpdateFilter(LoadedBank& bank) {
     bank.FilteredIndices.clear();
     std::string filter = bank.FilterText;
     std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+    bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects);
 
     for (size_t i = 0; i < bank.Entries.size(); i++) {
         // 1. FILTER BY TYPE (Modifier)
@@ -215,7 +242,19 @@ inline void UpdateFilter(LoadedBank& bank) {
             if (bank.Entries[i].Type != bank.FilterTypeMask) continue;
         }
 
-        // 2. FILTER BY TEXT
+        // 2. FILTER BY TEXTURE FORMAT
+        if (isTextureBank && bank.FilterTextureFormatMask != -1) {
+            ETextureFormat fmt = PeekTextureFormatFast(bank, (int)i);
+            int mappedFmt = -1;
+            if (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) mappedFmt = 0;
+            else if (fmt == ETextureFormat::DXT3) mappedFmt = 1;
+            else if (fmt == ETextureFormat::DXT5 || fmt == ETextureFormat::NormalMap_DXT5) mappedFmt = 2;
+            else if (fmt == ETextureFormat::ARGB8888) mappedFmt = 3;
+
+            if (mappedFmt != bank.FilterTextureFormatMask) continue;
+        }
+
+        // 3. FILTER BY TEXT/ID/SPEAKER
         if (filter.empty()) {
             bank.FilteredIndices.push_back((int)i);
             continue;

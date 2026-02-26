@@ -3,7 +3,6 @@
 #include <vector>
 #include <string>
 #include <algorithm>
-#include <iostream>
 
 #pragma pack(push, 1)
 struct CPixelFormatInit {
@@ -28,8 +27,8 @@ struct Color32 { uint8_t r, g, b, a; };
 class TextureUtils {
 public:
     static void GetColorBlockColors(Color32* colors, const uint8_t* block) {
-        uint16_t c0 = *(uint16_t*)(block);
-        uint16_t c1 = *(uint16_t*)(block + 2);
+        uint16_t c0; memcpy(&c0, block, 2);
+        uint16_t c1; memcpy(&c1, block + 2, 2);
 
         colors[0].r = (c0 >> 11) * 255 / 31;
         colors[0].g = ((c0 >> 5) & 0x3F) * 255 / 63;
@@ -65,7 +64,7 @@ public:
     static void DecompressDXT1Block(const uint8_t* block, Color32* output, uint32_t stride) {
         Color32 colors[4];
         GetColorBlockColors(colors, block);
-        uint32_t indices = *(uint32_t*)(block + 4);
+        uint32_t indices; memcpy(&indices, block + 4, 4);
 
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
@@ -78,7 +77,7 @@ public:
     static void DecompressDXT3Block(const uint8_t* block, Color32* output, uint32_t stride) {
         DecompressDXT1Block(block + 8, output, stride);
         for (int y = 0; y < 4; y++) {
-            uint16_t alphaRow = *(uint16_t*)(block + 2 * y);
+            uint16_t alphaRow; memcpy(&alphaRow, block + 2 * y, 2);
             for (int x = 0; x < 4; x++) {
                 uint8_t alpha = (alphaRow >> (4 * x)) & 0x0F;
                 output[y * stride + x].a = (alpha * 255) / 15;
@@ -90,7 +89,9 @@ public:
         DecompressDXT1Block(block + 8, output, stride);
         uint8_t a0 = block[0];
         uint8_t a1 = block[1];
-        uint64_t alphaMask = (*(uint64_t*)(block)) >> 16;
+
+        uint64_t fullBlock; memcpy(&fullBlock, block, 8);
+        uint64_t alphaMask = fullBlock >> 16;
 
         uint8_t alphas[8];
         alphas[0] = a0;
@@ -123,10 +124,6 @@ public:
     std::string DebugLog;
     uint32_t TrueFrameStride = 0;
     std::string PendingName;
-
-    void LogDebug(const std::string& msg) {
-        DebugLog += msg + "\n";
-    }
 
     std::string GetFormatString() {
         switch (DecodedFormat) {
@@ -162,19 +159,13 @@ public:
     }
 
     void DecodeFormat(bool isBump) {
-        // [FIX] MATCHING GAME ASSEMBLY LOGIC (CGraphicDataBank::GetTextureType)
-        // 1. Check Compression Status first (heuristic via ColourDepth).
-        // 32-bit is definitively Uncompressed ARGB in Fable 1 contexts.
         bool isUncompressed = (FormatInfo.ColourDepth == 32);
 
         if (isUncompressed) {
-            // If it's bump mapped but uncompressed, Fable treats it as specialized uncompressed bump.
-            // For viewer purposes, treating as ARGB8888 is usually correct for raw visualization.
             DecodedFormat = ETextureFormat::ARGB8888;
             return;
         }
 
-        // 2. If Compressed, switch on TransparencyType
         if (isBump) {
             switch (Header.TransparencyType) {
             case 0: case 2: DecodedFormat = ETextureFormat::NormalMap_DXT1; break;
@@ -184,26 +175,20 @@ public:
         else {
             switch (Header.TransparencyType) {
             case 0: DecodedFormat = ETextureFormat::DXT1; break;
-            case 1: DecodedFormat = ETextureFormat::DXT3; break; // Explicit Alpha (4-bit)
-            case 2: DecodedFormat = ETextureFormat::DXT1; break; // 1-bit Alpha
-            case 3: DecodedFormat = ETextureFormat::DXT5; break; // Interpolated Alpha
-            case 4: DecodedFormat = ETextureFormat::DXT3; break; // Unknown, typically DXT3 in fallback
-            default:
-                // Fallback for weird types, but we already handled 32-bit above.
-                // If it ends up here with < 32 bits and unknown type, default to DXT1 or Unknown.
-                DecodedFormat = ETextureFormat::DXT1;
-                break;
+            case 1: DecodedFormat = ETextureFormat::DXT3; break;
+            case 2: DecodedFormat = ETextureFormat::DXT1; break;
+            case 3: DecodedFormat = ETextureFormat::DXT5; break;
+            case 4: DecodedFormat = ETextureFormat::DXT3; break;
+            default: DecodedFormat = ETextureFormat::DXT1; break;
             }
         }
     }
 
     uint32_t CalculateTotalFrameSize() {
         uint32_t totalSize = 0;
-        // Use Physical Dimensions (Width/Height) not Logical (FrameWidth)
         uint32_t w = Header.Width;
         uint32_t h = Header.Height;
 
-        // Sanity Check: If Width is 0 (rare), fallback to FrameWidth
         if (w == 0) w = Header.FrameWidth;
         if (h == 0) h = Header.FrameHeight;
 
@@ -222,32 +207,25 @@ public:
     void Parse(const std::vector<uint8_t>& metadata, const std::vector<uint8_t>& pixelData, int32_t entryType) {
         IsParsed = false;
         DecodedPixels.clear();
-        DebugLog = "";
         PendingName = "";
 
         if (metadata.size() < 28) return;
+
         memcpy(&Header, metadata.data(), 28);
 
-        // Ensure we actually have the PixelFormatInit struct (6 bytes)
-        if (metadata.size() >= 34) {
-            memcpy(&FormatInfo, metadata.data() + 28, 6);
-        }
-        else {
-            // Fallback if missing (shouldn't happen in standard .BIG files)
-            FormatInfo = { 0, 0, 0, 0, 0, 0 };
-        }
+        if (metadata.size() >= 34) memcpy(&FormatInfo, metadata.data() + 28, 6);
+        else FormatInfo = { 0, 0, 0, 0, 0, 0 };
 
         bool isBump = (entryType == 0x2 || entryType == 0x3);
         DecodeFormat(isBump);
 
         TrueFrameStride = CalculateTotalFrameSize();
-        // Fallback: If calc is smaller than header claim, trust header (prevents truncation)
         if (TrueFrameStride < Header.FrameDataSize) TrueFrameStride = Header.FrameDataSize;
 
         uint32_t frames = (Header.FrameCount > 0) ? Header.FrameCount : 1;
         size_t expectedTotalSize = (size_t)TrueFrameStride * frames;
 
-        // Large Padding for LZO safety (prevents overflow on bad decompression)
+        // Pad to guarantee decompression write safety
         DecodedPixels.resize(expectedTotalSize + 65536, 0);
 
         if (pixelData.empty()) return;
@@ -260,12 +238,8 @@ public:
         int mips = (Header.MipmapLevels > 0) ? Header.MipmapLevels : 1;
 
         for (uint32_t f = 0; f < frames; f++) {
-            // Use Physical Dimensions for Loop state
-            uint32_t w = Header.Width;
-            uint32_t h = Header.Height;
-            if (w == 0) w = Header.FrameWidth;
-            if (h == 0) h = Header.FrameHeight;
-
+            uint32_t w = Header.Width ? Header.Width : Header.FrameWidth;
+            uint32_t h = Header.Height ? Header.Height : Header.FrameHeight;
             uint32_t d = (Header.Depth > 0) ? Header.Depth : 1;
 
             for (int m = 0; m < mips; m++) {
@@ -279,34 +253,54 @@ public:
                     }
                 }
                 else {
-                    // LZO Header handling
-                    if (inputCursor + 2 > inputSize) break;
-                    uint32_t compSize = *(uint16_t*)(src + inputCursor);
-                    inputCursor += 2;
-                    if (compSize == 0xFFFF) {
-                        if (inputCursor + 4 > inputSize) break;
-                        compSize = *(uint32_t*)(src + inputCursor);
-                        inputCursor += 4;
-                    }
+                    size_t bytesDecompressedForMip = 0;
+                    size_t lzoTarget = (mipVolumeSize > 3) ? (mipVolumeSize - 3) : 0;
 
-                    if (compSize == 0) {
-                        if (inputCursor + mipVolumeSize <= inputSize) {
-                            memcpy(DecodedPixels.data() + outputOffset, src + inputCursor, mipVolumeSize);
-                            inputCursor += mipVolumeSize;
+                    while (bytesDecompressedForMip < lzoTarget) {
+                        if (inputCursor + 2 > inputSize) break;
+
+                        uint16_t compSize16; memcpy(&compSize16, src + inputCursor, 2);
+                        inputCursor += 2;
+
+                        uint32_t compSize = compSize16;
+                        if (compSize == 0xFFFF) {
+                            if (inputCursor + 4 > inputSize) break;
+                            memcpy(&compSize, src + inputCursor, 4);
+                            inputCursor += 4;
+                        }
+
+                        if (compSize == 0) {
+                            size_t remaining = lzoTarget - bytesDecompressedForMip;
+                            size_t toCopy = (std::min)(remaining, (size_t)(inputSize - inputCursor));
+                            memcpy(DecodedPixels.data() + outputOffset + bytesDecompressedForMip, src + inputCursor, toCopy);
+                            inputCursor += toCopy;
+                            bytesDecompressedForMip += toCopy;
+                        }
+                        else {
+                            if (inputCursor + compSize > inputSize) break;
+
+                            size_t outLen = 0;
+                            size_t maxOutput = DecodedPixels.size() - (outputOffset + bytesDecompressedForMip);
+
+                            int ret = LZO1X_Decompress_Safe(
+                                src + inputCursor,
+                                compSize,
+                                DecodedPixels.data() + outputOffset + bytesDecompressedForMip,
+                                maxOutput,
+                                &outLen
+                            );
+
+                            inputCursor += compSize;
+                            bytesDecompressedForMip += outLen;
+
+                            if (ret != 0 || outLen == 0) break;
                         }
                     }
-                    else {
-                        if (inputCursor + compSize > inputSize) break;
-                        size_t outLen = 0;
-                        LZO1X_Decompress(src + inputCursor, compSize, DecodedPixels.data() + outputOffset, &outLen);
-                        inputCursor += compSize;
 
-                        // LZO Trailing Bytes
-                        if (inputCursor + 3 <= inputSize && mipVolumeSize >= 3) {
-                            uint8_t* destEnd = DecodedPixels.data() + outputOffset + mipVolumeSize - 3;
-                            memcpy(destEnd, src + inputCursor, 3);
-                            inputCursor += 3;
-                        }
+                    if (inputCursor + 3 <= inputSize && mipVolumeSize >= 3) {
+                        uint8_t* destEnd = DecodedPixels.data() + outputOffset + mipVolumeSize - 3;
+                        memcpy(destEnd, src + inputCursor, 3);
+                        inputCursor += 3;
                     }
                 }
                 outputOffset += mipVolumeSize;
@@ -316,6 +310,7 @@ public:
                 if (d > 1) d >>= 1;
             }
         }
+
         DecodedPixels.resize(expectedTotalSize);
         if (!DecodedPixels.empty()) IsParsed = true;
     }
