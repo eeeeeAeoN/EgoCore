@@ -209,100 +209,70 @@ public:
         for (const auto& prim : mesh.Primitives) {
             uint32_t batchStart = (uint32_t)indices.size();
 
-            // --- HANDLE REPEATED MESHES (GRASS/FOLIAGE) ---
-            if (prim.RepeatingMeshReps > 1 || prim.VertexStride == 36) {
+            // 1. Identify characteristics
+            bool hasBones = (prim.AnimatedBlockCount > 0);
+            bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
+            bool isNormComp = (prim.InitFlags & 4) != 0;
+
+            // 2. THE FIX: Drop the compression check. Only rely on the lack of bones 
+            // to protect the animated Hero meshes from falling into the particle path.
+            bool isRepeated = (prim.RepeatingMeshReps > 1) || (prim.VertexStride == 36 && !hasBones);
+
+            // --- 1. GRASS, FOLIAGE & PARTICLES (REPEATED MESHES / TYPE 4) ---
+            if (isRepeated) {
                 uint32_t localVertexOffset = (uint32_t)vertices.size();
                 int reps = (prim.RepeatingMeshReps > 1) ? prim.RepeatingMeshReps : 1;
 
-                // Duplicate the base mesh for every repetition using Generator Matrices
                 for (int r = 0; r < reps; r++) {
                     float m[12] = { 1,0,0, 0,1,0, 0,0,1, 0,0,0 };
                     if (r < mesh.Generators.size()) memcpy(m, mesh.Generators[r].Transform, 48);
 
                     for (int v = 0; v < prim.VertexCount; v++) {
-                        size_t offset = v * prim.VertexStride;
-                        if (offset + 12 > prim.VertexBuffer.size()) break;
-
+                        size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
                         GPUVertex gpuV;
-                        if (prim.VertexStride == 36) {
-                            const float* raw = (const float*)(prim.VertexBuffer.data() + offset);
-                            float bx = raw[0], by = raw[1], bz = raw[2];
-                            gpuV.Pos = XMFLOAT3(
-                                bx * m[0] + by * m[3] + bz * m[6] + m[9],
-                                bx * m[1] + by * m[4] + bz * m[7] + m[10],
-                                bx * m[2] + by * m[5] + bz * m[8] + m[11]
-                            );
 
-                            const float* n = (const float*)(prim.VertexBuffer.data() + offset + 12);
-                            float nx = n[0] * m[0] + n[1] * m[3] + n[2] * m[6];
-                            float ny = n[0] * m[1] + n[1] * m[4] + n[2] * m[7];
-                            float nz = n[0] * m[2] + n[1] * m[5] + n[2] * m[8];
-                            float len = sqrtf(nx * nx + ny * ny + nz * nz);
-                            if (len > 0) { nx /= len; ny /= len; nz /= len; }
-                            gpuV.Norm = XMFLOAT3(nx, ny, nz);
+                        const float* raw = (const float*)(prim.VertexBuffer.data() + offset);
+                        float bx = raw[0], by = raw[1], bz = raw[2];
+                        gpuV.Pos = XMFLOAT3(bx * m[0] + by * m[3] + bz * m[6] + m[9], bx * m[1] + by * m[4] + bz * m[7] + m[10], bx * m[2] + by * m[5] + bz * m[8] + m[11]);
 
-                            const float* u = (const float*)(prim.VertexBuffer.data() + offset + 24);
-                            gpuV.UV = XMFLOAT2(u[0], u[1]);
-                        }
-                        else {
-                            gpuV.Pos = XMFLOAT3(0, 0, 0); gpuV.Norm = XMFLOAT3(0, 1, 0); gpuV.UV = XMFLOAT2(0, 0);
-                        }
+                        const float* n = (const float*)(prim.VertexBuffer.data() + offset + 12);
+                        float nx = n[0] * m[0] + n[1] * m[3] + n[2] * m[6]; float ny = n[0] * m[1] + n[1] * m[4] + n[2] * m[7]; float nz = n[0] * m[2] + n[1] * m[5] + n[2] * m[8];
+                        float len = sqrtf(nx * nx + ny * ny + nz * nz); if (len > 0) { nx /= len; ny /= len; nz /= len; }
+                        gpuV.Norm = XMFLOAT3(nx, ny, nz);
+
+                        const float* u = (const float*)(prim.VertexBuffer.data() + offset + 24);
+                        gpuV.UV = XMFLOAT2(u[0], u[1]);
+
                         vertices.push_back(gpuV);
                     }
-
                     for (uint32_t k = 0; k < prim.IndexCount; k++) {
-                        if (k < prim.IndexBuffer.size()) {
-                            indices.push_back(localVertexOffset + (r * prim.VertexCount) + prim.IndexBuffer[k]);
-                        }
+                        if (k < prim.IndexBuffer.size()) indices.push_back(localVertexOffset + (r * prim.VertexCount) + prim.IndexBuffer[k]);
                     }
                 }
                 indexOffset += (prim.VertexCount * reps);
             }
-            // --- STANDARD & ANIMATED MESHES (HERO / BUILDINGS) ---
+            // --- 2. HERO, BUILDINGS & STANDARD MESHES ---
             else {
-                bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
-                bool isNormComp = (prim.InitFlags & 4) != 0;
-                size_t boneSize = (prim.AnimatedBlockCount > 0) ? 8 : 0;
-                size_t normOff = (isPosComp ? 4 : 12) + boneSize;
+                size_t wOff = isPosComp ? 4 : 12;
+                size_t normOff = wOff + (hasBones ? 8 : 0);
                 size_t uvOff = normOff + (isNormComp ? 4 : 12);
 
                 for (int v = 0; v < prim.VertexCount; v++) {
                     size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
                     GPUVertex gpuV;
 
-                    // 1. POSITION
-                    if (isPosComp) {
-                        uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset);
-                        UnpackPOSPACKED3(p, prim.Compression.Scale, prim.Compression.Offset, gpuV.Pos.x, gpuV.Pos.y, gpuV.Pos.z);
-                    }
-                    else {
-                        const float* r = (const float*)(prim.VertexBuffer.data() + offset);
-                        gpuV.Pos = XMFLOAT3(r[0], r[1], r[2]);
-                    }
+                    if (isPosComp) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset); UnpackPOSPACKED3(p, prim.Compression.Scale, prim.Compression.Offset, gpuV.Pos.x, gpuV.Pos.y, gpuV.Pos.z); }
+                    else { const float* r = (const float*)(prim.VertexBuffer.data() + offset); gpuV.Pos = XMFLOAT3(r[0], r[1], r[2]); }
 
-                    // 2. NORMAL
                     if (offset + normOff + 4 <= prim.VertexBuffer.size()) {
-                        if (isNormComp) {
-                            uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset + normOff);
-                            UnpackNORMPACKED3(p, gpuV.Norm.x, gpuV.Norm.y, gpuV.Norm.z);
-                        }
-                        else {
-                            const float* r = (const float*)(prim.VertexBuffer.data() + offset + normOff);
-                            gpuV.Norm = XMFLOAT3(r[0], r[1], r[2]);
-                        }
+                        if (isNormComp) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset + normOff); UnpackNORMPACKED3(p, gpuV.Norm.x, gpuV.Norm.y, gpuV.Norm.z); }
+                        else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + normOff); gpuV.Norm = XMFLOAT3(r[0], r[1], r[2]); }
                     }
                     else gpuV.Norm = XMFLOAT3(0, 1, 0);
 
-                    // 3. UV
                     if (offset + uvOff + 4 <= prim.VertexBuffer.size()) {
-                        if (isNormComp) {
-                            int16_t* u = (int16_t*)(prim.VertexBuffer.data() + offset + uvOff);
-                            gpuV.UV = XMFLOAT2(DecompressUV(u[0]), DecompressUV(u[1]));
-                        }
-                        else {
-                            const float* r = (const float*)(prim.VertexBuffer.data() + offset + uvOff);
-                            gpuV.UV = XMFLOAT2(r[0], r[1]);
-                        }
+                        if (isNormComp) { int16_t* u = (int16_t*)(prim.VertexBuffer.data() + offset + uvOff); gpuV.UV = XMFLOAT2(DecompressUV(u[0]), DecompressUV(u[1])); }
+                        else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + uvOff); gpuV.UV = XMFLOAT2(r[0], r[1]); }
                     }
                     else gpuV.UV = XMFLOAT2(0, 0);
 
@@ -316,10 +286,18 @@ public:
                             if (k % 2 == 0) { idx[0] = prim.IndexBuffer[start + k]; idx[1] = prim.IndexBuffer[start + k + 1]; idx[2] = prim.IndexBuffer[start + k + 2]; }
                             else { idx[0] = prim.IndexBuffer[start + k]; idx[1] = prim.IndexBuffer[start + k + 2]; idx[2] = prim.IndexBuffer[start + k + 1]; }
                             if (idx[0] == idx[1] || idx[1] == idx[2] || idx[0] == idx[2]) continue;
+                            if (idx[0] == 0xFFFF || idx[1] == 0xFFFF || idx[2] == 0xFFFF) continue;
                             indices.push_back(idx[0] + indexOffset); indices.push_back(idx[1] + indexOffset); indices.push_back(idx[2] + indexOffset);
                         }
                     }
-                    else { for (uint32_t k = 0; k < count * 3; k++) if (start + k < prim.IndexBuffer.size()) indices.push_back(prim.IndexBuffer[start + k] + indexOffset); }
+                    else {
+                        for (uint32_t k = 0; k < count * 3; k++) {
+                            if (start + k < prim.IndexBuffer.size()) {
+                                uint16_t i = prim.IndexBuffer[start + k];
+                                if (i != 0xFFFF) indices.push_back(i + indexOffset);
+                            }
+                        }
+                    }
                     };
 
                 bool processed = false;
@@ -337,7 +315,6 @@ public:
         D3D11_SUBRESOURCE_DATA vData = { vertices.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &VBuffer);
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
-
         CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f; CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
     }
 

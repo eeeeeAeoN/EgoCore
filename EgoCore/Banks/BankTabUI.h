@@ -287,7 +287,7 @@ static void DrawBankTab() {
                 }
 
                 float searchAvail = ImGui::GetContentRegionAvail().x;
-                bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects);
+                bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || bank.Type == EBankType::Graphics);
 
                 if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
                     ImGui::SetNextItemWidth(searchAvail - 35.0f);
@@ -370,6 +370,24 @@ static void DrawBankTab() {
                             if (ImGui::RadioButton("DXT3", bank.FilterTextureFormatMask == 1)) { bank.FilterTextureFormatMask = 1; UpdateFilter(bank); }
                             if (ImGui::RadioButton("DXT5 / Bump DXT5", bank.FilterTextureFormatMask == 2)) { bank.FilterTextureFormatMask = 2; UpdateFilter(bank); }
                             if (ImGui::RadioButton("ARGB8888", bank.FilterTextureFormatMask == 3)) { bank.FilterTextureFormatMask = 3; UpdateFilter(bank); }
+                        }
+                        // --- NEW: GRAPHICS BANK FILTERS ---
+                        else if (bank.Type == EBankType::Graphics) {
+                            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mesh Types:");
+                            if (ImGui::RadioButton("Show All Types##Gfx", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Static Mesh", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Repeated Mesh", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Physics Mesh", bank.FilterTypeMask == 3)) { bank.FilterTypeMask = 3; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Particle Mesh", bank.FilterTypeMask == 4)) { bank.FilterTypeMask = 4; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Animated Mesh", bank.FilterTypeMask == 5)) { bank.FilterTypeMask = 5; UpdateFilter(bank); }
+
+                            ImGui::Separator();
+                            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Animation Types:");
+                            if (ImGui::RadioButton("Animation", bank.FilterTypeMask == 6)) { bank.FilterTypeMask = 6; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Delta Animation", bank.FilterTypeMask == 7)) { bank.FilterTypeMask = 7; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Lipsync Animation", bank.FilterTypeMask == 8)) { bank.FilterTypeMask = 8; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Partial Animation", bank.FilterTypeMask == 9)) { bank.FilterTypeMask = 9; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Relative Animation", bank.FilterTypeMask == 10)) { bank.FilterTypeMask = 10; UpdateFilter(bank); }
                         }
 
                         ImGui::EndPopup();
@@ -494,6 +512,7 @@ static void DrawBankTab() {
                         else if (e.Type == 0x5) typeName = "Type 5 - Flat Sequence";
                         else typeName = "Type " + std::to_string(e.Type) + " - Texture";
                     }
+
                     else if (bank.Type == EBankType::Audio) typeName = "Audio Clip";
                     else typeName = "Type " + std::to_string(e.Type);
 

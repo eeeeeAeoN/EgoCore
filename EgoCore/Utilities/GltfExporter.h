@@ -96,9 +96,11 @@ namespace GltfExporter {
         std::vector<BufferView> bufferViews;
         std::stringstream primitivesJson;
 
+        // 1. GLOBAL BONE MAP
         std::map<uint16_t, uint16_t> globalToLocalBone;
         for (int i = 0; i < mesh.BoneCount; i++) if (i < mesh.BoneIndices.size()) globalToLocalBone[mesh.BoneIndices[i]] = (uint16_t)i;
 
+        // 2. MATRICES (Raw Z-Up)
         std::vector<Mat4> IBMs;
         std::vector<Mat4> WorldTransforms;
         IBMs.resize(mesh.BoneCount);
@@ -112,6 +114,7 @@ namespace GltfExporter {
             else { IBMs[i] = Identity(); WorldTransforms[i] = Identity(); }
         }
 
+        // 3. NODE MAPPING
         int boneStartIdx = 0;
         int meshNodeIdx = mesh.BoneCount;
         int helperStartIdx = meshNodeIdx + 1;
@@ -140,13 +143,15 @@ namespace GltfExporter {
 
         for (int i = 0; i < mesh.BoneCount; i++) if (mesh.Bones[i].ParentIndex == -1) nodeChildren[rootWrapperIdx].push_back(i);
 
+        // --- JSON ---
         json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"FableBankExplorer\"},";
 
         bool isRepeated = false;
         bool fP = true;
 
+        // --- MESH ---
         for (const auto& prim : mesh.Primitives) {
-            if (prim.RepeatingMeshReps > 1 || prim.VertexStride == 36) isRepeated = true;
+            if (prim.RepeatingMeshReps > 1) isRepeated = true;
 
             if (!fP) primitivesJson << ","; fP = false; primitivesJson << "\n{\"attributes\":{";
 
@@ -155,22 +160,24 @@ namespace GltfExporter {
                 if (str) {
                     for (uint32_t k = 0; k < c - 2; k++) {
                         uint16_t i0 = prim.IndexBuffer[s + k], i1 = prim.IndexBuffer[s + k + 1], i2 = prim.IndexBuffer[s + k + 2];
-                        if (i0 != i1 && i1 != i2 && i0 != i2) {
-                            if (k % 2) { idx.push_back(i0); idx.push_back(i1); idx.push_back(i2); }
-                            else { idx.push_back(i0); idx.push_back(i2); idx.push_back(i1); }
-                        }
+                        if (i0 == i1 || i1 == i2 || i0 == i2) continue; // Skip degenerates
+                        if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) continue; // Skip primitive restarts
+
+                        if (k % 2) { idx.push_back(i0); idx.push_back(i1); idx.push_back(i2); }
+                        else { idx.push_back(i0); idx.push_back(i2); idx.push_back(i1); }
                     }
                 }
                 else {
-                    for (uint32_t k = 0; k < c; k++) {
-                        idx.push_back(prim.IndexBuffer[s + k * 3]);
-                        idx.push_back(prim.IndexBuffer[s + k * 3 + 2]);
-                        idx.push_back(prim.IndexBuffer[s + k * 3 + 1]);
+                    for (uint32_t k = 0; k < c * 3; k++) {
+                        if (s + k < prim.IndexBuffer.size()) {
+                            uint16_t i = prim.IndexBuffer[s + k];
+                            if (i != 0xFFFF) idx.push_back(i);
+                        }
                     }
                 }
                 };
 
-            if (prim.RepeatingMeshReps > 1 || prim.VertexStride == 36) {
+            if (prim.RepeatingMeshReps > 1) {
                 if (!prim.IndexBuffer.empty()) AddIdx(prim.IndexBuffer.size() / 3, 0, false);
             }
             else {
@@ -187,26 +194,29 @@ namespace GltfExporter {
             float min[3] = { 1e9,1e9,1e9 }, max[3] = { -1e9,-1e9,-1e9 };
             int blk = 0, proc = 0, limit = (prim.AnimatedBlocks.empty() ? 999999 : prim.AnimatedBlocks[0].VertexCount);
 
+            bool hasBones = (prim.AnimatedBlockCount > 0);
             bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
             bool isNormComp = (prim.InitFlags & 4) != 0;
-            size_t boneSize = (prim.AnimatedBlockCount > 0) ? 8 : 0;
-            size_t normOff = (isPosComp ? 4 : 12) + boneSize;
+
+            size_t wOff = isPosComp ? 4 : 12;
+            size_t iOff = wOff + 4;
+            size_t normOff = wOff + (hasBones ? 8 : 0);
             size_t uOff = normOff + (isNormComp ? 4 : 12);
 
             for (int v = 0; v < prim.VertexCount; v++) {
-                if (!prim.AnimatedBlocks.empty() && proc >= limit) { blk++; proc = 0; if (blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
+                if (hasBones && proc >= limit) { blk++; proc = 0; if (blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
                 proc++;
 
-                size_t off = v * prim.VertexStride;
-                if (off + 12 > prim.VertexBuffer.size()) break;
-
+                size_t off = v * prim.VertexStride; if (off + 12 > prim.VertexBuffer.size()) break;
                 float x, y, z, nx = 0, ny = 1, nz = 0, u = 0, v_c = 0;
 
-                if (prim.VertexStride == 36) {
+                // GRASS / REPEATED MESHES
+                if (prim.RepeatingMeshReps > 1) {
                     float* p = (float*)(prim.VertexBuffer.data() + off); x = p[0]; y = p[1]; z = p[2];
                     if (off + 24 <= prim.VertexBuffer.size()) { float* n = (float*)(prim.VertexBuffer.data() + off + 12); nx = n[0]; ny = n[1]; nz = n[2]; }
                     if (off + 32 <= prim.VertexBuffer.size()) { float* t = (float*)(prim.VertexBuffer.data() + off + 24); u = t[0]; v_c = t[1]; }
                 }
+                // HERO / STANDARD MESHES
                 else {
                     if (isPosComp) { UnpackPOSPACKED3(*(uint32_t*)(prim.VertexBuffer.data() + off), prim.Compression.Scale, prim.Compression.Offset, x, y, z); }
                     else { float* p = (float*)(prim.VertexBuffer.data() + off); x = p[0]; y = p[1]; z = p[2]; }
@@ -227,16 +237,15 @@ namespace GltfExporter {
                 normData.push_back(nx); normData.push_back(ny); normData.push_back(nz);
                 uvData.push_back(u); uvData.push_back(v_c);
 
-                if (mesh.BoneCount > 0 && prim.AnimatedBlockCount > 0) {
-                    size_t iOff = isPosComp ? 4 : 12; size_t wOff = iOff + 4;
-                    if (off + wOff + 4 <= prim.VertexBuffer.size()) {
-                        uint8_t* ri = (uint8_t*)(prim.VertexBuffer.data() + off + iOff);
-                        uint8_t* rw = (uint8_t*)(prim.VertexBuffer.data() + off + wOff);
+                if (hasBones) {
+                    if (off + iOff + 4 <= prim.VertexBuffer.size()) {
+                        uint8_t* wgt = (uint8_t*)(prim.VertexBuffer.data() + off + wOff);
+                        uint8_t* ind = (uint8_t*)(prim.VertexBuffer.data() + off + iOff);
                         for (int k = 0; k < 4; k++) {
-                            uint16_t lID = 0, pID = ri[k] / 3;
+                            uint16_t lID = 0, pID = ind[k] / 3;
                             if (blk < prim.AnimatedBlocks.size() && pID < prim.AnimatedBlocks[blk].Groups.size()) lID = prim.AnimatedBlocks[blk].Groups[pID];
                             if (lID >= mesh.BoneCount) lID = 0;
-                            jointData.push_back(lID); weightData.push_back(rw[k] / 255.0f);
+                            jointData.push_back(lID); weightData.push_back(wgt[k] / 255.0f);
                         }
                     }
                     else {
@@ -257,7 +266,7 @@ namespace GltfExporter {
             accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5126, "VEC2", 0, 0, false));
             primitivesJson << ",\"TEXCOORD_0\":" << accessors.size() - 1;
 
-            if (mesh.BoneCount > 0 && prim.AnimatedBlockCount > 0) {
+            if (hasBones) {
                 bufferViews.push_back({ bin.Write(jointData.data(), jointData.size() * 2), (int)jointData.size() * 2, 34962 });
                 accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5123, "VEC4", 0, 0, false));
                 primitivesJson << ",\"JOINTS_0\":" << accessors.size() - 1;
