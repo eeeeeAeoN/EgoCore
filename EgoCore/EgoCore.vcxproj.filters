@@ -102,9 +102,6 @@
     <ClInclude Include="Textures\TextureProperties.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
-    <ClInclude Include="Meshes\MeshRenderer.h">
-      <Filter>Source Files\Meshes</Filter>
-    </ClInclude>
     <ClInclude Include="Textures\TextureExporter.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
@@ -206,6 +203,9 @@
     </ClInclude>
     <ClInclude Include="Utilities\stb_dxt.h">
       <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\MeshRenderer.h">
+      <Filter>Source Files\Meshes</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

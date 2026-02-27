@@ -243,7 +243,7 @@ inline void DrawTextureProperties() {
     // Disable Add/Remove on Types 4 and 5
     if (entry.Type != 0x4 && entry.Type != 0x5) {
         ImGui::SameLine();
-        if (ImGui::Button("Add Frame...")) {
+        if (ImGui::Button("Add Frame")) {
             std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
             if (!path.empty()) {
                 AddTextureFrame(&bank, bank.SelectedEntryIndex, path);
@@ -359,7 +359,7 @@ inline void DrawTextureProperties() {
     }
 
     // EXPORT
-    if (ImGui::Button("Export Frame...")) {
+    if (ImGui::Button("Export")) {
         std::string path = SaveFileDialog("PNG Image\0*.png\0TGA Image\0*.tga\0DDS Texture\0*.dds\0");
         if (!path.empty()) {
             std::string ext = std::filesystem::path(path).extension().string();
@@ -411,7 +411,7 @@ inline void DrawTextureProperties() {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Replace Frame...")) {
+    if (ImGui::Button("Import")) {
         std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
         if (!path.empty()) {
             int targetFrame = isFlatSeq ? 0 : g_SelectedFrame;

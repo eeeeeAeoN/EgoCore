@@ -136,14 +136,16 @@ struct C3DMeshContent {
     }
 
     int CalculateVertexStride(int initFlags, bool isAnimated) {
-        bool isCompressed = (initFlags & 4) != 0;
+        // FIX: Position is uncompressed if the 0x10 flag is set!
+        bool isPosComp = (initFlags & 4) != 0 && (initFlags & 0x10) == 0;
+        bool isNormComp = (initFlags & 4) != 0;
         bool hasBump = (initFlags & 2) != 0;
         int stride = 0;
-        stride += isCompressed ? 4 : 12; // Pos
+        stride += isPosComp ? 4 : 12; // Pos
         if (isAnimated) stride += 8; // Anim
-        stride += isCompressed ? 4 : 12; // Norm
-        stride += isCompressed ? 4 : 8; // UV
-        if (hasBump) stride += isCompressed ? 8 : 16;
+        stride += isNormComp ? 4 : 12; // Norm
+        stride += isNormComp ? 4 : 8; // UV
+        if (hasBump) stride += isNormComp ? 8 : 16;
         return stride;
     }
 
