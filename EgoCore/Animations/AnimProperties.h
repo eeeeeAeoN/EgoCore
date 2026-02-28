@@ -5,20 +5,31 @@
 #include <vector>
 #include <functional>
 
+// Keep your AnimUIContext
 struct AnimUIContext {
     bool ShowHexWindow = false;
     std::vector<uint8_t> HexBuffer;
 };
 
-inline void DrawAnimProperties(C3DAnimationInfo& anim, bool isLoaded, AnimUIContext& ctx, std::function<void()> onSave) {
+// We will pass the raw animation payload (from the BIG file) to this function now,
+// not just the 24-byte header.
+inline void DrawAnimProperties(C3DAnimationInfo& anim, bool isLoaded, AnimUIContext& ctx, const std::vector<uint8_t>& rawEntryData, std::function<void()> onSave) {
     if (!isLoaded) {
         ImGui::Text("No animation loaded.");
         return;
     }
 
+    // NEW: Parse the animation payload on the fly so we can see the debug info
+    static AnimParser debugParser;
+    static int lastParsedSize = 0;
+    if (rawEntryData.size() != lastParsedSize) {
+        debugParser.Parse(rawEntryData);
+        lastParsedSize = rawEntryData.size();
+    }
+
     if (ImGui::Button("INSPECT ANIM HEX")) {
         ctx.ShowHexWindow = true;
-        ctx.HexBuffer = anim.Serialize();
+        ctx.HexBuffer = rawEntryData; // Show the full raw data now
     }
 
     if (ctx.ShowHexWindow) {
@@ -40,7 +51,10 @@ inline void DrawAnimProperties(C3DAnimationInfo& anim, bool isLoaded, AnimUICont
     ImGui::DragFloat("Rotation", &anim.Rotation, 0.01f);
 
     ImGui::Separator();
+    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "--- CHUNK STRUCTURE ---");
+    ImGui::InputTextMultiline("##AnimDebug", (char*)debugParser.Data.DebugInfo.c_str(), debugParser.Data.DebugInfo.size(), ImVec2(-1, 300), ImGuiInputTextFlags_ReadOnly);
 
+    ImGui::Separator();
     if (ImGui::Button("SAVE TO .BIG", ImVec2(-1, 40))) {
         if (onSave) onSave();
     }

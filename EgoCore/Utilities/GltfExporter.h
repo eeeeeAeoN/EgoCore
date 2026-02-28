@@ -198,9 +198,9 @@ namespace GltfExporter {
             bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
             bool isNormComp = (prim.InitFlags & 4) != 0;
 
-            size_t wOff = isPosComp ? 4 : 12;
-            size_t iOff = wOff + 4;
-            size_t normOff = wOff + (hasBones ? 8 : 0);
+            size_t iOff = isPosComp ? 4 : 12;           // Indices come FIRST
+            size_t wOff = iOff + 4;                     // Weights come NEXT
+            size_t normOff = iOff + (hasBones ? 8 : 0); // Normal is offset by the 8 total bone bytes
             size_t uOff = normOff + (isNormComp ? 4 : 12);
 
             for (int v = 0; v < prim.VertexCount; v++) {
@@ -241,15 +241,33 @@ namespace GltfExporter {
                     if (off + iOff + 4 <= prim.VertexBuffer.size()) {
                         uint8_t* wgt = (uint8_t*)(prim.VertexBuffer.data() + off + wOff);
                         uint8_t* ind = (uint8_t*)(prim.VertexBuffer.data() + off + iOff);
+
+                        // STRICT GLTF REQUIREMENT: Weights must sum to exactly 1.0
+                        float w[4] = { wgt[0] / 255.0f, wgt[1] / 255.0f, wgt[2] / 255.0f, wgt[3] / 255.0f };
+                        float sum = w[0] + w[1] + w[2] + w[3];
+
+                        if (sum > 0.001f) {
+                            w[0] /= sum; w[1] /= sum; w[2] /= sum; w[3] /= sum;
+                        }
+                        else {
+                            // Fallback to bind to root if totally unweighted
+                            w[0] = 1.0f; w[1] = 0.0f; w[2] = 0.0f; w[3] = 0.0f;
+                        }
+
                         for (int k = 0; k < 4; k++) {
                             uint16_t lID = 0, pID = ind[k] / 3;
                             if (blk < prim.AnimatedBlocks.size() && pID < prim.AnimatedBlocks[blk].Groups.size()) lID = prim.AnimatedBlocks[blk].Groups[pID];
                             if (lID >= mesh.BoneCount) lID = 0;
-                            jointData.push_back(lID); weightData.push_back(wgt[k] / 255.0f);
+
+                            jointData.push_back(lID);
+                            weightData.push_back(w[k]);
                         }
                     }
                     else {
-                        for (int k = 0; k < 4; k++) { jointData.push_back(0); weightData.push_back(0); }
+                        for (int k = 0; k < 4; k++) {
+                            jointData.push_back(0);
+                            weightData.push_back(k == 0 ? 1.0f : 0.0f);
+                        }
                     }
                 }
             }
@@ -359,7 +377,18 @@ namespace GltfExporter {
 
         json << "\"scene\":0,\"scenes\":[{\"nodes\":[" << rootWrapperIdx << "]}],";
         json << "\"meshes\":[{\"name\":" << Esc(mesh.MeshName) << ",\"primitives\":[" << primitivesJson.str() << "]}],";
-        if (mesh.BoneCount > 0) { json << "\"skins\":[{\"inverseBindMatrices\":" << ibmAcc << ",\"joints\":["; for (int i = 0; i < mesh.BoneCount; i++) json << i << (i < mesh.BoneCount - 1 ? "," : ""); json << "]}],"; }
+        if (mesh.BoneCount > 0) {
+            int rootBoneIdx = -1;
+            for (int i = 0; i < mesh.BoneCount; i++) {
+                if (mesh.Bones[i].ParentIndex == -1) { rootBoneIdx = i; break; }
+            }
+
+            json << "\"skins\":[{\"inverseBindMatrices\":" << ibmAcc;
+            if (rootBoneIdx != -1) json << ",\"skeleton\":" << rootBoneIdx;
+            json << ",\"joints\":[";
+            for (int i = 0; i < mesh.BoneCount; i++) json << i << (i < mesh.BoneCount - 1 ? "," : "");
+            json << "]}],";
+        }
 
         json << "\"materials\":[";
         for (size_t i = 0; i < mesh.Materials.size(); i++) {

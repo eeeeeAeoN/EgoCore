@@ -12,8 +12,26 @@
 
 using namespace DirectX;
 
-struct GPUVertex { XMFLOAT3 Pos; XMFLOAT3 Norm; XMFLOAT2 UV; };
-struct CBMatrix { XMMATRIX WorldViewProj; XMMATRIX World; XMFLOAT4 Color; XMFLOAT4 LightDir; };
+inline bool g_DebugDivIndices = true;
+// NEW: Added Joints and Weights to the Vertex
+struct GPUVertex {
+    XMFLOAT3 Pos;
+    XMFLOAT3 Norm;
+    XMFLOAT2 UV;
+    uint32_t Joints;   // Packed 4x uint8
+    XMFLOAT4 Weights;  // 4x floats
+};
+
+// NEW: Added BoneTransforms array and animation flag
+struct CBMatrix {
+    XMMATRIX WorldViewProj;
+    XMMATRIX World;
+    XMFLOAT4 Color;
+    XMFLOAT4 LightDir;
+    XMMATRIX BoneTransforms[128]; // Max 128 bones
+    int HasAnimation;
+    XMFLOAT3 Padding;
+};
 
 struct RenderBatch {
     uint32_t IndexStart;
@@ -41,7 +59,6 @@ private:
     float Width = 0, Height = 0;
     float CamRotX = 0.0f; float CamRotY = 0.0f; float CamDist = 10.0f; XMFLOAT2 CamPan = { 0, 0 };
 
-    // DEBUG BUFFERS
     ID3D11Buffer* DebugVBuffer = nullptr; ID3D11Buffer* DebugIBuffer = nullptr;
     uint32_t DebugBoxIndexCount = 0;
     uint32_t DebugCircleIndexCount = 0;
@@ -65,39 +82,21 @@ private:
 
     void CreateDebugBuffers(ID3D11Device* device) {
         if (DebugVBuffer) return;
-
-        std::vector<GPUVertex> verts;
-        std::vector<uint32_t> inds;
-
-        // 1. UNIT CUBE (Lines) - Vertices 0-7
-        // Min at -0.5, Max at 0.5
+        std::vector<GPUVertex> verts; std::vector<uint32_t> inds;
         float h = 0.5f;
-        XMFLOAT3 boxVerts[] = {
-            {-h,-h,-h}, { h,-h,-h}, { h, h,-h}, {-h, h,-h}, // Front
-            {-h,-h, h}, { h,-h, h}, { h, h, h}, {-h, h, h}  // Back
-        };
-        for (auto& p : boxVerts) verts.push_back({ p, {0,0,0}, {0,0} });
-
-        // Cube Indices (Line List)
-        uint32_t boxInds[] = {
-            0,1, 1,2, 2,3, 3,0, // Front Face
-            4,5, 5,6, 6,7, 7,4, // Back Face
-            0,4, 1,5, 2,6, 3,7  // Connecting Lines
-        };
+        XMFLOAT3 boxVerts[] = { {-h,-h,-h}, { h,-h,-h}, { h, h,-h}, {-h, h,-h}, {-h,-h, h}, { h,-h, h}, { h, h, h}, {-h, h, h} };
+        for (auto& p : boxVerts) verts.push_back({ p, {0,0,0}, {0,0}, 0, {0,0,0,0} });
+        uint32_t boxInds[] = { 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7 };
         for (auto i : boxInds) inds.push_back(i);
         DebugBoxIndexCount = 24;
 
-        // 2. UNIT CIRCLE (Lines) - Vertices 8+
-        // Radius 1.0 on XY plane
         DebugCircleStartIndex = (uint32_t)inds.size();
         uint32_t circleVertStart = (uint32_t)verts.size();
         int segments = 64;
         for (int i = 0; i < segments; i++) {
             float theta = (float)i / segments * XM_2PI;
-            verts.push_back({ XMFLOAT3(cosf(theta), sinf(theta), 0.0f), {0,0,0}, {0,0} });
-
-            inds.push_back(circleVertStart + i);
-            inds.push_back(circleVertStart + ((i + 1) % segments));
+            verts.push_back({ XMFLOAT3(cosf(theta), sinf(theta), 0.0f), {0,0,0}, {0,0}, 0, {0,0,0,0} });
+            inds.push_back(circleVertStart + i); inds.push_back(circleVertStart + ((i + 1) % segments));
         }
         DebugCircleIndexCount = segments * 2;
 
@@ -136,22 +135,43 @@ public:
     bool Initialize(ID3D11Device* device) {
         if (VS) return true;
 
-        // Standard Shader
+        // NEW: Shader now supports Hardware Skinning via BoneTransforms
         const char* shaderSrc = R"(
-            cbuffer CBuf : register(b0) { matrix WVP; matrix World; float4 Col; float4 LightDir; };
-            struct VS_IN { float3 Pos : POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; };
+            cbuffer CBuf : register(b0) { 
+                matrix WVP; matrix World; float4 Col; float4 LightDir; 
+                matrix BoneTransforms[128];
+                int HasAnimation; float3 padding;
+            };
+            struct VS_IN { 
+                float3 Pos : POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; 
+                uint4 Joints : BLENDINDICES; float4 Weights : BLENDWEIGHT;
+            };
             struct PS_IN { float4 Pos : SV_POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; };
             
             PS_IN VS(VS_IN input) { 
                 PS_IN output; 
-                output.Pos = mul(float4(input.Pos, 1.0f), WVP); 
-                output.Norm = mul(input.Norm, (float3x3)World); 
+                
+                float4 localPos = float4(input.Pos, 1.0f);
+                float3 localNorm = input.Norm;
+
+                float wSum = input.Weights.x + input.Weights.y + input.Weights.z + input.Weights.w;
+                if (HasAnimation == 1 && wSum > 0.001f) {
+                    matrix boneMat = BoneTransforms[input.Joints.x] * input.Weights.x +
+                                     BoneTransforms[input.Joints.y] * input.Weights.y +
+                                     BoneTransforms[input.Joints.z] * input.Weights.z +
+                                     BoneTransforms[input.Joints.w] * input.Weights.w;
+                    
+                    localPos = mul(localPos, boneMat);
+                    localNorm = mul(localNorm, (float3x3)boneMat);
+                }
+
+                output.Pos = mul(localPos, WVP); 
+                output.Norm = mul(localNorm, (float3x3)World); 
                 output.UV = input.UV;
                 return output; 
             }
             
-            Texture2D tex : register(t0);
-            SamplerState sam : register(s0);
+            Texture2D tex : register(t0); SamplerState sam : register(s0);
 
             float4 PS(PS_IN input) : SV_Target { 
                 float4 texColor = tex.Sample(sam, input.UV);
@@ -162,22 +182,26 @@ public:
                 return float4(texColor.rgb * Col.rgb * diff, texColor.a); 
             }
 
-            // UNLIT SOLID COLOR SHADER
-            float4 PS_Solid(PS_IN input) : SV_Target {
-                return Col; 
-            }
+            float4 PS_Solid(PS_IN input) : SV_Target { return Col; }
         )";
 
         ID3DBlob* vsBlob = nullptr; ID3DBlob* psBlob = nullptr; ID3DBlob* psSolidBlob = nullptr;
         D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "VS", "vs_4_0", 0, 0, &vsBlob, nullptr);
         device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &VS);
-        D3D11_INPUT_ELEMENT_DESC desc[] = { { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }, { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 }, { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 } };
-        device->CreateInputLayout(desc, 3, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &Layout); vsBlob->Release();
+
+        // NEW: Input Layout matches updated GPUVertex
+        D3D11_INPUT_ELEMENT_DESC desc[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UINT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+        };
+        device->CreateInputLayout(desc, 5, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &Layout); vsBlob->Release();
 
         D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "PS", "ps_4_0", 0, 0, &psBlob, nullptr);
         device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &PS); psBlob->Release();
 
-        // Compile Solid PS
         D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "PS_Solid", "ps_4_0", 0, 0, &psSolidBlob, nullptr);
         device->CreatePixelShader(psSolidBlob->GetBufferPointer(), psSolidBlob->GetBufferSize(), nullptr, &PS_Solid); psSolidBlob->Release();
 
@@ -193,13 +217,12 @@ public:
         D3D11_BLEND_DESC blendDesc = {}; blendDesc.RenderTarget[0].BlendEnable = TRUE; blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA; blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA; blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD; blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE; blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO; blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD; blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
         device->CreateBlendState(&blendDesc, &BlendState);
 
-        CreateDefaultTexture(device);
-        CreateDebugBuffers(device);
+        CreateDefaultTexture(device); CreateDebugBuffers(device);
         return true;
     }
 
-    // ... (SetMaterialTextures, UploadMesh, UploadBBM, Resize remain exactly the same) ...
     void SetMaterialTextures(const std::vector<ID3D11ShaderResourceView*>& textures) { MaterialTextures = textures; }
+
     void UploadMesh(ID3D11Device* device, const C3DMeshContent& mesh) {
         if (!mesh.IsParsed) return;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
@@ -209,16 +232,11 @@ public:
         for (const auto& prim : mesh.Primitives) {
             uint32_t batchStart = (uint32_t)indices.size();
 
-            // 1. Identify characteristics
             bool hasBones = (prim.AnimatedBlockCount > 0);
             bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
             bool isNormComp = (prim.InitFlags & 4) != 0;
-
-            // 2. THE FIX: Drop the compression check. Only rely on the lack of bones 
-            // to protect the animated Hero meshes from falling into the particle path.
             bool isRepeated = (prim.RepeatingMeshReps > 1) || (prim.VertexStride == 36 && !hasBones);
 
-            // --- 1. GRASS, FOLIAGE & PARTICLES (REPEATED MESHES / TYPE 4) ---
             if (isRepeated) {
                 uint32_t localVertexOffset = (uint32_t)vertices.size();
                 int reps = (prim.RepeatingMeshReps > 1) ? prim.RepeatingMeshReps : 1;
@@ -229,7 +247,7 @@ public:
 
                     for (int v = 0; v < prim.VertexCount; v++) {
                         size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
-                        GPUVertex gpuV;
+                        GPUVertex gpuV = {};
 
                         const float* raw = (const float*)(prim.VertexBuffer.data() + offset);
                         float bx = raw[0], by = raw[1], bz = raw[2];
@@ -243,6 +261,7 @@ public:
                         const float* u = (const float*)(prim.VertexBuffer.data() + offset + 24);
                         gpuV.UV = XMFLOAT2(u[0], u[1]);
 
+                        gpuV.Joints = 0; gpuV.Weights = { 1,0,0,0 }; // No skinning for grass
                         vertices.push_back(gpuV);
                     }
                     for (uint32_t k = 0; k < prim.IndexCount; k++) {
@@ -251,15 +270,21 @@ public:
                 }
                 indexOffset += (prim.VertexCount * reps);
             }
-            // --- 2. HERO, BUILDINGS & STANDARD MESHES ---
             else {
-                size_t wOff = isPosComp ? 4 : 12;
-                size_t normOff = wOff + (hasBones ? 8 : 0);
+                size_t iOff = isPosComp ? 4 : 12;
+                size_t wOff = iOff + 4;
+                size_t normOff = iOff + (hasBones ? 8 : 0);
                 size_t uvOff = normOff + (isNormComp ? 4 : 12);
 
+                int blk = 0; int proc = 0;
+                int limit = (prim.AnimatedBlocks.empty() ? 999999 : prim.AnimatedBlocks[0].VertexCount);
+
                 for (int v = 0; v < prim.VertexCount; v++) {
+                    if (hasBones && proc >= limit) { blk++; proc = 0; if (blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
+                    proc++;
+
                     size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
-                    GPUVertex gpuV;
+                    GPUVertex gpuV = {};
 
                     if (isPosComp) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset); UnpackPOSPACKED3(p, prim.Compression.Scale, prim.Compression.Offset, gpuV.Pos.x, gpuV.Pos.y, gpuV.Pos.z); }
                     else { const float* r = (const float*)(prim.VertexBuffer.data() + offset); gpuV.Pos = XMFLOAT3(r[0], r[1], r[2]); }
@@ -275,6 +300,43 @@ public:
                         else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + uvOff); gpuV.UV = XMFLOAT2(r[0], r[1]); }
                     }
                     else gpuV.UV = XMFLOAT2(0, 0);
+
+                    // NEW: EXTRACT BONE WEIGHTS & JOINTS
+                    if (hasBones && offset + iOff + 4 <= prim.VertexBuffer.size()) {
+                        uint8_t* wgt = (uint8_t*)(prim.VertexBuffer.data() + offset + wOff);
+                        uint8_t* ind = (uint8_t*)(prim.VertexBuffer.data() + offset + iOff);
+
+                        uint8_t j[4] = { 0,0,0,0 };
+                        for (int k = 0; k < 4; k++) {
+                            uint16_t pID = ind[k] / 3; // Fable matrix stride
+                            uint16_t lID = pID;
+
+                            if (blk < prim.AnimatedBlocks.size() && !prim.AnimatedBlocks[blk].Groups.empty()) {
+                                if (pID < prim.AnimatedBlocks[blk].Groups.size()) lID = prim.AnimatedBlocks[blk].Groups[pID];
+                                else lID = 0;
+                            }
+                            if (lID >= mesh.BoneCount || lID >= 128) lID = 0;
+                            j[k] = (uint8_t)lID;
+                        }
+                        gpuV.Joints = (j[3] << 24) | (j[2] << 16) | (j[1] << 8) | j[0];
+
+                        float w0 = wgt[0] / 255.0f; float w1 = wgt[1] / 255.0f;
+                        float w2 = wgt[2] / 255.0f; float w3 = wgt[3] / 255.0f;
+                        float sum = w0 + w1 + w2 + w3;
+
+                        // FIX: Only normalize if it actually has weights. 
+                        // Otherwise, leave it as 0 so the shader ignores it!
+                        if (sum > 0.01f) {
+                            gpuV.Weights = XMFLOAT4(w0 / sum, w1 / sum, w2 / sum, w3 / sum);
+                        }
+                        else {
+                            gpuV.Weights = XMFLOAT4(0, 0, 0, 0);
+                        }
+                    }
+                    else {
+                        gpuV.Joints = 0;
+                        gpuV.Weights = XMFLOAT4(0, 0, 0, 0);
+                    }
 
                     vertices.push_back(gpuV);
                 }
@@ -324,7 +386,8 @@ public:
         Batches.clear();
         std::vector<GPUVertex> vertices; float maxDistSq = 0.0f;
         for (const auto& v : bbm.ParsedVertices) {
-            GPUVertex g; g.Pos = XMFLOAT3(v.Position.x, v.Position.y, v.Position.z); g.Norm = XMFLOAT3(v.Normal.x, v.Normal.y, v.Normal.z); g.UV = XMFLOAT2(v.UV.u, v.UV.v);
+            GPUVertex g = {}; g.Pos = XMFLOAT3(v.Position.x, v.Position.y, v.Position.z); g.Norm = XMFLOAT3(v.Normal.x, v.Normal.y, v.Normal.z); g.UV = XMFLOAT2(v.UV.u, v.UV.v);
+            g.Joints = 0; g.Weights = XMFLOAT4(1, 0, 0, 0);
             vertices.push_back(g); float d = g.Pos.x * g.Pos.x + g.Pos.y * g.Pos.y + g.Pos.z * g.Pos.z; if (d > maxDistSq) maxDistSq = d;
         }
         std::vector<uint32_t> indices; for (auto idx : bbm.ParsedIndices) indices.push_back(idx);
@@ -335,6 +398,7 @@ public:
         RenderBatch batch = { 0, (uint32_t)indices.size(), -1 }; Batches.push_back(batch);
         float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f; CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
     }
+
     void Resize(ID3D11Device* device, float w, float h) {
         if (w == Width && h == Height && RenderTex) return;
         ReleaseResizedResources(); Width = w; Height = h; if (w <= 0 || h <= 0) return;
@@ -344,10 +408,9 @@ public:
         device->CreateTexture2D(&dDesc, nullptr, &DepthTex); device->CreateDepthStencilView(DepthTex, nullptr, &DSV);
     }
 
-    // --- STANDARD RENDER ---
-    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false) {
+    // NEW: We now accept an array of BoneTransforms from the UI
+    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false, const std::vector<XMMATRIX>* animatedBones = nullptr) {
         if (!VS || !VBuffer) return nullptr;
-        // Camera Input Processing (Same as before)
         if (ImGui::IsWindowHovered()) {
             if (ImGui::IsMouseDragging(1)) { CamRotY += ImGui::GetIO().MouseDelta.x * 0.01f; CamRotX += ImGui::GetIO().MouseDelta.y * 0.01f; }
             if (ImGui::IsMouseDragging(2)) { CamPan.x += ImGui::GetIO().MouseDelta.x * (CamDist * 0.002f); CamPan.y -= ImGui::GetIO().MouseDelta.y * (CamDist * 0.002f); }
@@ -355,10 +418,8 @@ public:
         }
 
         float bgColor[4] = { isPhysics ? 0.15f : 0.1f, 0.12f, isPhysics ? 0.1f : 0.15f, 1.0f };
-        ctx->ClearRenderTargetView(RTV, bgColor);
-        ctx->ClearDepthStencilView(DSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
-        ctx->OMSetRenderTargets(1, &RTV, DSV);
-        D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f }; ctx->RSSetViewports(1, &vp);
+        ctx->ClearRenderTargetView(RTV, bgColor); ctx->ClearDepthStencilView(DSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
+        ctx->OMSetRenderTargets(1, &RTV, DSV); D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f }; ctx->RSSetViewports(1, &vp);
 
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
@@ -370,6 +431,17 @@ public:
         cb.WorldViewProj = XMMatrixTranspose(world * view * proj);
         cb.Color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
         cb.LightDir = XMFLOAT4(0.5f, 1.0f, -0.5f, 0.0f);
+
+        // Populate Bone Transforms for Hardware Skinning
+        cb.HasAnimation = (animatedBones && !animatedBones->empty()) ? 1 : 0;
+        if (cb.HasAnimation) {
+            for (size_t i = 0; i < animatedBones->size() && i < 128; i++) {
+                cb.BoneTransforms[i] = XMMatrixTranspose((*animatedBones)[i]);
+            }
+        }
+        else {
+            for (int i = 0; i < 128; i++) cb.BoneTransforms[i] = XMMatrixIdentity();
+        }
 
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
 
@@ -408,64 +480,48 @@ public:
         return SRV;
     }
 
-    // --- NEW: RENDER BOUNDS (Call this after Render()) ---
-    void RenderBounds(ID3D11DeviceContext* ctx, float w, float h,
-        const float* bMin, const float* bMax,
-        const float* sCenter, float sRadius)
-    {
+    void RenderBounds(ID3D11DeviceContext* ctx, float w, float h, const float* bMin, const float* bMax, const float* sCenter, float sRadius) {
         if (!VS || !DebugVBuffer) return;
 
-        // Setup Pipeline for Lines
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
-        ctx->PSSetShader(PS_Solid, nullptr, 0); // Use Unlit Solid Color
-        ctx->RSSetState(RastStateSolid); // Use Solid state, but Lines are always 1px. Avoid Wireframe state to prevent confusion.
+        ctx->PSSetShader(PS_Solid, nullptr, 0);
+        ctx->RSSetState(RastStateSolid);
 
         UINT stride = sizeof(GPUVertex); UINT offset = 0;
         ctx->IASetVertexBuffers(0, 1, &DebugVBuffer, &stride, &offset);
         ctx->IASetIndexBuffer(DebugIBuffer, DXGI_FORMAT_R32_UINT, 0);
 
-        // Recalculate Matrices (Same View/Proj as main render)
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
         XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
         worldCam = worldCam * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
 
         CBMatrix cb;
+        cb.HasAnimation = 0; // Disable bone multiplication for bounds
 
-        // 1. DRAW BOX (Green)
-        // Transform Unit Box [-0.5, 0.5] to Target Bounds
         float bSize[3] = { bMax[0] - bMin[0], bMax[1] - bMin[1], bMax[2] - bMin[2] };
         float bCenter[3] = { bMin[0] + bSize[0] * 0.5f, bMin[1] + bSize[1] * 0.5f, bMin[2] + bSize[2] * 0.5f };
 
-        XMMATRIX boxWorld = XMMatrixScaling(bSize[0], bSize[1], bSize[2]) * XMMatrixTranslation(bCenter[0], bCenter[1], bCenter[2]) *
-            worldCam;
-
+        XMMATRIX boxWorld = XMMatrixScaling(bSize[0], bSize[1], bSize[2]) * XMMatrixTranslation(bCenter[0], bCenter[1], bCenter[2]) * worldCam;
         cb.World = XMMatrixTranspose(boxWorld);
         cb.WorldViewProj = XMMatrixTranspose(boxWorld * view * proj);
-        cb.Color = XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f); // Green
-
+        cb.Color = XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
         ctx->DrawIndexed(DebugBoxIndexCount, 0, 0);
 
-        // 2. DRAW SPHERE (Yellow)
-        // Draw 3 rings (XY, XZ, YZ)
         XMMATRIX sphereScaleTrans = XMMatrixScaling(sRadius, sRadius, sRadius) * XMMatrixTranslation(sCenter[0], sCenter[1], sCenter[2]);
+        cb.Color = XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
 
-        cb.Color = XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
-
-        // Ring 1 (XY Plane - Default)
         XMMATRIX ring1 = sphereScaleTrans * worldCam;
         cb.WorldViewProj = XMMatrixTranspose(ring1 * view * proj);
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
         ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
 
-        // Ring 2 (XZ Plane - Rotate 90 X)
         XMMATRIX ring2 = XMMatrixRotationX(XM_PIDIV2) * sphereScaleTrans * worldCam;
         cb.WorldViewProj = XMMatrixTranspose(ring2 * view * proj);
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
         ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
 
-        // Ring 3 (YZ Plane - Rotate 90 Y)
         XMMATRIX ring3 = XMMatrixRotationY(XM_PIDIV2) * sphereScaleTrans * worldCam;
         cb.WorldViewProj = XMMatrixTranspose(ring3 * view * proj);
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
@@ -479,7 +535,6 @@ public:
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
         XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
         world = world * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
-
         XMMATRIX wvp = world * view * proj;
         XMVECTOR v = XMVectorSet(worldPos.x, worldPos.y, worldPos.z, 1.0f);
         XMVECTOR vClip = XMVector3TransformCoord(v, wvp);

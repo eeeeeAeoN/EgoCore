@@ -5,6 +5,7 @@
 #include <cstring>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 #include "Utils.h"
 
 class CBBMParser {
@@ -114,6 +115,10 @@ public:
     float LastTransform[12] = { 1,0,0, 0,1,0, 0,0,1, 0,0,0 };
     bool HasTransform = false;
 
+    // Multi-mesh offset trackers
+    uint32_t CurrentVertexOffset = 0;
+    uint32_t CurrentBoneOffset = 0;
+
     bool Parse(const std::vector<uint8_t>& compressedData) {
         IsParsed = false; DebugInfo = ""; PhysicsMaterialIndex = 0;
         ParsedVertices.clear(); ParsedIndices.clear(); Helpers.clear(); Dummies.clear();
@@ -122,12 +127,15 @@ public:
         HasTransform = false; memset(LastTransform, 0, 48);
         LastTransform[0] = 1; LastTransform[4] = 1; LastTransform[8] = 1;
 
+        CurrentVertexOffset = 0;
+        CurrentBoneOffset = 0;
+
         if (compressedData.size() < 8) return false;
 
         uint32_t uncompressedSize = *(uint32_t*)compressedData.data();
         if (uncompressedSize == 0 || uncompressedSize > 50000000) uncompressedSize = 10 * 1024 * 1024;
 
-        DebugInfo += "=== BBM PARSER v10.0 (Stable Baseline + Groups) ===\n";
+        DebugInfo += "=== BBM PARSER v10.1 (Stable Baseline + Multi-Mesh Fixes) ===\n";
 
         std::vector<uint8_t> data = DecompressRawLZO(compressedData, 4, uncompressedSize);
         if (data.empty()) { DebugInfo += "[X] Decompression failed\n"; return false; }
@@ -216,6 +224,7 @@ private:
     }
 
     void ParseSUBM(const uint8_t* base, size_t& cursor, size_t end, int depth) {
+        CurrentBoneOffset = (uint32_t)Bones.size(); // Offset for new skeleton
         std::string indent(depth * 2, ' ');
         std::string name = ReadString(base, cursor, end);
         DebugInfo += indent + "  Name: \"" + name + "\"\n";
@@ -239,6 +248,7 @@ private:
 
         VertexGroup grp;
         memcpy(&grp.BoneIndex, base + cursor, 4); cursor += 4;
+        if (grp.BoneIndex >= 0) grp.BoneIndex += CurrentBoneOffset;
 
         uint32_t count = 0;
         memcpy(&count, base + cursor, 4); cursor += 4;
@@ -249,6 +259,7 @@ private:
             for (uint32_t i = 0; i < count; i++) {
                 VertexWeight vw;
                 memcpy(&vw.VertexIndex, base + cursor, 2); cursor += 2;
+                vw.VertexIndex += CurrentVertexOffset; // Apply offset
                 memcpy(&vw.BlendValue, base + cursor, 4); cursor += 4;
                 grp.Weights.push_back(vw);
             }
@@ -286,6 +297,7 @@ private:
     }
 
     void ParsePRIM(const uint8_t* base, size_t& cursor, size_t end, int depth) {
+        CurrentVertexOffset = (uint32_t)ParsedVertices.size(); // Offset for new vertices
         std::string indent(depth * 2, ' ');
         if (cursor + 4 <= end) {
             int32_t headerVal = 0; memcpy(&headerVal, base + cursor, 4);
@@ -309,6 +321,12 @@ private:
         memcpy(&bone.FirstChildIndex, base + cursor, 4); cursor += 4;
         memcpy(&bone.NextSiblingIndex, base + cursor, 4); cursor += 4;
         memcpy(bone.LocalTransform, base + cursor, 48); cursor += 48;
+
+        bone.Index += CurrentBoneOffset;
+        if (bone.ParentIndex >= 0) bone.ParentIndex += CurrentBoneOffset;
+        if (bone.FirstChildIndex >= 0) bone.FirstChildIndex += CurrentBoneOffset;
+        if (bone.NextSiblingIndex >= 0) bone.NextSiblingIndex += CurrentBoneOffset;
+
         if (cursor < nextChunkOffset) bone.Name = ReadString(base, cursor, nextChunkOffset);
         else bone.Name = "<Unnamed>";
         Bones.push_back(bone);
@@ -316,7 +334,27 @@ private:
     }
 
     void ParseTRFM(const uint8_t* base, size_t& cursor, size_t end, int depth) {
-        if (cursor + 48 <= end) { memcpy(LastTransform, base + cursor, 48); HasTransform = true; cursor += 48; }
+        if (cursor + 48 <= end) {
+            memcpy(LastTransform, base + cursor, 48);
+
+            bool validTransform = true;
+            for (int i = 0; i < 12; i++) {
+                if (std::abs(LastTransform[i]) > 10000.0f || std::isnan(LastTransform[i])) {
+                    validTransform = false;
+                    break;
+                }
+            }
+
+            if (validTransform) {
+                HasTransform = true;
+            }
+            else {
+                HasTransform = false;
+                memset(LastTransform, 0, 48);
+                LastTransform[0] = 1; LastTransform[4] = 1; LastTransform[8] = 1;
+            }
+            cursor += 48;
+        }
         if (cursor < end) ProcessChunks(base, cursor, end, depth + 1);
     }
 
@@ -353,7 +391,13 @@ private:
         if (idxCount > 0) {
             size_t old = ParsedIndices.size();
             ParsedIndices.resize(old + idxCount);
-            memcpy(ParsedIndices.data() + old, base + cursor + 4, idxCount * 2);
+
+            uint16_t* dest = ParsedIndices.data() + old;
+            const uint16_t* src = (const uint16_t*)(base + cursor + 4);
+
+            for (size_t i = 0; i < idxCount; i++) {
+                dest[i] = src[i] + CurrentVertexOffset;
+            }
         }
     }
 
@@ -378,6 +422,7 @@ private:
         memcpy(&h.Position, base + cursor, 12); cursor += 12;
         memcpy(&h.SubMeshIndex, base + cursor, 4); cursor += 4;
         memcpy(&h.BoneIndex, base + cursor, 4); cursor += 4;
+        if (h.BoneIndex >= 0) h.BoneIndex += CurrentBoneOffset;
         h.Name = ReadString(base, cursor, nextChunkOffset);
         Helpers.push_back(h);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
@@ -394,6 +439,7 @@ private:
             memcpy(&d.Position, base + cursor, 12); cursor += 12;
             memcpy(&d.SubMeshIndex, base + cursor, 4); cursor += 4;
             memcpy(&d.BoneIndex, base + cursor, 4); cursor += 4;
+            if (d.BoneIndex >= 0) d.BoneIndex += CurrentBoneOffset;
             d.Name = ReadString(base, cursor, nextChunkOffset);
         }
         Dummies.push_back(d);

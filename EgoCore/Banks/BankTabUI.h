@@ -17,6 +17,8 @@ static int g_ImportFormat = 1; // 0: DXT1, 1: DXT3, 2: DXT5, 3: ARGB
 static int g_ImportType = 0;   // 0: Graphic, 2: Bumpmap, 5: Flat Sequence
 static bool g_ScrollToSelected = false;
 
+static bool g_ShowLeftPanel = true;
+
 static void DrawBinaryTab() {
     static bool isCompilingBins = false;
     static std::string compileBinStatus = "";
@@ -229,269 +231,278 @@ static void DrawBankTab() {
                 }
 
                 // --- LEFT PANE ---
-                ImGui::BeginChild("LeftPane", ImVec2(bankSidebarWidth, 0), true);
+                if (g_ShowLeftPanel) {
+                    ImGui::BeginChild("LeftPane", ImVec2(bankSidebarWidth, 0), true);
 
-                // Recompile Buttons
-                if (bank.Type == EBankType::Text) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-                    if (ImGui::Button("Recompile Text Bank (.BIG)", ImVec2(-FLT_MIN, 30))) SaveBigBank(&bank);
-                    ImGui::PopStyleColor();
-                    ImGui::Separator();
-                }
-                else if (bank.Type == EBankType::Dialogue) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.2f, 0.8f, 1.0f));
-                    if (ImGui::Button("Recompile Dialogue Bank", ImVec2(-FLT_MIN, 30))) SaveBigBank(&bank);
-                    ImGui::PopStyleColor();
-                    ImGui::Separator();
-                }
-                else if (bank.Type == EBankType::Audio) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.4f, 0.0f, 1.0f));
-                    std::string btnText = bank.LugParserPtr ? "Recompile Script (.LUG + .MET)" : "Recompile Audio Bank (.LUT)";
-                    if (ImGui::Button(btnText.c_str(), ImVec2(-FLT_MIN, 30))) SaveAudioBank(&bank);
-                    ImGui::PopStyleColor();
-                    ImGui::Separator();
-                }
-                else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.0f, 0.5f, 1.0f));
-                    if (ImGui::Button("Recompile Bank (.BIG)", ImVec2(-FLT_MIN, 30))) SaveBigBank(&bank);
-                    ImGui::PopStyleColor();
-                    ImGui::Separator();
-                }
-
-                if (bank.Type != EBankType::Audio && !bank.SubBanks.empty()) {
-                    float avail = ImGui::GetContentRegionAvail().x;
-                    ImGui::SetNextItemWidth(avail - 30);
-                    std::string preview = (bank.ActiveSubBankIndex >= 0) ? bank.SubBanks[bank.ActiveSubBankIndex].Name : "Select Sub-Bank";
-                    if (ImGui::BeginCombo("##folder", preview.c_str())) {
-                        for (int s = 0; s < (int)bank.SubBanks.size(); s++) {
-                            if (ImGui::Selectable((bank.SubBanks[s].Name + " (" + std::to_string(bank.SubBanks[s].EntryCount) + ")").c_str(), bank.ActiveSubBankIndex == s))
-                                LoadSubBankEntries(&bank, s);
-                        }
-                        ImGui::EndCombo();
+                    // Recompile Buttons
+                    if (bank.Type == EBankType::Text) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
+                        if (ImGui::Button("Recompile Text Bank (.BIG)", ImVec2(-FLT_MIN, 30))) SaveBigBank(&bank);
+                        ImGui::PopStyleColor();
+                        ImGui::Separator();
                     }
-                    ImGui::SameLine();
-                    if (ImGui::Button("+", ImVec2(22, 0))) {
-                        if (bank.Type == EBankType::Text) { g_ShowAddEntryPopup = true; ImGui::OpenPopup("Add Entry Type"); }
-                        else if (bank.Type == EBankType::Dialogue) { CreateNewDialogueEntry(&bank); g_ScrollToSelected = true; }
-                        else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
-                            std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
-                            if (!path.empty()) {
-                                g_PendingImportPath = path;
-                                g_ShowTexImportPopup = true;
+                    else if (bank.Type == EBankType::Dialogue) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.2f, 0.8f, 1.0f));
+                        if (ImGui::Button("Recompile Dialogue Bank", ImVec2(-FLT_MIN, 30))) SaveBigBank(&bank);
+                        ImGui::PopStyleColor();
+                        ImGui::Separator();
+                    }
+                    else if (bank.Type == EBankType::Audio) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.4f, 0.0f, 1.0f));
+                        std::string btnText = bank.LugParserPtr ? "Recompile Script (.LUG + .MET)" : "Recompile Audio Bank (.LUT)";
+                        if (ImGui::Button(btnText.c_str(), ImVec2(-FLT_MIN, 30))) SaveAudioBank(&bank);
+                        ImGui::PopStyleColor();
+                        ImGui::Separator();
+                    }
+                    else {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.0f, 0.5f, 1.0f));
+                        if (ImGui::Button("Recompile Bank (.BIG)", ImVec2(-FLT_MIN, 30))) SaveBigBank(&bank);
+                        ImGui::PopStyleColor();
+                        ImGui::Separator();
+                    }
+
+                    if (bank.Type != EBankType::Audio && !bank.SubBanks.empty()) {
+                        float avail = ImGui::GetContentRegionAvail().x;
+                        ImGui::SetNextItemWidth(avail - 30);
+                        std::string preview = (bank.ActiveSubBankIndex >= 0) ? bank.SubBanks[bank.ActiveSubBankIndex].Name : "Select Sub-Bank";
+                        if (ImGui::BeginCombo("##folder", preview.c_str())) {
+                            for (int s = 0; s < (int)bank.SubBanks.size(); s++) {
+                                if (ImGui::Selectable((bank.SubBanks[s].Name + " (" + std::to_string(bank.SubBanks[s].EntryCount) + ")").c_str(), bank.ActiveSubBankIndex == s))
+                                    LoadSubBankEntries(&bank, s);
                             }
+                            ImGui::EndCombo();
                         }
-                        else g_BankStatus = "Add Entry not implemented for this bank type.";
-                    }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add New Entry");
-                    ImGui::Separator();
-                }
-
-                float searchAvail = ImGui::GetContentRegionAvail().x;
-                bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || bank.Type == EBankType::Graphics);
-
-                if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
-                    ImGui::SetNextItemWidth(searchAvail - 35.0f);
-                }
-                else if (showFilterBtn) {
-                    ImGui::SetNextItemWidth(searchAvail - 65.0f - ImGui::GetStyle().ItemSpacing.x);
-                }
-                else {
-                    ImGui::SetNextItemWidth(-FLT_MIN);
-                }
-
-                ImGui::InputTextWithHint("##search", "Search...", bank.FilterText, 128);
-                if (ImGui::IsItemEdited()) UpdateFilter(bank);
-
-                if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
-                    ImGui::SameLine();
-                    if (ImGui::Button("+", ImVec2(25, 0))) {
-                        std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
-                        if (!wavPath.empty()) {
-                            if (bank.LugParserPtr->AddEntryFromWav(wavPath)) {
-                                bank.Entries.clear();
-                                bank.FilteredIndices.clear();
-                                for (size_t k = 0; k < bank.LugParserPtr->Entries.size(); k++) {
-                                    BankEntry be;
-                                    be.ID = bank.LugParserPtr->Entries[k].SoundID;
-                                    be.Name = bank.LugParserPtr->Entries[k].Name;
-                                    be.FriendlyName = be.Name;
-                                    be.Size = bank.LugParserPtr->Entries[k].Length;
-                                    be.Offset = bank.LugParserPtr->Entries[k].Offset;
-                                    bank.Entries.push_back(be);
-                                    bank.FilteredIndices.push_back((int)k);
+                        ImGui::SameLine();
+                        if (ImGui::Button("+", ImVec2(22, 0))) {
+                            if (bank.Type == EBankType::Text) { g_ShowAddEntryPopup = true; ImGui::OpenPopup("Add Entry Type"); }
+                            else if (bank.Type == EBankType::Dialogue) { CreateNewDialogueEntry(&bank); g_ScrollToSelected = true; }
+                            else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+                                std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
+                                if (!path.empty()) {
+                                    g_PendingImportPath = path;
+                                    g_ShowTexImportPopup = true;
                                 }
-                                UpdateFilter(bank);
-                                bank.SelectedEntryIndex = (int)bank.Entries.size() - 1;
-                                g_ScrollToSelected = true;
-                                g_SuccessMessage = "Entry created from WAV file.";
-                                g_ShowSuccessPopup = true;
+                            }
+                            else g_BankStatus = "Add Entry not implemented for this bank type.";
+                        }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add New Entry");
+                        ImGui::Separator();
+                    }
+
+                    float searchAvail = ImGui::GetContentRegionAvail().x;
+                    bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || bank.Type == EBankType::Graphics);
+
+                    if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
+                        ImGui::SetNextItemWidth(searchAvail - 35.0f);
+                    }
+                    else if (showFilterBtn) {
+                        ImGui::SetNextItemWidth(searchAvail - 65.0f - ImGui::GetStyle().ItemSpacing.x);
+                    }
+                    else {
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                    }
+
+                    ImGui::InputTextWithHint("##search", "Search...", bank.FilterText, 128);
+                    if (ImGui::IsItemEdited()) UpdateFilter(bank);
+
+                    if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
+                        ImGui::SameLine();
+                        if (ImGui::Button("+", ImVec2(25, 0))) {
+                            std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
+                            if (!wavPath.empty()) {
+                                if (bank.LugParserPtr->AddEntryFromWav(wavPath)) {
+                                    bank.Entries.clear();
+                                    bank.FilteredIndices.clear();
+                                    for (size_t k = 0; k < bank.LugParserPtr->Entries.size(); k++) {
+                                        BankEntry be;
+                                        be.ID = bank.LugParserPtr->Entries[k].SoundID;
+                                        be.Name = bank.LugParserPtr->Entries[k].Name;
+                                        be.FriendlyName = be.Name;
+                                        be.Size = bank.LugParserPtr->Entries[k].Length;
+                                        be.Offset = bank.LugParserPtr->Entries[k].Offset;
+                                        bank.Entries.push_back(be);
+                                        bank.FilteredIndices.push_back((int)k);
+                                    }
+                                    UpdateFilter(bank);
+                                    bank.SelectedEntryIndex = (int)bank.Entries.size() - 1;
+                                    g_ScrollToSelected = true;
+                                    g_SuccessMessage = "Entry created from WAV file.";
+                                    g_ShowSuccessPopup = true;
+                                }
                             }
                         }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add New Entry from WAV File");
                     }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add New Entry from WAV File");
-                }
 
-                if (showFilterBtn) {
-                    ImGui::SameLine();
-                    if (ImGui::Button("Filters", ImVec2(60, 0))) ImGui::OpenPopup("FilterOptionsPopup");
-                    if (ImGui::BeginPopup("FilterOptionsPopup")) {
+                    if (showFilterBtn) {
+                        ImGui::SameLine();
+                        if (ImGui::Button("Filters", ImVec2(60, 0))) ImGui::OpenPopup("FilterOptionsPopup");
+                        if (ImGui::BeginPopup("FilterOptionsPopup")) {
 
-                        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Search Mode:");
-                        if (ImGui::RadioButton("Search by Name", bank.FilterMode == EFilterMode::Name)) { bank.FilterMode = EFilterMode::Name; UpdateFilter(bank); }
-                        if (ImGui::RadioButton("Search by ID", bank.FilterMode == EFilterMode::ID)) { bank.FilterMode = EFilterMode::ID; UpdateFilter(bank); }
+                            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Search Mode:");
+                            if (ImGui::RadioButton("Search by Name", bank.FilterMode == EFilterMode::Name)) { bank.FilterMode = EFilterMode::Name; UpdateFilter(bank); }
+                            if (ImGui::RadioButton("Search by ID", bank.FilterMode == EFilterMode::ID)) { bank.FilterMode = EFilterMode::ID; UpdateFilter(bank); }
 
-                        if (bank.Type == EBankType::Text) {
-                            if (ImGui::RadioButton("Search by Speaker", bank.FilterMode == EFilterMode::Speaker)) { bank.FilterMode = EFilterMode::Speaker; UpdateFilter(bank); }
+                            if (bank.Type == EBankType::Text) {
+                                if (ImGui::RadioButton("Search by Speaker", bank.FilterMode == EFilterMode::Speaker)) { bank.FilterMode = EFilterMode::Speaker; UpdateFilter(bank); }
+                            }
+
+                            ImGui::Separator();
+
+                            if (bank.Type == EBankType::Text) {
+                                ImGui::TextColored(ImVec4(0, 1, 1, 1), "Entry Type:");
+                                if (ImGui::RadioButton("Show All Types", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Text Entries (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Groups (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Narrator Lists (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+                            }
+                            else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+                                ImGui::TextColored(ImVec4(0, 1, 1, 1), "Texture Type:");
+                                if (ImGui::RadioButton("Show All Types##Tex", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Graphic Single (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Graphic Sequence (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Bumpmap (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Bumpmap Sequence (Type 3)", bank.FilterTypeMask == 3)) { bank.FilterTypeMask = 3; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Volume Texture (Type 4)", bank.FilterTypeMask == 4)) { bank.FilterTypeMask = 4; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Flat Sequence (Type 5)", bank.FilterTypeMask == 5)) { bank.FilterTypeMask = 5; UpdateFilter(bank); }
+
+                                ImGui::Separator();
+                                ImGui::TextColored(ImVec4(1, 0, 1, 1), "Compression Format:");
+                                if (ImGui::RadioButton("Show All Formats", bank.FilterTextureFormatMask == -1)) { bank.FilterTextureFormatMask = -1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("DXT1 / Bump DXT1", bank.FilterTextureFormatMask == 0)) { bank.FilterTextureFormatMask = 0; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("DXT3", bank.FilterTextureFormatMask == 1)) { bank.FilterTextureFormatMask = 1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("DXT5 / Bump DXT5", bank.FilterTextureFormatMask == 2)) { bank.FilterTextureFormatMask = 2; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("ARGB8888", bank.FilterTextureFormatMask == 3)) { bank.FilterTextureFormatMask = 3; UpdateFilter(bank); }
+                            }
+                            // --- NEW: GRAPHICS BANK FILTERS ---
+                            else if (bank.Type == EBankType::Graphics) {
+                                ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mesh Types:");
+                                if (ImGui::RadioButton("Show All Types##Gfx", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Static Mesh", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Repeated Mesh", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Physics Mesh", bank.FilterTypeMask == 3)) { bank.FilterTypeMask = 3; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Particle Mesh", bank.FilterTypeMask == 4)) { bank.FilterTypeMask = 4; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Animated Mesh", bank.FilterTypeMask == 5)) { bank.FilterTypeMask = 5; UpdateFilter(bank); }
+
+                                ImGui::Separator();
+                                ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Animation Types:");
+                                if (ImGui::RadioButton("Animation", bank.FilterTypeMask == 6)) { bank.FilterTypeMask = 6; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Delta Animation", bank.FilterTypeMask == 7)) { bank.FilterTypeMask = 7; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Lipsync Animation", bank.FilterTypeMask == 8)) { bank.FilterTypeMask = 8; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Partial Animation", bank.FilterTypeMask == 9)) { bank.FilterTypeMask = 9; UpdateFilter(bank); }
+                                if (ImGui::RadioButton("Relative Animation", bank.FilterTypeMask == 10)) { bank.FilterTypeMask = 10; UpdateFilter(bank); }
+                            }
+
+                            ImGui::EndPopup();
+                        }
+                    }
+
+                    if (ImGui::BeginPopupModal("Add Entry Type", &g_ShowAddEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                        ImGui::Text("Select Entry Type:");
+                        ImGui::Separator();
+
+                        if (ImGui::Button("Text Entry (Type 0)", ImVec2(200, 0))) {
+                            CreateNewTextEntry(&bank, 0);
+                            g_ScrollToSelected = true;
+                            g_ShowAddEntryPopup = false;
+                            ImGui::CloseCurrentPopup();
+                        }
+                        if (ImGui::Button("Group Entry (Type 1)", ImVec2(200, 0))) {
+                            CreateNewTextEntry(&bank, 1);
+                            g_ScrollToSelected = true;
+                            g_ShowAddEntryPopup = false;
+                            ImGui::CloseCurrentPopup();
                         }
 
                         ImGui::Separator();
+                        ImGui::TextDisabled("Type 2 (Narrator List) not supported.");
 
-                        if (bank.Type == EBankType::Text) {
-                            ImGui::TextColored(ImVec4(0, 1, 1, 1), "Entry Type:");
-                            if (ImGui::RadioButton("Show All Types", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Text Entries (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Groups (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Narrator Lists (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+                        if (ImGui::Button("Cancel", ImVec2(200, 0))) {
+                            g_ShowAddEntryPopup = false;
+                            ImGui::CloseCurrentPopup();
                         }
-                        else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
-                            ImGui::TextColored(ImVec4(0, 1, 1, 1), "Texture Type:");
-                            if (ImGui::RadioButton("Show All Types##Tex", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Graphic Single (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Graphic Sequence (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Bumpmap (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Bumpmap Sequence (Type 3)", bank.FilterTypeMask == 3)) { bank.FilterTypeMask = 3; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Volume Texture (Type 4)", bank.FilterTypeMask == 4)) { bank.FilterTypeMask = 4; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Flat Sequence (Type 5)", bank.FilterTypeMask == 5)) { bank.FilterTypeMask = 5; UpdateFilter(bank); }
-
-                            ImGui::Separator();
-                            ImGui::TextColored(ImVec4(1, 0, 1, 1), "Compression Format:");
-                            if (ImGui::RadioButton("Show All Formats", bank.FilterTextureFormatMask == -1)) { bank.FilterTextureFormatMask = -1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("DXT1 / Bump DXT1", bank.FilterTextureFormatMask == 0)) { bank.FilterTextureFormatMask = 0; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("DXT3", bank.FilterTextureFormatMask == 1)) { bank.FilterTextureFormatMask = 1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("DXT5 / Bump DXT5", bank.FilterTextureFormatMask == 2)) { bank.FilterTextureFormatMask = 2; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("ARGB8888", bank.FilterTextureFormatMask == 3)) { bank.FilterTextureFormatMask = 3; UpdateFilter(bank); }
-                        }
-                        // --- NEW: GRAPHICS BANK FILTERS ---
-                        else if (bank.Type == EBankType::Graphics) {
-                            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mesh Types:");
-                            if (ImGui::RadioButton("Show All Types##Gfx", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Static Mesh", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Repeated Mesh", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Physics Mesh", bank.FilterTypeMask == 3)) { bank.FilterTypeMask = 3; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Particle Mesh", bank.FilterTypeMask == 4)) { bank.FilterTypeMask = 4; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Animated Mesh", bank.FilterTypeMask == 5)) { bank.FilterTypeMask = 5; UpdateFilter(bank); }
-
-                            ImGui::Separator();
-                            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Animation Types:");
-                            if (ImGui::RadioButton("Animation", bank.FilterTypeMask == 6)) { bank.FilterTypeMask = 6; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Delta Animation", bank.FilterTypeMask == 7)) { bank.FilterTypeMask = 7; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Lipsync Animation", bank.FilterTypeMask == 8)) { bank.FilterTypeMask = 8; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Partial Animation", bank.FilterTypeMask == 9)) { bank.FilterTypeMask = 9; UpdateFilter(bank); }
-                            if (ImGui::RadioButton("Relative Animation", bank.FilterTypeMask == 10)) { bank.FilterTypeMask = 10; UpdateFilter(bank); }
-                        }
-
                         ImGui::EndPopup();
                     }
-                }
 
-                if (ImGui::BeginPopupModal("Add Entry Type", &g_ShowAddEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::Text("Select Entry Type:");
-                    ImGui::Separator();
+                    if (!bank.Entries.empty()) {
+                        ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
 
-                    if (ImGui::Button("Text Entry (Type 0)", ImVec2(200, 0))) {
-                        CreateNewTextEntry(&bank, 0);
-                        g_ScrollToSelected = true;
-                        g_ShowAddEntryPopup = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    if (ImGui::Button("Group Entry (Type 1)", ImVec2(200, 0))) {
-                        CreateNewTextEntry(&bank, 1);
-                        g_ScrollToSelected = true;
-                        g_ShowAddEntryPopup = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-
-                    ImGui::Separator();
-                    ImGui::TextDisabled("Type 2 (Narrator List) not supported.");
-
-                    if (ImGui::Button("Cancel", ImVec2(200, 0))) {
-                        g_ShowAddEntryPopup = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
-                }
-
-                if (!bank.Entries.empty()) {
-                    ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
-
-                    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !bank.FilteredIndices.empty()) {
-                        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
-                            int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
-                            int currentPos = -1;
-                            for (int k = 0; k < bank.FilteredIndices.size(); k++) {
-                                if (bank.FilteredIndices[k] == bank.SelectedEntryIndex) { currentPos = k; break; }
-                            }
-
-                            if (currentPos == -1) {
-                                currentPos = (direction == 1) ? -1 : (int)bank.FilteredIndices.size();
-                            }
-
-                            int newPos = std::clamp(currentPos + direction, 0, (int)bank.FilteredIndices.size() - 1);
-                            SelectEntry(&bank, bank.FilteredIndices[newPos]);
-                            g_ScrollToSelected = true; // Trigger scroll on arrow keys
-                        }
-                    }
-
-                    for (int idx : bank.FilteredIndices) {
-                        const auto& e = bank.Entries[idx];
-
-                        ImGui::PushID(idx);
-
-                        if (ImGui::Selectable(e.FriendlyName.c_str(), bank.SelectedEntryIndex == idx)) {
-                            SelectEntry(&bank, idx);
-                            // Intentionally DO NOT set g_ScrollToSelected here so clicking doesn't jerk the list
-                        }
-
-                        if (ImGui::BeginPopupContextItem()) {
-                            if (ImGui::MenuItem("Duplicate Entry")) {
-                                DuplicateBankEntry(&bank, idx);
-                                g_ScrollToSelected = true; // Trigger scroll on duplicate
-                            }
-                            if (ImGui::MenuItem("Delete Entry")) {
-                                if (g_AppConfig.ShowBankDeleteConfirm) {
-                                    g_ContextEntryIndex = idx;
-                                    g_ShowDeleteBankEntryPopup = true;
-                                    ImGui::OpenPopup("Delete Bank Entry?");
+                        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !bank.FilteredIndices.empty()) {
+                            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+                                int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+                                int currentPos = -1;
+                                for (int k = 0; k < bank.FilteredIndices.size(); k++) {
+                                    if (bank.FilteredIndices[k] == bank.SelectedEntryIndex) { currentPos = k; break; }
                                 }
-                                else {
-                                    DeleteBankEntry(&bank, idx);
+
+                                if (currentPos == -1) {
+                                    currentPos = (direction == 1) ? -1 : (int)bank.FilteredIndices.size();
+                                }
+
+                                int newPos = std::clamp(currentPos + direction, 0, (int)bank.FilteredIndices.size() - 1);
+                                SelectEntry(&bank, bank.FilteredIndices[newPos]);
+                                g_ScrollToSelected = true; // Trigger scroll on arrow keys
+                            }
+                        }
+
+                        for (int idx : bank.FilteredIndices) {
+                            const auto& e = bank.Entries[idx];
+
+                            ImGui::PushID(idx);
+
+                            if (ImGui::Selectable(e.FriendlyName.c_str(), bank.SelectedEntryIndex == idx)) {
+                                SelectEntry(&bank, idx);
+                                // Intentionally DO NOT set g_ScrollToSelected here so clicking doesn't jerk the list
+                            }
+
+                            if (ImGui::BeginPopupContextItem()) {
+                                if (ImGui::MenuItem("Duplicate Entry")) {
+                                    DuplicateBankEntry(&bank, idx);
+                                    g_ScrollToSelected = true; // Trigger scroll on duplicate
+                                }
+                                if (ImGui::MenuItem("Delete Entry")) {
+                                    if (g_AppConfig.ShowBankDeleteConfirm) {
+                                        g_ContextEntryIndex = idx;
+                                        g_ShowDeleteBankEntryPopup = true;
+                                        ImGui::OpenPopup("Delete Bank Entry?");
+                                    }
+                                    else {
+                                        DeleteBankEntry(&bank, idx);
+                                    }
+                                }
+                                ImGui::EndPopup();
+                            }
+
+                            if (bank.SelectedEntryIndex == idx) {
+                                ImGui::SetItemDefaultFocus();
+                                if (g_ScrollToSelected) {
+                                    ImGui::SetScrollHereY(0.5f); // Snaps item to middle of view
+                                    g_ScrollToSelected = false;
                                 }
                             }
-                            ImGui::EndPopup();
-                        }
 
-                        if (bank.SelectedEntryIndex == idx) {
-                            ImGui::SetItemDefaultFocus();
-                            if (g_ScrollToSelected) {
-                                ImGui::SetScrollHereY(0.5f); // Snaps item to middle of view
-                                g_ScrollToSelected = false;
-                            }
+                            ImGui::PopID();
                         }
-
-                        ImGui::PopID();
+                        ImGui::EndChild();
                     }
                     ImGui::EndChild();
-                }                
-                ImGui::EndChild();
 
-                ImGui::SameLine();
-                ImGui::InvisibleButton("vsplitter", ImVec2(4.0f, -1.0f));
-                if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-                if (ImGui::IsItemActive()) bankSidebarWidth += ImGui::GetIO().MouseDelta.x;
-                ImGui::SameLine();
+                    ImGui::SameLine();
+                    ImGui::InvisibleButton("vsplitter", ImVec2(4.0f, -1.0f));
+                    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                    if (ImGui::IsItemActive()) bankSidebarWidth += ImGui::GetIO().MouseDelta.x;
+                    ImGui::SameLine();
+                }
 
                 // --- RIGHT PANE ---
                 ImGui::BeginChild("RightPane", ImVec2(0, 0), true);
+
+                // Top Toolbar for toggling the Left Panel
+                if (ImGui::Button(g_ShowLeftPanel ? "<<##LeftToggle" : ">>##LeftToggle", ImVec2(28, 24))) {
+                    g_ShowLeftPanel = !g_ShowLeftPanel;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowLeftPanel ? "Collapse Entry List" : "Expand Entry List");
+                ImGui::SameLine();
 
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
@@ -512,7 +523,21 @@ static void DrawBankTab() {
                         else if (e.Type == 0x5) typeName = "Type 5 - Flat Sequence";
                         else typeName = "Type " + std::to_string(e.Type) + " - Texture";
                     }
-
+                    else if (bank.Type == EBankType::Graphics) {
+                        switch (e.Type) {
+                        case 1: typeName = "Type 1 - Static Mesh"; break;
+                        case 2: typeName = "Type 2 - Repeated Mesh"; break;
+                        case 3: typeName = "Type 3 - Physics Mesh (BBM)"; break;
+                        case 4: typeName = "Type 4 - Particle Mesh"; break;
+                        case 5: typeName = "Type 5 - Animated Mesh"; break;
+                        case 6: typeName = "Type 6 - Animation"; break;
+                        case 7: typeName = "Type 7 - Delta Animation"; break;
+                        case 8: typeName = "Type 8 - Lipsync Animation"; break;
+                        case 9: typeName = "Type 9 - Partial Animation"; break;
+                        case 10: typeName = "Type 10 - Relative Animation"; break;
+                        default: typeName = "Type " + std::to_string(e.Type) + " - Unknown Mesh"; break;
+                        }
+                    }
                     else if (bank.Type == EBankType::Audio) typeName = "Audio Clip";
                     else typeName = "Type " + std::to_string(e.Type);
 
@@ -520,10 +545,10 @@ static void DrawBankTab() {
                     ImGui::Text("ID: %d | %s | Size: %d bytes", e.ID, typeName.c_str(), e.Size);
 
                     ImGui::SameLine();
-                    float avail = ImGui::GetContentRegionAvail().x;
+                    float availRight = ImGui::GetContentRegionAvail().x;
                     float buttonsWidth = 140.0f;
-                    if (avail > buttonsWidth) {
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonsWidth);
+                    if (availRight > buttonsWidth) {
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availRight - buttonsWidth);
                     }
 
                     if (ImGui::Button("Save", ImVec2(60, 0))) {
@@ -547,24 +572,51 @@ static void DrawBankTab() {
 
                     ImGui::Separator();
 
-                    if (e.Name != e.FriendlyName) {
-                        ImGui::TextDisabled("Internal File Name: %s", e.Name.c_str());
-                    }
-
                     if (bank.Type == EBankType::Audio) {
                         if (bank.LugParserPtr) DrawLugAudioProperties(&bank);
                         else DrawAudioProperties(&bank);
                     }
-                    else if (IsSupportedMesh(e.Type) && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
-                        std::string lodPreview = "LOD " + std::to_string(bank.SelectedLOD);
-                        if (ImGui::BeginCombo("##lod", lodPreview.c_str())) {
-                            for (uint32_t l = 0; l < g_ActiveMeshContent.EntryMeta.LODCount; l++) {
-                                if (ImGui::Selectable(("LOD " + std::to_string(l)).c_str(), bank.SelectedLOD == l)) {
-                                    bank.SelectedLOD = l;
-                                    ParseSelectedLOD(&bank);
+                    else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) {
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Name:");
+                        ImGui::SameLine();
+
+                        static char nameBuf[256];
+                        static int lastEditID = -1;
+                        static int lastBankID = -1;
+                        if (lastEditID != e.ID || lastBankID != g_ActiveBankIndex) {
+                            strncpy_s(nameBuf, sizeof(nameBuf), e.Name.c_str(), _TRUNCATE);
+                            lastEditID = e.ID;
+                            lastBankID = g_ActiveBankIndex;
+                        }
+
+                        ImGui::SetNextItemWidth(500);
+                        if (ImGui::InputText("##meshNameEdit", nameBuf, 256)) {
+                            bank.Entries[bank.SelectedEntryIndex].Name = nameBuf;
+                            bank.Entries[bank.SelectedEntryIndex].FriendlyName = nameBuf;
+                            if (IsSupportedMesh(e.Type)) g_ActiveMeshContent.MeshName = nameBuf;
+                        }
+
+                        if (IsSupportedMesh(e.Type) && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
+                            ImGui::SameLine();
+                            ImGui::Text("LOD:");
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(50);
+                            std::string lodPreview = std::to_string(bank.SelectedLOD);
+                            if (ImGui::BeginCombo("##lod", lodPreview.c_str())) {
+                                for (uint32_t l = 0; l < g_ActiveMeshContent.EntryMeta.LODCount; l++) {
+                                    if (ImGui::Selectable(std::to_string(l).c_str(), bank.SelectedLOD == l)) {
+                                        bank.SelectedLOD = l;
+                                        ParseSelectedLOD(&bank);
+                                    }
                                 }
+                                ImGui::EndCombo();
                             }
-                            ImGui::EndCombo();
+                        }
+                    }
+                    else {
+                        if (e.Name != e.FriendlyName) {
+                            ImGui::TextDisabled("Internal File Name: %s", e.Name.c_str());
                         }
                     }
 
@@ -573,8 +625,8 @@ static void DrawBankTab() {
                     if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) DrawTextureProperties();
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
-                    else if (IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
-                    else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) DrawAnimProperties(g_ActiveAnim, g_AnimParseSuccess, g_AnimUIState, [&]() { SaveEntryChanges(&bank); });
+                    else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
+                    else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) DrawAnimProperties(g_ActiveAnim, g_AnimParseSuccess, g_AnimUIState, bank.CurrentEntryRawData, [&]() { SaveEntryChanges(&bank); });
                 }
                 ImGui::EndChild();
 
