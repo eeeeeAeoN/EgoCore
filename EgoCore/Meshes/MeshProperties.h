@@ -376,17 +376,24 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         }
     }
 
-    if (g_ActiveMeshContent.IsParsed && g_PreviewAnimPlaying && g_PreviewAnimParser.Data.IsParsed && g_SelectedAnimType == 6) {
+    // NEW BUTTON FOR ANIMATION EXPORT
+    if (g_ActiveMeshContent.IsParsed && g_PreviewAnimPlaying && g_PreviewAnimParser.Data.IsParsed) {
         ImGui::SameLine();
         if (ImGui::Button("Export Mesh + Anim (glTF)")) {
             std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
             if (!savePath.empty()) {
                 if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
-                // Pass the animation parser to the exporter
-                GltfExporter::Export(g_ActiveMeshContent, savePath, &g_PreviewAnimParser);
+
+                // Pass the Animation and the Type (6, 7, or 9)
+                GltfExporter::Export(g_ActiveMeshContent, savePath, &g_PreviewAnimParser, g_SelectedAnimType);
             }
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Exports the mesh along with the currently playing animation (Standard Type 6 only).");
+        if (ImGui::IsItemHovered()) {
+            std::string tooltip = "Exports the mesh along with the currently playing animation.";
+            if (g_SelectedAnimType == 7) tooltip += "\nDelta Animation: Baked to Bind Pose.";
+            if (g_SelectedAnimType == 9) tooltip += "\nPartial Animation: Only masked bones are exported.";
+            ImGui::SetTooltip("%s", tooltip.c_str());
+        }
     }
 
 
