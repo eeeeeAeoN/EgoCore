@@ -1,6 +1,7 @@
 #pragma once
 #include "MeshParser.h"
 #include "BBMParser.h" 
+#include "AnimParser.h"
 #include <fstream>
 #include <string>
 #include <vector>
@@ -13,6 +14,7 @@ namespace GltfExporter {
 
     struct Mat4 { float m[16]; };
     struct Vec3 { float x, y, z; };
+    struct Vec4 { float x, y, z, w; }; // Added Vec4 for Quaternions
 
     static Mat4 Identity() { return { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }; }
 
@@ -25,6 +27,8 @@ namespace GltfExporter {
 
     static bool Invert(const Mat4& m, Mat4& out) {
         float inv[16], det;
+        // ... [Implementation identical to previous file] ...
+        // (Assuming standard matrix inversion logic is here)
         inv[0] = m.m[5] * m.m[10] * m.m[15] - m.m[5] * m.m[11] * m.m[14] - m.m[9] * m.m[6] * m.m[15] + m.m[9] * m.m[7] * m.m[14] + m.m[13] * m.m[6] * m.m[11] - m.m[13] * m.m[7] * m.m[10];
         inv[4] = -m.m[4] * m.m[10] * m.m[15] + m.m[4] * m.m[11] * m.m[14] + m.m[8] * m.m[6] * m.m[15] - m.m[8] * m.m[7] * m.m[14] - m.m[12] * m.m[6] * m.m[11] + m.m[12] * m.m[7] * m.m[10];
         inv[8] = m.m[4] * m.m[9] * m.m[15] - m.m[4] * m.m[11] * m.m[13] - m.m[8] * m.m[5] * m.m[15] + m.m[8] * m.m[7] * m.m[13] + m.m[12] * m.m[5] * m.m[11] - m.m[12] * m.m[7] * m.m[9];
@@ -58,7 +62,26 @@ namespace GltfExporter {
         int Write(const void* src, size_t size) { Pad(); size_t s = data.size(); data.resize(s + size); memcpy(data.data() + s, src, size); return (int)s; }
     };
 
-    static std::string Esc(const std::string& s) { return "\"" + s + "\""; }
+    static std::string Esc(const std::string& s) {
+        std::stringstream ss;
+        ss << "\"";
+        for (char c : s) {
+            switch (c) {
+            case '"': ss << "\\\""; break;
+            case '\\': ss << "\\\\"; break;
+            case '\b': ss << "\\b"; break;
+            case '\f': ss << "\\f"; break;
+            case '\n': ss << "\\n"; break;
+            case '\r': ss << "\\r"; break;
+            case '\t': ss << "\\t"; break;
+            default:
+                if ((unsigned char)c < 0x20) ss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)c;
+                else ss << c;
+            }
+        }
+        ss << "\"";
+        return ss.str();
+    }
 
     static std::string ToHex(const std::vector<uint8_t>& data) {
         std::stringstream ss; ss << std::hex << std::setfill('0');
@@ -81,7 +104,8 @@ namespace GltfExporter {
     };
     struct BufferView { int offset; int length; int target; };
 
-    static bool Export(const C3DMeshContent& mesh, const std::string& filename) {
+    // UPDATED: Added AnimParser* optional argument
+    static bool Export(const C3DMeshContent& mesh, const std::string& filename, const AnimParser* anim = nullptr) {
         if (mesh.Primitives.empty()) return false;
 
         std::string binFilename = filename.substr(0, filename.find_last_of('.')) + ".bin";
@@ -143,13 +167,14 @@ namespace GltfExporter {
 
         for (int i = 0; i < mesh.BoneCount; i++) if (mesh.Bones[i].ParentIndex == -1) nodeChildren[rootWrapperIdx].push_back(i);
 
-        // --- JSON ---
+        // --- JSON START ---
         json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"FableBankExplorer\"},";
 
         bool isRepeated = false;
         bool fP = true;
 
-        // --- MESH ---
+        // --- MESH DATA EXPORT ---
+        // (This section remains identical to previous version, handles vertices, normals, skins, etc.)
         for (const auto& prim : mesh.Primitives) {
             if (prim.RepeatingMeshReps > 1) isRepeated = true;
 
@@ -198,9 +223,9 @@ namespace GltfExporter {
             bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
             bool isNormComp = (prim.InitFlags & 4) != 0;
 
-            size_t iOff = isPosComp ? 4 : 12;           // Indices come FIRST
-            size_t wOff = iOff + 4;                     // Weights come NEXT
-            size_t normOff = iOff + (hasBones ? 8 : 0); // Normal is offset by the 8 total bone bytes
+            size_t iOff = isPosComp ? 4 : 12;
+            size_t wOff = iOff + 4;
+            size_t normOff = iOff + (hasBones ? 8 : 0);
             size_t uOff = normOff + (isNormComp ? 4 : 12);
 
             for (int v = 0; v < prim.VertexCount; v++) {
@@ -242,32 +267,21 @@ namespace GltfExporter {
                         uint8_t* wgt = (uint8_t*)(prim.VertexBuffer.data() + off + wOff);
                         uint8_t* ind = (uint8_t*)(prim.VertexBuffer.data() + off + iOff);
 
-                        // STRICT GLTF REQUIREMENT: Weights must sum to exactly 1.0
                         float w[4] = { wgt[0] / 255.0f, wgt[1] / 255.0f, wgt[2] / 255.0f, wgt[3] / 255.0f };
                         float sum = w[0] + w[1] + w[2] + w[3];
-
-                        if (sum > 0.001f) {
-                            w[0] /= sum; w[1] /= sum; w[2] /= sum; w[3] /= sum;
-                        }
-                        else {
-                            // Fallback to bind to root if totally unweighted
-                            w[0] = 1.0f; w[1] = 0.0f; w[2] = 0.0f; w[3] = 0.0f;
-                        }
+                        if (sum > 0.001f) { w[0] /= sum; w[1] /= sum; w[2] /= sum; w[3] /= sum; }
+                        else { w[0] = 1.0f; w[1] = 0.0f; w[2] = 0.0f; w[3] = 0.0f; }
 
                         for (int k = 0; k < 4; k++) {
                             uint16_t lID = 0, pID = ind[k] / 3;
                             if (blk < prim.AnimatedBlocks.size() && pID < prim.AnimatedBlocks[blk].Groups.size()) lID = prim.AnimatedBlocks[blk].Groups[pID];
                             if (lID >= mesh.BoneCount) lID = 0;
-
                             jointData.push_back(lID);
                             weightData.push_back(w[k]);
                         }
                     }
                     else {
-                        for (int k = 0; k < 4; k++) {
-                            jointData.push_back(0);
-                            weightData.push_back(k == 0 ? 1.0f : 0.0f);
-                        }
+                        for (int k = 0; k < 4; k++) { jointData.push_back(0); weightData.push_back(k == 0 ? 1.0f : 0.0f); }
                     }
                 }
             }
@@ -293,7 +307,6 @@ namespace GltfExporter {
                 primitivesJson << ",\"WEIGHTS_0\":" << accessors.size() - 1;
             }
             primitivesJson << "},\"indices\":" << idxAcc << ",\"material\":" << prim.MaterialIndex;
-
             if (!prim.ClothPrimitives.empty()) {
                 primitivesJson << ",\"extras\":{\"cloth\":[";
                 for (size_t k = 0; k < prim.ClothPrimitives.size(); k++) primitivesJson << (k > 0 ? "," : "") << "{\"matIdx\":" << prim.ClothPrimitives[k].MaterialIndex << ",\"data\":\"" << ToHex(prim.ClothPrimitives[k].ParticleProgramData) << "\"}";
@@ -311,20 +324,147 @@ namespace GltfExporter {
             ibmAcc = (int)accessors.size() - 1;
         }
 
+        // --- ANIMATION SAMPLING ---
+        std::stringstream animationJson;
+        bool hasAnimation = false;
+
+        if (anim && anim->Data.IsParsed) {
+            float duration = anim->Data.Duration;
+
+            // SAFETY: If Header duration is missing/zero, calculate it from the tracks
+            if (duration < 0.01f) {
+                float maxTrackDuration = 0.0f;
+                for (const auto& t : anim->Data.Tracks) {
+                    if (t.SamplesPerSecond > 0 && t.FrameCount > 0) {
+                        float d = (float)t.FrameCount / t.SamplesPerSecond;
+                        if (d > maxTrackDuration) maxTrackDuration = d;
+                    }
+                }
+                if (maxTrackDuration > 0.0f) duration = maxTrackDuration;
+            }
+
+            int frames = (int)(duration * 30.0f); // Resample at 30 FPS
+            if (frames < 2) frames = 2; // Needs at least 2 keyframes
+
+            std::vector<float> timeData;
+            for (int i = 0; i < frames; i++) timeData.push_back(i / 30.0f);
+
+            // Time Accessor
+            bufferViews.push_back({ bin.Write(timeData.data(), timeData.size() * 4), (int)timeData.size() * 4, 0 });
+            float timeMin[3] = { timeData.front(), 0, 0 }; float timeMax[3] = { timeData.back(), 0, 0 };
+            accessors.push_back(Accessor((int)bufferViews.size() - 1, frames, 5126, "SCALAR", timeMin, timeMax, true));
+            int timeAccIdx = (int)accessors.size() - 1;
+
+            animationJson << "{\"name\":" << Esc(anim->Data.ObjectName.empty() ? "ExportedAnim" : anim->Data.ObjectName) << ",\"channels\":[";
+            std::stringstream samplersJson;
+            int samplerCount = 0;
+            bool firstChannel = true;
+
+            for (int b = 0; b < mesh.BoneCount; b++) {
+                // Find matching track for this bone
+                const AnimTrack* track = nullptr;
+                std::string boneName = (b < mesh.BoneNames.size() ? mesh.BoneNames[b] : "");
+                std::transform(boneName.begin(), boneName.end(), boneName.begin(), ::tolower);
+
+                for (const auto& t : anim->Data.Tracks) {
+                    std::string tName = t.BoneName;
+                    std::transform(tName.begin(), tName.end(), tName.begin(), ::tolower);
+
+                    bool match = false;
+                    if (boneName.length() > 0 && tName.length() >= boneName.length()) {
+                        if (tName.compare(0, boneName.length(), boneName) == 0) {
+                            if (tName.length() == boneName.length()) match = true;
+                            else {
+                                char next = tName[boneName.length()];
+                                if ((next < 'a' || next > 'z') && (next < '0' || next > '9')) match = true;
+                            }
+                        }
+                    }
+                    if (match) { track = &t; break; }
+                }
+
+                if (!track) continue; // No animation for this bone
+
+                std::vector<Vec3> transData;
+                std::vector<Vec4> rotData;
+
+                for (int f = 0; f < frames; f++) {
+                    // 1. Define variables using the GLOBAL types (::Vec3) that AnimParser expects
+                    ::Vec3 p_raw;
+                    ::Vec4 r_raw;
+
+                    // 2. Calculate time
+                    float time = f / 30.0f;
+                    int trackFrame = (int)(time * track->SamplesPerSecond) % (track->FrameCount > 0 ? track->FrameCount : 1);
+
+                    // 3. Call the function with the correct types
+                    track->EvaluateFrame(trackFrame, p_raw, r_raw);
+
+                    // 4. Convert to our local GltfExporter types for the binary buffer
+                    Vec3 p = { p_raw.x, p_raw.y, p_raw.z };
+
+                    // Fable Quaternions (x,y,z,w) -> glTF usually requires Conjugate (-x,-y,-z,w) 
+                    // or just renormalization depending on coordinate space. 
+                    // Let's stick to the conjugate we used in rendering for now.
+                    Vec4 r = { -r_raw.x, -r_raw.y, -r_raw.z, r_raw.w };
+
+                    transData.push_back(p);
+                    rotData.push_back(r);
+                }
+
+                // Write Translation Buffer
+                bufferViews.push_back({ bin.Write(transData.data(), transData.size() * 12), (int)transData.size() * 12, 0 });
+                accessors.push_back(Accessor((int)bufferViews.size() - 1, frames, 5126, "VEC3", 0, 0, false));
+                int transAccIdx = (int)accessors.size() - 1;
+
+                // Write Rotation Buffer
+                bufferViews.push_back({ bin.Write(rotData.data(), rotData.size() * 16), (int)rotData.size() * 16, 0 });
+                accessors.push_back(Accessor((int)bufferViews.size() - 1, frames, 5126, "VEC4", 0, 0, false));
+                int rotAccIdx = (int)accessors.size() - 1;
+
+                // Append Samplers
+                if (samplerCount > 0) samplersJson << ",";
+                samplersJson << "{\"input\":" << timeAccIdx << ",\"interpolation\":\"LINEAR\",\"output\":" << transAccIdx << "},";
+                samplersJson << "{\"input\":" << timeAccIdx << ",\"interpolation\":\"LINEAR\",\"output\":" << rotAccIdx << "}";
+
+                // Append Channels
+                if (!firstChannel) animationJson << ",";
+                animationJson << "{\"sampler\":" << (samplerCount * 2) << ",\"target\":{\"node\":" << b << ",\"path\":\"translation\"}},";
+                animationJson << "{\"sampler\":" << (samplerCount * 2 + 1) << ",\"target\":{\"node\":" << b << ",\"path\":\"rotation\"}}";
+
+                samplerCount++;
+                firstChannel = false;
+            }
+
+            animationJson << "],\"samplers\":[" << samplersJson.str() << "]}";
+            hasAnimation = (samplerCount > 0);
+        }
+
+        // --- NODE EXPORT (Standard) ---
         std::vector<std::string> nodeStrs;
 
         for (int i = 0; i < mesh.BoneCount; i++) {
             Mat4 local; int p = mesh.Bones[i].ParentIndex;
             if (p == -1) local = WorldTransforms[i]; else local = Multiply(IBMs[p], WorldTransforms[i]);
             Mat4 t; Transpose(local, t);
+
             std::stringstream ss;
+            ss.imbue(std::locale("C")); // <--- CRITICAL FIX: Force dot for decimals
+
             ss << "{\"name\":" << Esc(i < mesh.BoneNames.size() ? mesh.BoneNames[i] : "B" + std::to_string(i)) << ",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << t.m[k] << (k < 15 ? "," : "");
-            ss << "]"; if (!nodeChildren[i].empty()) { ss << ",\"children\":["; for (size_t k = 0; k < nodeChildren[i].size(); k++) ss << nodeChildren[i][k] << (k < nodeChildren[i].size() - 1 ? "," : ""); ss << "]"; }
+            ss << "]";
+            if (!nodeChildren[i].empty()) {
+                ss << ",\"children\":[";
+                for (size_t k = 0; k < nodeChildren[i].size(); k++)
+                    ss << nodeChildren[i][k] << (k < nodeChildren[i].size() - 1 ? "," : "");
+                ss << "]";
+            }
             ss << "}";
             nodeStrs.push_back(ss.str());
         }
 
+        // [Nodes for Mesh, Helpers, Dummies, Gens, Volumes - Unchanged]
         if (!isRepeated || mesh.Generators.empty()) {
             std::stringstream ss; ss << "{\"name\":" << Esc(mesh.MeshName) << ",\"mesh\":0" << (mesh.BoneCount > 0 ? ",\"skin\":0" : "") << "}";
             nodeStrs.push_back(ss.str());
@@ -341,8 +481,13 @@ namespace GltfExporter {
         }
 
         for (size_t i = 0; i < mesh.Dummies.size(); i++) {
-            const auto& d = mesh.Dummies[i]; Mat4 dMat; memcpy(dMat.m, d.Transform, 48); dMat.m[3] = 0; dMat.m[7] = 0; dMat.m[11] = 0; dMat.m[15] = 1; Mat4 t; Transpose(dMat, t);
+            const auto& d = mesh.Dummies[i];
+            Mat4 dMat; memcpy(dMat.m, d.Transform, 48); dMat.m[3] = 0; dMat.m[7] = 0; dMat.m[11] = 0; dMat.m[15] = 1;
+            Mat4 t; Transpose(dMat, t);
+
             std::stringstream ss;
+            ss.imbue(std::locale("C")); // <--- FIX
+
             ss << "{\"name\":" << Esc(i < mesh.DummyNameStrings.size() ? mesh.DummyNameStrings[i] : "HDMY_" + std::to_string(d.NameCRC)) << ",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << t.m[k] << (k < 15 ? "," : "");
             ss << "],\"extras\":{\"type\":\"Dummy\",\"crc\":" << d.NameCRC << "}}";
@@ -350,8 +495,12 @@ namespace GltfExporter {
         }
 
         for (size_t i = 0; i < mesh.Generators.size(); i++) {
-            Mat4 dMat; memcpy(dMat.m, mesh.Generators[i].Transform, 48); dMat.m[3] = 0; dMat.m[7] = 0; dMat.m[11] = 0; dMat.m[15] = 1; Mat4 t; Transpose(dMat, t);
+            Mat4 dMat; memcpy(dMat.m, mesh.Generators[i].Transform, 48); dMat.m[3] = 0; dMat.m[7] = 0; dMat.m[11] = 0; dMat.m[15] = 1;
+            Mat4 t; Transpose(dMat, t);
+
             std::stringstream ss;
+            ss.imbue(std::locale("C")); // <--- FIX
+
             ss << "{\"name\":\"GEN_" << mesh.Generators[i].ObjectName << "\",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << t.m[k] << (k < 15 ? "," : "");
             ss << "]";
@@ -376,6 +525,11 @@ namespace GltfExporter {
         json << "\"nodes\":["; for (size_t i = 0; i < nodeStrs.size(); i++) json << (i > 0 ? "," : "") << nodeStrs[i]; json << "],";
 
         json << "\"scene\":0,\"scenes\":[{\"nodes\":[" << rootWrapperIdx << "]}],";
+
+        if (hasAnimation) {
+            json << "\"animations\":[" << animationJson.str() << "],";
+        }
+
         json << "\"meshes\":[{\"name\":" << Esc(mesh.MeshName) << ",\"primitives\":[" << primitivesJson.str() << "]}],";
         if (mesh.BoneCount > 0) {
             int rootBoneIdx = -1;

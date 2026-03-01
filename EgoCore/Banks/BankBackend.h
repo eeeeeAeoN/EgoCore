@@ -107,8 +107,10 @@ inline CBBMParser g_BBMParser;
 inline CTextureParser g_TextureParser;
 inline bool g_MeshUploadNeeded = false;
 inline C3DAnimationInfo g_ActiveAnim;
-inline AnimUIContext    g_AnimUIState;
 inline bool             g_AnimParseSuccess = false;
+inline AnimUIContext g_AnimUIState;
+inline AnimParser g_AnimParser;
+
 
 // --- UTILS ---
 inline bool StartsWith(const std::string& str, const std::string& prefix) {

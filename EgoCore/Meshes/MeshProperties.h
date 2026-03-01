@@ -9,7 +9,7 @@
 #include <string>
 #include <algorithm>
 #include "GltfExporter.h"
-#include "FileDialogs.h" // NEW: Added for Export Dialog
+#include "FileDialogs.h"
 
 extern ID3D11Device* g_pd3dDevice;
 
@@ -35,6 +35,7 @@ static bool g_PreviewAnimPlaying = false;
 static float g_PreviewAnimTime = 0.0f;
 static int g_SelectedAnimBankIndex = -1;
 static int g_SelectedAnimEntryIndex = -1;
+static int g_SelectedAnimType = -1; // Tracks if it is 6, 7, or 9
 static AnimParser g_PreviewAnimParser;
 static std::vector<XMMATRIX> g_PreviewBoneTransforms;     // Sent to Shader
 static std::vector<XMMATRIX> g_PreviewGlobalTransforms;   // Sent to UI Overlay
@@ -158,6 +159,7 @@ inline void UpdateAnimationBones() {
 
     std::vector<XMMATRIX> ibm(boneCount);
     std::vector<XMMATRIX> bindGlobal(boneCount);
+    std::vector<XMMATRIX> bindLocal(boneCount);
 
     // 1. Extract, Clean, and Transpose Inverse Bind Matrices (IBM)
     for (int i = 0; i < boneCount; i++) {
@@ -180,15 +182,24 @@ inline void UpdateAnimationBones() {
         }
     }
 
-    // FIX: Only bypass if NO animation is loaded. 
-    // This allows the animation to hold its current pose when paused/scrubbing.
+    // Pre-calculate mathematically perfect local bind matrices
+    for (int i = 0; i < boneCount; i++) {
+        int p = g_ActiveMeshContent.Bones[i].ParentIndex;
+        if (p == -1 || p >= boneCount) {
+            bindLocal[i] = bindGlobal[i];
+        }
+        else {
+            bindLocal[i] = XMMatrixMultiply(bindGlobal[i], ibm[p]);
+        }
+    }
+
     bool isAnimLoaded = g_PreviewAnimParser.Data.IsParsed;
 
     // 2. PERFECT BIND POSE BYPASS
     if (!isAnimLoaded) {
         for (int i = 0; i < boneCount; i++) {
-            g_PreviewBoneTransforms[i] = XMMatrixIdentity(); // Forces mesh to stay perfectly still
-            g_PreviewGlobalTransforms[i] = bindGlobal[i];    // Draws correct skeleton from cleanly inverted matrix
+            g_PreviewBoneTransforms[i] = XMMatrixIdentity();
+            g_PreviewGlobalTransforms[i] = bindGlobal[i];
         }
         return;
     }
@@ -199,42 +210,68 @@ inline void UpdateAnimationBones() {
     for (int i = 0; i < boneCount; i++) {
         bool hasAnim = false;
         std::string targetBoneName = i < g_ActiveMeshContent.BoneNames.size() ? g_ActiveMeshContent.BoneNames[i] : "";
+        std::transform(targetBoneName.begin(), targetBoneName.end(), targetBoneName.begin(), ::tolower);
 
+        // Iterate through all parsed tracks to find a match
         for (const auto& track : g_PreviewAnimParser.Data.Tracks) {
             std::string tName = track.BoneName;
-            std::string bName = targetBoneName;
             std::transform(tName.begin(), tName.end(), tName.begin(), ::tolower);
-            std::transform(bName.begin(), bName.end(), bName.begin(), ::tolower);
 
-            if (tName == bName && track.FrameCount > 0 && track.SamplesPerSecond > 0) {
-                int frame = (int)(g_PreviewAnimTime * track.SamplesPerSecond) % track.FrameCount;
-                if (frame < 0) frame += track.FrameCount;
+            bool isMatch = false;
 
-                Vec3 p;
-                Vec4 q;
-                track.EvaluateFrame(frame, p, q);
+            // IRONCLAD PREFIX MATCHER: 
+            // Fable track names contain binary garbage at the end because they aren't properly null-terminated.
+            // We check if the track name STARTS with the mesh bone name, and ensure the next character is garbage, not a letter!
+            if (targetBoneName.length() > 0 && tName.length() >= targetBoneName.length()) {
+                if (tName.compare(0, targetBoneName.length(), targetBoneName) == 0) {
+                    if (tName.length() == targetBoneName.length()) {
+                        isMatch = true; // Exact match
+                    }
+                    else {
+                        // Check the first character after the match. If it's a letter/number, it's a different bone (e.g. "Arm" vs "Armor")
+                        char nextChar = tName[targetBoneName.length()];
+                        if ((nextChar < 'a' || nextChar > 'z') && (nextChar < '0' || nextChar > '9')) {
+                            isMatch = true; // It's binary garbage padding! Safe match.
+                        }
+                    }
+                }
+            }
 
-                XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 1.0f);
-                XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
+            if (isMatch) {
+                if (track.FrameCount > 0 && track.SamplesPerSecond > 0) {
+                    int frame = (int)(g_PreviewAnimTime * track.SamplesPerSecond) % track.FrameCount;
+                    if (frame < 0) frame += track.FrameCount;
 
-                // Conjugate the Fable Quaternion to fix "inversely connected" backwards bending
-                vRot = XMQuaternionConjugate(vRot);
+                    Vec3 p;
+                    Vec4 q;
+                    track.EvaluateFrame(frame, p, q);
 
-                localTransforms[i] = XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
-                hasAnim = true;
-                break;
+                    XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 1.0f);
+                    XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
+
+                    // Conjugate Fable Quaternion
+                    vRot = XMQuaternionConjugate(vRot);
+
+                    XMMATRIX trackMat = XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
+
+                    // DELTA ANIMATION (TYPE 7) OFFSET MATH
+                    if (g_SelectedAnimType == 7) {
+                        localTransforms[i] = XMMatrixMultiply(trackMat, bindLocal[i]);
+                    }
+                    else {
+                        // STANDARD (TYPE 6) AND PARTIAL (TYPE 9)
+                        localTransforms[i] = trackMat;
+                    }
+
+                    hasAnim = true;
+                }
+                break; // Found the track, stop searching! (Prevents noodles)
             }
         }
 
-        // If no animation overrides it, derive the TRUE local bind transform mathematically
+        // If no animation overrides it, use the TRUE local bind transform (crucial for Partial animations!)
         if (!hasAnim) {
-            int p = g_ActiveMeshContent.Bones[i].ParentIndex;
-            if (p == -1 || p >= boneCount) {
-                localTransforms[i] = bindGlobal[i];
-            }
-            else {
-                localTransforms[i] = XMMatrixMultiply(bindGlobal[i], ibm[p]);
-            }
+            localTransforms[i] = bindLocal[i];
         }
     }
 
@@ -323,13 +360,11 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     ImGui::SameLine();
     ImGui::Checkbox("Bounds", &g_ShowBounds);
 
-    // Conditionally render Skeleton Toggle
     if (g_ActiveMeshContent.BoneCount > 0) {
         ImGui::SameLine();
         ImGui::Checkbox("Draw Skeleton", &g_ShowSkeleton);
     }
 
-    // NEW: File explorer dialog for glTF Export
     ImGui::SameLine();
     if (ImGui::Button("Export to glTF")) {
         std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
@@ -340,6 +375,20 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             else if (g_ActiveMeshContent.IsParsed) GltfExporter::Export(g_ActiveMeshContent, savePath);
         }
     }
+
+    if (g_ActiveMeshContent.IsParsed && g_PreviewAnimPlaying && g_PreviewAnimParser.Data.IsParsed && g_SelectedAnimType == 6) {
+        ImGui::SameLine();
+        if (ImGui::Button("Export Mesh + Anim (glTF)")) {
+            std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+            if (!savePath.empty()) {
+                if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
+                // Pass the animation parser to the exporter
+                GltfExporter::Export(g_ActiveMeshContent, savePath, &g_PreviewAnimParser);
+            }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Exports the mesh along with the currently playing animation (Standard Type 6 only).");
+    }
+
 
     ImGui::SameLine();
     float availToolW = ImGui::GetContentRegionAvail().x;
@@ -370,7 +419,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     ID3D11DeviceContext* ctx;
     g_pd3dDevice->GetImmediateContext(&ctx);
 
-    // Pass the animation bones to the renderer
     ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, viewportWidth, avail.y, g_ShowWireframe, g_BBMParser.IsParsed, &g_PreviewBoneTransforms);
 
     if (g_ShowBounds && g_ActiveMeshContent.IsParsed) {
@@ -526,7 +574,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             if (srv) {
                                 ImGui::Image((void*)srv, ImVec2(24, 24));
                                 if (ImGui::IsItemHovered()) {
-                                    // FIX: Wrapped tooltip text for large names
                                     ImGui::BeginTooltip();
                                     ImGui::Image((void*)srv, ImVec2(256, 256));
                                     ImGui::PushTextWrapPos(256.0f);
@@ -657,17 +704,17 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     ImGui::EndTabItem();
                 }
 
-                // --- CLEANED UP ANIMATIONS TAB ---
-                // Only renders if this mesh's Type 5 Animated Flag is natively active in the file
+                // --- ANIMATIONS TAB ---
                 if (g_ActiveMeshContent.AnimatedFlag && ImGui::BeginTabItem("Animations")) {
-                    struct FoundAnim { int BankIdx; int EntryIdx; std::string Name; uint32_t ID; };
+                    struct FoundAnim { int BankIdx; int EntryIdx; std::string Name; uint32_t ID; int Type; };
                     std::vector<FoundAnim> anims;
 
                     for (int i = 0; i < g_OpenBanks.size(); i++) {
                         if (g_OpenBanks[i].Type == EBankType::Graphics) {
                             for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
-                                if (g_OpenBanks[i].Entries[j].Type == 6) {
-                                    anims.push_back({ i, j, g_OpenBanks[i].Entries[j].FriendlyName, g_OpenBanks[i].Entries[j].ID });
+                                int t = g_OpenBanks[i].Entries[j].Type;
+                                if (t == 6 || t == 7 || t == 9) { // Include Standard, Delta, and Partial
+                                    anims.push_back({ i, j, g_OpenBanks[i].Entries[j].FriendlyName, g_OpenBanks[i].Entries[j].ID, t });
                                 }
                             }
                         }
@@ -677,26 +724,14 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                         ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded: %s", anims.empty() ? "Anim" : g_OpenBanks[g_SelectedAnimBankIndex].Entries[g_SelectedAnimEntryIndex].FriendlyName.c_str());
                         float duration = g_PreviewAnimParser.Data.Duration > 0 ? g_PreviewAnimParser.Data.Duration : 1.0f;
 
-                        if (ImGui::Button(g_PreviewAnimPlaying ? "Pause" : "Play", ImVec2(80, 0))) {
-                            g_PreviewAnimPlaying = !g_PreviewAnimPlaying;
-                        }
+                        if (ImGui::Button(g_PreviewAnimPlaying ? "Pause" : "Play", ImVec2(80, 0))) g_PreviewAnimPlaying = !g_PreviewAnimPlaying;
                         ImGui::SameLine();
                         if (ImGui::Button("Stop", ImVec2(80, 0))) {
-                            g_PreviewAnimPlaying = false;
-                            g_PreviewAnimTime = 0.0f;
-                            g_PreviewAnimParser.Data.IsParsed = false; // NEW: Forces Bind Pose
-                            g_SelectedAnimBankIndex = -1;
-                            g_SelectedAnimEntryIndex = -1;
+                            g_PreviewAnimPlaying = false; g_PreviewAnimTime = 0.0f;
+                            g_PreviewAnimParser.Data.IsParsed = false; g_SelectedAnimBankIndex = -1; g_SelectedAnimEntryIndex = -1; g_SelectedAnimType = -1;
                         }
 
-                        ImGui::SameLine();
-                        ImGui::Text("Loop: %s", g_PreviewAnimParser.Data.IsCyclic ? "Yes" : "No");
-
-                        // NEW: Sliders disable playing when dragged, allowing scrubbing!
-                        if (ImGui::SliderFloat("Time", &g_PreviewAnimTime, 0.0f, duration, "%.2f s")) {
-                            g_PreviewAnimPlaying = false;
-                        }
-
+                        if (ImGui::SliderFloat("Time", &g_PreviewAnimTime, 0.0f, duration, "%.2f s")) g_PreviewAnimPlaying = false;
                         ImGui::Separator();
                     }
                     else {
@@ -716,15 +751,20 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
                         if (filter.empty() || lowerName.find(filter) != std::string::npos) {
                             bool isSelected = (g_SelectedAnimBankIndex == a.BankIdx && g_SelectedAnimEntryIndex == a.EntryIdx);
-                            if (ImGui::Selectable((std::to_string(a.ID) + " - " + a.Name).c_str(), isSelected)) {
+
+                            std::string typeLabel = "";
+                            if (a.Type == 7) typeLabel = " [Delta]";
+                            else if (a.Type == 9) typeLabel = " [Partial]";
+                            std::string displayStr = std::to_string(a.ID) + " - " + a.Name + typeLabel;
+
+                            if (ImGui::Selectable(displayStr.c_str(), isSelected)) {
                                 g_SelectedAnimBankIndex = a.BankIdx;
                                 g_SelectedAnimEntryIndex = a.EntryIdx;
+                                g_SelectedAnimType = a.Type;
 
                                 auto& b = g_OpenBanks[a.BankIdx];
                                 std::vector<uint8_t> rawData;
-                                if (b.ModifiedEntryData.count(a.EntryIdx)) {
-                                    rawData = b.ModifiedEntryData[a.EntryIdx];
-                                }
+                                if (b.ModifiedEntryData.count(a.EntryIdx)) rawData = b.ModifiedEntryData[a.EntryIdx];
                                 else {
                                     b.Stream->clear();
                                     b.Stream->seekg(b.Entries[a.EntryIdx].Offset, std::ios::beg);
@@ -807,7 +847,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             if (srv) {
                                 ImGui::Image((void*)srv, ImVec2(24, 24));
                                 if (ImGui::IsItemHovered()) {
-                                    // FIX: Wrapped tooltip text for large names
                                     ImGui::BeginTooltip();
                                     ImGui::Image((void*)srv, ImVec2(256, 256));
                                     ImGui::PushTextWrapPos(256.0f);

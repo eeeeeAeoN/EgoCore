@@ -94,7 +94,8 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
     }
 
     g_TextureParser.DecodedPixels.clear(); g_TextureParser.IsParsed = false;
-    g_BBMParser.IsParsed = false; g_ActiveMeshContent = C3DMeshContent(); g_AnimParseSuccess = false;
+    g_BBMParser.IsParsed = false; g_ActiveMeshContent = C3DMeshContent();
+    g_AnimParser.Data = C3DAnimationInfo();
     g_TextParser.IsParsed = false; g_TextParser.TextData = CTextEntry(); g_TextParser.GroupData = CTextGroup(); g_TextParser.NarratorStrings.clear(); g_TextParser.RawData.clear();
     g_LipSyncParser.Data = CLipSyncData();
 
@@ -136,13 +137,22 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         if (g_TextParser.IsGroup) ResolveGroupMetadata(bank);
     }
     else if (bank->Type != EBankType::Audio) {
-        if (e.Type == TYPE_STATIC_PHYSICS_MESH) { g_BBMParser.Parse(bank->CurrentEntryRawData); g_MeshUploadNeeded = true; }
+        if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
+            g_BBMParser.Parse(bank->CurrentEntryRawData);
+            g_MeshUploadNeeded = true;
+        }
         else if (IsSupportedMesh(e.Type)) {
             if (bank->SubheaderCache.count(idx)) g_ActiveMeshContent.ParseEntryMetadata(bank->SubheaderCache[idx]);
             if (!bank->CurrentEntryRawData.empty()) { g_ActiveMeshContent.Parse(bank->CurrentEntryRawData); g_MeshUploadNeeded = true; }
         }
-        else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
-            if (bank->SubheaderCache.count(idx)) g_AnimParseSuccess = g_ActiveAnim.Deserialize(bank->SubheaderCache[idx]);
+        // HANDLE ANIMATIONS (Type 6, 7, 9)
+        else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
+            if (bank->SubheaderCache.count(idx)) {
+                g_AnimParser.Data.Deserialize(bank->SubheaderCache[idx]);
+            }
+            if (!bank->CurrentEntryRawData.empty()) {
+                g_AnimParser.Parse(bank->CurrentEntryRawData);
+            }
         }
     }
 }

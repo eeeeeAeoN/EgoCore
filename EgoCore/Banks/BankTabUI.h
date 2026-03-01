@@ -388,9 +388,9 @@ static void DrawBankTab() {
                                 ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Animation Types:");
                                 if (ImGui::RadioButton("Animation", bank.FilterTypeMask == 6)) { bank.FilterTypeMask = 6; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("Delta Animation", bank.FilterTypeMask == 7)) { bank.FilterTypeMask = 7; UpdateFilter(bank); }
-                                if (ImGui::RadioButton("Lipsync Animation", bank.FilterTypeMask == 8)) { bank.FilterTypeMask = 8; UpdateFilter(bank); }
+                                //if (ImGui::RadioButton("Lipsync Animation", bank.FilterTypeMask == 8)) { bank.FilterTypeMask = 8; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("Partial Animation", bank.FilterTypeMask == 9)) { bank.FilterTypeMask = 9; UpdateFilter(bank); }
-                                if (ImGui::RadioButton("Relative Animation", bank.FilterTypeMask == 10)) { bank.FilterTypeMask = 10; UpdateFilter(bank); }
+                                //if (ImGui::RadioButton("Relative Animation", bank.FilterTypeMask == 10)) { bank.FilterTypeMask = 10; UpdateFilter(bank); }
                             }
 
                             ImGui::EndPopup();
@@ -626,8 +626,10 @@ static void DrawBankTab() {
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
                     else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
-                    else if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) DrawAnimProperties(g_ActiveAnim, g_AnimParseSuccess, g_AnimUIState, bank.CurrentEntryRawData, [&]() { SaveEntryChanges(&bank); });
-                }
+                    else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
+                        DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
+                    }
+}
                 ImGui::EndChild();
 
                 if (g_ShowDeleteBankEntryPopup) ImGui::OpenPopup("Delete Bank Entry?");
