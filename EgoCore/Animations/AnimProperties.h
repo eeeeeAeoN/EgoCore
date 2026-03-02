@@ -44,49 +44,112 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, AnimPar
 
     ImGui::Separator();
 
-    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "--- HEADER METADATA ---");
-    ImGui::DragFloat("Duration", &anim.Duration, 0.01f);
-    ImGui::DragFloat("Non-Looping", &anim.NonLoopingDuration, 0.01f);
-    ImGui::DragFloat("Rotation", &anim.Rotation, 0.01f);
+    // ====================================================================
+    // EGOCORE ENGINE LOGIC EDITOR
+    // ====================================================================
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.8f, 1.0f), "--- FABLE ENGINE LOGIC ---");
 
-    ImGui::Dummy(ImVec2(0, 5));
+    // 1. Cyclic Flag & Durations
+    ImGui::Checkbox("Is Cyclic (Looping Animation)", &anim.IsCyclic);
+    ImGui::DragFloat("Duration (Seconds)", &anim.Duration, 0.01f);
+    ImGui::DragFloat("Non-Looping Duration", &anim.NonLoopingDuration, 0.01f);
 
-    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "--- PAYLOAD DATA ---");
-    ImGui::Text("Target Skeleton: %s", anim.ObjectName.empty() ? "None" : anim.ObjectName.c_str());
-    ImGui::Text("Cyclic: %s", anim.IsCyclic ? "Yes" : "No");
-
-    // Partial Animation Info
-    if (!anim.BoneMaskBits.empty()) {
-        ImGui::TextColored(ImVec4(0, 1, 1, 1), "Partial Animation Bone Mask (AMSK) Detected.");
-        if (ImGui::TreeNode("View Bitmask")) {
-            for (size_t i = 0; i < anim.BoneMaskBits.size(); i++) {
-                ImGui::Text("Word %zu: %08X", i, anim.BoneMaskBits[i]);
-            }
-            ImGui::TreePop();
+    // 2. Movement Vector (MVEC)
+    ImGui::Text("Root Movement Vector (MVEC):");
+    ImGui::DragFloat3("##mvec_edit", &anim.MovementVector.x, 0.01f);
+    ImGui::SameLine();
+    if (ImGui::Button("Auto-Calc from Root")) {
+        if (!anim.Tracks.empty() && !anim.Tracks[0].PositionTrack.empty()) {
+            Vec3 startPos = anim.Tracks[0].PositionTrack.front();
+            Vec3 endPos = anim.Tracks[0].PositionTrack.back();
+            anim.MovementVector.x = endPos.x - startPos.x;
+            anim.MovementVector.y = endPos.y - startPos.y;
+            anim.MovementVector.z = endPos.z - startPos.z;
         }
     }
 
-    ImGui::DragFloat3("Movement Vector", &anim.MovementVector.x, 0.05f);
+    ImGui::Dummy(ImVec2(0, 5));
+
+    // 3. Time Events (TMEV) Editor
+    if (ImGui::CollapsingHeader("Time Events (TMEV)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button("Add New Event")) {
+            anim.TimeEvents.push_back({ "NEW_EVENT", 0.0f });
+        }
+
+        ImGui::BeginChild("TMEV_Editor", ImVec2(0, 150), true);
+        for (size_t i = 0; i < anim.TimeEvents.size(); i++) {
+            ImGui::PushID((int)i);
+
+            char tmevBuf[256];
+            strncpy_s(tmevBuf, anim.TimeEvents[i].Name.c_str(), 255);
+            ImGui::SetNextItemWidth(250);
+            if (ImGui::InputText("##evname", tmevBuf, 256)) anim.TimeEvents[i].Name = tmevBuf;
+
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            ImGui::DragFloat("##evtime", &anim.TimeEvents[i].Time, 0.01f, 0.0f, anim.Duration, "%.2fs");
+
+            ImGui::SameLine();
+            if (ImGui::Button("X")) {
+                anim.TimeEvents.erase(anim.TimeEvents.begin() + i);
+                i--;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
+
+    // 4. Bone Mask (AMSK) Editor
+    if (ImGui::CollapsingHeader("Partial Animation Bone Mask (AMSK)")) {
+        if (anim.BoneMaskBits.empty()) {
+            ImGui::TextDisabled("This is a Full Body animation (No Mask).");
+            if (ImGui::Button("Convert to Partial Animation")) {
+                uint32_t wordCount = ((uint32_t)anim.Tracks.size() + 31) / 32;
+                anim.BoneMaskBits.resize(wordCount, 0xFFFFFFFF);
+            }
+        }
+        else {
+            if (ImGui::Button("Clear Mask")) anim.BoneMaskBits.clear();
+            ImGui::SameLine();
+            if (ImGui::Button("Disable All")) for (auto& word : anim.BoneMaskBits) word = 0;
+            ImGui::SameLine();
+            if (ImGui::Button("Enable All")) for (auto& word : anim.BoneMaskBits) word = 0xFFFFFFFF;
+
+            ImGui::BeginChild("MaskEditor", ImVec2(0, 150), true);
+            for (size_t i = 0; i < anim.Tracks.size(); i++) {
+                uint32_t wordIdx = (uint32_t)(i / 32);
+                uint32_t bitIdx = (uint32_t)(i % 32);
+                if (wordIdx >= anim.BoneMaskBits.size()) anim.BoneMaskBits.resize(wordIdx + 1, 0);
+                bool isEnabled = (anim.BoneMaskBits[wordIdx] & (1 << bitIdx)) != 0;
+
+                if (ImGui::Checkbox((anim.Tracks[i].BoneName + "##mask" + std::to_string(i)).c_str(), &isEnabled)) {
+                    if (isEnabled) anim.BoneMaskBits[wordIdx] |= (1 << bitIdx);
+                    else anim.BoneMaskBits[wordIdx] &= ~(1 << bitIdx);
+                }
+            }
+            ImGui::EndChild();
+        }
+    }
 
     ImGui::Separator();
+    // ====================================================================
+
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "--- TRACKS & KEYFRAMES ---");
 
     if (ImGui::BeginChild("TracksList", ImVec2(0, 0), true)) {
         for (size_t i = 0; i < anim.Tracks.size(); i++) {
             const auto& track = anim.Tracks[i];
+
             bool isEnabled = true;
-            // For partial animations, check the mask
             if (!anim.BoneMaskBits.empty()) {
-                uint32_t word = i / 32;
-                uint32_t bit = i % 32;
-                if (word < anim.BoneMaskBits.size()) {
-                    isEnabled = (anim.BoneMaskBits[word] & (1 << bit)) != 0;
-                }
+                uint32_t word = (uint32_t)(i / 32);
+                uint32_t bit = (uint32_t)(i % 32);
+                if (word < anim.BoneMaskBits.size()) isEnabled = (anim.BoneMaskBits[word] & (1 << bit)) != 0;
             }
 
             ImVec4 headerCol = isEnabled ? ImVec4(1, 1, 1, 1) : ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_Text, headerCol);
-            bool open = ImGui::CollapsingHeader((track.BoneName + (isEnabled ? "" : " (DISABLED)") + "##" + std::to_string(i)).c_str());
+            bool open = ImGui::CollapsingHeader((track.BoneName + (isEnabled ? "" : " (MASKED OUT)") + "##" + std::to_string(i)).c_str());
             ImGui::PopStyleColor();
 
             if (open) {

@@ -42,15 +42,44 @@ public:
             sw.Write<uint8_t>(anim.IsCyclic ? 1 : 0);
             sw.Write<float>(anim.Duration);
 
-            // --- LOSSLESS HELPER WRITING ---
-            // Simply dump the exact bytes we scraped, preserving all Time Events and Triggers
-            if (!anim.HelperData.empty()) {
+            // --- WRITE HLPR BEFORE AOBJ ---
+            bool needsHelper = anim.HasHelper || !anim.XaloData.empty() || !anim.HelperTracks.empty() || !anim.TimeEvents.empty() ||
+                std::abs(anim.MovementVector.x) > 0.001f ||
+                std::abs(anim.MovementVector.y) > 0.001f ||
+                std::abs(anim.MovementVector.z) > 0.001f;
+
+            if (needsHelper) {
                 WriteChunk(sw, "HLPR", [&](AnimWriter& hW) {
-                    hW.Write(anim.HelperData.data(), anim.HelperData.size());
+
+                    WriteChunk(hW, "MVEC", [&](AnimWriter& vecW) {
+                        vecW.Write<float>(anim.MovementVector.x);
+                        vecW.Write<float>(anim.MovementVector.y);
+                        vecW.Write<float>(anim.MovementVector.z);
+                        });
+
+                    // Repack all extracted Time Events perfectly!
+                    for (const auto& ev : anim.TimeEvents) {
+                        WriteChunk(hW, "TMEV", [&](AnimWriter& tW) {
+                            tW.WriteString(ev.Name); // Writes string + \0
+                            tW.Write<float>(ev.Time);
+                            });
+                    }
+
+                    for (const auto& track : anim.HelperTracks) {
+                        WriteChunk(hW, "XSEQ", [&](AnimWriter& seqW) {
+                            WriteTrackPayload(seqW, track);
+                            });
+                    }
+
+                    if (!anim.XaloData.empty()) {
+                        WriteChunk(hW, "XALO", [&](AnimWriter& xW) {
+                            xW.Write(anim.XaloData.data(), anim.XaloData.size());
+                            });
+                    }
                     });
             }
 
-            // --- WRITE AOBJ ---
+            // --- WRITE AOBJ SECOND ---
             WriteChunk(sw, "AOBJ", [&](AnimWriter& objW) {
                 objW.WriteString(anim.ObjectName);
                 objW.Write<int32_t>(-1); // SubMeshIndex
@@ -110,7 +139,6 @@ private:
 
     static PosPaletteResult ProcessPositions(const AnimTrack& t) {
         PosPaletteResult res;
-
         res.Indices = t.PalettedPositions;
         res.Factor = t.PositionFactor;
         if (res.Factor == 0.0f) res.Factor = 1.0f;
@@ -120,7 +148,6 @@ private:
             res.CompressedPalette.push_back((int16_t)std::round(p.y / res.Factor));
             res.CompressedPalette.push_back((int16_t)std::round(p.z / res.Factor));
         }
-
         return res;
     }
 
@@ -149,14 +176,13 @@ private:
         w.Write<uint8_t>(t.PreFPSFlag);
         w.Write<float>(t.SamplesPerSecond);
 
-        // --- FIX: Process the palettes BEFORE we try to write their variables! ---
         auto posDat = ProcessPositions(t);
         auto rotDat = ProcessRotations(t);
 
         w.Write<uint32_t>(t.FrameCount);
 
         w.Write(t.PostFrameFlags, 4);
-        w.Write<float>(posDat.Factor); // No more E0020 error!
+        w.Write<float>(posDat.Factor);
         w.Write<float>(t.ScalingFactor);
 
         w.Write<uint16_t>((uint16_t)rotDat.Palette.size());

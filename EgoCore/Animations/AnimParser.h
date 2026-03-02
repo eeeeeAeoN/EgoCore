@@ -9,10 +9,8 @@
 struct AnimTrack {
     int32_t ParentIndex = -1;
     std::string BoneName = "";
-
     uint8_t PreFPSFlag = 0;
     uint8_t PostFrameFlags[4] = { 0,0,0,0 };
-
     float SamplesPerSecond = 30.0f;
     uint32_t FrameCount = 0;
     float PositionFactor = 1.0f;
@@ -20,7 +18,6 @@ struct AnimTrack {
 
     std::vector<Vec4> RotationTrack;
     std::vector<uint8_t> PalettedRotations;
-
     std::vector<Vec3> PositionTrack;
     std::vector<uint8_t> PalettedPositions;
 
@@ -43,14 +40,20 @@ struct AnimTrack {
     }
 };
 
+struct TimeEvent {
+    std::string Name;
+    float Time;
+};
+
 struct C3DAnimationInfo {
     float Duration = 0.0f;
     float NonLoopingDuration = 0.0f;
     Vec3 MovementVector = { 0,0,0 };
     float Rotation = 0.0f;
 
-    // The Ultimate Fix: Store the entire Helper block exactly as it was found
-    std::vector<uint8_t> HelperData;
+    bool HasHelper = false;
+    std::vector<TimeEvent> TimeEvents;
+    std::vector<uint8_t> XaloData;
 
     std::string ObjectName = "";
     bool IsCyclic = false;
@@ -58,8 +61,8 @@ struct C3DAnimationInfo {
 
     std::string DebugInfo = "";
     bool IsParsed = false;
-
     std::vector<AnimTrack> Tracks;
+    std::vector<AnimTrack> HelperTracks;
 
     bool Deserialize(const std::vector<uint8_t>& data) {
         if (data.size() < 24) return false;
@@ -87,10 +90,13 @@ public:
     bool Parse(const std::vector<uint8_t>& compressedData) {
         Data.IsParsed = false;
         Data.Tracks.clear();
-        Data.HelperData.clear();
+        Data.HelperTracks.clear();
+        Data.TimeEvents.clear();
+        Data.XaloData.clear();
         Data.ObjectName = "";
         Data.BoneMaskBits.clear();
         Data.Duration = 0.0f;
+        Data.HasHelper = false;
 
         if (compressedData.size() < 8) return false;
         uint32_t magic = *(uint32_t*)compressedData.data();
@@ -107,59 +113,71 @@ public:
         }
 
         size_t cursor = 0;
+        bool inHelper = false;
+        size_t helperEnd = 0;
 
         while (cursor + 8 <= rawData.size()) {
+            // Keep track of when we leave the Helper block
+            if (inHelper && cursor >= helperEnd) inHelper = false;
+
             std::string sig((char*)rawData.data() + cursor, 4);
             uint32_t chunkSize = *(uint32_t*)(rawData.data() + cursor + 4);
             size_t payloadStart = cursor + 8;
 
+            // --- 1. CONTAINERS (Step inside, let scanner handle the data gaps) ---
             if (sig == "ANRT" && payloadStart + 5 <= rawData.size()) {
                 Data.IsCyclic = (rawData[payloadStart] != 0);
                 memcpy(&Data.Duration, rawData.data() + payloadStart + 1, 4);
+                cursor += 8;
             }
             else if (sig == "HLPR") {
-                if (payloadStart + chunkSize <= rawData.size()) {
-                    // Lossless capture of the entire Helper block
-                    Data.HelperData.assign(rawData.data() + payloadStart, rawData.data() + payloadStart + chunkSize);
-
-                    // Extract MVEC purely for the UI Display
-                    for (size_t i = 0; i + 16 <= Data.HelperData.size(); i++) {
-                        if (Data.HelperData[i] == 'M' && Data.HelperData[i + 1] == 'V' && Data.HelperData[i + 2] == 'E' && Data.HelperData[i + 3] == 'C') {
-                            // Fable quirk: sometimes MVEC has a size header, sometimes it doesn't.
-                            if (*(uint32_t*)(Data.HelperData.data() + i + 4) == 12) {
-                                memcpy(&Data.MovementVector, Data.HelperData.data() + i + 8, 12);
-                            }
-                            else {
-                                memcpy(&Data.MovementVector, Data.HelperData.data() + i + 4, 12);
-                            }
-                            break;
-                        }
-                    }
-                    cursor += 8 + chunkSize; // Skip scanning inside HLPR entirely!
-                    continue;
-                }
+                inHelper = true;
+                helperEnd = payloadStart + chunkSize;
+                Data.HasHelper = true;
+                cursor += 8;
             }
             else if (sig == "AOBJ") {
                 if (Data.ObjectName.empty() && payloadStart < rawData.size()) {
                     size_t c = payloadStart;
                     while (c < rawData.size() && rawData[c] != '\0') { Data.ObjectName += (char)rawData[c]; c++; }
                 }
+                cursor += 8;
+            }
+            // --- 2. TERMINAL CHUNKS (Read, then strictly skip the whole payload) ---
+            else if (sig == "TMEV" && payloadStart + chunkSize <= rawData.size()) {
+                TimeEvent ev;
+                size_t c = payloadStart;
+                while (c < payloadStart + chunkSize && rawData[c] != '\0') { ev.Name += (char)rawData[c]; c++; }
+                if (c < payloadStart + chunkSize) c++; // skip null terminator
+                if (c + 4 <= payloadStart + chunkSize) memcpy(&ev.Time, rawData.data() + c, 4);
+                Data.TimeEvents.push_back(ev);
+                cursor += 8 + chunkSize;
+            }
+            else if (sig == "MVEC" && payloadStart + 12 <= rawData.size()) {
+                memcpy(&Data.MovementVector, rawData.data() + payloadStart, 12);
+                cursor += 8 + chunkSize;
+            }
+            else if (sig == "XALO" && payloadStart + chunkSize <= rawData.size() && chunkSize < 1024) {
+                Data.XaloData.assign(rawData.data() + payloadStart, rawData.data() + payloadStart + chunkSize);
+                cursor += 8 + chunkSize;
             }
             else if (sig == "AMSK" && payloadStart + chunkSize <= rawData.size() && chunkSize < 1024) {
-                if (Data.BoneMaskBits.empty()) {
-                    uint32_t wordCount = (chunkSize + 3) / 4;
-                    Data.BoneMaskBits.resize(wordCount, 0);
-                    memcpy(Data.BoneMaskBits.data(), rawData.data() + payloadStart, chunkSize);
-                }
+                uint32_t wordCount = (chunkSize + 3) / 4;
+                Data.BoneMaskBits.resize(wordCount, 0);
+                memcpy(Data.BoneMaskBits.data(), rawData.data() + payloadStart, chunkSize);
+                cursor += 8 + chunkSize;
             }
-            else if (sig == "XSEQ" || sig == "SEQ0") {
-                if (payloadStart + chunkSize <= rawData.size()) {
-                    ParseXSEQ(rawData.data(), payloadStart, payloadStart + chunkSize, Data.Tracks);
-                }
+            else if ((sig == "XSEQ" || sig == "SEQ0") && payloadStart + chunkSize <= rawData.size()) {
+                if (inHelper) ParseXSEQ(rawData.data(), payloadStart, payloadStart + chunkSize, Data.HelperTracks);
+                else ParseXSEQ(rawData.data(), payloadStart, payloadStart + chunkSize, Data.Tracks);
+                cursor += 8 + chunkSize;
             }
-
-            if (sig == "XSEQ" || sig == "SEQ0" || sig == "AMSK") cursor += 8 + chunkSize;
-            else cursor++;
+            // --- 3. THE SELF-HEALING SCANNER ---
+            else {
+                // If we are sitting on raw string data or padding, creep forward 1 byte
+                // until we align with the next real "3DAF", "XSEQ", etc.
+                cursor++;
+            }
         }
 
         Data.IsParsed = true;
