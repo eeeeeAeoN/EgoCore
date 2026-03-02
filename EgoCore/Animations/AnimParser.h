@@ -9,6 +9,10 @@
 struct AnimTrack {
     int32_t ParentIndex = -1;
     std::string BoneName = "";
+
+    uint8_t PreFPSFlag = 0;
+    uint8_t PostFrameFlags[4] = { 0,0,0,0 };
+
     float SamplesPerSecond = 30.0f;
     uint32_t FrameCount = 0;
     float PositionFactor = 1.0f;
@@ -21,9 +25,7 @@ struct AnimTrack {
     std::vector<uint8_t> PalettedPositions;
 
     void EvaluateFrame(int frame, Vec3& outPos, Vec4& outRot) const {
-        if (RotationTrack.empty()) {
-            outRot = { 0.0f, 0.0f, 0.0f, 1.0f };
-        }
+        if (RotationTrack.empty()) outRot = { 0.0f, 0.0f, 0.0f, 1.0f };
         else {
             int rotIdx = frame;
             if (!PalettedRotations.empty()) rotIdx = (frame < PalettedRotations.size()) ? PalettedRotations[frame] : PalettedRotations.back();
@@ -31,9 +33,7 @@ struct AnimTrack {
             outRot = RotationTrack[rotIdx];
         }
 
-        if (PositionTrack.empty()) {
-            outPos = { 0.0f, 0.0f, 0.0f };
-        }
+        if (PositionTrack.empty()) outPos = { 0.0f, 0.0f, 0.0f };
         else {
             int posIdx = frame;
             if (!PalettedPositions.empty()) posIdx = (frame < PalettedPositions.size()) ? PalettedPositions[frame] : PalettedPositions.back();
@@ -49,12 +49,16 @@ struct C3DAnimationInfo {
     Vec3 MovementVector = { 0,0,0 };
     float Rotation = 0.0f;
 
+    // The Ultimate Fix: Store the entire Helper block exactly as it was found
+    std::vector<uint8_t> HelperData;
+
     std::string ObjectName = "";
     bool IsCyclic = false;
-    std::vector<uint32_t> BoneMaskBits; // Partial Animation Mask
+    std::vector<uint32_t> BoneMaskBits;
 
     std::string DebugInfo = "";
     bool IsParsed = false;
+
     std::vector<AnimTrack> Tracks;
 
     bool Deserialize(const std::vector<uint8_t>& data) {
@@ -83,6 +87,7 @@ public:
     bool Parse(const std::vector<uint8_t>& compressedData) {
         Data.IsParsed = false;
         Data.Tracks.clear();
+        Data.HelperData.clear();
         Data.ObjectName = "";
         Data.BoneMaskBits.clear();
         Data.Duration = 0.0f;
@@ -103,23 +108,42 @@ public:
 
         size_t cursor = 0;
 
-        // PROVEN LOGIC: Byte-by-Byte scan!
         while (cursor + 8 <= rawData.size()) {
             std::string sig((char*)rawData.data() + cursor, 4);
             uint32_t chunkSize = *(uint32_t*)(rawData.data() + cursor + 4);
             size_t payloadStart = cursor + 8;
 
-            if (sig == "ANRT" && payloadStart < rawData.size()) {
+            if (sig == "ANRT" && payloadStart + 5 <= rawData.size()) {
                 Data.IsCyclic = (rawData[payloadStart] != 0);
+                memcpy(&Data.Duration, rawData.data() + payloadStart + 1, 4);
             }
-            else if (sig == "AOBJ" && payloadStart < rawData.size()) {
-                if (Data.ObjectName.empty()) {
+            else if (sig == "HLPR") {
+                if (payloadStart + chunkSize <= rawData.size()) {
+                    // Lossless capture of the entire Helper block
+                    Data.HelperData.assign(rawData.data() + payloadStart, rawData.data() + payloadStart + chunkSize);
+
+                    // Extract MVEC purely for the UI Display
+                    for (size_t i = 0; i + 16 <= Data.HelperData.size(); i++) {
+                        if (Data.HelperData[i] == 'M' && Data.HelperData[i + 1] == 'V' && Data.HelperData[i + 2] == 'E' && Data.HelperData[i + 3] == 'C') {
+                            // Fable quirk: sometimes MVEC has a size header, sometimes it doesn't.
+                            if (*(uint32_t*)(Data.HelperData.data() + i + 4) == 12) {
+                                memcpy(&Data.MovementVector, Data.HelperData.data() + i + 8, 12);
+                            }
+                            else {
+                                memcpy(&Data.MovementVector, Data.HelperData.data() + i + 4, 12);
+                            }
+                            break;
+                        }
+                    }
+                    cursor += 8 + chunkSize; // Skip scanning inside HLPR entirely!
+                    continue;
+                }
+            }
+            else if (sig == "AOBJ") {
+                if (Data.ObjectName.empty() && payloadStart < rawData.size()) {
                     size_t c = payloadStart;
                     while (c < rawData.size() && rawData[c] != '\0') { Data.ObjectName += (char)rawData[c]; c++; }
                 }
-            }
-            else if (sig == "MVEC" && payloadStart + 12 <= rawData.size()) {
-                memcpy(&Data.MovementVector, rawData.data() + payloadStart, 12);
             }
             else if (sig == "AMSK" && payloadStart + chunkSize <= rawData.size() && chunkSize < 1024) {
                 if (Data.BoneMaskBits.empty()) {
@@ -130,45 +154,34 @@ public:
             }
             else if (sig == "XSEQ" || sig == "SEQ0") {
                 if (payloadStart + chunkSize <= rawData.size()) {
-                    ParseXSEQ(rawData.data(), payloadStart, payloadStart + chunkSize);
+                    ParseXSEQ(rawData.data(), payloadStart, payloadStart + chunkSize, Data.Tracks);
                 }
             }
 
-            // THE CRITICAL FIX: Only jump by chunkSize if it's a known Sequence. 
-            // Everything else scans byte-by-byte to prevent corrupt-size jumps!
-            if (sig == "XSEQ" || sig == "SEQ0") cursor += 8 + chunkSize;
+            if (sig == "XSEQ" || sig == "SEQ0" || sig == "AMSK") cursor += 8 + chunkSize;
             else cursor++;
         }
-
-        // Calculate actual duration so Exporter/Renderer knows how long it is
-        float calcDuration = 0.0f;
-        for (const auto& t : Data.Tracks) {
-            if (t.SamplesPerSecond > 0 && t.FrameCount > 0) {
-                float d = (float)t.FrameCount / t.SamplesPerSecond;
-                if (d > calcDuration) calcDuration = d;
-            }
-        }
-        Data.Duration = calcDuration;
-        if (Data.Duration <= 0.001f) Data.Duration = 1.0f;
 
         Data.IsParsed = true;
         return true;
     }
 
 private:
-    void ParseXSEQ(const uint8_t* base, size_t start, size_t end) {
+    void ParseXSEQ(const uint8_t* base, size_t start, size_t end, std::vector<AnimTrack>& targetVector) {
         size_t c = start;
         AnimTrack track;
         if (c + 8 > end) return;
-        c += 4; // Skip Magic
+        c += 4; // Skip inner magic
         track.ParentIndex = *(int32_t*)(base + c); c += 4;
+
         while (c < end && base[c] != '\0') { track.BoneName += (char)base[c]; c++; }
         if (c < end) c++;
         if (c + 18 > end) return;
-        c += 1;
+
+        track.PreFPSFlag = *(uint8_t*)(base + c); c += 1;
         track.SamplesPerSecond = *(float*)(base + c); c += 4;
         track.FrameCount = *(uint32_t*)(base + c); c += 4;
-        c += 4;
+        memcpy(track.PostFrameFlags, base + c, 4); c += 4;
         track.PositionFactor = *(float*)(base + c); c += 4;
         track.ScalingFactor = *(float*)(base + c); c += 4;
 
@@ -207,7 +220,7 @@ private:
                 for (int i = 0; i < palPosCount; i++) track.PalettedPositions.push_back(base[c++]);
             }
         }
-        Data.Tracks.push_back(track);
+        targetVector.push_back(track);
     }
 };
 

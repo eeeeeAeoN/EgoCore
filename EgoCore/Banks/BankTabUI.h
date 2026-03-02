@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "FileDialogs.h"
 #include "AudioExplorer.h"
+#include "AnimCompiler.h"
 #include "BankEditor.h" 
 #include <thread>
 

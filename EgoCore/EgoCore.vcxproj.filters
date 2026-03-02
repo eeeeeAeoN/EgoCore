@@ -207,6 +207,18 @@
     <ClInclude Include="Meshes\MeshRenderer.h">
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>
+    <ClInclude Include="AnimCompiler.h">
+      <Filter>Source Files\Animations</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\minilzo.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\lzoconf.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\lzodefs.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">
@@ -235,6 +247,9 @@
     </ClCompile>
     <ClCompile Include="TextEditor\TextEditor.cpp">
       <Filter>Source Files\TextEditor</Filter>
+    </ClCompile>
+    <ClCompile Include="Utilities\minilzo.c">
+      <Filter>Source Files\Utilities</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

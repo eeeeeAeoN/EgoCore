@@ -108,6 +108,34 @@ struct C3DMeshContent {
         return true;
     }
 
+    // --- REVERSE of ParseEntryMetadata ---
+    std::vector<uint8_t> SerializeEntryMetadata() {
+        std::vector<uint8_t> data;
+        auto Write = [&](const void* val, size_t len) {
+            size_t s = data.size(); data.resize(s + len); memcpy(data.data() + s, val, len);
+            };
+
+        Write(&EntryMeta.PhysicsIndex, 4);
+        Write(EntryMeta.BoundingSphereCenter, 12);
+        Write(&EntryMeta.BoundingSphereRadius, 4);
+        Write(EntryMeta.BoundingBoxMin, 12);
+        Write(EntryMeta.BoundingBoxMax, 12);
+
+        Write(&EntryMeta.LODCount, 4);
+        for (uint32_t s : EntryMeta.LODSizes) Write(&s, 4);
+
+        // Matches ParseEntryMetadata read order
+        Write(&EntryMeta.SafeBoundingRadius, 4);
+
+        for (float e : EntryMeta.LODErrors) Write(&e, 4);
+
+        uint32_t texCount = (uint32_t)EntryMeta.TextureIDs.size();
+        Write(&texCount, 4);
+        for (int32_t id : EntryMeta.TextureIDs) Write(&id, 4);
+
+        return data;
+    }
+
     void ParseEntryMetadata(const std::vector<uint8_t>& data) {
         EntryMeta = CMeshEntryMetadata();
         EntryMeta.RawSize = (uint32_t)data.size();
@@ -136,11 +164,9 @@ struct C3DMeshContent {
     }
 
     int CalculateVertexStride(int initFlags, bool isAnimated) {
-        // 0x10 flag forces Position to be uncompressed
         bool isPosComp = (initFlags & 4) != 0 && (initFlags & 0x10) == 0;
         bool isNormComp = (initFlags & 4) != 0;
         bool hasBump = (initFlags & 2) != 0;
-
         int stride = 0;
         stride += isPosComp ? 4 : 12; // Pos
         if (isAnimated) stride += 8; // Weights (4) + Indices (4)

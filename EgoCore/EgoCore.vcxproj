@@ -21,6 +21,7 @@
   <ItemGroup>
     <ClInclude Include="Animations\AnimParser.h" />
     <ClInclude Include="Animations\AnimProperties.h" />
+    <ClInclude Include="AnimCompiler.h" />
     <ClInclude Include="Audio\AudioBackend.h" />
     <ClInclude Include="Audio\AudioExplorer.h" />
     <ClInclude Include="Audio\AudioHelpers.h" />
@@ -66,7 +67,10 @@
     <ClInclude Include="Utilities\ImGUI\imstb_rectpack.h" />
     <ClInclude Include="Utilities\ImGUI\imstb_textedit.h" />
     <ClInclude Include="Utilities\ImGUI\imstb_truetype.h" />
+    <ClInclude Include="Utilities\lzoconf.h" />
+    <ClInclude Include="Utilities\lzodefs.h" />
     <ClInclude Include="Utilities\miniaudio.h" />
+    <ClInclude Include="Utilities\minilzo.h" />
     <ClInclude Include="Utilities\stb_dxt.h" />
     <ClInclude Include="Utilities\stb_image.h" />
     <ClInclude Include="Utilities\stb_image_resize.h" />
@@ -83,6 +87,7 @@
     <ClCompile Include="Utilities\ImGUI\imgui_impl_win32.cpp" />
     <ClCompile Include="Utilities\ImGUI\imgui_tables.cpp" />
     <ClCompile Include="Utilities\ImGUI\imgui_widgets.cpp" />
+    <ClCompile Include="Utilities\minilzo.c" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="EgoCore.rc" />

@@ -755,77 +755,106 @@ inline void SaveBigBank(LoadedBank* bank) {
     }
 }
 
+// --- Inside BankEditor.h (Replace the whole function) ---
+
 inline void SaveEntryChanges(LoadedBank* bank) {
     if (!bank || bank->SelectedEntryIndex == -1) return;
     BankEntry& e = bank->Entries[bank->SelectedEntryIndex];
     std::vector<uint8_t> newBytes;
+    std::vector<uint8_t> newInfo;
 
-    if (e.Type == TYPE_ANIMATION || e.Type == TYPE_LIPSYNC_ANIMATION) {
-        newBytes = g_ActiveAnim.Serialize();
-    }
-    else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
-        bank->LugParserPtr->IsDirty = true;
-        g_BankStatus = "Saved to Memory. Recompile to write to disk.";
-        g_ShowSuccessPopup = true;
-        g_SuccessMessage = "Metadata saved to RAM.\n\nUse 'Recompile Script' in the sidebar to write to disk.";
-        return;
-    }
-    else if (bank->Type == EBankType::Text) {
-        g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
-        if (!g_OriginalIdentifier.empty() && g_TextParser.TextData.Identifier != g_OriginalIdentifier) {
-            if (!g_TextParser.TextData.SpeechBank.empty()) UpdateHeaderDefinition(g_TextParser.TextData.SpeechBank, g_OriginalIdentifier, g_TextParser.TextData.Identifier);
-            e.Name = g_TextParser.TextData.Identifier; g_OriginalIdentifier = g_TextParser.TextData.Identifier;
-        }
-        else if (e.Type == 0 && !g_TextParser.TextData.Identifier.empty()) e.Name = g_TextParser.TextData.Identifier;
+    // --- ANIMATIONS (Types 6, 7, 9) ---
+    if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
+        if (g_AnimParser.Data.IsParsed) {
+            // 1. Serialize Header (Entry Metadata for Bank)
+            newInfo = g_AnimParser.Data.Serialize();
+            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
+            e.InfoSize = (uint32_t)newInfo.size();
 
-        if (!g_TextParser.TextData.SpeechBank.empty()) {
-            bool exists = false;
-            for (const auto& d : e.Dependencies) if (d == g_TextParser.TextData.SpeechBank) exists = true;
-            if (!exists) { e.Dependencies.clear(); e.Dependencies.push_back(g_TextParser.TextData.SpeechBank); }
-        }
-        if (!g_TextParser.TextData.SpeechBank.empty()) SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
-        newBytes = g_TextParser.Recompile();
-    }
-    else if (bank->Type == EBankType::Dialogue) {
-        if (g_LipSyncParser.IsParsed) {
-            newBytes = g_LipSyncParser.Recompile();
+            // 2. Compile Payload (Rebuild Animation File using AnimCompiler)
+            // This now includes tracks, palettes, and LZO compression
+            newBytes = AnimCompiler::Compile(g_AnimParser.Data);
+
+            // 3. Commit
             bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
             bank->CurrentEntryRawData = newBytes;
             e.Size = (uint32_t)newBytes.size();
-            std::vector<uint8_t> newInfo(4); memcpy(newInfo.data(), &g_LipSyncParser.Data.Duration, 4);
-            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo; e.InfoSize = 4;
 
-            if (LoadDialogueBankInBackground()) {
-                int sbIdx = 0;
-                if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
-                    std::string currentName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
-                    if (g_LipSyncState.SubBankMap.count(currentName)) sbIdx = g_LipSyncState.SubBankMap[currentName];
-                }
-                std::string prefix = GetPrefixForSubBank(bank->SubBanks[bank->ActiveSubBankIndex].Name);
-                AddedEntryData ae; ae.Type = e.Type; ae.NamePrefix = prefix; ae.Raw = newBytes; ae.Info = newInfo;
-                if (!e.Dependencies.empty()) ae.Dependencies = e.Dependencies; else ae.Dependencies.push_back("SPEAKER_FEMALE1");
-                g_LipSyncState.PendingAdds[sbIdx][e.ID] = ae;
-            }
-            g_BankStatus = "LipSync Entry Saved to Memory (Pending Recompile)."; return;
+            g_BankStatus = "Animation Full Recompile Success.";
         }
     }
+    // --- MESHES (Types 1, 2, 4, 5) ---
+    else if (IsSupportedMesh(e.Type)) {
+        if (g_ActiveMeshContent.IsParsed) {
+            newInfo = g_ActiveMeshContent.SerializeEntryMetadata();
+            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
+            e.InfoSize = (uint32_t)newInfo.size();
+        }
+        newBytes = bank->CurrentEntryRawData;
+        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+        g_BankStatus = "Mesh Header Saved.";
+    }
+    // --- PHYSICS MESH (Type 3) ---
+    else if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
+        e.InfoSize = 0;
+        bank->SubheaderCache.erase(bank->SelectedEntryIndex);
+        newBytes = bank->CurrentEntryRawData;
+        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+        g_BankStatus = "Physics Mesh Saved.";
+    }
+    // --- TEXTURES ---
     else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || bank->Type == EBankType::Effects) {
         if (!g_TextureParser.PendingName.empty() && g_TextureParser.PendingName != e.Name) {
             RenameTextureEntry(bank, bank->SelectedEntryIndex, g_TextureParser.PendingName);
         }
         if (g_TextureParser.IsParsed && bank->SubheaderCache.count(bank->SelectedEntryIndex)) {
-            memcpy(bank->SubheaderCache[bank->SelectedEntryIndex].data(), &g_TextureParser.Header, sizeof(CGraphicHeader));
+            newInfo = bank->SubheaderCache[bank->SelectedEntryIndex];
+            if (newInfo.size() >= sizeof(CGraphicHeader)) {
+                memcpy(newInfo.data(), &g_TextureParser.Header, sizeof(CGraphicHeader));
+            }
+            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
         }
-        g_BankStatus = "Texture Changes Saved to Memory.";
-        return;
+        newBytes = bank->CurrentEntryRawData;
+        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+        g_BankStatus = "Texture Changes Saved.";
     }
-    else return;
+    // --- TEXT ---
+    else if (bank->Type == EBankType::Text) {
+        g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
+        if (!g_TextParser.TextData.SpeechBank.empty()) SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
+        newBytes = g_TextParser.Recompile();
+        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+        bank->CurrentEntryRawData = newBytes;
+        e.Size = (uint32_t)newBytes.size();
+        g_IsTextDirty = false;
+        g_BankStatus = "Text Entry Saved.";
+    }
+    // --- DIALOGUE ---
+    else if (bank->Type == EBankType::Dialogue && g_LipSyncParser.IsParsed) {
+        newBytes = g_LipSyncParser.Recompile();
+        float duration = g_LipSyncParser.Data.Duration;
+        newInfo.resize(4); memcpy(newInfo.data(), &duration, 4);
+        bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
+        e.InfoSize = 4;
 
-    bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-    bank->CurrentEntryRawData = newBytes;
-    e.Size = (uint32_t)newBytes.size();
+        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+        bank->CurrentEntryRawData = newBytes;
+        e.Size = (uint32_t)newBytes.size();
+        g_BankStatus = "LipSync Entry Saved.";
+    }
+    // --- AUDIO ---
+    else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
+        bank->LugParserPtr->IsDirty = true;
+        g_BankStatus = "Metadata Saved to RAM.";
+    }
+    else {
+        // Fallback
+        newBytes = bank->CurrentEntryRawData;
+        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+        g_BankStatus = "Entry Preserved.";
+    }
+
     UpdateFilter(*bank);
-    g_BankStatus = "Saved to Memory."; g_IsTextDirty = false;
 }
 
 inline void DeleteLinkedMedia(const std::string& speechBankName, const std::string& identifier) {
