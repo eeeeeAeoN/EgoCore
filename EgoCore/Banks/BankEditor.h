@@ -363,6 +363,80 @@ inline void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx) {
     }
 }
 
+inline void CreateNewAnimationEntry(LoadedBank* bank, const std::string& gltfPath, int animType) {
+    if (!bank) return;
+
+    C3DAnimationInfo newAnim;
+    newAnim.Duration = 1.0f;
+    newAnim.NonLoopingDuration = 1.0f;
+    newAnim.IsCyclic = true;
+    newAnim.HasHelper = false;
+    newAnim.Rotation = 0.0f;
+    newAnim.MovementVector = { 0.0f, 0.0f, 0.0f };
+    newAnim.ObjectName = std::filesystem::path(gltfPath).stem().string();
+
+    // 1. Pre-populate tracks from the Active Mesh to satisfy the Fable AOBJ tree
+    if (g_ActiveMeshContent.BoneCount > 0) {
+        for (int i = 0; i < g_ActiveMeshContent.BoneCount; i++) {
+            AnimTrack t;
+            t.BoneIndex = g_ActiveMeshContent.BoneIndices[i];
+            int pIdx = g_ActiveMeshContent.Bones[i].ParentIndex;
+            t.ParentIndex = (pIdx == -1 || pIdx >= g_ActiveMeshContent.BoneCount) ? -1 : g_ActiveMeshContent.BoneIndices[pIdx];
+            if (i < g_ActiveMeshContent.BoneNames.size()) t.BoneName = g_ActiveMeshContent.BoneNames[i];
+            t.FrameCount = 30; // Dummy count, Importer will overwrite with real math
+            t.SamplesPerSecond = 30.0f;
+            t.PositionFactor = 1.0f;
+            t.ScalingFactor = 1.0f;
+            newAnim.Tracks.push_back(t);
+        }
+    }
+    else {
+        // Need at least one dummy track so the Importer doesn't abort
+        AnimTrack root; root.BoneIndex = 0; root.ParentIndex = -1; root.BoneName = "Scene Root";
+        newAnim.Tracks.push_back(root);
+    }
+
+    // 2. Pass to our robust importer to inject keyframes, sync time, and calculate exact duration
+    int outType = animType;
+    std::string err = GltfAnimImporter::Import(gltfPath, g_ActiveMeshContent, newAnim, outType);
+    if (!err.empty()) {
+        g_ShowSuccessPopup = true;
+        g_SuccessMessage = "Import Error: " + err;
+        return;
+    }
+
+    // 3. Compile straight to Fable binaries using our AnimCompiler
+    std::vector<uint8_t> payload = AnimCompiler::Compile(newAnim);
+    std::vector<uint8_t> info = newAnim.Serialize();
+
+    // 4. Create the Bank Entry
+    uint32_t newID = GetNextFreeID(bank);
+    BankEntry entry;
+    entry.ID = newID;
+    std::string fname = newAnim.ObjectName;
+    std::transform(fname.begin(), fname.end(), fname.begin(), ::toupper);
+    entry.Name = fname;
+    entry.FriendlyName = fname;
+    entry.Type = animType;
+    entry.Size = (uint32_t)payload.size();
+    entry.InfoSize = (uint32_t)info.size();
+    entry.Offset = 0;
+    entry.Timestamp = 0;
+
+    bank->Entries.push_back(entry);
+    int newIndex = (int)bank->Entries.size() - 1;
+
+    bank->ModifiedEntryData[newIndex] = payload;
+    bank->SubheaderCache[newIndex] = info;
+
+    bank->FilterText[0] = '\0';
+    UpdateFilter(*bank);
+    SelectEntry(bank, newIndex);
+
+    g_ShowSuccessPopup = true;
+    g_SuccessMessage = "Animation Entry Created: " + fname + "\nDuration: " + std::to_string(newAnim.Duration) + "s";
+}
+
 inline void RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName) {
     if (entryIdx < 0) return;
     bank->Entries[entryIdx].Name = newName;

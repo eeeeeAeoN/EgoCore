@@ -468,7 +468,18 @@ namespace GltfExporter {
             std::stringstream ss; ss.imbue(std::locale("C"));
             ss << "{\"name\":" << Esc(i < mesh.BoneNames.size() ? mesh.BoneNames[i] : "B" + std::to_string(i)) << ",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << t.m[k] << (k < 15 ? "," : "");
-            ss << "]"; if (!nodeChildren[i].empty()) { ss << ",\"children\":["; for (size_t k = 0; k < nodeChildren[i].size(); k++) ss << nodeChildren[i][k] << (k < nodeChildren[i].size() - 1 ? "," : ""); ss << "]"; }
+            ss << "]";
+
+            if (!nodeChildren[i].empty()) {
+                ss << ",\"children\":[";
+                for (size_t k = 0; k < nodeChildren[i].size(); k++) ss << nodeChildren[i][k] << (k < nodeChildren[i].size() - 1 ? "," : "");
+                ss << "]";
+            }
+
+            // --- Save Fable IDs into the glTF so it's self-sufficient ---
+            int parentFableID = (p == -1 || p >= mesh.BoneCount) ? -1 : mesh.BoneIndices[p];
+            ss << ",\"extras\":{\"FableID\":" << mesh.BoneIndices[i] << ",\"ParentID\":" << parentFableID << "}";
+
             ss << "}"; nodeStrs.push_back(ss.str());
         }
 

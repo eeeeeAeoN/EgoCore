@@ -25,6 +25,18 @@ namespace GltfAnimImporter {
     struct GltfBufferView { int offset; int length; };
     struct GltfAccessor { int view; int count; int typeSize; };
 
+    static int32_t ExtractInt32(const std::string& json, const std::string& key) {
+        size_t pos = json.find("\"" + key + "\""); if (pos == std::string::npos) return 0;
+        pos = json.find(':', pos); if (pos == std::string::npos) return 0; pos++;
+        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) pos++;
+        size_t end = pos;
+        if (pos < json.length() && json[pos] == '-') end++; // handle negatives
+        while (end < json.length() && isdigit(json[end])) end++;
+        if (pos == end) return 0;
+        try { return (int32_t)std::stoll(json.substr(pos, end - pos)); }
+        catch (...) { return 0; }
+    }
+
     static std::string ExtractBlock(const std::string& json, const std::string& key, size_t startPos = 0) {
         size_t pos = json.find("\"" + key + "\"", startPos);
         if (pos == std::string::npos) return "";
@@ -141,8 +153,31 @@ namespace GltfAnimImporter {
         outAnim.Tracks.clear();
 
         // 3. Map glTF Nodes
-        std::string nodesBlock = ExtractBlock(json, "nodes");
-        std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
+        std::string realNodesBlock = "";
+        size_t searchPos = 0;
+        while (true) {
+            size_t pos = json.find("\"nodes\"", searchPos);
+            if (pos == std::string::npos) break;
+
+            size_t arrStart = json.find_first_of("[{", pos);
+            if (arrStart != std::string::npos && json[arrStart] == '[') {
+                size_t firstContent = json.find_first_not_of(" \t\r\n", arrStart + 1);
+                if (firstContent != std::string::npos && json[firstContent] == '{') {
+                    int depth = 0;
+                    size_t endPos = arrStart;
+                    for (; endPos < json.length(); endPos++) {
+                        if (json[endPos] == '[' || json[endPos] == '{') depth++;
+                        else if (json[endPos] == ']' || json[endPos] == '}') depth--;
+                        if (depth == 0) break;
+                    }
+                    realNodesBlock = json.substr(arrStart, endPos - arrStart + 1);
+                    break;
+                }
+            }
+            searchPos = pos + 7;
+        }
+
+        std::vector<std::string> nodeObjs = SplitArray(realNodesBlock);
         std::vector<std::string> gltfNodeNames;
         for (const auto& obj : nodeObjs) gltfNodeNames.push_back(ExtractString(obj, "name"));
 
@@ -204,13 +239,31 @@ namespace GltfAnimImporter {
 
         std::string chanBlock = ExtractBlock(targetAnim, "channels");
 
+        // FIX: Independent time arrays to survive Blender's keyframe optimization
         struct LoadedTrack {
-            int originalTrackIdx;
-            std::vector<float> times;
+            std::vector<float> posTimes;
             std::vector<DirectX::XMVECTOR> positions;
+            std::vector<float> rotTimes;
             std::vector<DirectX::XMVECTOR> rotations;
         };
-        std::map<int, LoadedTrack> loadedTracks;
+        std::map<int, LoadedTrack> mappedTracks;
+
+        auto ExtractInt32 = [](const std::string& json, const std::string& key) -> int32_t {
+            size_t pos = json.find("\"" + key + "\""); if (pos == std::string::npos) return 0;
+            pos = json.find(':', pos); if (pos == std::string::npos) return 0; pos++;
+            while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) pos++;
+            size_t end = pos; if (pos < json.length() && json[pos] == '-') end++;
+            while (end < json.length() && isdigit(json[end])) end++;
+            if (pos == end) return 0;
+            try { return (int32_t)std::stoll(json.substr(pos, end - pos)); }
+            catch (...) { return 0; }
+            };
+
+        auto CleanName = [](std::string s) {
+            std::string r;
+            for (char c : s) if (isalnum((unsigned char)c)) r += tolower((unsigned char)c);
+            return r;
+            };
 
         for (const auto& obj : SplitArray(chanBlock)) {
             int sampIdx = (int)ExtractFloat(obj, "sampler");
@@ -218,107 +271,168 @@ namespace GltfAnimImporter {
             int gltfNodeIdx = (int)ExtractFloat(targetBlock, "node");
             std::string path = ExtractString(targetBlock, "path");
 
-            if (gltfNodeIdx >= gltfNodeNames.size()) continue;
+            if (gltfNodeIdx >= nodeObjs.size()) continue;
 
-            // --- TRANSPILER MATCHER: Map glTF Node to original AnimTrack Name ---
-            std::string nodeName = gltfNodeNames[gltfNodeIdx];
-            std::transform(nodeName.begin(), nodeName.end(), nodeName.begin(), ::tolower);
+            std::string nodeObj = nodeObjs[gltfNodeIdx];
+            std::string nodeName = ExtractString(nodeObj, "name");
+            std::string extrasBlock = ExtractBlock(nodeObj, "extras");
 
-            int originalIdx = -1;
-            for (size_t i = 0; i < originalTracks.size(); i++) {
-                std::string fName = originalTracks[i].BoneName;
-                std::transform(fName.begin(), fName.end(), fName.begin(), ::tolower);
-                // Fable names contain garbage. We check if the node name starts with the bone name.
-                if (nodeName.find(fName.c_str()) != std::string::npos || fName.find(nodeName.c_str()) != std::string::npos) {
-                    originalIdx = i; break;
+            int targetOrigIdx = -1;
+
+            if (!extrasBlock.empty() && extrasBlock.find("FableID") != std::string::npos) {
+                uint32_t tBoneIdx = (uint32_t)ExtractInt32(extrasBlock, "FableID");
+                for (size_t i = 0; i < originalTracks.size(); i++) {
+                    if (originalTracks[i].BoneIndex == tBoneIdx) { targetOrigIdx = (int)i; break; }
                 }
             }
-            if (originalIdx == -1) continue;
 
-            auto& track = loadedTracks[originalIdx];
-            track.originalTrackIdx = originalIdx;
+            if (targetOrigIdx == -1) {
+                std::string cleanNode = CleanName(nodeName);
+                for (size_t i = 0; i < originalTracks.size(); i++) {
+                    std::string cleanOrig = CleanName(originalTracks[i].BoneName);
+                    if (!cleanNode.empty() && cleanNode == cleanOrig) {
+                        targetOrigIdx = (int)i; break;
+                    }
+                }
+            }
 
+            if (targetOrigIdx == -1) continue;
+
+            auto& track = mappedTracks[targetOrigIdx];
             auto& inAcc = accessors[samplers[sampIdx].inAcc];
             auto& outAcc = accessors[samplers[sampIdx].outAcc];
 
             float* times = (float*)(binData.data() + views[inAcc.view].offset);
-            if (track.times.empty()) {
-                for (int i = 0; i < inAcc.count; i++) track.times.push_back(times[i]);
-            }
-
             float* vals = (float*)(binData.data() + views[outAcc.view].offset);
+
             if (path == "translation") {
+                if (track.posTimes.empty()) { for (int i = 0; i < inAcc.count; i++) track.posTimes.push_back(times[i]); }
                 for (int i = 0; i < outAcc.count; i++) track.positions.push_back(DirectX::XMVectorSet(vals[i * 3], vals[i * 3 + 1], vals[i * 3 + 2], 1.0f));
             }
             else if (path == "rotation") {
+                if (track.rotTimes.empty()) { for (int i = 0; i < inAcc.count; i++) track.rotTimes.push_back(times[i]); }
                 for (int i = 0; i < outAcc.count; i++) track.rotations.push_back(DirectX::XMVectorSet(vals[i * 4], vals[i * 4 + 1], vals[i * 4 + 2], vals[i * 4 + 3]));
             }
         }
 
         if (outAnim.Duration <= 0.01f) {
             float maxT = 0.0f;
-            for (const auto& [n, t] : loadedTracks) { if (!t.times.empty() && t.times.back() > maxT) maxT = t.times.back(); }
+            for (const auto& [idx, t] : mappedTracks) {
+                if (!t.posTimes.empty() && t.posTimes.back() > maxT) maxT = t.posTimes.back();
+                if (!t.rotTimes.empty() && t.rotTimes.back() > maxT) maxT = t.rotTimes.back();
+            }
             outAnim.Duration = maxT;
         }
 
-        // 8. Rebuild Fable Track Array
         int totalFrames = (int)(outAnim.Duration * 30.0f);
         if (totalFrames < 2) totalFrames = 2;
 
+        outAnim.Tracks.clear();
+
         for (size_t origIdx = 0; origIdx < originalTracks.size(); origIdx++) {
-            if (loadedTracks.count(origIdx) == 0) {
-                // Not animated in glTF? Keep original keyframes exactly as they were!
-                outAnim.Tracks.push_back(originalTracks[origIdx]);
-                continue;
-            }
+            AnimTrack t = originalTracks[origIdx];
 
-            auto& lTrack = loadedTracks[origIdx];
-
-            // Transplant exact Fable specific variables from the old track
-            AnimTrack t;
-            t.BoneIndex = originalTracks[origIdx].BoneIndex;
-            t.ParentIndex = originalTracks[origIdx].ParentIndex;
-            t.BoneName = originalTracks[origIdx].BoneName; // Preserves binary garbage padding!
-            t.PreFPSFlag = originalTracks[origIdx].PreFPSFlag;
-            memcpy(t.PostFrameFlags, originalTracks[origIdx].PostFrameFlags, 4);
-            t.SamplesPerSecond = 30.0f;
             t.FrameCount = totalFrames;
+            t.SamplesPerSecond = 30.0f;
             t.PositionFactor = 1.0f;
             t.ScalingFactor = 1.0f;
 
-            for (int f = 0; f < totalFrames; f++) {
-                float targetTime = f / 30.0f;
-                int idx0 = 0, idx1 = 0; float lerpT = 0.0f;
-                for (int i = 0; i < lTrack.times.size() - 1; i++) {
-                    if (targetTime >= lTrack.times[i] && targetTime <= lTrack.times[i + 1]) {
-                        idx0 = i; idx1 = i + 1;
-                        lerpT = (targetTime - lTrack.times[i]) / (lTrack.times[i + 1] - lTrack.times[i]);
-                        break;
+            t.PositionTrack.clear();
+            t.RotationTrack.clear();
+            t.PalettedPositions.clear();
+            t.PalettedRotations.clear();
+
+            if (mappedTracks.count((int)origIdx) > 0) {
+                auto& lTrack = mappedTracks[(int)origIdx];
+
+                int meshLocalIdx = -1;
+                if (outAnimType == 7 && mesh.BoneCount > 0) {
+                    for (int m = 0; m < mesh.BoneCount; m++) {
+                        if (mesh.BoneIndices[m] == t.BoneIndex) { meshLocalIdx = m; break; }
                     }
-                    if (i == lTrack.times.size() - 2) { idx0 = idx1 = i + 1; }
                 }
 
-                DirectX::XMVECTOR pVec = lTrack.positions.empty() ? DirectX::XMVectorZero() : Lerp(lTrack.positions[idx0], lTrack.positions[idx1], lerpT);
-                DirectX::XMVECTOR rVec = lTrack.rotations.empty() ? DirectX::XMVectorSet(0, 0, 0, 1) : Slerp(lTrack.rotations[idx0], lTrack.rotations[idx1], lerpT);
+                for (int f = 0; f < totalFrames; f++) {
+                    float targetTime = f / 30.0f;
 
-                if (outAnimType == 7 && t.BoneIndex < dxBindLocal.size()) {
-                    DirectX::XMMATRIX mExport = DirectX::XMMatrixMultiply(DirectX::XMMatrixRotationQuaternion(rVec), DirectX::XMMatrixTranslationFromVector(pVec));
-                    DirectX::XMMATRIX mInvBind = DirectX::XMMatrixInverse(nullptr, dxBindLocal[t.BoneIndex]);
-                    DirectX::XMMATRIX mDelta = DirectX::XMMatrixMultiply(mExport, mInvBind);
-                    DirectX::XMVECTOR s, r, t_vec;
-                    DirectX::XMMatrixDecompose(&s, &r, &t_vec, mDelta);
-                    pVec = t_vec;
-                    rVec = DirectX::XMQuaternionConjugate(r);
+                    // --- Independent Position Lerp ---
+                    DirectX::XMVECTOR pVec = DirectX::XMVectorZero();
+                    if (lTrack.positions.empty()) {
+                        pVec = DirectX::XMVectorZero();
+                    }
+                    else if (lTrack.posTimes.size() <= 1) {
+                        pVec = lTrack.positions[0];
+                    }
+                    else {
+                        int idx0 = 0, idx1 = 0; float lerpT = 0.0f;
+                        for (int i = 0; i < lTrack.posTimes.size() - 1; i++) {
+                            if (targetTime >= lTrack.posTimes[i] && targetTime <= lTrack.posTimes[i + 1]) {
+                                idx0 = i; idx1 = i + 1;
+                                lerpT = (targetTime - lTrack.posTimes[i]) / (lTrack.posTimes[i + 1] - lTrack.posTimes[i]);
+                                break;
+                            }
+                            if (i == lTrack.posTimes.size() - 2) { idx0 = idx1 = i + 1; }
+                        }
+                        pVec = Lerp(lTrack.positions[idx0], lTrack.positions[idx1], lerpT);
+                    }
+
+                    // --- Independent Rotation Slerp ---
+                    DirectX::XMVECTOR rVec = DirectX::XMVectorSet(0, 0, 0, 1);
+                    if (lTrack.rotations.empty()) {
+                        rVec = DirectX::XMVectorSet(0, 0, 0, 1);
+                    }
+                    else if (lTrack.rotTimes.size() <= 1) {
+                        rVec = lTrack.rotations[0];
+                    }
+                    else {
+                        int idx0 = 0, idx1 = 0; float lerpT = 0.0f;
+                        for (int i = 0; i < lTrack.rotTimes.size() - 1; i++) {
+                            if (targetTime >= lTrack.rotTimes[i] && targetTime <= lTrack.rotTimes[i + 1]) {
+                                idx0 = i; idx1 = i + 1;
+                                lerpT = (targetTime - lTrack.rotTimes[i]) / (lTrack.rotTimes[i + 1] - lTrack.rotTimes[i]);
+                                break;
+                            }
+                            if (i == lTrack.rotTimes.size() - 2) { idx0 = idx1 = i + 1; }
+                        }
+                        rVec = Slerp(lTrack.rotations[idx0], lTrack.rotations[idx1], lerpT);
+                    }
+
+                    if (outAnimType == 7 && meshLocalIdx != -1 && meshLocalIdx < dxBindLocal.size()) {
+                        DirectX::XMMATRIX mExport = DirectX::XMMatrixMultiply(DirectX::XMMatrixRotationQuaternion(rVec), DirectX::XMMatrixTranslationFromVector(pVec));
+                        DirectX::XMMATRIX mInvBind = DirectX::XMMatrixInverse(nullptr, dxBindLocal[meshLocalIdx]);
+                        DirectX::XMMATRIX mDelta = DirectX::XMMatrixMultiply(mExport, mInvBind);
+                        DirectX::XMVECTOR s, r, t_vec;
+                        DirectX::XMMatrixDecompose(&s, &r, &t_vec, mDelta);
+                        pVec = t_vec;
+                        rVec = DirectX::XMQuaternionConjugate(r);
+                    }
+                    else {
+                        rVec = DirectX::XMQuaternionConjugate(rVec);
+                    }
+
+                    t.PositionTrack.push_back({ DirectX::XMVectorGetX(pVec), DirectX::XMVectorGetY(pVec), DirectX::XMVectorGetZ(pVec) });
+                    t.RotationTrack.push_back({ DirectX::XMVectorGetX(rVec), DirectX::XMVectorGetY(rVec), DirectX::XMVectorGetZ(rVec), DirectX::XMVectorGetW(rVec) });
                 }
-                else {
-                    rVec = DirectX::XMQuaternionConjugate(rVec); // Convert glTF Rot back to Fable Rot
+            }
+            else {
+                Vec3 basePos = { 0,0,0 };
+                Vec4 baseRot = { 0,0,0,1 };
+
+                if (!originalTracks[origIdx].PositionTrack.empty()) {
+                    auto p = originalTracks[origIdx].PositionTrack[0];
+                    basePos = { p.x, p.y, p.z };
+                }
+                if (!originalTracks[origIdx].RotationTrack.empty()) {
+                    auto r = originalTracks[origIdx].RotationTrack[0];
+                    baseRot = { r.x, r.y, r.z, r.w };
                 }
 
-                t.PositionTrack.push_back({ DirectX::XMVectorGetX(pVec), DirectX::XMVectorGetY(pVec), DirectX::XMVectorGetZ(pVec) });
-                t.RotationTrack.push_back({ DirectX::XMVectorGetX(rVec), DirectX::XMVectorGetY(rVec), DirectX::XMVectorGetZ(rVec), DirectX::XMVectorGetW(rVec) });
+                for (int f = 0; f < totalFrames; f++) {
+                    t.PositionTrack.push_back({ basePos.x, basePos.y, basePos.z });
+                    t.RotationTrack.push_back({ baseRot.x, baseRot.y, baseRot.z, baseRot.w });
+                }
             }
 
-            // Create 1:1 dummy palettes
             for (int f = 0; f < totalFrames; f++) {
                 t.PalettedPositions.push_back((uint8_t)f);
                 t.PalettedRotations.push_back((uint8_t)f);

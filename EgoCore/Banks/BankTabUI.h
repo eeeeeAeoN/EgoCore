@@ -18,6 +18,9 @@ static int g_ImportFormat = 1; // 0: DXT1, 1: DXT3, 2: DXT5, 3: ARGB
 static int g_ImportType = 0;   // 0: Graphic, 2: Bumpmap, 5: Flat Sequence
 static bool g_ScrollToSelected = false;
 
+static bool g_ShowAnimImportPopup = false;
+static int g_ImportAnimType = 6; // Default to 6 (Animation)
+
 static bool g_ShowLeftPanel = true;
 
 static void DrawBinaryTab() {
@@ -200,6 +203,51 @@ static void DrawBankTab() {
         ImGui::EndPopup();
     }
 
+    // --- ANIMATION IMPORT MODAL ---
+    if (g_ShowAnimImportPopup) {
+        ImGui::OpenPopup("Import Animation Options");
+    }
+
+    if (ImGui::BeginPopupModal("Import Animation Options", &g_ShowAnimImportPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("File: %s", std::filesystem::path(g_PendingImportPath).filename().string().c_str());
+        ImGui::Separator();
+
+        if (g_ActiveMeshContent.BoneCount == 0) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "WARNING: No Mesh loaded!");
+            ImGui::TextWrapped("Fable requires animations to match the mesh skeleton exactly.");
+            ImGui::TextWrapped("Importing without an active mesh open may cause game crashes.");
+            ImGui::Dummy(ImVec2(0, 10));
+        }
+
+        ImGui::TextColored(ImVec4(0, 1, 1, 1), "Entry Type:");
+
+        ImGui::BeginDisabled();
+        int dummyMesh = 1;
+        ImGui::RadioButton("Static Mesh (1) [Coming Soon]", &dummyMesh, 1);
+        ImGui::EndDisabled();
+
+        ImGui::RadioButton("Animation (6)", &g_ImportAnimType, 6);
+        ImGui::RadioButton("Partial Animation (9)", &g_ImportAnimType, 9);
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Import", ImVec2(120, 0))) {
+            if (g_ActiveBankIndex != -1 && g_ActiveBankIndex < g_OpenBanks.size()) {
+                // We will define this function in BankEditor.h next!
+                CreateNewAnimationEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingImportPath, g_ImportAnimType);
+                g_ScrollToSelected = true;
+            }
+            g_ShowAnimImportPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowAnimImportPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     if (ImGui::BeginTabBar("BankFiles", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
 
         for (int i = 0; i < (int)g_OpenBanks.size(); ) {
@@ -282,6 +330,14 @@ static void DrawBankTab() {
                                 if (!path.empty()) {
                                     g_PendingImportPath = path;
                                     g_ShowTexImportPopup = true;
+                                }
+                            }
+                            else if (bank.Type == EBankType::Graphics) {
+                                std::string path = OpenFileDialog("glTF 3D Models\0*.gltf\0All Files\0*.*\0");
+                                if (!path.empty()) {
+                                    g_PendingImportPath = path;
+                                    g_ShowAnimImportPopup = true;
+                                    ImGui::OpenPopup("Import Animation Options");
                                 }
                             }
                             else g_BankStatus = "Add Entry not implemented for this bank type.";
