@@ -36,13 +36,21 @@ public:
         std::string comment = "Copyright Big Blue Box Studios Ltd.";
         w.Write(comment.c_str(), comment.length() + 1);
 
+        // Standard string header alignment
+        size_t stringEndAlign = (w.GetPos() + 3) & ~3;
+        while (w.GetPos() < stringEndAlign) w.Write<uint8_t>(0);
+
         // 2. Root Chunk (ANRT)
         WriteChunk(w, "ANRT", [&](AnimWriter& sw) {
 
             sw.Write<uint8_t>(anim.IsCyclic ? 1 : 0);
             sw.Write<float>(anim.Duration);
 
-            // --- WRITE HLPR BEFORE AOBJ ---
+            // Write back any preserved unknown variables
+            if (!anim.AnrtHeaderData.empty()) {
+                sw.Write(anim.AnrtHeaderData.data(), anim.AnrtHeaderData.size());
+            }
+
             bool needsHelper = anim.HasHelper || !anim.XaloData.empty() || !anim.HelperTracks.empty() || !anim.TimeEvents.empty() ||
                 std::abs(anim.MovementVector.x) > 0.001f ||
                 std::abs(anim.MovementVector.y) > 0.001f ||
@@ -57,10 +65,9 @@ public:
                         vecW.Write<float>(anim.MovementVector.z);
                         });
 
-                    // Repack all extracted Time Events perfectly!
                     for (const auto& ev : anim.TimeEvents) {
                         WriteChunk(hW, "TMEV", [&](AnimWriter& tW) {
-                            tW.WriteString(ev.Name); // Writes string + \0
+                            tW.WriteString(ev.Name);
                             tW.Write<float>(ev.Time);
                             });
                     }
@@ -79,10 +86,18 @@ public:
                     });
             }
 
-            // --- WRITE AOBJ SECOND ---
             WriteChunk(sw, "AOBJ", [&](AnimWriter& objW) {
                 objW.WriteString(anim.ObjectName);
-                objW.Write<int32_t>(-1); // SubMeshIndex
+
+                // CRITICAL FIX: Write back ParentIndex/Child/Sibling/Submesh tree pointers!
+                if (!anim.AobjHeaderData.empty()) {
+                    objW.Write(anim.AobjHeaderData.data(), anim.AobjHeaderData.size());
+                }
+                else {
+                    // Fallback
+                    objW.Write<int32_t>(-1); objW.Write<int32_t>(-1);
+                    objW.Write<int32_t>(-1); objW.Write<int32_t>(-1);
+                }
 
                 for (const auto& track : anim.Tracks) {
                     WriteChunk(objW, "XSEQ", [&](AnimWriter& seqW) {
@@ -98,14 +113,12 @@ public:
                 });
             });
 
-        // 3. Fable chunk footer (Size tracking)
         size_t footerOff = w.GetPos();
         w.Write<uint32_t>(0);
         w.Write<uint32_t>(0);
         uint32_t footerSize = (uint32_t)(w.GetPos() - footerOff - 4);
         w.WriteAt(footerOff, &footerSize, 4);
 
-        // 4. Stable LZO Compression using miniLZO
         if (lzo_init() != LZO_E_OK) return std::vector<uint8_t>();
 
         uint32_t uncompLen = (uint32_t)w.data.size();
@@ -117,7 +130,6 @@ public:
             return std::vector<uint8_t>();
         }
 
-        // 5. Final Assembly
         std::vector<uint8_t> finalBlob(4 + compLen);
         memcpy(finalBlob.data(), &uncompLen, 4);
         memcpy(finalBlob.data() + 4, compBuf.data(), compLen);
@@ -161,15 +173,19 @@ private:
     static void WriteChunk(AnimWriter& w, const char* id, std::function<void(AnimWriter&)> content) {
         w.Write(id, 4);
         size_t sizePos = w.GetPos();
-        w.Write<uint32_t>(0);
+        w.Write<uint32_t>(0); // Placeholder
+
         size_t start = w.GetPos();
         content(w);
         uint32_t size = (uint32_t)(w.GetPos() - start);
+
         w.WriteAt(sizePos, &size, 4);
+
+        // Removed chunk 4-byte padding! Let Fable chunks stay tightly packed.
     }
 
     static void WriteTrackPayload(AnimWriter& w, const AnimTrack& t) {
-        w.Write<uint32_t>(0); // Inner Magic
+        w.Write<uint32_t>(t.BoneIndex); // Restored original BoneIndex
         w.Write<int32_t>(t.ParentIndex);
         w.WriteString(t.BoneName);
 

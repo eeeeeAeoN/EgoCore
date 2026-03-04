@@ -186,7 +186,7 @@ namespace GltfExporter {
         for (size_t i = 0; i < mesh.Volumes.size(); i++) nodeChildren[rootWrapperIdx].push_back(volStartIdx + i);
         for (int i = 0; i < mesh.BoneCount; i++) if (mesh.Bones[i].ParentIndex == -1) nodeChildren[rootWrapperIdx].push_back(i);
 
-        json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"FableBankExplorer\"},";
+        json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"EgoCore\"},";
         bool isRepeated = false; bool fP = true;
 
         for (const auto& prim : mesh.Primitives) {
@@ -194,11 +194,10 @@ namespace GltfExporter {
             if (!fP) primitivesJson << ","; fP = false; primitivesJson << "\n{\"attributes\":{";
 
             std::vector<uint16_t> idx;
-            // FIX 1: Triangle Strips loop boundary fixed. 'c' is the number of triangles!
             auto AddIdx = [&](uint32_t c, uint32_t s, bool str) {
                 if (str) {
                     for (uint32_t k = 0; k < c; k++) {
-                        if (s + k + 2 >= prim.IndexBuffer.size()) break; // Safety Check
+                        if (s + k + 2 >= prim.IndexBuffer.size()) break;
                         uint16_t i0 = prim.IndexBuffer[s + k];
                         uint16_t i1 = prim.IndexBuffer[s + k + 1];
                         uint16_t i2 = prim.IndexBuffer[s + k + 2];
@@ -308,13 +307,7 @@ namespace GltfExporter {
                 accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5126, "VEC4", 0, 0, false));
                 primitivesJson << ",\"WEIGHTS_0\":" << accessors.size() - 1;
             }
-            primitivesJson << "},\"indices\":" << idxAcc << ",\"material\":" << prim.MaterialIndex;
-            if (!prim.ClothPrimitives.empty()) {
-                primitivesJson << ",\"extras\":{\"cloth\":[";
-                for (size_t k = 0; k < prim.ClothPrimitives.size(); k++) primitivesJson << (k > 0 ? "," : "") << "{\"matIdx\":" << prim.ClothPrimitives[k].MaterialIndex << ",\"data\":\"" << ToHex(prim.ClothPrimitives[k].ParticleProgramData) << "\"}";
-                primitivesJson << "]}";
-            }
-            primitivesJson << "}";
+            primitivesJson << "},\"indices\":" << idxAcc << ",\"material\":" << prim.MaterialIndex << "}";
         }
 
         int ibmAcc = -1;
@@ -326,7 +319,6 @@ namespace GltfExporter {
             ibmAcc = (int)accessors.size() - 1;
         }
 
-        // --- ANIMATION SAMPLING (ENHANCED FOR PARTIAL & DELTA) ---
         std::stringstream animationJson;
         bool hasAnimation = false;
 
@@ -354,12 +346,33 @@ namespace GltfExporter {
             accessors.push_back(Accessor((int)bufferViews.size() - 1, frames, 5126, "SCALAR", timeMin, timeMax, true));
             int timeAccIdx = (int)accessors.size() - 1;
 
-            animationJson << "{\"name\":" << Esc(anim->Data.ObjectName.empty() ? "ExportedAnim" : anim->Data.ObjectName) << ",\"channels\":[";
+            // --- PACK FABLE METADATA INTO HEX STRING ---
+            std::vector<uint8_t> metaBlob;
+            auto wMeta = [&](const void* d, size_t s) { metaBlob.insert(metaBlob.end(), (uint8_t*)d, (uint8_t*)d + s); };
+            wMeta(&animType, 4);
+            wMeta(&anim->Data.Duration, 4);
+            wMeta(&anim->Data.NonLoopingDuration, 4);
+            wMeta(&anim->Data.MovementVector, 12);
+            wMeta(&anim->Data.Rotation, 4);
+            uint8_t cyc = anim->Data.IsCyclic; wMeta(&cyc, 1);
+            uint8_t hlp = anim->Data.HasHelper; wMeta(&hlp, 1);
+
+            uint32_t evCount = anim->Data.TimeEvents.size(); wMeta(&evCount, 4);
+            for (auto& e : anim->Data.TimeEvents) {
+                uint32_t nl = e.Name.length(); wMeta(&nl, 4);
+                wMeta(e.Name.c_str(), nl); wMeta(&e.Time, 4);
+            }
+            uint32_t maskCount = anim->Data.BoneMaskBits.size(); wMeta(&maskCount, 4);
+            if (maskCount > 0) wMeta(anim->Data.BoneMaskBits.data(), maskCount * 4);
+
+            std::string metaHex = ToHex(metaBlob);
+            animationJson << "{\"name\":" << Esc(anim->Data.ObjectName.empty() ? "ExportedAnim" : anim->Data.ObjectName)
+                << ",\"extras\":{\"FableAnimData\":\"" << metaHex << "\"},\"channels\":[";
+
             std::stringstream samplersJson;
             int samplerCount = 0;
             bool firstChannel = true;
 
-            // PRE-CALCULATE MATHEMATICALLY PERFECT BIND POSE (Same as Renderer)
             std::vector<DirectX::XMMATRIX> dxBindLocal(mesh.BoneCount);
             if (animType == 7) {
                 std::vector<DirectX::XMMATRIX> dxIBM(mesh.BoneCount);
@@ -373,10 +386,7 @@ namespace GltfExporter {
                         dxIBM[i] = DirectX::XMMatrixTranspose(rawMatrix);
                         dxBindGlobal[i] = DirectX::XMMatrixInverse(nullptr, dxIBM[i]);
                     }
-                    else {
-                        dxIBM[i] = DirectX::XMMatrixIdentity();
-                        dxBindGlobal[i] = DirectX::XMMatrixIdentity();
-                    }
+                    else { dxIBM[i] = DirectX::XMMatrixIdentity(); dxBindGlobal[i] = DirectX::XMMatrixIdentity(); }
                 }
                 for (int i = 0; i < mesh.BoneCount; i++) {
                     int p = mesh.Bones[i].ParentIndex;
@@ -386,61 +396,42 @@ namespace GltfExporter {
             }
 
             for (int b = 0; b < mesh.BoneCount; b++) {
-
                 const AnimTrack* track = nullptr;
                 std::string boneName = (b < mesh.BoneNames.size() ? mesh.BoneNames[b] : "");
                 std::transform(boneName.begin(), boneName.end(), boneName.begin(), ::tolower);
 
                 for (const auto& t : anim->Data.Tracks) {
-                    std::string tName = t.BoneName;
-                    std::transform(tName.begin(), tName.end(), tName.begin(), ::tolower);
+                    std::string tName = t.BoneName; std::transform(tName.begin(), tName.end(), tName.begin(), ::tolower);
                     bool match = false;
                     if (boneName.length() > 0 && tName.length() >= boneName.length()) {
                         if (tName.compare(0, boneName.length(), boneName) == 0) {
                             if (tName.length() == boneName.length()) match = true;
-                            else {
-                                char next = tName[boneName.length()];
-                                if ((next < 'a' || next > 'z') && (next < '0' || next > '9')) match = true;
-                            }
+                            else { char next = tName[boneName.length()]; if ((next < 'a' || next > 'z') && (next < '0' || next > '9')) match = true; }
                         }
                     }
                     if (match) { track = &t; break; }
                 }
 
-                if (!track) continue; // Skip exporting this bone's track if no track data exists
+                if (!track) continue;
 
-                std::vector<Vec3> transData;
-                std::vector<Vec4> rotData;
-
+                std::vector<Vec3> transData; std::vector<Vec4> rotData;
                 for (int f = 0; f < frames; f++) {
-                    ::Vec3 p_anim; ::Vec4 r_anim;
+                    ::GltfExporter::Vec3 p_anim; ::GltfExporter::Vec4 r_anim;
                     float time = f / 30.0f;
                     int trackFrame = (int)(time * track->SamplesPerSecond) % (track->FrameCount > 0 ? track->FrameCount : 1);
-                    track->EvaluateFrame(trackFrame, p_anim, r_anim);
+                    track->EvaluateFrame(trackFrame, *(::Vec3*)&p_anim, *(::Vec4*)&r_anim);
 
                     if (animType == 7) {
-                        // EXACT RENDERER MATH: Bake the Delta into the Local Bind Pose
                         DirectX::XMVECTOR vRot = DirectX::XMQuaternionConjugate(DirectX::XMVectorSet(r_anim.x, r_anim.y, r_anim.z, r_anim.w));
                         DirectX::XMVECTOR vPos = DirectX::XMVectorSet(p_anim.x, p_anim.y, p_anim.z, 1.0f);
-
-                        DirectX::XMMATRIX trackMat = DirectX::XMMatrixMultiply(
-                            DirectX::XMMatrixRotationQuaternion(vRot),
-                            DirectX::XMMatrixTranslationFromVector(vPos)
-                        );
-
+                        DirectX::XMMATRIX trackMat = DirectX::XMMatrixMultiply(DirectX::XMMatrixRotationQuaternion(vRot), DirectX::XMMatrixTranslationFromVector(vPos));
                         DirectX::XMMATRIX finalLocal = DirectX::XMMatrixMultiply(trackMat, dxBindLocal[b]);
-
-                        // Decompose into absolute glTF-ready transforms
-                        DirectX::XMVECTOR s, r, t;
-                        DirectX::XMMatrixDecompose(&s, &r, &t, finalLocal);
-
+                        DirectX::XMVECTOR s, r, t; DirectX::XMMatrixDecompose(&s, &r, &t, finalLocal);
                         transData.push_back({ DirectX::XMVectorGetX(t), DirectX::XMVectorGetY(t), DirectX::XMVectorGetZ(t) });
                         rotData.push_back({ DirectX::XMVectorGetX(r), DirectX::XMVectorGetY(r), DirectX::XMVectorGetZ(r), DirectX::XMVectorGetW(r) });
                     }
                     else {
-                        // Type 6 or 9: Output standard Fable tracks (Conjugated for glTF)
-                        transData.push_back({ p_anim.x, p_anim.y, p_anim.z });
-                        rotData.push_back({ -r_anim.x, -r_anim.y, -r_anim.z, r_anim.w });
+                        transData.push_back({ p_anim.x, p_anim.y, p_anim.z }); rotData.push_back({ -r_anim.x, -r_anim.y, -r_anim.z, r_anim.w });
                     }
                 }
 
@@ -463,12 +454,10 @@ namespace GltfExporter {
                 samplerCount++;
                 firstChannel = false;
             }
-
             animationJson << "],\"samplers\":[" << samplersJson.str() << "]}";
             hasAnimation = (samplerCount > 0);
         }
 
-        // --- NODE EXPORT (Standard) ---
         std::vector<std::string> nodeStrs;
 
         for (int i = 0; i < mesh.BoneCount; i++) {
@@ -536,17 +525,12 @@ namespace GltfExporter {
         json << "\"nodes\":["; for (size_t i = 0; i < nodeStrs.size(); i++) json << (i > 0 ? "," : "") << nodeStrs[i]; json << "],";
         json << "\"scene\":0,\"scenes\":[{\"nodes\":[" << rootWrapperIdx << "]}],";
 
-        if (hasAnimation) {
-            json << "\"animations\":[" << animationJson.str() << "],";
-        }
+        if (hasAnimation) json << "\"animations\":[" << animationJson.str() << "],";
 
         json << "\"meshes\":[{\"name\":" << Esc(mesh.MeshName) << ",\"primitives\":[" << primitivesJson.str() << "]}],";
         if (mesh.BoneCount > 0) {
             int rootBoneIdx = -1;
-            for (int i = 0; i < mesh.BoneCount; i++) {
-                if (mesh.Bones[i].ParentIndex == -1) { rootBoneIdx = i; break; }
-            }
-
+            for (int i = 0; i < mesh.BoneCount; i++) if (mesh.Bones[i].ParentIndex == -1) { rootBoneIdx = i; break; }
             json << "\"skins\":[{\"inverseBindMatrices\":" << ibmAcc;
             if (rootBoneIdx != -1) json << ",\"skeleton\":" << rootBoneIdx;
             json << ",\"joints\":[";

@@ -628,7 +628,7 @@ static void DrawBankTab() {
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
                     else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
                     else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
-                        DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
+                        DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }
 }
                 ImGui::EndChild();

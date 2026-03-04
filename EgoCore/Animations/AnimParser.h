@@ -7,6 +7,7 @@
 #include "Utils.h"
 
 struct AnimTrack {
+    uint32_t BoneIndex = 0;
     int32_t ParentIndex = -1;
     std::string BoneName = "";
     uint8_t PreFPSFlag = 0;
@@ -59,6 +60,10 @@ struct C3DAnimationInfo {
     bool IsCyclic = false;
     std::vector<uint32_t> BoneMaskBits;
 
+    // Preserved exact header structures
+    std::vector<uint8_t> AnrtHeaderData;
+    std::vector<uint8_t> AobjHeaderData;
+
     std::string DebugInfo = "";
     bool IsParsed = false;
     std::vector<AnimTrack> Tracks;
@@ -95,101 +100,143 @@ public:
         Data.XaloData.clear();
         Data.ObjectName = "";
         Data.BoneMaskBits.clear();
+        Data.AnrtHeaderData.clear();
+        Data.AobjHeaderData.clear();
         Data.Duration = 0.0f;
         Data.HasHelper = false;
 
         if (compressedData.size() < 8) return false;
-        uint32_t magic = *(uint32_t*)compressedData.data();
-        std::vector<uint8_t> rawData;
 
-        if (magic != 0x3E3E3E3E) {
+        std::vector<uint8_t> rawData;
+        uint32_t magic = *(uint32_t*)compressedData.data();
+
+        // 1. Decompress if necessary
+        if (magic != 0x3E3E3E3E) { // 0x3E3E3E3E is ">>>>"
             uint32_t uncompressedSize = magic;
             if (uncompressedSize == 0 || uncompressedSize > 50000000) uncompressedSize = 10 * 1024 * 1024;
             rawData = DecompressRawLZO(compressedData, 4, uncompressedSize);
             if (rawData.empty()) return false;
         }
         else {
-            rawData = std::vector<uint8_t>(compressedData.begin() + 4, compressedData.end());
+            rawData = compressedData;
         }
 
         size_t cursor = 0;
-        bool inHelper = false;
-        size_t helperEnd = 0;
 
-        while (cursor + 8 <= rawData.size()) {
-            // Keep track of when we leave the Helper block
-            if (inHelper && cursor >= helperEnd) inHelper = false;
+        // 2. Parse Fable 3DAF Header
+        if (cursor + 8 <= rawData.size()) {
+            uint32_t headerMagic = *(uint32_t*)(rawData.data() + cursor);
+            if (headerMagic == 0x3E3E3E3E) {
+                cursor += 4; // Skip ">>>>"
+                std::string sig((char*)rawData.data() + cursor, 4);
+                if (sig == "3DAF") {
+                    cursor += 4; // Skip "3DAF"
+                    cursor += 4; // Skip Version
 
-            std::string sig((char*)rawData.data() + cursor, 4);
-            uint32_t chunkSize = *(uint32_t*)(rawData.data() + cursor + 4);
-            size_t payloadStart = cursor + 8;
+                    while (cursor < rawData.size() && rawData[cursor] != '\0') cursor++;
+                    if (cursor < rawData.size()) cursor++;
 
-            // --- 1. CONTAINERS (Step inside, let scanner handle the data gaps) ---
-            if (sig == "ANRT" && payloadStart + 5 <= rawData.size()) {
-                Data.IsCyclic = (rawData[payloadStart] != 0);
-                memcpy(&Data.Duration, rawData.data() + payloadStart + 1, 4);
-                cursor += 8;
-            }
-            else if (sig == "HLPR") {
-                inHelper = true;
-                helperEnd = payloadStart + chunkSize;
-                Data.HasHelper = true;
-                cursor += 8;
-            }
-            else if (sig == "AOBJ") {
-                if (Data.ObjectName.empty() && payloadStart < rawData.size()) {
-                    size_t c = payloadStart;
-                    while (c < rawData.size() && rawData[c] != '\0') { Data.ObjectName += (char)rawData[c]; c++; }
+                    cursor = (cursor + 3) & ~3; // 3DAF Header is aligned
                 }
-                cursor += 8;
-            }
-            // --- 2. TERMINAL CHUNKS (Read, then strictly skip the whole payload) ---
-            else if (sig == "TMEV" && payloadStart + chunkSize <= rawData.size()) {
-                TimeEvent ev;
-                size_t c = payloadStart;
-                while (c < payloadStart + chunkSize && rawData[c] != '\0') { ev.Name += (char)rawData[c]; c++; }
-                if (c < payloadStart + chunkSize) c++; // skip null terminator
-                if (c + 4 <= payloadStart + chunkSize) memcpy(&ev.Time, rawData.data() + c, 4);
-                Data.TimeEvents.push_back(ev);
-                cursor += 8 + chunkSize;
-            }
-            else if (sig == "MVEC" && payloadStart + 12 <= rawData.size()) {
-                memcpy(&Data.MovementVector, rawData.data() + payloadStart, 12);
-                cursor += 8 + chunkSize;
-            }
-            else if (sig == "XALO" && payloadStart + chunkSize <= rawData.size() && chunkSize < 1024) {
-                Data.XaloData.assign(rawData.data() + payloadStart, rawData.data() + payloadStart + chunkSize);
-                cursor += 8 + chunkSize;
-            }
-            else if (sig == "AMSK" && payloadStart + chunkSize <= rawData.size() && chunkSize < 1024) {
-                uint32_t wordCount = (chunkSize + 3) / 4;
-                Data.BoneMaskBits.resize(wordCount, 0);
-                memcpy(Data.BoneMaskBits.data(), rawData.data() + payloadStart, chunkSize);
-                cursor += 8 + chunkSize;
-            }
-            else if ((sig == "XSEQ" || sig == "SEQ0") && payloadStart + chunkSize <= rawData.size()) {
-                if (inHelper) ParseXSEQ(rawData.data(), payloadStart, payloadStart + chunkSize, Data.HelperTracks);
-                else ParseXSEQ(rawData.data(), payloadStart, payloadStart + chunkSize, Data.Tracks);
-                cursor += 8 + chunkSize;
-            }
-            // --- 3. THE SELF-HEALING SCANNER ---
-            else {
-                // If we are sitting on raw string data or padding, creep forward 1 byte
-                // until we align with the next real "3DAF", "XSEQ", etc.
-                cursor++;
+                else cursor -= 4; // Fallback
             }
         }
+
+        // 3. Kick off structural parsing
+        ParseChunkBlock(rawData.data(), cursor, rawData.size(), false);
 
         Data.IsParsed = true;
         return true;
     }
 
 private:
+    void ParseChunkBlock(const uint8_t* base, size_t& cursor, size_t endBoundary, bool isHelper) {
+        while (cursor + 8 <= endBoundary) {
+            std::string sig((char*)base + cursor, 4);
+            uint32_t chunkSize = *(uint32_t*)(base + cursor + 4);
+            size_t payloadStart = cursor + 8;
+            size_t nextChunkStart = payloadStart + chunkSize;
+
+            if (nextChunkStart > endBoundary) break; // Corrupted, abort safely
+
+            if (sig == "ANRT") {
+                Data.IsCyclic = (base[payloadStart] != 0);
+                memcpy(&Data.Duration, base + payloadStart + 1, 4);
+
+                size_t innerCursor = payloadStart + 5;
+                size_t headerStart = innerCursor;
+                // Safely jump over unknown ANRT fields until we hit the first subchunk
+                while (innerCursor + 4 <= nextChunkStart) {
+                    std::string subSig((char*)base + innerCursor, 4);
+                    if (subSig == "HLPR" || subSig == "AOBJ") break;
+                    innerCursor++;
+                }
+                Data.AnrtHeaderData.assign(base + headerStart, base + innerCursor);
+
+                ParseChunkBlock(base, innerCursor, nextChunkStart, isHelper);
+            }
+            else if (sig == "HLPR") {
+                Data.HasHelper = true;
+                size_t innerCursor = payloadStart;
+                ParseChunkBlock(base, innerCursor, nextChunkStart, true);
+            }
+            else if (sig == "AOBJ") {
+                size_t innerCursor = payloadStart;
+                while (innerCursor < nextChunkStart && base[innerCursor] != '\0') {
+                    Data.ObjectName += (char)base[innerCursor++];
+                }
+                if (innerCursor < nextChunkStart) innerCursor++; // skip \0
+
+                size_t headerStart = innerCursor;
+                // Safely jump over ParentIndex, FirstChild, NextSibling, SubMesh, etc.
+                while (innerCursor + 4 <= nextChunkStart) {
+                    std::string subSig((char*)base + innerCursor, 4);
+                    if (subSig == "XSEQ" || subSig == "SEQ0" || subSig == "AMSK") break;
+                    innerCursor++;
+                }
+                Data.AobjHeaderData.assign(base + headerStart, base + innerCursor);
+
+                ParseChunkBlock(base, innerCursor, nextChunkStart, false);
+            }
+            else if (sig == "TMEV") {
+                TimeEvent ev;
+                size_t c = payloadStart;
+                while (c < nextChunkStart && base[c] != '\0') { ev.Name += (char)base[c++]; }
+                if (c < nextChunkStart) c++;
+                if (c + 4 <= nextChunkStart) memcpy(&ev.Time, base + c, 4);
+                Data.TimeEvents.push_back(ev);
+            }
+            else if (sig == "MVEC") {
+                if (payloadStart + 12 <= nextChunkStart) {
+                    memcpy(&Data.MovementVector, base + payloadStart, 12);
+                }
+            }
+            else if (sig == "XALO") {
+                if (chunkSize > 0 && chunkSize < 1024 * 1024) {
+                    Data.XaloData.assign(base + payloadStart, base + nextChunkStart);
+                }
+            }
+            else if (sig == "AMSK") {
+                uint32_t wordCount = (chunkSize + 3) / 4;
+                Data.BoneMaskBits.resize(wordCount, 0);
+                memcpy(Data.BoneMaskBits.data(), base + payloadStart, chunkSize);
+            }
+            else if (sig == "XSEQ" || sig == "SEQ0") {
+                if (isHelper) ParseXSEQ(base, payloadStart, nextChunkStart, Data.HelperTracks);
+                else ParseXSEQ(base, payloadStart, nextChunkStart, Data.Tracks);
+            }
+
+            // Tightly packed: Move to exact chunk boundary without guessing padding
+            cursor = nextChunkStart;
+        }
+    }
+
     void ParseXSEQ(const uint8_t* base, size_t start, size_t end, std::vector<AnimTrack>& targetVector) {
         size_t c = start;
         AnimTrack track;
         if (c + 8 > end) return;
-        c += 4; // Skip inner magic
+
+        track.BoneIndex = *(uint32_t*)(base + c); c += 4;
         track.ParentIndex = *(int32_t*)(base + c); c += 4;
 
         while (c < end && base[c] != '\0') { track.BoneName += (char)base[c]; c++; }

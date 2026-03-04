@@ -219,6 +219,9 @@
     <ClInclude Include="Utilities\lzodefs.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
+    <ClInclude Include="GltfAnimImporter.h">
+      <Filter>Source Files\Animations</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">
