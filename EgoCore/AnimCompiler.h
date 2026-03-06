@@ -38,7 +38,6 @@ public:
         size_t stringEndAlign = (w.GetPos() + 3) & ~3;
         while (w.GetPos() < stringEndAlign) w.Write<uint8_t>(0);
 
-        // --- HIERARCHY SANITIZER ---
         std::vector<AnimTrack> safeTracks = anim.Tracks;
         bool hasGlobalIDs = false;
         for (const auto& t : safeTracks) {
@@ -61,11 +60,25 @@ public:
             for (auto& t : safeTracks) t.BoneIndex = 31450;
         }
 
+        // --- TRUE DURATION CALCULATOR ---
+        // Dynamically calculate the duration to prevent the engine from stretching
+        // short glTF imports over the duration of long original animation files.
+        float actualDuration = 0.0f;
+        for (const auto& t : safeTracks) {
+            if (t.SamplesPerSecond > 0.0f && t.FrameCount > 0) {
+                float d = (float)t.FrameCount / t.SamplesPerSecond;
+                if (d > actualDuration) actualDuration = d;
+            }
+        }
+        if (actualDuration <= 0.0f) actualDuration = anim.Duration; // Fallback
+
         WriteChunk(w, "ANRT", [&](AnimWriter& sw) {
             sw.Write<uint8_t>(anim.IsCyclic ? 1 : 0);
-            sw.Write<float>(anim.Duration);
+            sw.Write<float>(actualDuration); // Write calculated duration
 
-            if (!anim.AnrtHeaderData.empty()) sw.Write(anim.AnrtHeaderData.data(), anim.AnrtHeaderData.size());
+            if (!anim.AnrtHeaderData.empty()) {
+                sw.Write(anim.AnrtHeaderData.data(), anim.AnrtHeaderData.size());
+            }
 
             WriteChunk(sw, "XALO", [&](AnimWriter& xaloW) {
                 xaloW.Write<uint32_t>(1);
@@ -89,32 +102,41 @@ public:
                         vecW.Write<float>(anim.MovementVector.y);
                         vecW.Write<float>(anim.MovementVector.z);
                         });
+
                     for (const auto& ev : anim.TimeEvents) {
                         WriteChunk(hW, "TMEV", [&](AnimWriter& tW) {
-                            tW.WriteString(ev.Name); tW.Write<float>(ev.Time);
+                            tW.WriteString(ev.Name);
+                            tW.Write<float>(ev.Time);
                             });
                     }
+
                     for (const auto& track : anim.HelperTracks) {
-                        WriteChunk(hW, "XSEQ", [&](AnimWriter& seqW) { WriteTrackPayload(seqW, track); });
+                        WriteChunk(hW, "XSEQ", [&](AnimWriter& seqW) {
+                            WriteTrackPayload(seqW, track);
+                            });
                     }
                     });
             }
 
             WriteChunk(sw, "AOBJ", [&](AnimWriter& objW) {
                 objW.WriteString(anim.ObjectName);
-                objW.Write<int32_t>(0); // Submesh Index
+                objW.Write<int32_t>(0);
 
                 if (!anim.BoneMaskBits.empty()) {
                     WriteChunk(objW, "AMSK", [&](AnimWriter& maskW) {
                         maskW.Write<uint32_t>((uint32_t)anim.BoneMaskBits.size() * 32);
                         for (uint32_t bitmask : anim.BoneMaskBits) {
-                            for (int bit = 0; bit < 32; bit++) maskW.Write<uint8_t>(((bitmask >> bit) & 1) != 0 ? 1 : 0);
+                            for (int bit = 0; bit < 32; bit++) {
+                                maskW.Write<uint8_t>(((bitmask >> bit) & 1) != 0 ? 1 : 0);
+                            }
                         }
                         });
                 }
 
                 for (const auto& track : safeTracks) {
-                    WriteChunk(objW, "XSEQ", [&](AnimWriter& seqW) { WriteTrackPayload(seqW, track); });
+                    WriteChunk(objW, "XSEQ", [&](AnimWriter& seqW) {
+                        WriteTrackPayload(seqW, track);
+                        });
                 }
                 });
             });
@@ -129,7 +151,9 @@ public:
         std::vector<uint8_t> compBuf(uncompLen + (uncompLen / 16) + 128);
         lzo_uint compLen = 0; std::vector<uint8_t> wrkmem(LZO1X_1_MEM_COMPRESS);
 
-        if (lzo1x_1_compress(w.data.data(), uncompLen, compBuf.data(), &compLen, wrkmem.data()) != LZO_E_OK) return std::vector<uint8_t>();
+        if (lzo1x_1_compress(w.data.data(), uncompLen, compBuf.data(), &compLen, wrkmem.data()) != LZO_E_OK) {
+            return std::vector<uint8_t>();
+        }
 
         std::vector<uint8_t> finalBlob(4 + compLen);
         memcpy(finalBlob.data(), &uncompLen, 4);
@@ -152,6 +176,13 @@ private:
 
     static PosPaletteResult ProcessPositions(const AnimTrack& t) {
         PosPaletteResult res;
+
+        // Strip Root Offsets (Keeps character on the ground)
+        if (t.BoneName == "Scene Root" || t.BoneName == "Movement" ||
+            t.BoneName == "Movement_dummy" || t.BoneName == "Sub_movement_dummy") {
+            return res;
+        }
+
         res.Factor = (t.PositionFactor <= 0.0f) ? 1.0f : t.PositionFactor;
 
         if (!t.PalettedPositions.empty()) {
@@ -194,6 +225,12 @@ private:
     static RotPaletteResult ProcessRotations(const AnimTrack& t) {
         RotPaletteResult res;
 
+        // Strip Root Offsets
+        if (t.BoneName == "Scene Root" || t.BoneName == "Movement" ||
+            t.BoneName == "Movement_dummy" || t.BoneName == "Sub_movement_dummy") {
+            return res;
+        }
+
         if (!t.PalettedRotations.empty()) {
             res.Indices = t.PalettedRotations;
             res.Palette = t.RotationTrack;
@@ -211,14 +248,10 @@ private:
 
             if (isConstant) {
                 auto r = t.RotationTrack[0];
-                // SMART OPTIMIZER: Detect Fable Identity (0,0,0,1) or our glTF Exporter's broken mapped Identity (1,0,0,0)
                 bool isRealIdentity = (std::abs(r.x) < 0.001f && std::abs(r.y) < 0.001f && std::abs(r.z) < 0.001f && std::abs(std::abs(r.w) - 1.0f) < 0.001f);
                 bool isGlTFFlipped = (std::abs(std::abs(r.x) - 1.0f) < 0.001f && std::abs(r.y) < 0.001f && std::abs(r.z) < 0.001f && std::abs(r.w) < 0.001f);
 
-                // If it's an identity track, we STRIP it (leave res.Palette empty). Fable will fallback to the safe Bind Pose.
-                if (!isRealIdentity && !isGlTFFlipped) {
-                    res.Palette.push_back(r);
-                }
+                if (!isRealIdentity && !isGlTFFlipped) res.Palette.push_back(r);
             }
             else {
                 res.Palette = t.RotationTrack;
@@ -245,8 +278,7 @@ private:
         w.Write<int32_t>(t.ParentIndex);
         w.WriteString(t.BoneName);
 
-        // FIX: Force PreFPS to 0. 1 was causing Fable to treat this as a continuous Delta Animation!
-        w.Write<uint8_t>(0);
+        w.Write<uint8_t>(0); // Prevent Additive Rolling
         w.Write<float>(t.SamplesPerSecond);
         w.Write<uint32_t>(t.FrameCount);
 
@@ -254,9 +286,10 @@ private:
         auto rotDat = ProcessRotations(t);
 
         uint8_t flags[4] = { 0, 0, 0, 0 };
+        // FIX: Reverted back to 2 (Linear). 3 causes timing/interpolation distortion in the engine.
         flags[1] = (rotDat.Palette.size() > 1) ? 2 : (rotDat.Palette.size() == 1 ? 1 : 0);
         flags[2] = (posDat.CompressedPalette.size() / 3 > 1) ? 2 : (posDat.CompressedPalette.size() / 3 == 1 ? 1 : 0);
-        flags[0] = (flags[1] == 2 || flags[2] == 2) ? 1 : 0;
+        flags[0] = (flags[1] > 0 || flags[2] > 0) ? 1 : 0;
         flags[3] = 0;
 
         w.Write(flags, 4);
@@ -268,13 +301,17 @@ private:
         for (const auto& q : rotDat.Palette) w.Write(q);
 
         w.Write<uint16_t>((uint16_t)rotDat.Indices.size());
-        for (uint16_t idx : rotDat.Indices) w.Write<uint8_t>((uint8_t)std::clamp(idx, (uint16_t)0, (uint16_t)255));
+        for (uint16_t idx : rotDat.Indices) {
+            w.Write<uint8_t>((uint8_t)std::clamp(idx, (uint16_t)0, (uint16_t)255));
+        }
 
         uint16_t posPalSize = (uint16_t)(posDat.CompressedPalette.size() / 3);
         w.Write<uint16_t>(posPalSize);
         for (int16_t val : posDat.CompressedPalette) w.Write(val);
 
         w.Write<uint16_t>((uint16_t)posDat.Indices.size());
-        for (uint16_t idx : posDat.Indices) w.Write<uint8_t>((uint8_t)std::clamp(idx, (uint16_t)0, (uint16_t)255));
+        for (uint16_t idx : posDat.Indices) {
+            w.Write<uint8_t>((uint8_t)std::clamp(idx, (uint16_t)0, (uint16_t)255));
+        }
     }
 };
