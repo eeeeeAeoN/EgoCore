@@ -179,6 +179,35 @@ namespace GltfAnimImporter {
                 if (maskCount > 0 && c + maskCount * 4 <= meta.size()) {
                     outAnim.BoneMaskBits.resize(maskCount);
                     memcpy(outAnim.BoneMaskBits.data(), meta.data() + c, maskCount * 4);
+                    c += maskCount * 4;
+                }
+
+                // --- NEW: Deserialize Helper Tracks ---
+                outAnim.HelperTracks.clear();
+                uint32_t helperCount = 0;
+                if (c + 4 <= meta.size()) { memcpy(&helperCount, meta.data() + c, 4); c += 4; }
+                for (uint32_t i = 0; i < helperCount; i++) {
+                    if (c + 4 > meta.size()) break;
+                    AnimTrack ht;
+                    uint32_t nl = 0; memcpy(&nl, meta.data() + c, 4); c += 4;
+                    if (nl > 0 && c + nl <= meta.size()) {
+                        ht.BoneName = std::string((char*)meta.data() + c, nl); c += nl;
+                    }
+                    ht.BoneIndex = 31450; ht.ParentIndex = -1; ht.PreFPSFlag = 0;
+                    if (c + 16 <= meta.size()) {
+                        memcpy(&ht.SamplesPerSecond, meta.data() + c, 4); c += 4;
+                        memcpy(&ht.FrameCount, meta.data() + c, 4); c += 4;
+                        memcpy(&ht.PositionFactor, meta.data() + c, 4); c += 4;
+                        memcpy(&ht.ScalingFactor, meta.data() + c, 4); c += 4;
+                    }
+                    uint32_t posCount = 0;
+                    if (c + 4 <= meta.size()) { memcpy(&posCount, meta.data() + c, 4); c += 4; }
+                    if (posCount > 0 && c + posCount * 12 <= meta.size()) {
+                        ht.PositionTrack.resize(posCount);
+                        memcpy(ht.PositionTrack.data(), meta.data() + c, posCount * 12);
+                        c += posCount * 12;
+                    }
+                    outAnim.HelperTracks.push_back(ht);
                 }
             }
         }

@@ -172,8 +172,6 @@ inline void UpdateAnimationBones() {
     std::vector<XMMATRIX> bindGlobal(boneCount);
     std::vector<XMMATRIX> bindLocal(boneCount);
 
-    // 1. Extract, Clean, and Transpose Inverse Bind Matrices (IBM)
-    // This is mathematically perfect and required for Delta animations to work!
     for (int i = 0; i < boneCount; i++) {
         if ((i + 1) * 64 <= g_ActiveMeshContent.BoneTransformsRaw.size()) {
             float* raw = (float*)(g_ActiveMeshContent.BoneTransformsRaw.data() + i * 64);
@@ -191,7 +189,6 @@ inline void UpdateAnimationBones() {
         }
     }
 
-    // 2. Pre-calculate mathematically perfect local bind matrices from IBMs
     for (int i = 0; i < boneCount; i++) {
         int p = g_ActiveMeshContent.Bones[i].ParentIndex;
         if (p == -1 || p >= boneCount) {
@@ -222,7 +219,6 @@ inline void UpdateAnimationBones() {
         return res;
         };
 
-    // 3. Calculate Local Transforms for this frame
     for (int i = 0; i < boneCount; i++) {
         bool hasAnim = false;
 
@@ -239,8 +235,6 @@ inline void UpdateAnimationBones() {
                         if (frame < 0) frame += track.FrameCount;
 
                         if (g_SelectedAnimType == 7) {
-                            // --- DELTA ANIMATION LOGIC (RESTORED TO ORIGINAL) ---
-                            // Delta tracks use {0,0,0} fallback to produce Identity matrix when tracks are missing
                             Vec3 p = { 0.0f, 0.0f, 0.0f };
                             Vec4 q = { 0.0f, 0.0f, 0.0f, 1.0f };
 
@@ -251,13 +245,9 @@ inline void UpdateAnimationBones() {
                             vRot = XMQuaternionConjugate(vRot);
 
                             XMMATRIX trackMat = XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
-
-                            // Delta applies relative offset to the pure IBM-derived bindLocal
                             localTransforms[i] = XMMatrixMultiply(trackMat, bindLocal[i]);
                         }
                         else {
-                            // --- STANDARD/PARTIAL ANIMATION LOGIC ---
-                            // Standard tracks use the actual bind pose fallback so missing bones don't snap to origin
                             XMVECTOR s_b, r_b, t_b;
                             XMMatrixDecompose(&s_b, &r_b, &t_b, bindLocal[i]);
                             r_b = XMQuaternionConjugate(r_b);
@@ -271,7 +261,6 @@ inline void UpdateAnimationBones() {
                             XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
                             vRot = XMQuaternionConjugate(vRot);
 
-                            // The "Puddle" fix: Inject the scale back in to preserve dragon sizes
                             localTransforms[i] = XMMatrixScalingFromVector(s_b) * XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
                         }
 
@@ -287,14 +276,13 @@ inline void UpdateAnimationBones() {
         }
     }
 
-    // 4. TOPOLOGICAL HIERARCHY SOLVER (Fixes Extremity Detachments)
     std::vector<bool> computed(boneCount, false);
     std::function<void(int)> ComputeGlobal = [&](int idx) {
         if (computed[idx]) return;
 
         int p = g_ActiveMeshContent.Bones[idx].ParentIndex;
         if (p != -1 && p < boneCount) {
-            ComputeGlobal(p); // Force parent to evaluate first
+            ComputeGlobal(p);
             g_PreviewGlobalTransforms[idx] = XMMatrixMultiply(localTransforms[idx], g_PreviewGlobalTransforms[p]);
         }
         else {
@@ -305,7 +293,6 @@ inline void UpdateAnimationBones() {
 
     for (int i = 0; i < boneCount; i++) {
         ComputeGlobal(i);
-        // 5. Final Hardware Skinning Matrix
         g_PreviewBoneTransforms[i] = XMMatrixMultiply(ibm[i], g_PreviewGlobalTransforms[i]);
     }
 }
@@ -397,14 +384,12 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     }
 
     // NEW BUTTON FOR ANIMATION EXPORT
-    if (g_ActiveMeshContent.IsParsed && g_PreviewAnimPlaying && g_PreviewAnimParser.Data.IsParsed) {
+    if (g_ActiveMeshContent.IsParsed && g_PreviewAnimParser.Data.IsParsed) {
         ImGui::SameLine();
         if (ImGui::Button("Export Mesh + Anim (glTF)")) {
             std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
             if (!savePath.empty()) {
                 if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
-
-                // Pass the Animation and the Type (6, 7, or 9)
                 GltfExporter::Export(g_ActiveMeshContent, savePath, &g_PreviewAnimParser, g_SelectedAnimType);
             }
         }
@@ -416,6 +401,40 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         }
     }
 
+    // --- NEW: EXPORT UNCOMPRESSED BINARY (LZO SAFE) ---
+    ImGui::SameLine();
+    if (ImGui::Button("Export Uncompressed Binary")) {
+        std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
+        if (!savePath.empty()) {
+            if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
+                auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
+                if (!currentBank.CurrentEntryRawData.empty()) {
+                    std::vector<uint8_t> outData = currentBank.CurrentEntryRawData;
+
+                    // Fable Compression Check: If the first 4 bytes aren't standard 
+                    // uncompressed magic (like ">>>>" 0x3E3E3E3E or BBM's 0x4D424220), 
+                    // those 4 bytes represent the target uncompressed size for LZO.
+                    if (outData.size() >= 4) {
+                        uint32_t magic = *(uint32_t*)outData.data();
+                        if (magic != 0x3E3E3E3E && magic != 0x4D424220) {
+                            uint32_t uncompSize = magic;
+                            // Sanity check to ensure we don't blow up memory on a bad read
+                            if (uncompSize > 0 && uncompSize < 100 * 1024 * 1024) {
+                                outData = DecompressRawLZO(currentBank.CurrentEntryRawData, 4, uncompSize);
+                            }
+                        }
+                    }
+
+                    std::ofstream out(savePath, std::ios::binary);
+                    out.write((char*)outData.data(), outData.size());
+                    g_BankStatus = "Exported Uncompressed Mesh Binary!";
+                }
+                else {
+                    g_BankStatus = "Error: No data available for this mesh.";
+                }
+            }
+        }
+    }
 
     ImGui::SameLine();
     float availToolW = ImGui::GetContentRegionAvail().x;
@@ -475,7 +494,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             ImVec2 scrPos;
             if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
                 scrPos.x += pMin.x; scrPos.y += pMin.y;
-                dl->AddCircleFilled(scrPos, 3.0f, IM_COL32(0, 255, 0, 255)); // Green joint
+                dl->AddCircleFilled(scrPos, 3.0f, IM_COL32(0, 255, 0, 255));
 
                 int parentIdx = g_ActiveMeshContent.Bones[i].ParentIndex;
                 if (parentIdx != -1 && parentIdx < g_ActiveMeshContent.BoneCount) {
@@ -484,7 +503,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     ImVec2 pScrPos;
                     if (g_MeshRenderer.ProjectToScreen(pPos, pScrPos, viewportWidth, avail.y)) {
                         pScrPos.x += pMin.x; pScrPos.y += pMin.y;
-                        dl->AddLine(scrPos, pScrPos, IM_COL32(255, 255, 0, 255), 2.0f); // Yellow bone
+                        dl->AddLine(scrPos, pScrPos, IM_COL32(255, 255, 0, 255), 2.0f);
                     }
                 }
             }
@@ -740,7 +759,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                         if (g_OpenBanks[i].Type == EBankType::Graphics) {
                             for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
                                 int t = g_OpenBanks[i].Entries[j].Type;
-                                if (t == 6 || t == 7 || t == 9) { // Include Standard, Delta, and Partial
+                                if (t == 6 || t == 7 || t == 9) { // Standard, Delta, Partial
                                     anims.push_back({ i, j, g_OpenBanks[i].Entries[j].FriendlyName, g_OpenBanks[i].Entries[j].ID, t });
                                 }
                             }
@@ -758,7 +777,19 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             g_PreviewAnimParser.Data.IsParsed = false; g_SelectedAnimBankIndex = -1; g_SelectedAnimEntryIndex = -1; g_SelectedAnimType = -1;
                         }
 
-                        if (ImGui::SliderFloat("Time", &g_PreviewAnimTime, 0.0f, duration, "%.2f s")) g_PreviewAnimPlaying = false;
+                        float fps = g_PreviewAnimParser.Data.Tracks.empty() ? 30.0f : g_PreviewAnimParser.Data.Tracks[0].SamplesPerSecond;
+                        int maxFrames = (int)(duration * fps);
+                        if (maxFrames < 1) maxFrames = 1;
+                        int currentFrame = (int)(g_PreviewAnimTime * fps);
+
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(150); // Narrower slider
+                        if (ImGui::SliderInt("##FrameScrub", &currentFrame, 0, maxFrames, "%d")) {
+                            g_PreviewAnimTime = (float)currentFrame / fps;
+                            g_PreviewAnimPlaying = false; // Pause while scrubbing
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("FPS: %.1f", fps); // FPS moved to the end
                         ImGui::Separator();
                     }
                     else {
@@ -782,6 +813,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             std::string typeLabel = "";
                             if (a.Type == 7) typeLabel = " [Delta]";
                             else if (a.Type == 9) typeLabel = " [Partial]";
+
                             std::string displayStr = std::to_string(a.ID) + " - " + a.Name + typeLabel;
 
                             if (ImGui::Selectable(displayStr.c_str(), isSelected)) {

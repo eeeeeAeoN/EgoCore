@@ -143,6 +143,30 @@ public:
         return true;
     }
 
+    static std::string FastPeekObjectName(const std::vector<uint8_t>& compressedData) {
+        if (compressedData.size() < 8) return "";
+        uint32_t magic = *(uint32_t*)compressedData.data();
+        std::vector<uint8_t> uncomp;
+        if (magic != 0x3E3E3E3E) {
+            uint32_t sz = magic; if (sz == 0 || sz > 50000000) sz = 10 * 1024 * 1024;
+            uncomp = DecompressRawLZO(compressedData, 4, sz);
+        }
+        else {
+            uncomp = compressedData;
+        }
+        if (uncomp.size() < 8) return "";
+
+        // Scan directly for the "AOBJ" chunk signature
+        for (size_t i = 0; i < uncomp.size() - 8; i++) {
+            if (uncomp[i] == 'A' && uncomp[i + 1] == 'O' && uncomp[i + 2] == 'B' && uncomp[i + 3] == 'J') {
+                std::string name = ""; size_t c = i + 8;
+                while (c < uncomp.size() && uncomp[c] != '\0') name += (char)uncomp[c++];
+                return name;
+            }
+        }
+        return "";
+    }
+
 private:
     void ParseChunkBlock(const uint8_t* base, size_t& cursor, size_t endBoundary, bool isHelper) {
         while (cursor + 8 <= endBoundary) {
@@ -197,7 +221,13 @@ private:
                 Data.TimeEvents.push_back(ev);
             }
             else if (sig == "MVEC") {
-                if (payloadStart + 12 <= nextChunkStart) memcpy(&Data.MovementVector, base + payloadStart, 12);
+                if (payloadStart + 12 <= nextChunkStart) {
+                    memcpy(&Data.MovementVector, base + payloadStart, 12);
+
+                    // NEW: MVEC is a SuperChunk! We must parse the hidden collision track inside it.
+                    size_t innerCursor = payloadStart + 12;
+                    ParseChunkBlock(base, innerCursor, nextChunkStart, isHelper);
+                }
             }
             else if (sig == "XALO") {
                 if (chunkSize > 0 && chunkSize < 1024 * 1024) Data.XaloData.assign(base + payloadStart, base + nextChunkStart);

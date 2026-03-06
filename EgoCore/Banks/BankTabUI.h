@@ -226,14 +226,14 @@ static void DrawBankTab() {
         ImGui::RadioButton("Static Mesh (1) [Coming Soon]", &dummyMesh, 1);
         ImGui::EndDisabled();
 
-        ImGui::RadioButton("Animation (6)", &g_ImportAnimType, 6);
-        ImGui::RadioButton("Partial Animation (9)", &g_ImportAnimType, 9);
+        ImGui::RadioButton("Normal Animation (6)", &g_ImportAnimType, 6);
+        ImGui::RadioButton("Delta Animation (7)", &g_ImportAnimType, 7);
+        ImGui::TextDisabled("Note: Partial Animations (9) are auto-detected via bitmasks.");
 
         ImGui::Separator();
 
         if (ImGui::Button("Import", ImVec2(120, 0))) {
             if (g_ActiveBankIndex != -1 && g_ActiveBankIndex < g_OpenBanks.size()) {
-                // We will define this function in BankEditor.h next!
                 CreateNewAnimationEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingImportPath, g_ImportAnimType);
                 g_ScrollToSelected = true;
             }

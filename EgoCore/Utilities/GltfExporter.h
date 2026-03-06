@@ -359,11 +359,25 @@ namespace GltfExporter {
 
             uint32_t evCount = anim->Data.TimeEvents.size(); wMeta(&evCount, 4);
             for (auto& e : anim->Data.TimeEvents) {
-                uint32_t nl = e.Name.length(); wMeta(&nl, 4);
+                uint32_t nl = (uint32_t)e.Name.length(); wMeta(&nl, 4);
                 wMeta(e.Name.c_str(), nl); wMeta(&e.Time, 4);
             }
-            uint32_t maskCount = anim->Data.BoneMaskBits.size(); wMeta(&maskCount, 4);
+
+            uint32_t maskCount = (uint32_t)anim->Data.BoneMaskBits.size(); wMeta(&maskCount, 4);
             if (maskCount > 0) wMeta(anim->Data.BoneMaskBits.data(), maskCount * 4);
+
+            // --- NEW: Serialize Helper Tracks (Preserves collision curve) ---
+            uint32_t helperCount = (uint32_t)anim->Data.HelperTracks.size(); wMeta(&helperCount, 4);
+            for (const auto& ht : anim->Data.HelperTracks) {
+                uint32_t nl = (uint32_t)ht.BoneName.length(); wMeta(&nl, 4);
+                if (nl > 0) wMeta(ht.BoneName.c_str(), nl);
+                wMeta(&ht.SamplesPerSecond, 4);
+                wMeta(&ht.FrameCount, 4);
+                wMeta(&ht.PositionFactor, 4);
+                wMeta(&ht.ScalingFactor, 4);
+                uint32_t posCount = (uint32_t)ht.PositionTrack.size(); wMeta(&posCount, 4);
+                if (posCount > 0) wMeta(ht.PositionTrack.data(), posCount * 12);
+            }
 
             std::string metaHex = ToHex(metaBlob);
             animationJson << "{\"name\":" << Esc(anim->Data.ObjectName.empty() ? "ExportedAnim" : anim->Data.ObjectName)

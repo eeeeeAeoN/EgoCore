@@ -486,9 +486,19 @@ inline void CreateNewAnimationEntry(LoadedBank* bank, const std::string& gltfPat
         return;
     }
 
-    std::vector<uint8_t> payload = AnimCompiler::Compile(newAnim);
+    // --- NEW: Handle Auto-Partial and Delta Stripping ---
+    if (!newAnim.BoneMaskBits.empty()) {
+        outType = 9; // Auto-transform to Partial if a bitmask exists
+    }
 
-    // Exact 24 byte fallback
+    if (outType == 7) {
+        newAnim.MovementVector = { 0.0f, 0.0f, 0.0f };
+        newAnim.HelperTracks.erase(std::remove_if(newAnim.HelperTracks.begin(), newAnim.HelperTracks.end(),
+            [](const AnimTrack& t) { return t.BoneName == ""; }), newAnim.HelperTracks.end());
+    }
+    // ----------------------------------------------------
+
+    std::vector<uint8_t> payload = AnimCompiler::Compile(newAnim);
     std::vector<uint8_t> info = newAnim.Serialize();
 
     uint32_t newID = GetNextFreeID(bank);

@@ -3,7 +3,6 @@
 #include "MeshParser.h"
 #include "BBMParser.h"
 #include "AnimParser.h"
-#include "AnimProperties.h"
 #include "TextureParser.h"
 #include "AudioBackend.h" 
 #include "TextParser.h" 
