@@ -5,8 +5,8 @@
 #include "FileDialogs.h"
 #include <string>
 #include <vector>
+#include <fstream>
 
-// Forward declarations for globals
 extern struct C3DMeshContent g_ActiveMeshContent;
 extern std::string g_BankStatus;
 
@@ -18,7 +18,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
 
     auto& anim = parser.Data;
 
-    // --- RENAME & IMPORT (Header) ---
     ImGui::AlignTextToFramePadding();
     ImGui::Text("Name:");
     ImGui::SameLine();
@@ -33,15 +32,14 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
 
     ImGui::SameLine();
 
-    // --- PURE TRANSPILER IMPORT BUTTON ---
     if (ImGui::Button("Import from glTF", ImVec2(150, 0))) {
         std::string loadPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
         if (!loadPath.empty()) {
-            int importedType = entryType; // Default to current
+            int importedType = entryType;
             std::string err = GltfAnimImporter::Import(loadPath, g_ActiveMeshContent, anim, importedType);
 
             if (err.empty()) {
-                entryType = importedType; // Update the bank's entry type
+                entryType = importedType;
                 g_BankStatus = "Transpiled animation successfully! PLEASE SAVE.";
             }
             else {
@@ -57,6 +55,18 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         ctx.HexBuffer = rawData;
     }
 
+    ImGui::SameLine();
+
+    if (ImGui::Button("Export Uncompressed Binary")) {
+        std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
+        if (!savePath.empty()) {
+            std::ofstream out(savePath, std::ios::binary);
+            // Write the UncompressedData we saved in the parser
+            out.write((char*)parser.UncompressedData.data(), parser.UncompressedData.size());
+            g_BankStatus = "Exported Uncompressed Binary!";
+        }
+    }
+
     if (ctx.ShowHexWindow) {
         if (ImGui::Begin("Anim Hex Inspector", &ctx.ShowHexWindow)) {
             for (size_t i = 0; i < ctx.HexBuffer.size(); i++) {
@@ -69,9 +79,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
 
     ImGui::Separator();
 
-    // ====================================================================
-    // EGOCORE ENGINE LOGIC EDITOR
-    // ====================================================================
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.8f, 1.0f), "--- FABLE ENGINE LOGIC ---");
 
     ImGui::Checkbox("Is Cyclic (Looping Animation)", &anim.IsCyclic);
@@ -165,7 +172,32 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
                     ImGuiListClipper clipper; clipper.Begin(track.FrameCount);
                     while (clipper.Step()) {
                         for (int f = clipper.DisplayStart; f < clipper.DisplayEnd; f++) {
-                            Vec3 p; Vec4 r; track.EvaluateFrame(f, p, r);
+                            Vec3 p = { 0.0f, 0.0f, 0.0f };
+                            Vec4 r = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+                            // Grab the bind pose from the loaded mesh for the UI text table
+                            if (g_ActiveMeshContent.IsParsed) {
+                                for (int m = 0; m < g_ActiveMeshContent.BoneCount; m++) {
+                                    if (g_ActiveMeshContent.BoneIndices[m] == track.BoneIndex) {
+                                        const float* loc = g_ActiveMeshContent.Bones[m].LocalizationMatrix;
+                                        DirectX::XMMATRIX localMat = DirectX::XMMATRIX(
+                                            loc[0], loc[1], loc[2], 0.0f,
+                                            loc[3], loc[4], loc[5], 0.0f,
+                                            loc[6], loc[7], loc[8], 0.0f,
+                                            loc[9], loc[10], loc[11], 1.0f
+                                        );
+                                        DirectX::XMVECTOR scl, rot, trans;
+                                        DirectX::XMMatrixDecompose(&scl, &rot, &trans, localMat);
+                                        rot = DirectX::XMQuaternionConjugate(rot);
+                                        p = { DirectX::XMVectorGetX(trans), DirectX::XMVectorGetY(trans), DirectX::XMVectorGetZ(trans) };
+                                        r = { DirectX::XMVectorGetX(rot), DirectX::XMVectorGetY(rot), DirectX::XMVectorGetZ(rot), DirectX::XMVectorGetW(rot) };
+                                        break;
+                                    }
+                                }
+                            }
+
+                            track.EvaluateFrame(f, p, r);
+
                             ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", f);
                             ImGui::TableSetColumnIndex(1); ImGui::Text("%.2f,%.2f,%.2f", p.x, p.y, p.z);
                             ImGui::TableSetColumnIndex(2); ImGui::Text("%.2f,%.2f,%.2f,%.2f", r.x, r.y, r.z, r.w);

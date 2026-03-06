@@ -10,29 +10,29 @@ struct AnimTrack {
     uint32_t BoneIndex = 0;
     int32_t ParentIndex = -1;
     std::string BoneName = "";
-    uint8_t PreFPSFlag = 0;
-    uint8_t PostFrameFlags[4] = { 0,0,0,0 };
+
+    uint8_t PreFPSFlag = 0; // It IS 1 byte!
+
     float SamplesPerSecond = 30.0f;
     uint32_t FrameCount = 0;
+    uint8_t PostFrameFlags[4] = { 0,0,0,0 };
     float PositionFactor = 1.0f;
     float ScalingFactor = 1.0f;
 
     std::vector<Vec4> RotationTrack;
-    std::vector<uint8_t> PalettedRotations;
+    std::vector<uint16_t> PalettedRotations;
     std::vector<Vec3> PositionTrack;
-    std::vector<uint8_t> PalettedPositions;
+    std::vector<uint16_t> PalettedPositions;
 
     void EvaluateFrame(int frame, Vec3& outPos, Vec4& outRot) const {
-        if (RotationTrack.empty()) outRot = { 0.0f, 0.0f, 0.0f, 1.0f };
-        else {
+        if (!RotationTrack.empty()) {
             int rotIdx = frame;
             if (!PalettedRotations.empty()) rotIdx = (frame < PalettedRotations.size()) ? PalettedRotations[frame] : PalettedRotations.back();
             if (rotIdx >= RotationTrack.size()) rotIdx = (int)RotationTrack.size() - 1;
             outRot = RotationTrack[rotIdx];
         }
 
-        if (PositionTrack.empty()) outPos = { 0.0f, 0.0f, 0.0f };
-        else {
+        if (!PositionTrack.empty()) {
             int posIdx = frame;
             if (!PalettedPositions.empty()) posIdx = (frame < PalettedPositions.size()) ? PalettedPositions[frame] : PalettedPositions.back();
             if (posIdx >= PositionTrack.size()) posIdx = (int)PositionTrack.size() - 1;
@@ -60,7 +60,6 @@ struct C3DAnimationInfo {
     bool IsCyclic = false;
     std::vector<uint32_t> BoneMaskBits;
 
-    // Preserved exact header structures
     std::vector<uint8_t> AnrtHeaderData;
     std::vector<uint8_t> AobjHeaderData;
 
@@ -91,6 +90,7 @@ struct C3DAnimationInfo {
 class AnimParser {
 public:
     C3DAnimationInfo Data;
+    std::vector<uint8_t> UncompressedData;
 
     bool Parse(const std::vector<uint8_t>& compressedData) {
         Data.IsParsed = false;
@@ -104,47 +104,41 @@ public:
         Data.AobjHeaderData.clear();
         Data.Duration = 0.0f;
         Data.HasHelper = false;
+        UncompressedData.clear();
 
         if (compressedData.size() < 8) return false;
 
-        std::vector<uint8_t> rawData;
         uint32_t magic = *(uint32_t*)compressedData.data();
 
-        // 1. Decompress if necessary
-        if (magic != 0x3E3E3E3E) { // 0x3E3E3E3E is ">>>>"
+        if (magic != 0x3E3E3E3E) {
             uint32_t uncompressedSize = magic;
             if (uncompressedSize == 0 || uncompressedSize > 50000000) uncompressedSize = 10 * 1024 * 1024;
-            rawData = DecompressRawLZO(compressedData, 4, uncompressedSize);
-            if (rawData.empty()) return false;
+            UncompressedData = DecompressRawLZO(compressedData, 4, uncompressedSize);
+            if (UncompressedData.empty()) return false;
         }
         else {
-            rawData = compressedData;
+            UncompressedData = compressedData;
         }
 
         size_t cursor = 0;
 
-        // 2. Parse Fable 3DAF Header
-        if (cursor + 8 <= rawData.size()) {
-            uint32_t headerMagic = *(uint32_t*)(rawData.data() + cursor);
+        if (cursor + 8 <= UncompressedData.size()) {
+            uint32_t headerMagic = *(uint32_t*)(UncompressedData.data() + cursor);
             if (headerMagic == 0x3E3E3E3E) {
-                cursor += 4; // Skip ">>>>"
-                std::string sig((char*)rawData.data() + cursor, 4);
+                cursor += 4;
+                std::string sig((char*)UncompressedData.data() + cursor, 4);
                 if (sig == "3DAF") {
-                    cursor += 4; // Skip "3DAF"
-                    cursor += 4; // Skip Version
-
-                    while (cursor < rawData.size() && rawData[cursor] != '\0') cursor++;
-                    if (cursor < rawData.size()) cursor++;
-
-                    cursor = (cursor + 3) & ~3; // 3DAF Header is aligned
+                    cursor += 4;
+                    cursor += 4;
+                    while (cursor < UncompressedData.size() && UncompressedData[cursor] != '\0') cursor++;
+                    if (cursor < UncompressedData.size()) cursor++;
+                    cursor = (cursor + 3) & ~3;
                 }
-                else cursor -= 4; // Fallback
+                else cursor -= 4;
             }
         }
 
-        // 3. Kick off structural parsing
-        ParseChunkBlock(rawData.data(), cursor, rawData.size(), false);
-
+        ParseChunkBlock(UncompressedData.data(), cursor, UncompressedData.size(), false);
         Data.IsParsed = true;
         return true;
     }
@@ -157,7 +151,7 @@ private:
             size_t payloadStart = cursor + 8;
             size_t nextChunkStart = payloadStart + chunkSize;
 
-            if (nextChunkStart > endBoundary) break; // Corrupted, abort safely
+            if (nextChunkStart > endBoundary) break;
 
             if (sig == "ANRT") {
                 Data.IsCyclic = (base[payloadStart] != 0);
@@ -165,14 +159,12 @@ private:
 
                 size_t innerCursor = payloadStart + 5;
                 size_t headerStart = innerCursor;
-                // Safely jump over unknown ANRT fields until we hit the first subchunk
                 while (innerCursor + 4 <= nextChunkStart) {
                     std::string subSig((char*)base + innerCursor, 4);
-                    if (subSig == "HLPR" || subSig == "AOBJ") break;
+                    if (subSig == "HLPR" || subSig == "AOBJ" || subSig == "XALO") break;
                     innerCursor++;
                 }
                 Data.AnrtHeaderData.assign(base + headerStart, base + innerCursor);
-
                 ParseChunkBlock(base, innerCursor, nextChunkStart, isHelper);
             }
             else if (sig == "HLPR") {
@@ -185,17 +177,15 @@ private:
                 while (innerCursor < nextChunkStart && base[innerCursor] != '\0') {
                     Data.ObjectName += (char)base[innerCursor++];
                 }
-                if (innerCursor < nextChunkStart) innerCursor++; // skip \0
+                if (innerCursor < nextChunkStart) innerCursor++;
 
                 size_t headerStart = innerCursor;
-                // Safely jump over ParentIndex, FirstChild, NextSibling, SubMesh, etc.
                 while (innerCursor + 4 <= nextChunkStart) {
                     std::string subSig((char*)base + innerCursor, 4);
                     if (subSig == "XSEQ" || subSig == "SEQ0" || subSig == "AMSK") break;
                     innerCursor++;
                 }
                 Data.AobjHeaderData.assign(base + headerStart, base + innerCursor);
-
                 ParseChunkBlock(base, innerCursor, nextChunkStart, false);
             }
             else if (sig == "TMEV") {
@@ -207,14 +197,10 @@ private:
                 Data.TimeEvents.push_back(ev);
             }
             else if (sig == "MVEC") {
-                if (payloadStart + 12 <= nextChunkStart) {
-                    memcpy(&Data.MovementVector, base + payloadStart, 12);
-                }
+                if (payloadStart + 12 <= nextChunkStart) memcpy(&Data.MovementVector, base + payloadStart, 12);
             }
             else if (sig == "XALO") {
-                if (chunkSize > 0 && chunkSize < 1024 * 1024) {
-                    Data.XaloData.assign(base + payloadStart, base + nextChunkStart);
-                }
+                if (chunkSize > 0 && chunkSize < 1024 * 1024) Data.XaloData.assign(base + payloadStart, base + nextChunkStart);
             }
             else if (sig == "AMSK") {
                 uint32_t wordCount = (chunkSize + 3) / 4;
@@ -225,67 +211,89 @@ private:
                 if (isHelper) ParseXSEQ(base, payloadStart, nextChunkStart, Data.HelperTracks);
                 else ParseXSEQ(base, payloadStart, nextChunkStart, Data.Tracks);
             }
-
-            // Tightly packed: Move to exact chunk boundary without guessing padding
             cursor = nextChunkStart;
         }
     }
 
-    void ParseXSEQ(const uint8_t* base, size_t start, size_t end, std::vector<AnimTrack>& targetVector) {
-        size_t c = start;
+    void ParseXSEQ(const uint8_t* base, size_t start, size_t end, std::vector<AnimTrack>& outTracks) {
         AnimTrack track;
+        size_t c = start;
+
         if (c + 8 > end) return;
 
-        track.BoneIndex = *(uint32_t*)(base + c); c += 4;
-        track.ParentIndex = *(int32_t*)(base + c); c += 4;
+        memcpy(&track.BoneIndex, base + c, 4); c += 4;
+        memcpy(&track.ParentIndex, base + c, 4); c += 4;
 
         while (c < end && base[c] != '\0') { track.BoneName += (char)base[c]; c++; }
         if (c < end) c++;
-        if (c + 18 > end) return;
 
-        track.PreFPSFlag = *(uint8_t*)(base + c); c += 1;
-        track.SamplesPerSecond = *(float*)(base + c); c += 4;
-        track.FrameCount = *(uint32_t*)(base + c); c += 4;
+        if (c + 17 > end) return;
+
+        track.PreFPSFlag = base[c]; c += 1;
+
+        memcpy(&track.SamplesPerSecond, base + c, 4); c += 4;
+        memcpy(&track.FrameCount, base + c, 4); c += 4;
         memcpy(track.PostFrameFlags, base + c, 4); c += 4;
-        track.PositionFactor = *(float*)(base + c); c += 4;
-        track.ScalingFactor = *(float*)(base + c); c += 4;
 
+        memcpy(&track.PositionFactor, base + c, 4); c += 4;
+        memcpy(&track.ScalingFactor, base + c, 4); c += 4;
+
+        // Fable's PositionFactor is exactly the multiplier needed!
+        float truePosFactor = track.PositionFactor;
+
+        // 1. UNIQUE ROTATIONS
+        uint16_t rotCount = 0;
         if (c + 2 <= end) {
-            uint16_t rotCount = *(uint16_t*)(base + c); c += 2;
-            if (c + (rotCount * 16) <= end) {
-                for (int i = 0; i < rotCount; i++) {
-                    Vec4 q; memcpy(&q, base + c, 16);
-                    track.RotationTrack.push_back(q);
-                    c += 16;
-                }
+            memcpy(&rotCount, base + c, 2); c += 2;
+            for (int i = 0; i < rotCount && c + 16 <= end; i++) {
+                Vec4 q; memcpy(&q, base + c, 16); c += 16;
+                track.RotationTrack.push_back(q);
             }
         }
+
+        // 2. PALETTED ROTATIONS
         if (c + 2 <= end) {
-            uint16_t palRotCount = *(uint16_t*)(base + c); c += 2;
-            if (c + palRotCount <= end) {
-                for (int i = 0; i < palRotCount; i++) track.PalettedRotations.push_back(base[c++]);
+            uint16_t palRotCount = 0; memcpy(&palRotCount, base + c, 2); c += 2;
+            int bpi = (rotCount > 255) ? 2 : 1;
+            for (int i = 0; i < palRotCount && c + bpi <= end; i++) {
+                uint16_t idx = 0;
+                if (bpi == 1) { idx = base[c++]; }
+                else { memcpy(&idx, base + c, 2); c += 2; }
+                track.PalettedRotations.push_back(idx);
             }
         }
+
+        // 3. UNIQUE POSITIONS
+        uint16_t posCount = 0;
         if (c + 2 <= end) {
-            uint16_t posCount = *(uint16_t*)(base + c); c += 2;
-            if (c + (posCount * 6) <= end) {
-                for (int i = 0; i < posCount; i++) {
-                    int16_t ix, iy, iz;
-                    memcpy(&ix, base + c, 2); c += 2;
-                    memcpy(&iy, base + c, 2); c += 2;
-                    memcpy(&iz, base + c, 2); c += 2;
-                    Vec3 pos = { (float)ix * track.PositionFactor, (float)iy * track.PositionFactor, (float)iz * track.PositionFactor };
-                    track.PositionTrack.push_back(pos);
-                }
+            memcpy(&posCount, base + c, 2); c += 2;
+            for (int i = 0; i < posCount && c + 6 <= end; i++) {
+                int16_t ix, iy, iz;
+                memcpy(&ix, base + c, 2); c += 2;
+                memcpy(&iy, base + c, 2); c += 2;
+                memcpy(&iz, base + c, 2); c += 2;
+
+                Vec3 pos;
+                pos.x = (float)ix * truePosFactor;
+                pos.y = (float)iy * truePosFactor;
+                pos.z = (float)iz * truePosFactor;
+                track.PositionTrack.push_back(pos);
             }
         }
+
+        // 4. PALETTED POSITIONS
         if (c + 2 <= end) {
-            uint16_t palPosCount = *(uint16_t*)(base + c); c += 2;
-            if (c + palPosCount <= end) {
-                for (int i = 0; i < palPosCount; i++) track.PalettedPositions.push_back(base[c++]);
+            uint16_t palPosCount = 0; memcpy(&palPosCount, base + c, 2); c += 2;
+            int bpi = (posCount > 255) ? 2 : 1;
+            for (int i = 0; i < palPosCount && c + bpi <= end; i++) {
+                uint16_t idx = 0;
+                if (bpi == 1) { idx = base[c++]; }
+                else { memcpy(&idx, base + c, 2); c += 2; }
+                track.PalettedPositions.push_back(idx);
             }
         }
-        targetVector.push_back(track);
+
+        outTracks.push_back(track);
     }
 };
 

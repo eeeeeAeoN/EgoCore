@@ -44,17 +44,33 @@ inline std::string GetSubBankNameForSpeech(const std::string& speechBank) {
     std::string stem = speechBank;
     size_t ld = stem.find_last_of('.'); if (ld != std::string::npos) stem = stem.substr(0, ld);
     std::transform(stem.begin(), stem.end(), stem.begin(), ::tolower);
-    if (stem == "dialogue")             return "LIPSYNC_ENGLISH_MAIN";
-    if (stem == "dialogue2")            return "LIPSYNC_ENGLISH_MAIN_2";
-    if (stem == "scriptdialogue")       return "LIPSYNC_ENGLISH_SCRIPT";
-    if (stem == "scriptdialogue2")      return "LIPSYNC_ENGLISH_SCRIPT_2";
-    return "";
+
+    std::string targetSuffix = "";
+    if (stem == "dialogue") targetSuffix = "_MAIN";
+    else if (stem == "dialogue2") targetSuffix = "_MAIN_2";
+    else if (stem == "scriptdialogue") targetSuffix = "_SCRIPT";
+    else if (stem == "scriptdialogue2") targetSuffix = "_SCRIPT_2";
+
+    // Check loaded memory to match active language
+    if (!targetSuffix.empty() && !g_LipSyncState.SubBanks.empty()) {
+        for (const auto& sb : g_LipSyncState.SubBanks) {
+            if (sb.Name.find(targetSuffix) != std::string::npos) return sb.Name;
+        }
+    }
+    return "LIPSYNC_ENGLISH" + targetSuffix; // Safe fallback
 }
 
 inline bool EnsureLipSyncLoaded() {
     if (g_LipSyncState.Stream && g_LipSyncState.Stream->is_open()) return true;
-    std::string path = g_AppConfig.GameRootPath + "\\Data\\Lang\\English\\dialogue.big";
-    if (!std::filesystem::exists(path)) return false;
+
+    std::string path = "";
+    const char* langs[] = { "English", "French", "Italian", "Chinese", "German", "Korean", "Japanese", "Spanish" };
+    for (const char* l : langs) {
+        std::string p = g_AppConfig.GameRootPath + "\\Data\\Lang\\" + std::string(l) + "\\dialogue.big";
+        if (std::filesystem::exists(p)) { path = p; break; }
+    }
+
+    if (path.empty()) return false;
 
     g_LipSyncState.FilePath = path;
     g_LipSyncState.Stream = std::make_unique<std::fstream>(path, std::ios::binary | std::ios::in);

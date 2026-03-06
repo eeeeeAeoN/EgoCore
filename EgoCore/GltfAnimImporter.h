@@ -30,7 +30,7 @@ namespace GltfAnimImporter {
         pos = json.find(':', pos); if (pos == std::string::npos) return 0; pos++;
         while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) pos++;
         size_t end = pos;
-        if (pos < json.length() && json[pos] == '-') end++; // handle negatives
+        if (pos < json.length() && json[pos] == '-') end++;
         while (end < json.length() && isdigit(json[end])) end++;
         if (pos == end) return 0;
         try { return (int32_t)std::stoll(json.substr(pos, end - pos)); }
@@ -95,10 +95,43 @@ namespace GltfAnimImporter {
         catch (...) { return 0.0f; }
     }
 
+    static std::vector<float> ExtractFloatArray(const std::string& json, const std::string& key) {
+        std::vector<float> res;
+        std::string block = ExtractBlock(json, key);
+        if (block.empty() || block[0] != '[') return res;
+        size_t pos = 1;
+        while (pos < block.length() && block[pos] != ']') {
+            while (pos < block.length() && (block[pos] == ' ' || block[pos] == '\t' || block[pos] == '\n' || block[pos] == '\r' || block[pos] == ',')) pos++;
+            if (pos >= block.length() || block[pos] == ']') break;
+            size_t end = pos;
+            while (end < block.length() && (isdigit(block[end]) || block[end] == '.' || block[end] == '-' || block[end] == '+' || block[end] == 'e' || block[end] == 'E')) end++;
+            if (pos != end) {
+                try { res.push_back(std::stof(block.substr(pos, end - pos))); }
+                catch (...) {}
+            }
+            pos = end;
+        }
+        return res;
+    }
+
+    static std::string CleanName(std::string s) {
+        std::string r;
+        for (char c : s) if (isalnum((unsigned char)c) || c == '_' || c == ' ') r += (char)c;
+        return r;
+    }
+
     static DirectX::XMVECTOR Slerp(DirectX::XMVECTOR a, DirectX::XMVECTOR b, float t) { return DirectX::XMQuaternionSlerp(a, b, t); }
     static DirectX::XMVECTOR Lerp(DirectX::XMVECTOR a, DirectX::XMVECTOR b, float t) { return DirectX::XMVectorLerp(a, b, t); }
 
-    // --- TRUE TRANSPILER ---
+    struct GltfFableNode {
+        int GltfIndex;
+        std::string Name;
+        uint32_t FableID;
+        int32_t ParentID;
+        DirectX::XMMATRIX BindLocal;
+        bool IsMapped;
+    };
+
     static std::string Import(const std::string& gltfPath, const C3DMeshContent& mesh, C3DAnimationInfo& outAnim, int& outAnimType) {
         std::ifstream file(gltfPath);
         if (!file.is_open()) return "Failed to open .gltf file.";
@@ -112,47 +145,52 @@ namespace GltfAnimImporter {
         if (animList.empty()) return "Animations array is empty.";
         std::string targetAnim = animList[0];
 
-        // 1. Extract Fable Hex Meta
         std::string fableHex = ExtractString(targetAnim, "FableAnimData");
         if (!fableHex.empty()) {
             std::vector<uint8_t> meta = HexToBytes(fableHex);
             size_t c = 0;
-            memcpy(&outAnimType, meta.data() + c, 4); c += 4;
-            memcpy(&outAnim.Duration, meta.data() + c, 4); c += 4;
-            memcpy(&outAnim.NonLoopingDuration, meta.data() + c, 4); c += 4;
-            memcpy(&outAnim.MovementVector, meta.data() + c, 12); c += 12;
-            memcpy(&outAnim.Rotation, meta.data() + c, 4); c += 4;
-            outAnim.IsCyclic = meta[c++];
-            outAnim.HasHelper = meta[c++];
 
-            uint32_t evCount = *(uint32_t*)(meta.data() + c); c += 4;
-            outAnim.TimeEvents.clear();
-            for (uint32_t i = 0; i < evCount; i++) {
-                uint32_t nl = *(uint32_t*)(meta.data() + c); c += 4;
-                TimeEvent ev;
-                ev.Name = std::string((char*)meta.data() + c, nl); c += nl;
-                memcpy(&ev.Time, meta.data() + c, 4); c += 4;
-                outAnim.TimeEvents.push_back(ev);
-            }
-            uint32_t maskCount = *(uint32_t*)(meta.data() + c); c += 4;
-            outAnim.BoneMaskBits.clear();
-            if (maskCount > 0) {
-                outAnim.BoneMaskBits.resize(maskCount);
-                memcpy(outAnim.BoneMaskBits.data(), meta.data() + c, maskCount * 4);
+            if (meta.size() >= 26) {
+                memcpy(&outAnimType, meta.data() + c, 4); c += 4;
+                memcpy(&outAnim.Duration, meta.data() + c, 4); c += 4;
+                memcpy(&outAnim.NonLoopingDuration, meta.data() + c, 4); c += 4;
+                memcpy(&outAnim.MovementVector, meta.data() + c, 12); c += 12;
+                memcpy(&outAnim.Rotation, meta.data() + c, 4); c += 4;
+                outAnim.IsCyclic = meta[c++];
+                outAnim.HasHelper = meta[c++];
+
+                uint32_t evCount = 0;
+                if (c + 4 <= meta.size()) { memcpy(&evCount, meta.data() + c, 4); c += 4; }
+
+                outAnim.TimeEvents.clear();
+                for (uint32_t i = 0; i < evCount; i++) {
+                    if (c + 4 > meta.size()) break;
+                    uint32_t nl = *(uint32_t*)(meta.data() + c); c += 4;
+                    if (c + nl + 4 > meta.size()) break;
+                    TimeEvent ev;
+                    ev.Name = std::string((char*)meta.data() + c, nl); c += nl;
+                    memcpy(&ev.Time, meta.data() + c, 4); c += 4;
+                    outAnim.TimeEvents.push_back(ev);
+                }
+
+                uint32_t maskCount = 0;
+                if (c + 4 <= meta.size()) { memcpy(&maskCount, meta.data() + c, 4); c += 4; }
+                outAnim.BoneMaskBits.clear();
+                if (maskCount > 0 && c + maskCount * 4 <= meta.size()) {
+                    outAnim.BoneMaskBits.resize(maskCount);
+                    memcpy(outAnim.BoneMaskBits.data(), meta.data() + c, maskCount * 4);
+                }
             }
         }
         else {
             outAnim.Duration = 0.0f; outAnim.IsCyclic = true;
         }
 
+        if (outAnim.Duration > 600.0f || outAnim.Duration < 0.0f) outAnim.Duration = 0.0f;
+
         std::string aName = ExtractString(targetAnim, "name");
-        if (!aName.empty() && aName != "ExportedAnim") outAnim.ObjectName = aName;
+        if (!aName.empty() && aName != "ExportedAnim") outAnim.ObjectName = CleanName(aName);
 
-        // 2. Preserve original tracks to act as a Transpiler mapping
-        std::vector<AnimTrack> originalTracks = outAnim.Tracks;
-        outAnim.Tracks.clear();
-
-        // 3. Map glTF Nodes
         std::string realNodesBlock = "";
         size_t searchPos = 0;
         while (true) {
@@ -176,43 +214,56 @@ namespace GltfAnimImporter {
             }
             searchPos = pos + 7;
         }
-
         std::vector<std::string> nodeObjs = SplitArray(realNodesBlock);
-        std::vector<std::string> gltfNodeNames;
-        for (const auto& obj : nodeObjs) gltfNodeNames.push_back(ExtractString(obj, "name"));
 
-        // 4. Open Binary Buffer
-        std::string buffersBlock = ExtractBlock(json, "buffers");
-        std::vector<std::string> bufferObjs = SplitArray(buffersBlock);
-        if (bufferObjs.empty()) return "No 'buffers' array found.";
-        std::string uri = ExtractString(bufferObjs[0], "uri");
-        if (uri.find("data:application") == 0) return "Base64 buffers not supported. Export as 'glTF Separate (.gltf + .bin)'.";
+        std::vector<GltfFableNode> fableNodes;
+        bool hasFableIDs = false;
 
-        std::string binPath = gltfPath.substr(0, gltfPath.find_last_of("\\/") + 1) + uri;
-        std::ifstream binFile(binPath, std::ios::binary);
-        if (!binFile.is_open()) return "Failed to open associated .bin file: " + uri;
-        std::vector<uint8_t> binData((std::istreambuf_iterator<char>(binFile)), std::istreambuf_iterator<char>());
+        for (size_t nIdx = 0; nIdx < nodeObjs.size(); nIdx++) {
+            std::string nodeObj = nodeObjs[nIdx];
+            std::string extrasBlock = ExtractBlock(nodeObj, "extras");
 
-        // 5. Read Accessors & BufferViews
-        std::vector<GltfAccessor> accessors;
-        std::string accBlock = ExtractBlock(json, "accessors");
-        for (const auto& obj : SplitArray(accBlock)) {
-            std::string t = ExtractString(obj, "type");
-            int sz = (t == "SCALAR") ? 1 : (t == "VEC3" ? 3 : (t == "VEC4" ? 4 : 16));
-            accessors.push_back({ (int)ExtractFloat(obj, "bufferView"), (int)ExtractFloat(obj, "count"), sz });
+            GltfFableNode fn;
+            fn.GltfIndex = (int)nIdx;
+            fn.Name = CleanName(ExtractString(nodeObj, "name"));
+            fn.IsMapped = false;
+            fn.FableID = 0;
+            fn.ParentID = -1;
+
+            std::vector<float> mat = ExtractFloatArray(nodeObj, "matrix");
+            if (mat.size() >= 16) {
+                fn.BindLocal = DirectX::XMMATRIX(mat[0], mat[1], mat[2], mat[3], mat[4], mat[5], mat[6], mat[7], mat[8], mat[9], mat[10], mat[11], mat[12], mat[13], mat[14], mat[15]);
+            }
+            else {
+                std::vector<float> trans = ExtractFloatArray(nodeObj, "translation");
+                std::vector<float> rot = ExtractFloatArray(nodeObj, "rotation");
+                std::vector<float> scl = ExtractFloatArray(nodeObj, "scale");
+
+                DirectX::XMVECTOR vT = trans.size() >= 3 ? DirectX::XMVectorSet(trans[0], trans[1], trans[2], 1.0f) : DirectX::XMVectorSet(0, 0, 0, 1);
+                DirectX::XMVECTOR vR = rot.size() >= 4 ? DirectX::XMVectorSet(rot[0], rot[1], rot[2], rot[3]) : DirectX::XMQuaternionIdentity();
+                DirectX::XMVECTOR vS = scl.size() >= 3 ? DirectX::XMVectorSet(scl[0], scl[1], scl[2], 1.0f) : DirectX::XMVectorSet(1, 1, 1, 1);
+
+                fn.BindLocal = DirectX::XMMatrixScalingFromVector(vS) * DirectX::XMMatrixRotationQuaternion(vR) * DirectX::XMMatrixTranslationFromVector(vT);
+            }
+
+            if (!extrasBlock.empty() && extrasBlock.find("FableID") != std::string::npos) {
+                fn.FableID = (uint32_t)ExtractInt32(extrasBlock, "FableID");
+                fn.ParentID = ExtractInt32(extrasBlock, "ParentID");
+                fn.IsMapped = true;
+                hasFableIDs = true;
+            }
+
+            fableNodes.push_back(fn);
         }
-        std::vector<GltfBufferView> views;
-        std::string bvBlock = ExtractBlock(json, "bufferViews");
-        for (const auto& obj : SplitArray(bvBlock)) views.push_back({ (int)ExtractFloat(obj, "byteOffset"), (int)ExtractFloat(obj, "byteLength") });
 
-        // 6. DELTA CHECK (Only required if outAnimType is 7)
-        std::vector<DirectX::XMMATRIX> dxBindLocal;
-        if (outAnimType == 7) {
-            if (!mesh.IsParsed) return "Delta Animations (Type 7) mathematically require the skeleton. Please open the character's mesh before importing.";
+        if (!hasFableIDs) {
+            if (!mesh.IsParsed || mesh.BoneCount == 0) {
+                return "This glTF does not contain Fable metadata (FableID) and no Mesh is loaded! We cannot map these generic bones to Fable Engine IDs.";
+            }
 
-            dxBindLocal.resize(mesh.BoneCount);
             std::vector<DirectX::XMMATRIX> dxIBM(mesh.BoneCount);
             std::vector<DirectX::XMMATRIX> dxBindGlobal(mesh.BoneCount);
+            std::vector<DirectX::XMMATRIX> dxBindLocal(mesh.BoneCount);
 
             for (int i = 0; i < mesh.BoneCount; i++) {
                 if ((i + 1) * 64 <= mesh.BoneTransformsRaw.size()) {
@@ -229,9 +280,77 @@ namespace GltfAnimImporter {
                 if (par == -1 || par >= mesh.BoneCount) dxBindLocal[i] = dxBindGlobal[i];
                 else dxBindLocal[i] = DirectX::XMMatrixMultiply(dxBindGlobal[i], dxIBM[par]);
             }
+
+            for (auto& fn : fableNodes) {
+                std::string cleanNode = fn.Name;
+                std::transform(cleanNode.begin(), cleanNode.end(), cleanNode.begin(), ::tolower);
+
+                int targetMeshIdx = -1;
+                for (int m = 0; m < mesh.BoneCount; m++) {
+                    std::string cleanOrig = CleanName(mesh.BoneNames[m]);
+                    std::transform(cleanOrig.begin(), cleanOrig.end(), cleanOrig.begin(), ::tolower);
+
+                    if (!cleanNode.empty() && !cleanOrig.empty()) {
+                        if (cleanNode == cleanOrig || cleanNode.find(cleanOrig) != std::string::npos || cleanOrig.find(cleanNode) != std::string::npos) {
+                            targetMeshIdx = m;
+                            break;
+                        }
+                    }
+                }
+                if (targetMeshIdx != -1) {
+                    fn.FableID = mesh.BoneIndices[targetMeshIdx];
+                    int p = mesh.Bones[targetMeshIdx].ParentIndex;
+                    fn.ParentID = (p == -1 || p >= mesh.BoneCount) ? -1 : mesh.BoneIndices[p];
+                    fn.BindLocal = dxBindLocal[targetMeshIdx];
+                    fn.IsMapped = true;
+                }
+            }
         }
 
-        // 7. Parse Samplers & Channels
+        outAnim.Tracks.clear();
+
+        std::vector<AnimTrack> newTracks;
+        std::map<int, int> gltfNodeToTrackIdx;
+
+        for (const auto& fn : fableNodes) {
+            if (!fn.IsMapped) continue;
+
+            AnimTrack t;
+            t.BoneIndex = fn.FableID;
+            t.ParentIndex = fn.ParentID;
+            t.BoneName = fn.Name;
+            t.PreFPSFlag = 1;
+            t.SamplesPerSecond = 30.0f;
+            t.ScalingFactor = 1.0f;
+            t.PositionFactor = 0.0f;
+            newTracks.push_back(t);
+            gltfNodeToTrackIdx[fn.GltfIndex] = (int)newTracks.size() - 1;
+        }
+
+        if (newTracks.empty()) return "No valid bones were mapped. Cannot construct animation tracks.";
+
+        std::string buffersBlock = ExtractBlock(json, "buffers");
+        std::vector<std::string> bufferObjs = SplitArray(buffersBlock);
+        if (bufferObjs.empty()) return "No 'buffers' array found.";
+        std::string uri = ExtractString(bufferObjs[0], "uri");
+        if (uri.find("data:application") == 0) return "Base64 buffers not supported. Export as 'glTF Separate (.gltf + .bin)'.";
+
+        std::string binPath = gltfPath.substr(0, gltfPath.find_last_of("\\/") + 1) + uri;
+        std::ifstream binFile(binPath, std::ios::binary);
+        if (!binFile.is_open()) return "Failed to open associated .bin file: " + uri;
+        std::vector<uint8_t> binData((std::istreambuf_iterator<char>(binFile)), std::istreambuf_iterator<char>());
+
+        std::vector<GltfAccessor> accessors;
+        std::string accBlock = ExtractBlock(json, "accessors");
+        for (const auto& obj : SplitArray(accBlock)) {
+            std::string t = ExtractString(obj, "type");
+            int sz = (t == "SCALAR") ? 1 : (t == "VEC3" ? 3 : (t == "VEC4" ? 4 : 16));
+            accessors.push_back({ (int)ExtractFloat(obj, "bufferView"), (int)ExtractFloat(obj, "count"), sz });
+        }
+        std::vector<GltfBufferView> views;
+        std::string bvBlock = ExtractBlock(json, "bufferViews");
+        for (const auto& obj : SplitArray(bvBlock)) views.push_back({ (int)ExtractFloat(obj, "byteOffset"), (int)ExtractFloat(obj, "byteLength") });
+
         std::string sampBlock = ExtractBlock(targetAnim, "samplers");
         struct Samp { int inAcc; int outAcc; };
         std::vector<Samp> samplers;
@@ -239,31 +358,13 @@ namespace GltfAnimImporter {
 
         std::string chanBlock = ExtractBlock(targetAnim, "channels");
 
-        // FIX: Independent time arrays to survive Blender's keyframe optimization
         struct LoadedTrack {
             std::vector<float> posTimes;
             std::vector<DirectX::XMVECTOR> positions;
             std::vector<float> rotTimes;
             std::vector<DirectX::XMVECTOR> rotations;
         };
-        std::map<int, LoadedTrack> mappedTracks;
-
-        auto ExtractInt32 = [](const std::string& json, const std::string& key) -> int32_t {
-            size_t pos = json.find("\"" + key + "\""); if (pos == std::string::npos) return 0;
-            pos = json.find(':', pos); if (pos == std::string::npos) return 0; pos++;
-            while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) pos++;
-            size_t end = pos; if (pos < json.length() && json[pos] == '-') end++;
-            while (end < json.length() && isdigit(json[end])) end++;
-            if (pos == end) return 0;
-            try { return (int32_t)std::stoll(json.substr(pos, end - pos)); }
-            catch (...) { return 0; }
-            };
-
-        auto CleanName = [](std::string s) {
-            std::string r;
-            for (char c : s) if (isalnum((unsigned char)c)) r += tolower((unsigned char)c);
-            return r;
-            };
+        std::map<int, LoadedTrack> mappedKeyframes;
 
         for (const auto& obj : SplitArray(chanBlock)) {
             int sampIdx = (int)ExtractFloat(obj, "sampler");
@@ -271,34 +372,10 @@ namespace GltfAnimImporter {
             int gltfNodeIdx = (int)ExtractFloat(targetBlock, "node");
             std::string path = ExtractString(targetBlock, "path");
 
-            if (gltfNodeIdx >= nodeObjs.size()) continue;
+            if (gltfNodeToTrackIdx.find(gltfNodeIdx) == gltfNodeToTrackIdx.end()) continue;
+            int trackIdx = gltfNodeToTrackIdx[gltfNodeIdx];
 
-            std::string nodeObj = nodeObjs[gltfNodeIdx];
-            std::string nodeName = ExtractString(nodeObj, "name");
-            std::string extrasBlock = ExtractBlock(nodeObj, "extras");
-
-            int targetOrigIdx = -1;
-
-            if (!extrasBlock.empty() && extrasBlock.find("FableID") != std::string::npos) {
-                uint32_t tBoneIdx = (uint32_t)ExtractInt32(extrasBlock, "FableID");
-                for (size_t i = 0; i < originalTracks.size(); i++) {
-                    if (originalTracks[i].BoneIndex == tBoneIdx) { targetOrigIdx = (int)i; break; }
-                }
-            }
-
-            if (targetOrigIdx == -1) {
-                std::string cleanNode = CleanName(nodeName);
-                for (size_t i = 0; i < originalTracks.size(); i++) {
-                    std::string cleanOrig = CleanName(originalTracks[i].BoneName);
-                    if (!cleanNode.empty() && cleanNode == cleanOrig) {
-                        targetOrigIdx = (int)i; break;
-                    }
-                }
-            }
-
-            if (targetOrigIdx == -1) continue;
-
-            auto& track = mappedTracks[targetOrigIdx];
+            auto& track = mappedKeyframes[trackIdx];
             auto& inAcc = accessors[samplers[sampIdx].inAcc];
             auto& outAcc = accessors[samplers[sampIdx].outAcc];
 
@@ -317,7 +394,7 @@ namespace GltfAnimImporter {
 
         if (outAnim.Duration <= 0.01f) {
             float maxT = 0.0f;
-            for (const auto& [idx, t] : mappedTracks) {
+            for (const auto& [idx, t] : mappedKeyframes) {
                 if (!t.posTimes.empty() && t.posTimes.back() > maxT) maxT = t.posTimes.back();
                 if (!t.rotTimes.empty() && t.rotTimes.back() > maxT) maxT = t.rotTimes.back();
             }
@@ -325,40 +402,47 @@ namespace GltfAnimImporter {
         }
 
         int totalFrames = (int)(outAnim.Duration * 30.0f);
-        if (totalFrames < 2) totalFrames = 2;
+        if (totalFrames < 1) totalFrames = 1;
 
-        outAnim.Tracks.clear();
-
-        for (size_t origIdx = 0; origIdx < originalTracks.size(); origIdx++) {
-            AnimTrack t = originalTracks[origIdx];
-
+        for (size_t tIdx = 0; tIdx < newTracks.size(); tIdx++) {
+            AnimTrack t = newTracks[tIdx];
             t.FrameCount = totalFrames;
-            t.SamplesPerSecond = 30.0f;
-            t.PositionFactor = 1.0f;
-            t.ScalingFactor = 1.0f;
 
             t.PositionTrack.clear();
             t.RotationTrack.clear();
             t.PalettedPositions.clear();
             t.PalettedRotations.clear();
 
-            if (mappedTracks.count((int)origIdx) > 0) {
-                auto& lTrack = mappedTracks[(int)origIdx];
+            int gNodeIdx = -1;
+            for (const auto& pair : gltfNodeToTrackIdx) {
+                if (pair.second == tIdx) { gNodeIdx = pair.first; break; }
+            }
 
-                int meshLocalIdx = -1;
-                if (outAnimType == 7 && mesh.BoneCount > 0) {
-                    for (int m = 0; m < mesh.BoneCount; m++) {
-                        if (mesh.BoneIndices[m] == t.BoneIndex) { meshLocalIdx = m; break; }
-                    }
-                }
+            DirectX::XMMATRIX bindLocal = DirectX::XMMatrixIdentity();
+            if (gNodeIdx != -1) bindLocal = fableNodes[gNodeIdx].BindLocal;
+
+            DirectX::XMVECTOR s, r_bind, t_bind;
+            DirectX::XMMatrixDecompose(&s, &r_bind, &t_bind, bindLocal);
+
+            Vec3 basePos = { DirectX::XMVectorGetX(t_bind), DirectX::XMVectorGetY(t_bind), DirectX::XMVectorGetZ(t_bind) };
+            DirectX::XMVECTOR rConj = DirectX::XMQuaternionConjugate(r_bind);
+            Vec4 baseRot = { DirectX::XMVectorGetX(rConj), DirectX::XMVectorGetY(rConj), DirectX::XMVectorGetZ(rConj), DirectX::XMVectorGetW(rConj) };
+
+            if (mappedKeyframes.count((int)tIdx) > 0) {
+                auto& lTrack = mappedKeyframes[(int)tIdx];
 
                 for (int f = 0; f < totalFrames; f++) {
                     float targetTime = f / 30.0f;
 
-                    // --- Independent Position Lerp ---
-                    DirectX::XMVECTOR pVec = DirectX::XMVectorZero();
+                    if (lTrack.positions.empty() && lTrack.rotations.empty()) {
+                        t.PositionTrack.push_back(basePos);
+                        t.RotationTrack.push_back(baseRot);
+                        continue;
+                    }
+
+                    DirectX::XMVECTOR pVec;
                     if (lTrack.positions.empty()) {
-                        pVec = DirectX::XMVectorZero();
+                        pVec = DirectX::XMVectorSet(basePos.x, basePos.y, basePos.z, 1.0f);
                     }
                     else if (lTrack.posTimes.size() <= 1) {
                         pVec = lTrack.positions[0];
@@ -376,10 +460,9 @@ namespace GltfAnimImporter {
                         pVec = Lerp(lTrack.positions[idx0], lTrack.positions[idx1], lerpT);
                     }
 
-                    // --- Independent Rotation Slerp ---
-                    DirectX::XMVECTOR rVec = DirectX::XMVectorSet(0, 0, 0, 1);
+                    DirectX::XMVECTOR rVec;
                     if (lTrack.rotations.empty()) {
-                        rVec = DirectX::XMVectorSet(0, 0, 0, 1);
+                        rVec = DirectX::XMQuaternionConjugate(DirectX::XMVectorSet(baseRot.x, baseRot.y, baseRot.z, baseRot.w));
                     }
                     else if (lTrack.rotTimes.size() <= 1) {
                         rVec = lTrack.rotations[0];
@@ -397,14 +480,15 @@ namespace GltfAnimImporter {
                         rVec = Slerp(lTrack.rotations[idx0], lTrack.rotations[idx1], lerpT);
                     }
 
-                    if (outAnimType == 7 && meshLocalIdx != -1 && meshLocalIdx < dxBindLocal.size()) {
+                    if (outAnimType == 7) {
                         DirectX::XMMATRIX mExport = DirectX::XMMatrixMultiply(DirectX::XMMatrixRotationQuaternion(rVec), DirectX::XMMatrixTranslationFromVector(pVec));
-                        DirectX::XMMATRIX mInvBind = DirectX::XMMatrixInverse(nullptr, dxBindLocal[meshLocalIdx]);
+                        DirectX::XMMATRIX mInvBind = DirectX::XMMatrixInverse(nullptr, bindLocal);
                         DirectX::XMMATRIX mDelta = DirectX::XMMatrixMultiply(mExport, mInvBind);
-                        DirectX::XMVECTOR s, r, t_vec;
-                        DirectX::XMMatrixDecompose(&s, &r, &t_vec, mDelta);
-                        pVec = t_vec;
-                        rVec = DirectX::XMQuaternionConjugate(r);
+
+                        DirectX::XMVECTOR s_d, r_d, t_d;
+                        DirectX::XMMatrixDecompose(&s_d, &r_d, &t_d, mDelta);
+                        pVec = t_d;
+                        rVec = DirectX::XMQuaternionConjugate(r_d);
                     }
                     else {
                         rVec = DirectX::XMQuaternionConjugate(rVec);
@@ -415,33 +499,34 @@ namespace GltfAnimImporter {
                 }
             }
             else {
-                Vec3 basePos = { 0,0,0 };
-                Vec4 baseRot = { 0,0,0,1 };
-
-                if (!originalTracks[origIdx].PositionTrack.empty()) {
-                    auto p = originalTracks[origIdx].PositionTrack[0];
-                    basePos = { p.x, p.y, p.z };
-                }
-                if (!originalTracks[origIdx].RotationTrack.empty()) {
-                    auto r = originalTracks[origIdx].RotationTrack[0];
-                    baseRot = { r.x, r.y, r.z, r.w };
-                }
-
                 for (int f = 0; f < totalFrames; f++) {
-                    t.PositionTrack.push_back({ basePos.x, basePos.y, basePos.z });
-                    t.RotationTrack.push_back({ baseRot.x, baseRot.y, baseRot.z, baseRot.w });
+                    t.PositionTrack.push_back(basePos);
+                    t.RotationTrack.push_back(baseRot);
                 }
             }
 
-            for (int f = 0; f < totalFrames; f++) {
-                t.PalettedPositions.push_back((uint8_t)f);
-                t.PalettedRotations.push_back((uint8_t)f);
+            float maxExtents = 0.0f;
+            for (const auto& pos : t.PositionTrack) {
+                if (std::abs(pos.x) > maxExtents) maxExtents = std::abs(pos.x);
+                if (std::abs(pos.y) > maxExtents) maxExtents = std::abs(pos.y);
+                if (std::abs(pos.z) > maxExtents) maxExtents = std::abs(pos.z);
+            }
+
+            // FIX: Restore correct factor divisor
+            if (maxExtents > 32700.0f) {
+                t.PositionFactor = maxExtents / 32767.0f;
+            }
+            else if (maxExtents > 0.0f && maxExtents < 327.0f) {
+                t.PositionFactor = 0.01f;
+            }
+            else {
+                t.PositionFactor = 1.0f;
             }
 
             outAnim.Tracks.push_back(t);
         }
 
         outAnim.IsParsed = true;
-        return ""; // Success!
+        return "";
     }
 }

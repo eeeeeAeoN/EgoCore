@@ -462,3 +462,51 @@ inline void FindNextInEditor() {
         }
     }
 }
+
+inline bool ReplaceAndSaveEnum(const std::string& enumName, const std::string& newBody) {
+    int idx = -1;
+    for (int i = 0; i < (int)g_DefWorkspace.AllEnums.size(); i++) {
+        if (g_DefWorkspace.AllEnums[i].Name == enumName) {
+            idx = i; break;
+        }
+    }
+    if (idx == -1) return false; // Enum not found (Defs probably not loaded)
+
+    EnumEntry& entry = g_DefWorkspace.AllEnums[idx];
+
+    // Build new full content
+    std::string newContent = "enum " + enumName + "\n{\n" + newBody + "};";
+
+    std::ifstream inFile(entry.FilePath, std::ios::binary);
+    if (!inFile.is_open()) return false;
+    std::string fileContent((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
+    inFile.close();
+
+    if (fileContent.size() < entry.EndOffset) return false;
+
+    std::string pre = fileContent.substr(0, entry.StartOffset);
+    std::string post = fileContent.substr(entry.EndOffset);
+    std::string finalContent = pre + newContent + post;
+
+    std::ofstream outFile(entry.FilePath, std::ios::binary);
+    if (!outFile.is_open()) return false;
+    outFile << finalContent;
+    outFile.close();
+
+    long long sizeDiff = (long long)newContent.size() - (long long)(entry.EndOffset - entry.StartOffset);
+
+    for (auto& other : g_DefWorkspace.AllEnums) {
+        if (other.FilePath == entry.FilePath && other.StartOffset > entry.StartOffset) {
+            other.StartOffset += sizeDiff;
+            other.EndOffset += sizeDiff;
+        }
+    }
+    entry.EndOffset += sizeDiff;
+    entry.FullContent = newContent;
+
+    if (g_DefWorkspace.ShowDefsMode == false && g_DefWorkspace.SelectedEnumIndex == idx) {
+        g_DefWorkspace.Editor.SetText(newContent);
+        g_DefWorkspace.OriginalContent = newContent;
+    }
+    return true;
+}

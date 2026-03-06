@@ -381,20 +381,58 @@ inline void JumpToBankEntry(const std::string& targetFile, uint32_t id, const st
         }
         return -1;
         };
+
     int bankIdx = findBankIndex(targetFile);
+
+    // If bank isn't open, search for it dynamically across all possible language folders
     if (bankIdx == -1) {
-        std::vector<std::string> pathsToTry = { g_AppConfig.GameRootPath + "\\Data\\Lang\\English\\" + targetFile, g_AppConfig.GameRootPath + "\\Data\\Audio\\" + targetFile, g_AppConfig.GameRootPath + "\\Data\\" + targetFile };
-        for (const auto& p : pathsToTry) if (std::filesystem::exists(p)) { LoadBank(p); break; }
+        std::vector<std::string> pathsToTry;
+        const char* langs[] = { "English", "French", "Italian", "Chinese", "German", "Korean", "Japanese", "Spanish" };
+
+        // Add all language paths
+        for (const char* l : langs) {
+            pathsToTry.push_back(g_AppConfig.GameRootPath + "\\Data\\Lang\\" + std::string(l) + "\\" + targetFile);
+        }
+        // Add generic fallback paths
+        pathsToTry.push_back(g_AppConfig.GameRootPath + "\\Data\\" + targetFile);
+
+        for (const auto& p : pathsToTry) {
+            if (std::filesystem::exists(p)) {
+                LoadBank(p);
+                break;
+            }
+        }
         bankIdx = findBankIndex(targetFile);
     }
-    if (bankIdx == -1) { g_BankStatus = "Jump failed: Could not find/load " + targetFile; return; }
 
-    auto& bank = g_OpenBanks[bankIdx]; g_ActiveBankIndex = bankIdx; g_ForceTabSwitch = true;
+    if (bankIdx == -1) {
+        g_BankStatus = "Jump failed: Could not find/load " + targetFile;
+        return;
+    }
+
+    auto& bank = g_OpenBanks[bankIdx];
+    g_ActiveBankIndex = bankIdx;
+    g_ForceTabSwitch = true;
+
     if (!speechBankRef.empty() && !bank.SubBanks.empty()) {
         std::string targetSub = GetSubBankNameForSpeech(speechBankRef);
-        if (!targetSub.empty()) for (int s = 0; s < bank.SubBanks.size(); s++) if (bank.SubBanks[s].Name == targetSub) { if (bank.ActiveSubBankIndex != s) LoadSubBankEntries(&bank, s); break; }
+        if (!targetSub.empty()) {
+            for (int s = 0; s < bank.SubBanks.size(); s++) {
+                if (bank.SubBanks[s].Name == targetSub) {
+                    if (bank.ActiveSubBankIndex != s) LoadSubBankEntries(&bank, s);
+                    break;
+                }
+            }
+        }
     }
-    for (int k = 0; k < bank.Entries.size(); k++) if (bank.Entries[k].ID == id) { SelectEntry(&bank, k); return; }
+
+    for (int k = 0; k < bank.Entries.size(); k++) {
+        if (bank.Entries[k].ID == id) {
+            SelectEntry(&bank, k);
+            return;
+        }
+    }
+
     g_BankStatus = "Jump failed: ID " + std::to_string(id) + " not found.";
 }
 

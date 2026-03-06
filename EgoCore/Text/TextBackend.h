@@ -95,14 +95,20 @@ inline std::string GetHeaderName(const std::string& speechBank) {
     return stem + "snds.h";
 }
 
-// Maps Internal SubBank Name (e.g. "LIPSYNC_ENGLISH_MAIN") to header file
 inline std::string GetHeaderForSubBank(const std::string& subBankName) {
-    if (subBankName == "LIPSYNC_ENGLISH_MAIN") return "dialoguesnds.h";
-    if (subBankName == "LIPSYNC_ENGLISH_MAIN_2") return "dialoguesnds2.h";
-    if (subBankName == "LIPSYNC_ENGLISH_SCRIPT") return "scriptdialoguesnds.h";
-    if (subBankName == "LIPSYNC_ENGLISH_SCRIPT_2") return "scriptdialoguesnds2.h";
+    std::string upper = subBankName;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+
+    // ONLY apply audio friendly-names to LipSync banks, NOT Text banks!
+    if (upper.find("LIPSYNC_") == 0) {
+        if (upper.find("_MAIN_2") != std::string::npos) return "dialoguesnds2.h";
+        if (upper.find("_MAIN") != std::string::npos) return "dialoguesnds.h";
+        if (upper.find("_SCRIPT_2") != std::string::npos) return "scriptdialoguesnds2.h";
+        if (upper.find("_SCRIPT") != std::string::npos) return "scriptdialoguesnds.h";
+    }
     return "";
 }
+
 
 inline int FindHeaderIndex(const std::string& headerName) {
     for (int i = 0; i < (int)g_DefWorkspace.AllEnums.size(); i++) {
@@ -176,60 +182,38 @@ inline uint32_t GetNextIDFromHeader(const std::string& speechBank) {
 }
 
 inline std::shared_ptr<AudioBankParser> GetOrLoadAudioBank(const std::string& bankName) {
-    // 1. NORMALIZE INPUT TO .LUT FILENAME
-    // The text bank usually refers to banks as "Creature.lug" or just "Creature".
-    // We need to standardize this to "creature.lut" for consistent matching.
     std::string searchKey = bankName;
     std::transform(searchKey.begin(), searchKey.end(), searchKey.begin(), ::tolower);
 
-    // If it has .lug extension, swap it to .lut
     size_t lugPos = searchKey.find(".lug");
-    if (lugPos != std::string::npos) {
-        searchKey.replace(lugPos, 4, ".lut");
-    }
-    // If it has no extension, append .lut
-    else if (searchKey.find(".") == std::string::npos) {
-        searchKey += ".lut";
-    }
-    // Result is now guaranteed to be "filename.lut" (lowercase)
+    if (lugPos != std::string::npos) searchKey.replace(lugPos, 4, ".lut");
+    else if (searchKey.find(".") == std::string::npos) searchKey += ".lut";
 
-    // 2. CHECK OPEN TABS (CRITICAL)
-    // If the user has this bank open in the editor, we MUST use that instance.
-    // This ensures that if you have unsaved changes in the tab, the linker sees them.
     for (auto& b : g_OpenBanks) {
         if (b.Type == EBankType::Audio && b.AudioParser) {
             std::string bName = b.FileName;
             std::transform(bName.begin(), bName.end(), bName.begin(), ::tolower);
-
             if (bName == searchKey) {
-                // Found it live in the UI!
-                // Map it in the background cache so cascade compilation can find it easily later.
                 g_BackgroundAudioBanks[searchKey] = b.AudioParser;
                 return b.AudioParser;
             }
         }
     }
 
-    // 3. CHECK BACKGROUND CACHE
-    // If it's not in a tab, maybe we already loaded it in the background previously?
-    if (g_BackgroundAudioBanks.count(searchKey)) {
-        return g_BackgroundAudioBanks[searchKey];
-    }
+    if (g_BackgroundAudioBanks.count(searchKey)) return g_BackgroundAudioBanks[searchKey];
 
-    // 4. LOAD FROM DISK (STRICT)
-    // Only look in Data/Lang/English as requested.
-    std::string path = g_AppConfig.GameRootPath + "\\Data\\Lang\\English\\" + searchKey;
-
-    if (std::filesystem::exists(path)) {
-        auto parser = std::make_shared<AudioBankParser>();
-        if (parser->Parse(path)) {
-            g_BackgroundAudioBanks[searchKey] = parser;
-            return parser;
+    // LOAD FROM DISK (Language Agnostic)
+    const char* langs[] = { "English", "French", "Italian", "Chinese", "German", "Korean", "Japanese", "Spanish" };
+    for (const char* l : langs) {
+        std::string path = g_AppConfig.GameRootPath + "\\Data\\Lang\\" + std::string(l) + "\\" + searchKey;
+        if (std::filesystem::exists(path)) {
+            auto parser = std::make_shared<AudioBankParser>();
+            if (parser->Parse(path)) {
+                g_BackgroundAudioBanks[searchKey] = parser;
+                return parser;
+            }
         }
     }
-
-    // 5. FAIL
-    // If not found in English, we return null. We do not fallback to other folders.
     return nullptr;
 }
 

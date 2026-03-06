@@ -146,6 +146,17 @@ inline void CheckMeshUpload(ID3D11Device* device) {
     }
 }
 
+static std::string StrictCleanBoneName(const std::string& str) {
+    std::string res;
+    for (char c : str) {
+        // Strip out spaces, underscores, and Fable's binary garbage. Keep only letters and numbers.
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+            res += (char)tolower(c);
+        }
+    }
+    return res;
+}
+
 inline void UpdateAnimationBones() {
     if (!g_ActiveMeshContent.IsParsed || g_ActiveMeshContent.BoneCount == 0) {
         g_PreviewBoneTransforms.clear();
@@ -162,15 +173,13 @@ inline void UpdateAnimationBones() {
     std::vector<XMMATRIX> bindLocal(boneCount);
 
     // 1. Extract, Clean, and Transpose Inverse Bind Matrices (IBM)
+    // This is mathematically perfect and required for Delta animations to work!
     for (int i = 0; i < boneCount; i++) {
         if ((i + 1) * 64 <= g_ActiveMeshContent.BoneTransformsRaw.size()) {
             float* raw = (float*)(g_ActiveMeshContent.BoneTransformsRaw.data() + i * 64);
             XMMATRIX rawMatrix = XMMATRIX(raw);
 
-            // Clear Fable's garbage 4th row
             rawMatrix.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-
-            // Transpose Fable's Column-Major matrix to DirectX's Row-Major matrix
             XMMATRIX dxIBM = XMMatrixTranspose(rawMatrix);
 
             ibm[i] = dxIBM;
@@ -182,7 +191,7 @@ inline void UpdateAnimationBones() {
         }
     }
 
-    // Pre-calculate mathematically perfect local bind matrices
+    // 2. Pre-calculate mathematically perfect local bind matrices from IBMs
     for (int i = 0; i < boneCount; i++) {
         int p = g_ActiveMeshContent.Bones[i].ParentIndex;
         if (p == -1 || p >= boneCount) {
@@ -195,7 +204,6 @@ inline void UpdateAnimationBones() {
 
     bool isAnimLoaded = g_PreviewAnimParser.Data.IsParsed;
 
-    // 2. PERFECT BIND POSE BYPASS
     if (!isAnimLoaded) {
         for (int i = 0; i < boneCount; i++) {
             g_PreviewBoneTransforms[i] = XMMatrixIdentity();
@@ -206,86 +214,98 @@ inline void UpdateAnimationBones() {
 
     std::vector<XMMATRIX> localTransforms(boneCount);
 
+    auto cleanName = [](const std::string& str) {
+        std::string res;
+        for (char c : str) {
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) res += (char)tolower(c);
+        }
+        return res;
+        };
+
     // 3. Calculate Local Transforms for this frame
     for (int i = 0; i < boneCount; i++) {
         bool hasAnim = false;
+
         std::string targetBoneName = i < g_ActiveMeshContent.BoneNames.size() ? g_ActiveMeshContent.BoneNames[i] : "";
-        std::transform(targetBoneName.begin(), targetBoneName.end(), targetBoneName.begin(), ::tolower);
+        std::string cleanTarget = cleanName(targetBoneName);
 
-        // Iterate through all parsed tracks to find a match
-        for (const auto& track : g_PreviewAnimParser.Data.Tracks) {
-            std::string tName = track.BoneName;
-            std::transform(tName.begin(), tName.end(), tName.begin(), ::tolower);
+        if (!cleanTarget.empty()) {
+            for (const auto& track : g_PreviewAnimParser.Data.Tracks) {
+                std::string cleanTrack = cleanName(track.BoneName);
 
-            bool isMatch = false;
+                if (cleanTarget == cleanTrack) {
+                    if (track.FrameCount > 0 && track.SamplesPerSecond > 0) {
+                        int frame = (int)(g_PreviewAnimTime * track.SamplesPerSecond) % track.FrameCount;
+                        if (frame < 0) frame += track.FrameCount;
 
-            // IRONCLAD PREFIX MATCHER: 
-            // Fable track names contain binary garbage at the end because they aren't properly null-terminated.
-            // We check if the track name STARTS with the mesh bone name, and ensure the next character is garbage, not a letter!
-            if (targetBoneName.length() > 0 && tName.length() >= targetBoneName.length()) {
-                if (tName.compare(0, targetBoneName.length(), targetBoneName) == 0) {
-                    if (tName.length() == targetBoneName.length()) {
-                        isMatch = true; // Exact match
-                    }
-                    else {
-                        // Check the first character after the match. If it's a letter/number, it's a different bone (e.g. "Arm" vs "Armor")
-                        char nextChar = tName[targetBoneName.length()];
-                        if ((nextChar < 'a' || nextChar > 'z') && (nextChar < '0' || nextChar > '9')) {
-                            isMatch = true; // It's binary garbage padding! Safe match.
+                        if (g_SelectedAnimType == 7) {
+                            // --- DELTA ANIMATION LOGIC (RESTORED TO ORIGINAL) ---
+                            // Delta tracks use {0,0,0} fallback to produce Identity matrix when tracks are missing
+                            Vec3 p = { 0.0f, 0.0f, 0.0f };
+                            Vec4 q = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+                            track.EvaluateFrame(frame, p, q);
+
+                            XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 1.0f);
+                            XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
+                            vRot = XMQuaternionConjugate(vRot);
+
+                            XMMATRIX trackMat = XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
+
+                            // Delta applies relative offset to the pure IBM-derived bindLocal
+                            localTransforms[i] = XMMatrixMultiply(trackMat, bindLocal[i]);
                         }
+                        else {
+                            // --- STANDARD/PARTIAL ANIMATION LOGIC ---
+                            // Standard tracks use the actual bind pose fallback so missing bones don't snap to origin
+                            XMVECTOR s_b, r_b, t_b;
+                            XMMatrixDecompose(&s_b, &r_b, &t_b, bindLocal[i]);
+                            r_b = XMQuaternionConjugate(r_b);
+
+                            Vec3 p = { XMVectorGetX(t_b), XMVectorGetY(t_b), XMVectorGetZ(t_b) };
+                            Vec4 q = { XMVectorGetX(r_b), XMVectorGetY(r_b), XMVectorGetZ(r_b), XMVectorGetW(r_b) };
+
+                            track.EvaluateFrame(frame, p, q);
+
+                            XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 1.0f);
+                            XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
+                            vRot = XMQuaternionConjugate(vRot);
+
+                            // The "Puddle" fix: Inject the scale back in to preserve dragon sizes
+                            localTransforms[i] = XMMatrixScalingFromVector(s_b) * XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
+                        }
+
+                        hasAnim = true;
                     }
+                    break;
                 }
-            }
-
-            if (isMatch) {
-                if (track.FrameCount > 0 && track.SamplesPerSecond > 0) {
-                    int frame = (int)(g_PreviewAnimTime * track.SamplesPerSecond) % track.FrameCount;
-                    if (frame < 0) frame += track.FrameCount;
-
-                    Vec3 p;
-                    Vec4 q;
-                    track.EvaluateFrame(frame, p, q);
-
-                    XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 1.0f);
-                    XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
-
-                    // Conjugate Fable Quaternion
-                    vRot = XMQuaternionConjugate(vRot);
-
-                    XMMATRIX trackMat = XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
-
-                    // DELTA ANIMATION (TYPE 7) OFFSET MATH
-                    if (g_SelectedAnimType == 7) {
-                        localTransforms[i] = XMMatrixMultiply(trackMat, bindLocal[i]);
-                    }
-                    else {
-                        // STANDARD (TYPE 6) AND PARTIAL (TYPE 9)
-                        localTransforms[i] = trackMat;
-                    }
-
-                    hasAnim = true;
-                }
-                break; // Found the track, stop searching! (Prevents noodles)
             }
         }
 
-        // If no animation overrides it, use the TRUE local bind transform (crucial for Partial animations!)
         if (!hasAnim) {
             localTransforms[i] = bindLocal[i];
         }
     }
 
-    // 4. Rebuild Global Transforms for the Current Frame
-    for (int i = 0; i < boneCount; i++) {
-        int p = g_ActiveMeshContent.Bones[i].ParentIndex;
-        if (p != -1 && p < i) {
-            g_PreviewGlobalTransforms[i] = XMMatrixMultiply(localTransforms[i], g_PreviewGlobalTransforms[p]);
+    // 4. TOPOLOGICAL HIERARCHY SOLVER (Fixes Extremity Detachments)
+    std::vector<bool> computed(boneCount, false);
+    std::function<void(int)> ComputeGlobal = [&](int idx) {
+        if (computed[idx]) return;
+
+        int p = g_ActiveMeshContent.Bones[idx].ParentIndex;
+        if (p != -1 && p < boneCount) {
+            ComputeGlobal(p); // Force parent to evaluate first
+            g_PreviewGlobalTransforms[idx] = XMMatrixMultiply(localTransforms[idx], g_PreviewGlobalTransforms[p]);
         }
         else {
-            g_PreviewGlobalTransforms[i] = localTransforms[i];
+            g_PreviewGlobalTransforms[idx] = localTransforms[idx];
         }
+        computed[idx] = true;
+        };
 
-        // 5. Final Skinning Matrix: Clean Row-Major IBM * AnimatedGlobal
+    for (int i = 0; i < boneCount; i++) {
+        ComputeGlobal(i);
+        // 5. Final Hardware Skinning Matrix
         g_PreviewBoneTransforms[i] = XMMatrixMultiply(ibm[i], g_PreviewGlobalTransforms[i]);
     }
 }

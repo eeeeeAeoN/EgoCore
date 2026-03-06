@@ -250,7 +250,11 @@ struct C3DMeshContent {
             else { DebugStatus = "Truncated Bone Indices"; return false; }
 
             BoneNamesRaw = DecompressLZO(b, cursor, sz, BoneNameSize);
-            size_t bnCursor = 0; while (bnCursor < BoneNamesRaw.size()) { std::string s = ReadString(BoneNamesRaw.data(), bnCursor, BoneNamesRaw.size()); if (!s.empty()) BoneNames.push_back(s); }
+            size_t bnCursor = 0;
+            for (int i = 0; i < BoneCount && bnCursor < BoneNamesRaw.size(); i++) {
+                std::string s = ReadString(BoneNamesRaw.data(), bnCursor, BoneNamesRaw.size());
+                BoneNames.push_back(s); // DO NOT skip empty strings. We must keep the array 1:1 with BoneCount.
+            }
 
             auto boneDataRaw = DecompressLZO(b, cursor, sz, 60 * BoneCount);
             if (boneDataRaw.size() == 60 * BoneCount) { for (int i = 0; i < BoneCount; i++) { C3DBone bone; memcpy(&bone, boneDataRaw.data() + (i * 60), 60); Bones.push_back(bone); } }

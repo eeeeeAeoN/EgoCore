@@ -28,7 +28,7 @@ struct CBMatrix {
     XMMATRIX World;
     XMFLOAT4 Color;
     XMFLOAT4 LightDir;
-    XMMATRIX BoneTransforms[128]; // Max 128 bones
+    XMMATRIX BoneTransforms[256]; // Believe it or not, there are meshes with more than 128 bones i.e the dragon
     int HasAnimation;
     XMFLOAT3 Padding;
 };
@@ -139,7 +139,7 @@ public:
         const char* shaderSrc = R"(
             cbuffer CBuf : register(b0) { 
                 matrix WVP; matrix World; float4 Col; float4 LightDir; 
-                matrix BoneTransforms[128];
+                matrix BoneTransforms[256];
                 int HasAnimation; float3 padding;
             };
             struct VS_IN { 
@@ -315,7 +315,7 @@ public:
                                 if (pID < prim.AnimatedBlocks[blk].Groups.size()) lID = prim.AnimatedBlocks[blk].Groups[pID];
                                 else lID = 0;
                             }
-                            if (lID >= mesh.BoneCount || lID >= 128) lID = 0;
+                            if (lID >= mesh.BoneCount || lID >= 256) lID = 0;
                             j[k] = (uint8_t)lID;
                         }
                         gpuV.Joints = (j[3] << 24) | (j[2] << 16) | (j[1] << 8) | j[0];
@@ -435,12 +435,12 @@ public:
         // Populate Bone Transforms for Hardware Skinning
         cb.HasAnimation = (animatedBones && !animatedBones->empty()) ? 1 : 0;
         if (cb.HasAnimation) {
-            for (size_t i = 0; i < animatedBones->size() && i < 128; i++) {
+            for (size_t i = 0; i < animatedBones->size() && i < 256; i++) {
                 cb.BoneTransforms[i] = XMMatrixTranspose((*animatedBones)[i]);
             }
         }
         else {
-            for (int i = 0; i < 128; i++) cb.BoneTransforms[i] = XMMatrixIdentity();
+            for (int i = 0; i < 256; i++) cb.BoneTransforms[i] = XMMatrixIdentity();
         }
 
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
