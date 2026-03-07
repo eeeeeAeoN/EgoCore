@@ -222,6 +222,12 @@
     <ClInclude Include="GltfAnimImporter.h">
       <Filter>Source Files\Animations</Filter>
     </ClInclude>
+    <ClInclude Include="MeshCompiler.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="GltfMeshImporter.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

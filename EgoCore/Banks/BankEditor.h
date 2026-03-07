@@ -7,6 +7,7 @@
 #include "LipSyncCompiler.h"
 #include "TextBackend.h" 
 #include <thread>
+#include "MeshCompiler.h"
 
 inline std::string SanitizeEnumName(std::string name) {
     std::string res;
@@ -952,13 +953,47 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     // --- MESHES (Types 1, 2, 4, 5) ---
     else if (IsSupportedMesh(e.Type)) {
         if (g_ActiveMeshContent.IsParsed) {
-            newInfo = g_ActiveMeshContent.SerializeEntryMetadata();
-            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
-            e.InfoSize = (uint32_t)newInfo.size();
+            newBytes = MeshCompiler::Compile(g_ActiveMeshContent);
+            if (!newBytes.empty()) {
+
+                // Safely patch the existing subheader in-place!
+                newInfo = bank->SubheaderCache[bank->SelectedEntryIndex];
+                if (newInfo.size() >= 44) {
+                    size_t cursor = 4; // Skip PhysicsIndex
+                    uint32_t bbmFlag = *(uint32_t*)(newInfo.data() + cursor); cursor += 4;
+                    if (bbmFlag != 0 && cursor + 4 <= newInfo.size()) {
+                        uint32_t bbmLen = *(uint32_t*)(newInfo.data() + cursor); cursor += 4;
+                        cursor += bbmLen; // Skip the variable-length string
+                    }
+                    cursor += 12; // Skip unknown floats
+
+                    // We are now perfectly aligned at the Bounding Box data
+                    if (cursor + 44 <= newInfo.size()) {
+                        memcpy(newInfo.data() + cursor, g_ActiveMeshContent.BoundingSphereCenter, 12); cursor += 12;
+                        memcpy(newInfo.data() + cursor, &g_ActiveMeshContent.BoundingSphereRadius, 4); cursor += 4;
+                        memcpy(newInfo.data() + cursor, g_ActiveMeshContent.BoundingBoxMin, 12); cursor += 12;
+                        memcpy(newInfo.data() + cursor, g_ActiveMeshContent.BoundingBoxMax, 12); cursor += 12;
+
+                        uint32_t lodCount = *(uint32_t*)(newInfo.data() + cursor); cursor += 4;
+                        if (lodCount > 0 && cursor + 4 <= newInfo.size()) {
+                            uint32_t newLodSize = (uint32_t)newBytes.size();
+                            memcpy(newInfo.data() + cursor, &newLodSize, 4); // Inject compiled LZO size
+                        }
+                    }
+                }
+
+                bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
+                e.InfoSize = (uint32_t)newInfo.size();
+
+                bank->CurrentEntryRawData = newBytes;
+                bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
+                e.Size = (uint32_t)newBytes.size();
+                g_BankStatus = "Mesh Compiled and Saved to RAM.";
+            }
+            else {
+                g_BankStatus = "Error: Mesh Compilation failed!";
+            }
         }
-        newBytes = bank->CurrentEntryRawData;
-        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-        g_BankStatus = "Mesh Header Saved.";
     }
     // --- PHYSICS MESH (Type 3) ---
     else if (e.Type == TYPE_STATIC_PHYSICS_MESH) {

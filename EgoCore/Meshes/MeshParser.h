@@ -41,6 +41,7 @@ struct C3DMaterial {
     int32_t ID; std::string Name; int32_t DecalID; int32_t DiffuseMapID; int32_t BumpMapID;
     int32_t ReflectionMapID; int32_t IlluminationMapID; int32_t MapFlags; int32_t SelfIllumination;
     bool IsTwoSided; bool IsTransparent; bool BooleanAlpha; bool DegenerateTriangles; bool UseFilenames;
+    std::vector<std::string> TextureFileNames; // NEW: Non-lossy preserve
 };
 
 struct CStaticBlock { uint32_t PrimitiveCount; uint32_t StartIndex; bool IsStrip; uint8_t ChangeFlags; bool DegenerateTriangles; int32_t MaterialIndex; };
@@ -56,6 +57,7 @@ struct C3DPrimitive {
     uint32_t VertexCount; uint32_t TriangleCount; uint32_t IndexCount; uint32_t InitFlags;
     uint32_t StaticBlockCount_2; uint32_t AnimatedBlockCount_2;
     bool IsCompressed; bool HasExtraData; int32_t VertexStride;
+    uint32_t BufferType; // NEW: Non-lossy preserve
     CVertexCompressionParams Compression;
     std::vector<CStaticBlock> StaticBlocks;
     std::vector<CAnimatedBlock> AnimatedBlocks;
@@ -74,12 +76,16 @@ struct CMeshEntryMetadata {
 
 struct C3DMeshContent {
     std::string MeshName;
+    int32_t MeshType = -1; // NEW: Track the bank entry type for Type 4 fixes
+
     CMeshEntryMetadata EntryMeta;
     bool AnimatedFlag = false;
     float BoundingSphereCenter[3] = { 0 }; float BoundingSphereRadius = 0.0f;
     float BoundingBoxMin[3] = { 0 }; float BoundingBoxMax[3] = { 0 };
     uint16_t HelperPointCount = 0; uint16_t DummyObjectCount = 0; uint16_t PackedNamesSize = 0;
     uint16_t MeshVolumeCount = 0; uint16_t MeshGeneratorCount = 0;
+
+    std::vector<uint8_t> PackedNamesRaw; // NEW: Non-lossy preserve for padding
     std::vector<std::string> HelperNameStrings; std::vector<std::string> DummyNameStrings;
     std::vector<CHelperPoint> Helpers; std::vector<CDummyObject> Dummies;
     std::vector<CMeshVolume> Volumes; std::vector<CMeshGenerator> Generators;
@@ -108,7 +114,6 @@ struct C3DMeshContent {
         return true;
     }
 
-    // --- REVERSE of ParseEntryMetadata ---
     std::vector<uint8_t> SerializeEntryMetadata() {
         std::vector<uint8_t> data;
         auto Write = [&](const void* val, size_t len) {
@@ -123,10 +128,7 @@ struct C3DMeshContent {
 
         Write(&EntryMeta.LODCount, 4);
         for (uint32_t s : EntryMeta.LODSizes) Write(&s, 4);
-
-        // Matches ParseEntryMetadata read order
         Write(&EntryMeta.SafeBoundingRadius, 4);
-
         for (float e : EntryMeta.LODErrors) Write(&e, 4);
 
         uint32_t texCount = (uint32_t)EntryMeta.TextureIDs.size();
@@ -163,6 +165,28 @@ struct C3DMeshContent {
         }
     }
 
+    void UpdateMetadata(size_t compiledLZOSize) {
+        EntryMeta.TextureIDs.clear();
+        for (const auto& mat : Materials) {
+            if (mat.DiffuseMapID > 0 && std::find(EntryMeta.TextureIDs.begin(), EntryMeta.TextureIDs.end(), mat.DiffuseMapID) == EntryMeta.TextureIDs.end()) EntryMeta.TextureIDs.push_back(mat.DiffuseMapID);
+            if (mat.BumpMapID > 0 && std::find(EntryMeta.TextureIDs.begin(), EntryMeta.TextureIDs.end(), mat.BumpMapID) == EntryMeta.TextureIDs.end()) EntryMeta.TextureIDs.push_back(mat.BumpMapID);
+            if (mat.ReflectionMapID > 0 && std::find(EntryMeta.TextureIDs.begin(), EntryMeta.TextureIDs.end(), mat.ReflectionMapID) == EntryMeta.TextureIDs.end()) EntryMeta.TextureIDs.push_back(mat.ReflectionMapID);
+            if (mat.IlluminationMapID > 0 && std::find(EntryMeta.TextureIDs.begin(), EntryMeta.TextureIDs.end(), mat.IlluminationMapID) == EntryMeta.TextureIDs.end()) EntryMeta.TextureIDs.push_back(mat.IlluminationMapID);
+            if (mat.DecalID > 0 && std::find(EntryMeta.TextureIDs.begin(), EntryMeta.TextureIDs.end(), mat.DecalID) == EntryMeta.TextureIDs.end()) EntryMeta.TextureIDs.push_back(mat.DecalID);
+        }
+        EntryMeta.LODCount = 1;
+        EntryMeta.LODSizes.clear();
+        EntryMeta.LODSizes.push_back((uint32_t)compiledLZOSize);
+        EntryMeta.HasData = true;
+
+        // FIX: Sync our synthesized bounds back to the Engine TOC Header!
+        EntryMeta.PhysicsIndex = 0; // Standard for flora
+        memcpy(EntryMeta.BoundingSphereCenter, BoundingSphereCenter, 12);
+        EntryMeta.BoundingSphereRadius = BoundingSphereRadius;
+        memcpy(EntryMeta.BoundingBoxMin, BoundingBoxMin, 12);
+        memcpy(EntryMeta.BoundingBoxMax, BoundingBoxMax, 12);
+    }
+
     int CalculateVertexStride(int initFlags, bool isAnimated) {
         bool isPosComp = (initFlags & 4) != 0 && (initFlags & 0x10) == 0;
         bool isNormComp = (initFlags & 4) != 0;
@@ -176,11 +200,13 @@ struct C3DMeshContent {
         return stride;
     }
 
-    bool Parse(const std::vector<uint8_t>& data) {
+    bool Parse(const std::vector<uint8_t>& data, int entryType = -1) {
+        MeshType = entryType;
         IsParsed = false;
         Helpers.clear(); Dummies.clear(); Volumes.clear(); Generators.clear();
         Materials.clear(); Primitives.clear(); HelperNameStrings.clear(); DummyNameStrings.clear();
         BoneIndices.clear(); BoneNames.clear(); Bones.clear();
+        PackedNamesRaw.clear();
         DebugStatus = "Reset";
 
         if (data.size() < 100) { DebugStatus = "File too small"; return false; }
@@ -202,21 +228,20 @@ struct C3DMeshContent {
         if (HelperPointCount > 0) helpersRaw = DecompressLZO(b, cursor, sz, 20 * HelperPointCount);
         if (DummyObjectCount > 0) dummiesRaw = DecompressLZO(b, cursor, sz, 56 * DummyObjectCount);
 
+        // FIX: Non-lossy PackedNames parsing
         if (PackedNamesSize > 0) {
-            std::vector<uint8_t> namesRaw = DecompressLZO(b, cursor, sz, PackedNamesSize);
-            if (namesRaw.size() >= 2) {
-                uint16_t dummyOff = *(uint16_t*)namesRaw.data();
+            PackedNamesRaw = DecompressLZO(b, cursor, sz, PackedNamesSize);
+            if (PackedNamesRaw.size() >= 2) {
+                uint16_t dummyOff = *(uint16_t*)PackedNamesRaw.data();
                 size_t nCursor = 2;
                 for (int i = 0; i < HelperPointCount; i++) {
                     if (nCursor >= dummyOff) break;
-                    std::string s = ReadString(namesRaw.data(), nCursor, dummyOff);
-                    HelperNameStrings.push_back(s);
+                    HelperNameStrings.push_back(ReadString(PackedNamesRaw.data(), nCursor, dummyOff));
                 }
                 nCursor = dummyOff;
                 for (int i = 0; i < DummyObjectCount; i++) {
-                    if (nCursor >= namesRaw.size()) break;
-                    std::string s = ReadString(namesRaw.data(), nCursor, namesRaw.size());
-                    DummyNameStrings.push_back(s);
+                    if (nCursor >= PackedNamesRaw.size()) break;
+                    DummyNameStrings.push_back(ReadString(PackedNamesRaw.data(), nCursor, PackedNamesRaw.size()));
                 }
             }
         }
@@ -252,8 +277,7 @@ struct C3DMeshContent {
             BoneNamesRaw = DecompressLZO(b, cursor, sz, BoneNameSize);
             size_t bnCursor = 0;
             for (int i = 0; i < BoneCount && bnCursor < BoneNamesRaw.size(); i++) {
-                std::string s = ReadString(BoneNamesRaw.data(), bnCursor, BoneNamesRaw.size());
-                BoneNames.push_back(s); // DO NOT skip empty strings. We must keep the array 1:1 with BoneCount.
+                BoneNames.push_back(ReadString(BoneNamesRaw.data(), bnCursor, BoneNamesRaw.size()));
             }
 
             auto boneDataRaw = DecompressLZO(b, cursor, sz, 60 * BoneCount);
@@ -266,7 +290,12 @@ struct C3DMeshContent {
 
         for (int i = 0; i < MaterialCount; i++) {
             if (i > 1000) break; C3DMaterial mat; Read(b, cursor, sz, mat.ID); mat.Name = ReadString(b, cursor, sz); Read(b, cursor, sz, mat.DecalID); Read(b, cursor, sz, mat.DiffuseMapID); Read(b, cursor, sz, mat.BumpMapID); Read(b, cursor, sz, mat.ReflectionMapID); Read(b, cursor, sz, mat.IlluminationMapID); Read(b, cursor, sz, mat.MapFlags); Read(b, cursor, sz, mat.SelfIllumination); Read(b, cursor, sz, mat.IsTwoSided); Read(b, cursor, sz, mat.IsTransparent); Read(b, cursor, sz, mat.BooleanAlpha); Read(b, cursor, sz, mat.DegenerateTriangles); Read(b, cursor, sz, mat.UseFilenames);
-            if (mat.UseFilenames) { for (int j = 0; j < 4; j++) ReadString(b, cursor, sz); }
+            // FIX: Non-lossy Material Filenames parsing
+            if (mat.UseFilenames) {
+                for (int j = 0; j < 4; j++) {
+                    mat.TextureFileNames.push_back(ReadString(b, cursor, sz));
+                }
+            }
             Materials.push_back(mat);
         }
 
@@ -296,8 +325,10 @@ struct C3DMeshContent {
             if (cursor + 32 > sz) { DebugStatus = "Truncated before Vertex Comp"; break; }
             memcpy(&prim.Compression, b + cursor, 32); cursor += 32;
 
+            // FIX: Non-lossy Buffer Type parsing
             uint32_t stride = 0, type = 0; Read(b, cursor, sz, stride); Read(b, cursor, sz, type);
             if (stride > 0) prim.VertexStride = stride;
+            prim.BufferType = type; // Keep the type for correct serialization
 
             int32_t reps = (prim.RepeatingMeshReps <= 1) ? 1 : prim.RepeatingMeshReps;
             size_t vBufferSize = (size_t)prim.VertexStride * prim.VertexCount * reps;
@@ -324,7 +355,6 @@ struct C3DMeshContent {
 
     void AutoCalculateBounds() {
         if (!IsParsed || Primitives.empty()) return;
-
         float min[3] = { 1e9, 1e9, 1e9 };
         float max[3] = { -1e9, -1e9, -1e9 };
 
@@ -348,9 +378,7 @@ struct C3DMeshContent {
             }
         }
 
-        memcpy(BoundingBoxMin, min, 12);
-        memcpy(BoundingBoxMax, max, 12);
-
+        memcpy(BoundingBoxMin, min, 12); memcpy(BoundingBoxMax, max, 12);
         BoundingSphereCenter[0] = (min[0] + max[0]) * 0.5f;
         BoundingSphereCenter[1] = (min[1] + max[1]) * 0.5f;
         BoundingSphereCenter[2] = (min[2] + max[2]) * 0.5f;
@@ -360,20 +388,121 @@ struct C3DMeshContent {
             for (int v = 0; v < p.VertexCount; v++) {
                 size_t offset = v * p.VertexStride;
                 float x, y, z;
-                if (p.IsCompressed) {
-                    UnpackPOSPACKED3(*(uint32_t*)(p.VertexBuffer.data() + offset), p.Compression.Scale, p.Compression.Offset, x, y, z);
-                }
-                else {
-                    const float* raw = (const float*)(p.VertexBuffer.data() + offset);
-                    x = raw[0]; y = raw[1]; z = raw[2];
-                }
-                float dx = x - BoundingSphereCenter[0];
-                float dy = y - BoundingSphereCenter[1];
-                float dz = z - BoundingSphereCenter[2];
+                if (p.IsCompressed) { UnpackPOSPACKED3(*(uint32_t*)(p.VertexBuffer.data() + offset), p.Compression.Scale, p.Compression.Offset, x, y, z); }
+                else { const float* raw = (const float*)(p.VertexBuffer.data() + offset); x = raw[0]; y = raw[1]; z = raw[2]; }
+                float dx = x - BoundingSphereCenter[0]; float dy = y - BoundingSphereCenter[1]; float dz = z - BoundingSphereCenter[2];
                 float dSq = dx * dx + dy * dy + dz * dz;
                 if (dSq > maxDistSq) maxDistSq = dSq;
             }
         }
         BoundingSphereRadius = sqrtf(maxDistSq);
+    }
+
+    // --- NEW: Non-Lossy Uncompressed Binary Serialization ---
+    std::vector<uint8_t> SerializeUncompressed() const {
+        std::vector<uint8_t> data;
+        auto Write = [&](const void* val, size_t len) {
+            size_t s = data.size(); data.resize(s + len); memcpy(data.data() + s, val, len);
+            };
+        auto WriteString = [&](const std::string& str) {
+            Write(str.c_str(), str.length() + 1);
+            };
+
+        WriteString(MeshName);
+        Write(&AnimatedFlag, 1);
+        Write(BoundingSphereCenter, 12);
+        Write(&BoundingSphereRadius, 4);
+        Write(BoundingBoxMin, 12);
+        Write(BoundingBoxMax, 12);
+        Write(&HelperPointCount, 2);
+        Write(&DummyObjectCount, 2);
+
+        // Calculate Packed Names Size based on the raw block to preserve exact padding
+        uint16_t calcPackedNamesSize = (uint16_t)PackedNamesRaw.size();
+        Write(&calcPackedNamesSize, 2);
+
+        Write(&MeshVolumeCount, 2);
+        Write(&MeshGeneratorCount, 2);
+
+        for (const auto& h : Helpers) { Write(&h.NameCRC, 4); Write(h.Pos, 12); Write(&h.BoneIndex, 4); }
+        for (const auto& d : Dummies) { Write(&d.NameCRC, 4); Write(d.Transform, 48); Write(&d.BoneIndex, 4); }
+
+        if (!PackedNamesRaw.empty()) Write(PackedNamesRaw.data(), PackedNamesRaw.size());
+
+        for (const auto& vol : Volumes) {
+            Write(&vol.ID, 4); WriteString(vol.Name);
+            uint32_t pCount = (uint32_t)vol.Planes.size(); Write(&pCount, 4);
+            if (pCount > 0) Write(vol.Planes.data(), pCount * 16);
+        }
+
+        for (const auto& gen : Generators) {
+            Write(gen.Transform, 48); Write(&gen.BoneIndex, 4); WriteString(gen.ObjectName); Write(&gen.BankIndex, 4); Write(&gen.UseLocalOrigin, 1);
+        }
+
+        Write(&MaterialCount, 4); Write(&PrimitiveCount, 4); Write(&BoneCount, 4);
+
+        // Pre-calculate Bone Names block
+        std::vector<uint8_t> bNamesBlock;
+        for (const auto& s : BoneNames) bNamesBlock.insert(bNamesBlock.end(), s.c_str(), s.c_str() + s.length() + 1);
+        uint32_t calcBoneNameSize = (uint32_t)bNamesBlock.size();
+        Write(&calcBoneNameSize, 4);
+
+        Write(&ClothFlag, 1); Write(&TotalStaticBlocks, 2); Write(&TotalAnimatedBlocks, 2);
+
+        if (BoneCount > 0) {
+            Write(BoneIndices.data(), 2 * BoneCount);
+            if (!bNamesBlock.empty()) Write(bNamesBlock.data(), bNamesBlock.size());
+            if (!Bones.empty()) Write(Bones.data(), 60 * BoneCount);
+            if (!BoneKeyframesRaw.empty()) Write(BoneKeyframesRaw.data(), 48 * BoneCount);
+            if (!BoneTransformsRaw.empty()) Write(BoneTransformsRaw.data(), 64 * BoneCount);
+        }
+
+        Write(RootMatrix, 48);
+
+        for (const auto& mat : Materials) {
+            Write(&mat.ID, 4); WriteString(mat.Name); Write(&mat.DecalID, 4); Write(&mat.DiffuseMapID, 4); Write(&mat.BumpMapID, 4);
+            Write(&mat.ReflectionMapID, 4); Write(&mat.IlluminationMapID, 4); Write(&mat.MapFlags, 4); Write(&mat.SelfIllumination, 4);
+            Write(&mat.IsTwoSided, 1); Write(&mat.IsTransparent, 1); Write(&mat.BooleanAlpha, 1); Write(&mat.DegenerateTriangles, 1);
+            Write(&mat.UseFilenames, 1);
+            if (mat.UseFilenames) {
+                for (int j = 0; j < 4; j++) {
+                    if (j < mat.TextureFileNames.size()) WriteString(mat.TextureFileNames[j]);
+                    else WriteString(""); // Failsafe
+                }
+            }
+        }
+
+        for (const auto& prim : Primitives) {
+            Write(&prim.MaterialIndex, 4); Write(&prim.RepeatingMeshReps, 4); Write(prim.SphereCenter, 12); Write(&prim.SphereRadius, 4);
+            Write(&prim.AvgTextureStretch, 4); Write(&prim.StaticBlockCount, 4); Write(&prim.AnimatedBlockCount, 4); Write(&prim.VertexCount, 4);
+            Write(&prim.TriangleCount, 4); Write(&prim.IndexCount, 4); Write(&prim.InitFlags, 4); Write(&prim.StaticBlockCount_2, 4); Write(&prim.AnimatedBlockCount_2, 4);
+
+            for (const auto& sb : prim.StaticBlocks) { Write(&sb.PrimitiveCount, 4); Write(&sb.StartIndex, 4); Write(&sb.IsStrip, 1); Write(&sb.ChangeFlags, 1); Write(&sb.DegenerateTriangles, 1); Write(&sb.MaterialIndex, 4); }
+            for (const auto& ab : prim.AnimatedBlocks) {
+                Write(&ab.PrimitiveCount, 4); Write(&ab.StartIndex, 4); Write(&ab.IsStrip, 1); Write(&ab.ChangeFlags, 1); Write(&ab.DegenerateTriangles, 1);
+                Write(&ab.VertexCount, 4); Write(&ab.BonesPerVertex, 2); Write(&ab.PalettedFlag, 1);
+                uint8_t gCount = (uint8_t)ab.Groups.size(); Write(&gCount, 1);
+                if (gCount > 0) Write(ab.Groups.data(), gCount);
+            }
+
+            Write(&prim.Compression, 32);
+
+            uint32_t stride = prim.VertexStride; Write(&stride, 4);
+            uint32_t type = prim.BufferType; Write(&type, 4); // Use saved type!
+
+            if (!prim.VertexBuffer.empty()) { Write(prim.VertexBuffer.data(), prim.VertexBuffer.size()); }
+            else { uint16_t h = 0; Write(&h, 2); }
+
+            if (!prim.IndexBuffer.empty()) { Write(prim.IndexBuffer.data(), prim.IndexBuffer.size() * 2); }
+            else { uint16_t h = 0; Write(&h, 2); }
+
+            uint32_t cpCount = (uint32_t)prim.ClothPrimitives.size(); Write(&cpCount, 4);
+            for (const auto& cp : prim.ClothPrimitives) {
+                Write(&cp.PrimitiveIndex, 4); Write(&cp.MaterialIndex, 4);
+                uint32_t progLen = (uint32_t)cp.ParticleProgramData.size(); Write(&progLen, 4);
+                if (progLen > 0) Write(cp.ParticleProgramData.data(), progLen);
+            }
+        }
+        return data;
     }
 };

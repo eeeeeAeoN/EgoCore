@@ -143,7 +143,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         }
         else if (IsSupportedMesh(e.Type)) {
             if (bank->SubheaderCache.count(idx)) g_ActiveMeshContent.ParseEntryMetadata(bank->SubheaderCache[idx]);
-            if (!bank->CurrentEntryRawData.empty()) { g_ActiveMeshContent.Parse(bank->CurrentEntryRawData); g_MeshUploadNeeded = true; }
+            if (!bank->CurrentEntryRawData.empty()) { g_ActiveMeshContent.Parse(bank->CurrentEntryRawData, e.Type);; g_MeshUploadNeeded = true; }
         }
         // HANDLE ANIMATIONS (Type 6, 7, 9)
         else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
@@ -448,7 +448,7 @@ inline void ParseSelectedLOD(LoadedBank* bank) {
     }
     std::vector<uint8_t> slice;
     if (size > 0) { slice.resize(size); memcpy(slice.data(), bank->CurrentEntryRawData.data() + offset, size); }
-    g_ActiveMeshContent.Parse(slice);
+    g_ActiveMeshContent.Parse(slice, bank->Entries[bank->SelectedEntryIndex].Type);
     g_MeshUploadNeeded = true;
 }
 

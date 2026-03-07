@@ -10,7 +10,8 @@
 #include <cmath>
 #include <map>
 #include <algorithm>
-#include <directxmath.h> // -- I was forced to include it since delta animation baking was proving difficult 
+#include <directxmath.h> 
+#include <functional>
 
 namespace GltfExporter {
 
@@ -133,7 +134,7 @@ namespace GltfExporter {
     };
     struct BufferView { int offset; int length; int target; };
 
-    static bool Export(const C3DMeshContent& mesh, const std::string& filename, const AnimParser* anim = nullptr, int animType = 6) {
+    static bool Export(const C3DMeshContent& mesh, const std::string& filename, const AnimParser* anim = nullptr, int animType = 6, std::function<std::string(int)> extractTex = nullptr) {
         if (mesh.Primitives.empty()) return false;
 
         std::string binFilename = filename.substr(0, filename.find_last_of('.')) + ".bin";
@@ -187,24 +188,32 @@ namespace GltfExporter {
         for (int i = 0; i < mesh.BoneCount; i++) if (mesh.Bones[i].ParentIndex == -1) nodeChildren[rootWrapperIdx].push_back(i);
 
         json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"EgoCore\"},";
-        bool isRepeated = false; bool fP = true;
+        bool isRepeatedGlobal = false; bool fP = true;
 
         for (const auto& prim : mesh.Primitives) {
-            if (prim.RepeatingMeshReps > 1) isRepeated = true;
+            int reps = (prim.RepeatingMeshReps > 1) ? prim.RepeatingMeshReps : 1;
+            if (reps > 1) isRepeatedGlobal = true;
+
+            // FIX 1: Only export the base vertices, not the expanded repetitions
+            int exportVerts = prim.VertexCount;
+
             if (!fP) primitivesJson << ","; fP = false; primitivesJson << "\n{\"attributes\":{";
 
             std::vector<uint16_t> idx;
             auto AddIdx = [&](uint32_t c, uint32_t s, bool str) {
                 if (str) {
+                    int parity = 0;
                     for (uint32_t k = 0; k < c; k++) {
                         if (s + k + 2 >= prim.IndexBuffer.size()) break;
                         uint16_t i0 = prim.IndexBuffer[s + k];
                         uint16_t i1 = prim.IndexBuffer[s + k + 1];
                         uint16_t i2 = prim.IndexBuffer[s + k + 2];
-                        if (i0 == i1 || i1 == i2 || i0 == i2) continue;
-                        if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) continue;
-                        if (k % 2) { idx.push_back(i0); idx.push_back(i2); idx.push_back(i1); }
+                        if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) { parity = 0; continue; }
+                        if (i0 == i1 || i1 == i2 || i0 == i2) { parity++; continue; }
+
+                        if (parity % 2 != 0) { idx.push_back(i0); idx.push_back(i2); idx.push_back(i1); }
                         else { idx.push_back(i0); idx.push_back(i1); idx.push_back(i2); }
+                        parity++;
                     }
                 }
                 else {
@@ -214,7 +223,10 @@ namespace GltfExporter {
                 }
                 };
 
-            if (prim.RepeatingMeshReps > 1) { if (!prim.IndexBuffer.empty()) AddIdx(prim.IndexBuffer.size() / 3, 0, false); }
+            if (reps > 1) {
+                // FIX 2: Only export the base triangles, not the expanded index buffer
+                if (!prim.IndexBuffer.empty()) AddIdx(prim.TriangleCount, 0, false);
+            }
             else {
                 if (!prim.StaticBlocks.empty()) for (const auto& b : prim.StaticBlocks) AddIdx(b.PrimitiveCount, b.StartIndex, b.IsStrip);
                 else if (!prim.AnimatedBlocks.empty()) for (const auto& b : prim.AnimatedBlocks) AddIdx(b.PrimitiveCount, b.StartIndex, b.IsStrip);
@@ -233,32 +245,60 @@ namespace GltfExporter {
             bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
             bool isNormComp = (prim.InitFlags & 4) != 0;
 
-            size_t iOff = isPosComp ? 4 : 12; size_t wOff = iOff + 4; size_t normOff = iOff + (hasBones ? 8 : 0); size_t uOff = normOff + (isNormComp ? 4 : 12);
+            size_t iOff = isPosComp ? 4 : 12;
+            size_t wOff = iOff + 4;
+            size_t normOff = iOff + (hasBones ? 8 : 0);
+            size_t uOff = normOff + (isNormComp ? 4 : 12);
+            bool hasNormals = true;
 
-            for (int v = 0; v < prim.VertexCount; v++) {
+            if (mesh.MeshType == 4 || (prim.VertexStride == 36 && !hasBones)) {
+                isPosComp = false;
+                isNormComp = false;
+                hasNormals = true;
+                normOff = 12;
+                uOff = 24;
+            }
+            else if (!hasBones) {
+                if (prim.VertexStride == 24 && !isPosComp && !isNormComp) {
+                    hasNormals = false;
+                    uOff = 16;
+                }
+                else if (prim.VertexStride == 20 && isPosComp && !isNormComp) {
+                    hasNormals = false;
+                    uOff = 12;
+                }
+            }
+
+            // FIX 3: Loop only up to 'exportVerts' instead of 'totalVerts'
+            for (int v = 0; v < exportVerts; v++) {
                 if (hasBones && proc >= limit) { blk++; proc = 0; if (blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
                 proc++;
 
                 size_t off = v * prim.VertexStride; if (off + 12 > prim.VertexBuffer.size()) break;
                 float x, y, z, nx = 0, ny = 1, nz = 0, u = 0, v_c = 0;
 
-                if (prim.RepeatingMeshReps > 1) {
-                    float* p = (float*)(prim.VertexBuffer.data() + off); x = p[0]; y = p[1]; z = p[2];
-                    if (off + 24 <= prim.VertexBuffer.size()) { float* n = (float*)(prim.VertexBuffer.data() + off + 12); nx = n[0]; ny = n[1]; nz = n[2]; }
-                    if (off + 32 <= prim.VertexBuffer.size()) { float* t = (float*)(prim.VertexBuffer.data() + off + 24); u = t[0]; v_c = t[1]; }
-                }
-                else {
-                    if (isPosComp) { UnpackPOSPACKED3(*(uint32_t*)(prim.VertexBuffer.data() + off), prim.Compression.Scale, prim.Compression.Offset, x, y, z); }
-                    else { float* p = (float*)(prim.VertexBuffer.data() + off); x = p[0]; y = p[1]; z = p[2]; }
+                if (isPosComp) { UnpackPOSPACKED3(*(uint32_t*)(prim.VertexBuffer.data() + off), prim.Compression.Scale, prim.Compression.Offset, x, y, z); }
+                else { float* p = (float*)(prim.VertexBuffer.data() + off); x = p[0]; y = p[1]; z = p[2]; }
 
-                    if (off + normOff + 4 <= prim.VertexBuffer.size()) {
-                        if (isNormComp) UnpackNormal(*(uint32_t*)(prim.VertexBuffer.data() + off + normOff), nx, ny, nz);
-                        else { float* n = (float*)(prim.VertexBuffer.data() + off + normOff); nx = n[0]; ny = n[1]; nz = n[2]; }
+                if (hasNormals && off + normOff + 4 <= prim.VertexBuffer.size()) {
+                    if (isNormComp) UnpackNormal(*(uint32_t*)(prim.VertexBuffer.data() + off + normOff), nx, ny, nz);
+                    else { float* n = (float*)(prim.VertexBuffer.data() + off + normOff); nx = n[0]; ny = n[1]; nz = n[2]; }
+                }
+
+                if (off + uOff + 4 <= prim.VertexBuffer.size()) {
+                    if (isNormComp) {
+                        if (mesh.MeshType == 4) {
+                            uint16_t* t = (uint16_t*)(prim.VertexBuffer.data() + off + uOff);
+                            u = (float)t[0] / 65535.0f;
+                            v_c = (float)t[1] / 65535.0f;
+                        }
+                        else {
+                            int16_t* t = (int16_t*)(prim.VertexBuffer.data() + off + uOff);
+                            u = DecompressUV(t[0]);
+                            v_c = DecompressUV(t[1]);
+                        }
                     }
-                    if (off + uOff + 4 <= prim.VertexBuffer.size()) {
-                        if (isNormComp) { int16_t* t = (int16_t*)(prim.VertexBuffer.data() + off + uOff); u = DecompressUV(t[0]); v_c = DecompressUV(t[1]); }
-                        else { float* t = (float*)(prim.VertexBuffer.data() + off + uOff); u = t[0]; v_c = t[1]; }
-                    }
+                    else { float* t = (float*)(prim.VertexBuffer.data() + off + uOff); u = t[0]; v_c = t[1]; }
                 }
 
                 if (x < min[0]) min[0] = x; if (y < min[1]) min[1] = y; if (z < min[2]) min[2] = z;
@@ -288,23 +328,23 @@ namespace GltfExporter {
             }
 
             bufferViews.push_back({ bin.Write(posData.data(), posData.size() * 4), (int)posData.size() * 4, 34962 });
-            accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5126, "VEC3", min, max, true));
+            accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC3", min, max, true));
             primitivesJson << "\"POSITION\":" << accessors.size() - 1;
 
             bufferViews.push_back({ bin.Write(normData.data(), normData.size() * 4), (int)normData.size() * 4, 34962 });
-            accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5126, "VEC3", 0, 0, false));
+            accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC3", 0, 0, false));
             primitivesJson << ",\"NORMAL\":" << accessors.size() - 1;
 
             bufferViews.push_back({ bin.Write(uvData.data(), uvData.size() * 4), (int)uvData.size() * 4, 34962 });
-            accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5126, "VEC2", 0, 0, false));
+            accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC2", 0, 0, false));
             primitivesJson << ",\"TEXCOORD_0\":" << accessors.size() - 1;
 
             if (hasBones) {
                 bufferViews.push_back({ bin.Write(jointData.data(), jointData.size() * 2), (int)jointData.size() * 2, 34962 });
-                accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5123, "VEC4", 0, 0, false));
+                accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5123, "VEC4", 0, 0, false));
                 primitivesJson << ",\"JOINTS_0\":" << accessors.size() - 1;
                 bufferViews.push_back({ bin.Write(weightData.data(), weightData.size() * 4), (int)weightData.size() * 4, 34962 });
-                accessors.push_back(Accessor((int)bufferViews.size() - 1, (int)prim.VertexCount, 5126, "VEC4", 0, 0, false));
+                accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC4", 0, 0, false));
                 primitivesJson << ",\"WEIGHTS_0\":" << accessors.size() - 1;
             }
             primitivesJson << "},\"indices\":" << idxAcc << ",\"material\":" << prim.MaterialIndex << "}";
@@ -366,7 +406,6 @@ namespace GltfExporter {
             uint32_t maskCount = (uint32_t)anim->Data.BoneMaskBits.size(); wMeta(&maskCount, 4);
             if (maskCount > 0) wMeta(anim->Data.BoneMaskBits.data(), maskCount * 4);
 
-            // --- NEW: Serialize Helper Tracks (Preserves collision curve) ---
             uint32_t helperCount = (uint32_t)anim->Data.HelperTracks.size(); wMeta(&helperCount, 4);
             for (const auto& ht : anim->Data.HelperTracks) {
                 uint32_t nl = (uint32_t)ht.BoneName.length(); wMeta(&nl, 4);
@@ -490,14 +529,13 @@ namespace GltfExporter {
                 ss << "]";
             }
 
-            // --- Save Fable IDs into the glTF so it's self-sufficient ---
             int parentFableID = (p == -1 || p >= mesh.BoneCount) ? -1 : mesh.BoneIndices[p];
             ss << ",\"extras\":{\"FableID\":" << mesh.BoneIndices[i] << ",\"ParentID\":" << parentFableID << "}";
 
             ss << "}"; nodeStrs.push_back(ss.str());
         }
 
-        if (!isRepeated || mesh.Generators.empty()) {
+        if (!isRepeatedGlobal || mesh.Generators.empty()) {
             std::stringstream ss; ss.imbue(std::locale("C"));
             ss << "{\"name\":" << Esc(mesh.MeshName) << ",\"mesh\":0" << (mesh.BoneCount > 0 ? ",\"skin\":0" : "") << "}";
             nodeStrs.push_back(ss.str());
@@ -529,7 +567,7 @@ namespace GltfExporter {
             ss << "{\"name\":\"GEN_" << mesh.Generators[i].ObjectName << "\",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << t.m[k] << (k < 15 ? "," : "");
             ss << "]";
-            if (isRepeated) ss << ",\"mesh\":0";
+            if (isRepeatedGlobal) ss << ",\"mesh\":0";
             ss << ",\"extras\":{\"type\":\"Generator\",\"bankId\":" << mesh.Generators[i].BankIndex << "}}";
             nodeStrs.push_back(ss.str());
         }
@@ -563,10 +601,49 @@ namespace GltfExporter {
             json << "]}],";
         }
 
+        // --- NEW: Texture Auto-Extraction & Array Building ---
+        std::vector<std::string> images;
+        std::vector<int> matTextureIndices(mesh.Materials.size(), -1);
+
+        if (extractTex) {
+            for (size_t i = 0; i < mesh.Materials.size(); i++) {
+                if (mesh.Materials[i].DiffuseMapID > 0) {
+                    std::string texName = extractTex(mesh.Materials[i].DiffuseMapID);
+                    if (!texName.empty()) {
+                        int imgIdx = -1;
+                        for (size_t j = 0; j < images.size(); j++) {
+                            if (images[j] == texName) { imgIdx = (int)j; break; }
+                        }
+                        if (imgIdx == -1) {
+                            imgIdx = (int)images.size();
+                            images.push_back(texName);
+                        }
+                        matTextureIndices[i] = imgIdx;
+                    }
+                }
+            }
+        }
+
+        if (!images.empty()) {
+            json << "\"images\":[";
+            for (size_t i = 0; i < images.size(); i++) json << (i > 0 ? "," : "") << "{\"uri\":\"" << images[i] << "\"}";
+            json << "],\"textures\":[";
+            for (size_t i = 0; i < images.size(); i++) json << (i > 0 ? "," : "") << "{\"source\":" << i << "}";
+            json << "],";
+        }
+
+        // --- UPDATED: Material Output with PBR BaseColor Link ---
         json << "\"materials\":[";
         for (size_t i = 0; i < mesh.Materials.size(); i++) {
             const auto& m = mesh.Materials[i];
-            json << (i > 0 ? "," : "") << "{ \"name\": " << Esc(m.Name) << ", \"extras\": {";
+            json << (i > 0 ? "," : "") << "{ \"name\": " << Esc(m.Name);
+
+            // Standard glTF PBR Diffuse map linking
+            if (matTextureIndices[i] != -1) {
+                json << ",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":" << matTextureIndices[i] << "}}";
+            }
+
+            json << ", \"extras\": {";
             json << "\"ID\":" << m.ID << ",\"DecalID\":" << m.DecalID << ",\"DiffuseMapID\":" << m.DiffuseMapID << ",\"BumpMapID\":" << m.BumpMapID << ",\"ReflectionMapID\":" << m.ReflectionMapID << ",\"IlluminationMapID\":" << m.IlluminationMapID << ",\"MapFlags\":" << m.MapFlags << ",\"SelfIllumination\":" << m.SelfIllumination << ",\"IsTwoSided\":" << (m.IsTwoSided ? "true" : "false") << ",\"IsTransparent\":" << (m.IsTransparent ? "true" : "false") << ",\"BooleanAlpha\":" << (m.BooleanAlpha ? "true" : "false") << ",\"DegenerateTriangles\":" << (m.DegenerateTriangles ? "true" : "false") << ",\"UseFilenames\":" << (m.UseFilenames ? "true" : "false") << "}}";
         }
         json << "],";

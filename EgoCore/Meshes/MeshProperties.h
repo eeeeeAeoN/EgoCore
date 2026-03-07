@@ -10,8 +10,11 @@
 #include <algorithm>
 #include "GltfExporter.h"
 #include "FileDialogs.h"
+#include "MeshCompiler.h"
+#include "TextureExporter.h"
+#include "GltfMeshImporter.h"
 
-extern ID3D11Device* g_pd3dDevice;
+extern ID3D11Device * g_pd3dDevice;
 
 static MeshRenderer g_MeshRenderer;
 static bool g_ShowWireframe = false;
@@ -114,6 +117,35 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
     return nullptr;
 }
 
+inline std::string ExtractTextureForGltf(int textureID, const std::string& exportDir) {
+    if (textureID <= 0) return "";
+    for (auto& bank : g_OpenBanks) {
+        if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+            for (int i = 0; i < bank.Entries.size(); ++i) {
+                if (bank.Entries[i].ID == (uint32_t)textureID) {
+                    bank.Stream->clear();
+                    bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
+                    size_t fileSize = bank.Entries[i].Size;
+                    std::vector<uint8_t> tempData(fileSize + 64);
+                    bank.Stream->read((char*)tempData.data(), fileSize);
+
+                    CTextureParser parser;
+                    parser.Parse(bank.SubheaderCache[i], tempData, bank.Entries[i].Type);
+
+                    if (parser.IsParsed && !parser.DecodedPixels.empty()) {
+                        std::string fname = "tex_" + std::to_string(textureID) + ".dds";
+                        std::string fullPath = exportDir + fname;
+                        if (TextureExporter::ExportDDS(parser, fullPath, 0)) {
+                            return fname;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return "";
+}
+
 inline void CheckMeshUpload(ID3D11Device* device) {
     if (g_MeshUploadNeeded) {
         g_MeshRenderer.Initialize(device);
@@ -144,17 +176,6 @@ inline void CheckMeshUpload(ID3D11Device* device) {
         }
         g_MeshUploadNeeded = false;
     }
-}
-
-static std::string StrictCleanBoneName(const std::string& str) {
-    std::string res;
-    for (char c : str) {
-        // Strip out spaces, underscores, and Fable's binary garbage. Keep only letters and numbers.
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-            res += (char)tolower(c);
-        }
-    }
-    return res;
 }
 
 inline void UpdateAnimationBones() {
@@ -378,12 +399,16 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         if (!savePath.empty()) {
             if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
 
+            // Generate the output directory for textures
+            std::string expDir = savePath.substr(0, savePath.find_last_of("\\/") + 1);
+            auto extFunc = [expDir](int id) { return ExtractTextureForGltf(id, expDir); };
+
             if (g_BBMParser.IsParsed) GltfExporter::ExportBBM(g_BBMParser, savePath);
-            else if (g_ActiveMeshContent.IsParsed) GltfExporter::Export(g_ActiveMeshContent, savePath);
+            // Pass the lambda into the exporter
+            else if (g_ActiveMeshContent.IsParsed) GltfExporter::Export(g_ActiveMeshContent, savePath, nullptr, 6, extFunc);
         }
     }
 
-    // NEW BUTTON FOR ANIMATION EXPORT
     if (g_ActiveMeshContent.IsParsed && g_PreviewAnimParser.Data.IsParsed) {
         ImGui::SameLine();
         if (ImGui::Button("Export Mesh + Anim (glTF)")) {
@@ -401,37 +426,112 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         }
     }
 
-    // --- NEW: EXPORT UNCOMPRESSED BINARY (LZO SAFE) ---
     ImGui::SameLine();
     if (ImGui::Button("Export Uncompressed Binary")) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
-            if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
+            // Priority 1: If it's an engine mesh, serialize cleanly and uncompressed.
+            if (g_ActiveMeshContent.IsParsed) {
+                std::vector<uint8_t> outData = g_ActiveMeshContent.SerializeUncompressed();
+                std::ofstream out(savePath, std::ios::binary);
+                out.write((char*)outData.data(), outData.size());
+                g_BankStatus = "Exported Uncompressed Mesh Binary (C3DMeshContent)!";
+            }
+            // Priority 2: Fallback for generic LZO streams (like frontend or UI blobs)
+            else if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
                 auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
                 if (!currentBank.CurrentEntryRawData.empty()) {
                     std::vector<uint8_t> outData = currentBank.CurrentEntryRawData;
 
-                    // Fable Compression Check: If the first 4 bytes aren't standard 
-                    // uncompressed magic (like ">>>>" 0x3E3E3E3E or BBM's 0x4D424220), 
-                    // those 4 bytes represent the target uncompressed size for LZO.
                     if (outData.size() >= 4) {
                         uint32_t magic = *(uint32_t*)outData.data();
-                        if (magic != 0x3E3E3E3E && magic != 0x4D424220) {
+                        bool isUncompressed = false;
+
+                        if (magic == 0x4853454D) isUncompressed = true; // "MESH"
+                        else if (magic == 0x4D424220) isUncompressed = true; // "BBM "
+                        else if (magic == 0x3E3E3E3E) isUncompressed = true; // ">>>>"
+
+                        if (!isUncompressed) {
                             uint32_t uncompSize = magic;
-                            // Sanity check to ensure we don't blow up memory on a bad read
+                            // Check if the first uint32 looks like a valid LZO uncompressed size
                             if (uncompSize > 0 && uncompSize < 100 * 1024 * 1024) {
-                                outData = DecompressRawLZO(currentBank.CurrentEntryRawData, 4, uncompSize);
+                                std::vector<uint8_t> decomp = DecompressRawLZO(currentBank.CurrentEntryRawData, 4, uncompSize);
+                                if (!decomp.empty()) outData = decomp;
                             }
                         }
                     }
 
                     std::ofstream out(savePath, std::ios::binary);
                     out.write((char*)outData.data(), outData.size());
-                    g_BankStatus = "Exported Uncompressed Mesh Binary!";
+                    g_BankStatus = "Exported Uncompressed Binary (Fallback)!";
                 }
                 else {
-                    g_BankStatus = "Error: No data available for this mesh.";
+                    g_BankStatus = "Error: No data available for this entry.";
                 }
+            }
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Import glTF (Type 2 Grass)")) {
+        std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+        if (!gltfPath.empty()) {
+
+            std::string exactName = "Fallback_Name";
+            if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
+                auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
+                if (currentBank.SelectedEntryIndex != -1) {
+                    exactName = currentBank.Entries[currentBank.SelectedEntryIndex].Name;
+                }
+            }
+
+            C3DMeshContent newMesh;
+            std::string err = GltfMeshImporter::ImportType2(gltfPath, exactName, newMesh, 32);
+
+            if (err.empty()) {
+                // 1. Trick compiler to get the exact byte-size of JUST LOD 0
+                newMesh.MeshType = 0;
+                auto mainCompiled = MeshCompiler::Compile(newMesh);
+                uint32_t mainLodSize = (uint32_t)mainCompiled.size();
+                newMesh.MeshType = 2; // Restore so the real compile appends the blank LOD
+
+                // 2. FORCE STRICT 64-BYTE FABLE METADATA
+                newMesh.EntryMeta = CMeshEntryMetadata();
+                newMesh.EntryMeta.HasData = true;
+                newMesh.EntryMeta.PhysicsIndex = 0;
+                memcpy(newMesh.EntryMeta.BoundingSphereCenter, newMesh.BoundingSphereCenter, 12);
+                newMesh.EntryMeta.BoundingSphereRadius = newMesh.BoundingSphereRadius;
+                memcpy(newMesh.EntryMeta.BoundingBoxMin, newMesh.BoundingBoxMin, 12);
+                memcpy(newMesh.EntryMeta.BoundingBoxMax, newMesh.BoundingBoxMax, 12);
+
+                // These specific pushes guarantee the Serialize loop creates EXACTLY 64 bytes
+                newMesh.EntryMeta.LODCount = 1;
+                newMesh.EntryMeta.LODSizes.push_back(mainLodSize);
+                newMesh.EntryMeta.SafeBoundingRadius = newMesh.BoundingSphereRadius;
+                newMesh.EntryMeta.TextureIDs.push_back(247); // Default grass texture ID
+
+                g_ActiveMeshContent = newMesh;
+                g_MeshUploadNeeded = true;
+
+                if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
+                    auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
+                    int entryIdx = currentBank.SelectedEntryIndex;
+
+                    if (entryIdx != -1) {
+                        currentBank.Entries[entryIdx].Type = 2;
+
+                        // 3. OVERWRITE THE CACHE WITH THE 64 BYTES BEFORE SAVING
+                        auto cleanInfo = g_ActiveMeshContent.SerializeEntryMetadata();
+                        currentBank.SubheaderCache[entryIdx] = cleanInfo;
+                        currentBank.Entries[entryIdx].InfoSize = (uint32_t)cleanInfo.size();
+
+                        if (saveCallback) saveCallback();
+                        g_BankStatus = "Type 2 Mesh Synthesized! (Hit Save Big Bank to write to disk)";
+                    }
+                }
+            }
+            else {
+                g_BankStatus = "Import Error: " + err;
             }
         }
     }

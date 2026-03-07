@@ -13,22 +13,21 @@
 using namespace DirectX;
 
 inline bool g_DebugDivIndices = true;
-// NEW: Added Joints and Weights to the Vertex
+
 struct GPUVertex {
     XMFLOAT3 Pos;
     XMFLOAT3 Norm;
     XMFLOAT2 UV;
-    uint32_t Joints;   // Packed 4x uint8
-    XMFLOAT4 Weights;  // 4x floats
+    uint32_t Joints;
+    XMFLOAT4 Weights;
 };
 
-// NEW: Added BoneTransforms array and animation flag
 struct CBMatrix {
     XMMATRIX WorldViewProj;
     XMMATRIX World;
     XMFLOAT4 Color;
     XMFLOAT4 LightDir;
-    XMMATRIX BoneTransforms[256]; // Believe it or not, there are meshes with more than 128 bones i.e the dragon
+    XMMATRIX BoneTransforms[256];
     int HasAnimation;
     XMFLOAT3 Padding;
 };
@@ -135,7 +134,6 @@ public:
     bool Initialize(ID3D11Device* device) {
         if (VS) return true;
 
-        // NEW: Shader now supports Hardware Skinning via BoneTransforms
         const char* shaderSrc = R"(
             cbuffer CBuf : register(b0) { 
                 matrix WVP; matrix World; float4 Col; float4 LightDir; 
@@ -189,7 +187,6 @@ public:
         D3DCompile(shaderSrc, strlen(shaderSrc), nullptr, nullptr, nullptr, "VS", "vs_4_0", 0, 0, &vsBlob, nullptr);
         device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &VS);
 
-        // NEW: Input Layout matches updated GPUVertex
         D3D11_INPUT_ELEMENT_DESC desc[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -232,142 +229,170 @@ public:
         for (const auto& prim : mesh.Primitives) {
             uint32_t batchStart = (uint32_t)indices.size();
 
+            int reps = (prim.RepeatingMeshReps > 1) ? prim.RepeatingMeshReps : 1;
+            uint32_t totalVerts = prim.VertexCount * reps;
+
             bool hasBones = (prim.AnimatedBlockCount > 0);
             bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
             bool isNormComp = (prim.InitFlags & 4) != 0;
-            bool isRepeated = (prim.RepeatingMeshReps > 1) || (prim.VertexStride == 36 && !hasBones);
 
-            if (isRepeated) {
-                uint32_t localVertexOffset = (uint32_t)vertices.size();
-                int reps = (prim.RepeatingMeshReps > 1) ? prim.RepeatingMeshReps : 1;
-
-                for (int r = 0; r < reps; r++) {
-                    float m[12] = { 1,0,0, 0,1,0, 0,0,1, 0,0,0 };
-                    if (r < mesh.Generators.size()) memcpy(m, mesh.Generators[r].Transform, 48);
-
-                    for (int v = 0; v < prim.VertexCount; v++) {
-                        size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
-                        GPUVertex gpuV = {};
-
-                        const float* raw = (const float*)(prim.VertexBuffer.data() + offset);
-                        float bx = raw[0], by = raw[1], bz = raw[2];
-                        gpuV.Pos = XMFLOAT3(bx * m[0] + by * m[3] + bz * m[6] + m[9], bx * m[1] + by * m[4] + bz * m[7] + m[10], bx * m[2] + by * m[5] + bz * m[8] + m[11]);
-
-                        const float* n = (const float*)(prim.VertexBuffer.data() + offset + 12);
-                        float nx = n[0] * m[0] + n[1] * m[3] + n[2] * m[6]; float ny = n[0] * m[1] + n[1] * m[4] + n[2] * m[7]; float nz = n[0] * m[2] + n[1] * m[5] + n[2] * m[8];
-                        float len = sqrtf(nx * nx + ny * ny + nz * nz); if (len > 0) { nx /= len; ny /= len; nz /= len; }
-                        gpuV.Norm = XMFLOAT3(nx, ny, nz);
-
-                        const float* u = (const float*)(prim.VertexBuffer.data() + offset + 24);
-                        gpuV.UV = XMFLOAT2(u[0], u[1]);
-
-                        gpuV.Joints = 0; gpuV.Weights = { 1,0,0,0 }; // No skinning for grass
-                        vertices.push_back(gpuV);
-                    }
-                    for (uint32_t k = 0; k < prim.IndexCount; k++) {
-                        if (k < prim.IndexBuffer.size()) indices.push_back(localVertexOffset + (r * prim.VertexCount) + prim.IndexBuffer[k]);
-                    }
-                }
-                indexOffset += (prim.VertexCount * reps);
+            // THE FIX: Type 4 (Particles) claim to be compressed, but are actually raw 32-bit floats.
+            if (mesh.MeshType == 4 || (prim.VertexStride == 36 && !hasBones)) {
+                isPosComp = false;
+                isNormComp = false;
             }
-            else {
-                size_t iOff = isPosComp ? 4 : 12;
-                size_t wOff = iOff + 4;
-                size_t normOff = iOff + (hasBones ? 8 : 0);
-                size_t uvOff = normOff + (isNormComp ? 4 : 12);
 
-                int blk = 0; int proc = 0;
-                int limit = (prim.AnimatedBlocks.empty() ? 999999 : prim.AnimatedBlocks[0].VertexCount);
+            size_t iOff = isPosComp ? 4 : 12;
+            size_t wOff = iOff + 4;
+            size_t normOff = iOff + (hasBones ? 8 : 0);
+            size_t uvOff = normOff + (isNormComp ? 4 : 12);
 
-                for (int v = 0; v < prim.VertexCount; v++) {
-                    if (hasBones && proc >= limit) { blk++; proc = 0; if (blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
-                    proc++;
+            bool hasNormals = true;
 
-                    size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
-                    GPUVertex gpuV = {};
+            // Handle Overrides for Particle Meshes & Repeated Instances
+            if (reps > 1) {
+                isPosComp = false;
+                isNormComp = false;
+                hasNormals = true;
+                normOff = 12;
+                uvOff = 24;
+            }
+            else if (!hasBones) {
+                if (prim.VertexStride == 24 && !isPosComp && !isNormComp) {
+                    hasNormals = false;
+                    uvOff = 16;
+                }
+                else if (prim.VertexStride == 20 && isPosComp && !isNormComp) {
+                    hasNormals = false;
+                    uvOff = 12;
+                }
+            }
 
-                    if (isPosComp) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset); UnpackPOSPACKED3(p, prim.Compression.Scale, prim.Compression.Offset, gpuV.Pos.x, gpuV.Pos.y, gpuV.Pos.z); }
-                    else { const float* r = (const float*)(prim.VertexBuffer.data() + offset); gpuV.Pos = XMFLOAT3(r[0], r[1], r[2]); }
+            int blk = 0; int proc = 0;
+            int limit = (prim.AnimatedBlocks.empty() ? 999999 : prim.AnimatedBlocks[0].VertexCount);
 
-                    if (offset + normOff + 4 <= prim.VertexBuffer.size()) {
-                        if (isNormComp) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset + normOff); UnpackNORMPACKED3(p, gpuV.Norm.x, gpuV.Norm.y, gpuV.Norm.z); }
-                        else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + normOff); gpuV.Norm = XMFLOAT3(r[0], r[1], r[2]); }
-                    }
-                    else gpuV.Norm = XMFLOAT3(0, 1, 0);
+            for (int v = 0; v < totalVerts; v++) {
+                if (hasBones && proc >= limit) { blk++; proc = 0; if (blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
+                proc++;
 
-                    if (offset + uvOff + 4 <= prim.VertexBuffer.size()) {
-                        if (isNormComp) { int16_t* u = (int16_t*)(prim.VertexBuffer.data() + offset + uvOff); gpuV.UV = XMFLOAT2(DecompressUV(u[0]), DecompressUV(u[1])); }
-                        else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + uvOff); gpuV.UV = XMFLOAT2(r[0], r[1]); }
-                    }
-                    else gpuV.UV = XMFLOAT2(0, 0);
+                size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;
+                GPUVertex gpuV = {};
 
-                    // NEW: EXTRACT BONE WEIGHTS & JOINTS
-                    if (hasBones && offset + iOff + 4 <= prim.VertexBuffer.size()) {
-                        uint8_t* wgt = (uint8_t*)(prim.VertexBuffer.data() + offset + wOff);
-                        uint8_t* ind = (uint8_t*)(prim.VertexBuffer.data() + offset + iOff);
+                if (isPosComp) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset); UnpackPOSPACKED3(p, prim.Compression.Scale, prim.Compression.Offset, gpuV.Pos.x, gpuV.Pos.y, gpuV.Pos.z); }
+                else { const float* r = (const float*)(prim.VertexBuffer.data() + offset); gpuV.Pos = XMFLOAT3(r[0], r[1], r[2]); }
 
-                        uint8_t j[4] = { 0,0,0,0 };
-                        for (int k = 0; k < 4; k++) {
-                            uint16_t pID = ind[k] / 3; // Fable matrix stride
-                            uint16_t lID = pID;
+                if (hasNormals && offset + normOff + 4 <= prim.VertexBuffer.size()) {
+                    if (isNormComp) { uint32_t p = *(uint32_t*)(prim.VertexBuffer.data() + offset + normOff); UnpackNORMPACKED3(p, gpuV.Norm.x, gpuV.Norm.y, gpuV.Norm.z); }
+                    else { const float* r = (const float*)(prim.VertexBuffer.data() + offset + normOff); gpuV.Norm = XMFLOAT3(r[0], r[1], r[2]); }
+                }
+                else gpuV.Norm = XMFLOAT3(0, 1, 0);
 
-                            if (blk < prim.AnimatedBlocks.size() && !prim.AnimatedBlocks[blk].Groups.empty()) {
-                                if (pID < prim.AnimatedBlocks[blk].Groups.size()) lID = prim.AnimatedBlocks[blk].Groups[pID];
-                                else lID = 0;
-                            }
-                            if (lID >= mesh.BoneCount || lID >= 256) lID = 0;
-                            j[k] = (uint8_t)lID;
-                        }
-                        gpuV.Joints = (j[3] << 24) | (j[2] << 16) | (j[1] << 8) | j[0];
-
-                        float w0 = wgt[0] / 255.0f; float w1 = wgt[1] / 255.0f;
-                        float w2 = wgt[2] / 255.0f; float w3 = wgt[3] / 255.0f;
-                        float sum = w0 + w1 + w2 + w3;
-
-                        // FIX: Only normalize if it actually has weights. 
-                        // Otherwise, leave it as 0 so the shader ignores it!
-                        if (sum > 0.01f) {
-                            gpuV.Weights = XMFLOAT4(w0 / sum, w1 / sum, w2 / sum, w3 / sum);
+                if (offset + uvOff + 4 <= prim.VertexBuffer.size()) {
+                    if (isNormComp) {
+                        if (mesh.MeshType == 4) {
+                            // Type 4: Unsigned Normalized (0 to 1)
+                            uint16_t* u = (uint16_t*)(prim.VertexBuffer.data() + offset + uvOff);
+                            gpuV.UV = XMFLOAT2((float)u[0] / 65535.0f, (float)u[1] / 65535.0f);
                         }
                         else {
-                            gpuV.Weights = XMFLOAT4(0, 0, 0, 0);
+                            // Type 2 / Standard: Signed Compressed (-8 to +8)
+                            int16_t* u = (int16_t*)(prim.VertexBuffer.data() + offset + uvOff);
+                            gpuV.UV = XMFLOAT2(DecompressUV(u[0]), DecompressUV(u[1]));
                         }
                     }
                     else {
-                        gpuV.Joints = 0;
+                        const float* r = (const float*)(prim.VertexBuffer.data() + offset + uvOff);
+                        gpuV.UV = XMFLOAT2(r[0], r[1]);
+                    }
+                }
+                else gpuV.UV = XMFLOAT2(0, 0);
+
+                if (hasBones && offset + iOff + 4 <= prim.VertexBuffer.size()) {
+                    uint8_t* wgt = (uint8_t*)(prim.VertexBuffer.data() + offset + wOff);
+                    uint8_t* ind = (uint8_t*)(prim.VertexBuffer.data() + offset + iOff);
+
+                    uint8_t j[4] = { 0,0,0,0 };
+                    for (int k = 0; k < 4; k++) {
+                        uint16_t pID = ind[k] / 3;
+                        uint16_t lID = pID;
+
+                        if (blk < prim.AnimatedBlocks.size() && !prim.AnimatedBlocks[blk].Groups.empty()) {
+                            if (pID < prim.AnimatedBlocks[blk].Groups.size()) lID = prim.AnimatedBlocks[blk].Groups[pID];
+                            else lID = 0;
+                        }
+                        if (lID >= mesh.BoneCount || lID >= 256) lID = 0;
+                        j[k] = (uint8_t)lID;
+                    }
+                    gpuV.Joints = (j[3] << 24) | (j[2] << 16) | (j[1] << 8) | j[0];
+
+                    float w0 = wgt[0] / 255.0f; float w1 = wgt[1] / 255.0f;
+                    float w2 = wgt[2] / 255.0f; float w3 = wgt[3] / 255.0f;
+                    float sum = w0 + w1 + w2 + w3;
+
+                    if (sum > 0.01f) {
+                        gpuV.Weights = XMFLOAT4(w0 / sum, w1 / sum, w2 / sum, w3 / sum);
+                    }
+                    else {
                         gpuV.Weights = XMFLOAT4(0, 0, 0, 0);
                     }
-
-                    vertices.push_back(gpuV);
+                }
+                else {
+                    gpuV.Joints = 0;
+                    gpuV.Weights = XMFLOAT4(0, 0, 0, 0);
                 }
 
-                auto ProcessIndices = [&](uint32_t start, uint32_t count, bool isStrip) {
-                    if (isStrip) {
-                        for (uint32_t k = 0; k < count; k++) {
-                            uint16_t idx[3];
-                            if (k % 2 == 0) { idx[0] = prim.IndexBuffer[start + k]; idx[1] = prim.IndexBuffer[start + k + 1]; idx[2] = prim.IndexBuffer[start + k + 2]; }
-                            else { idx[0] = prim.IndexBuffer[start + k]; idx[1] = prim.IndexBuffer[start + k + 2]; idx[2] = prim.IndexBuffer[start + k + 1]; }
-                            if (idx[0] == idx[1] || idx[1] == idx[2] || idx[0] == idx[2]) continue;
-                            if (idx[0] == 0xFFFF || idx[1] == 0xFFFF || idx[2] == 0xFFFF) continue;
-                            indices.push_back(idx[0] + indexOffset); indices.push_back(idx[1] + indexOffset); indices.push_back(idx[2] + indexOffset);
-                        }
-                    }
-                    else {
-                        for (uint32_t k = 0; k < count * 3; k++) {
-                            if (start + k < prim.IndexBuffer.size()) {
-                                uint16_t i = prim.IndexBuffer[start + k];
-                                if (i != 0xFFFF) indices.push_back(i + indexOffset);
-                            }
-                        }
-                    }
-                    };
+                vertices.push_back(gpuV);
+            }
 
+            auto ProcessIndices = [&](uint32_t start, uint32_t count, bool isStrip) {
+                if (isStrip) {
+                    int parity = 0;
+                    for (uint32_t k = 0; k < count; k++) {
+                        if (start + k + 2 >= prim.IndexBuffer.size()) break;
+                        uint16_t i0 = prim.IndexBuffer[start + k];
+                        uint16_t i1 = prim.IndexBuffer[start + k + 1];
+                        uint16_t i2 = prim.IndexBuffer[start + k + 2];
+                        if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) {
+                            parity = 0;
+                            continue;
+                        }
+                        if (i0 == i1 || i1 == i2 || i0 == i2) {
+                            parity++;
+                            continue;
+                        }
+                        if (parity % 2 != 0) {
+                            indices.push_back(i0 + indexOffset);
+                            indices.push_back(i2 + indexOffset);
+                            indices.push_back(i1 + indexOffset);
+                        }
+                        else {
+                            indices.push_back(i0 + indexOffset);
+                            indices.push_back(i1 + indexOffset);
+                            indices.push_back(i2 + indexOffset);
+                        }
+                        parity++;
+                    }
+                }
+                else {
+                    for (uint32_t k = 0; k < count * 3; k++) {
+                        if (start + k < prim.IndexBuffer.size()) {
+                            uint16_t i = prim.IndexBuffer[start + k];
+                            if (i != 0xFFFF) indices.push_back(i + indexOffset);
+                        }
+                    }
+                }
+                };
+
+            if (reps > 1) {
+                ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false);
+            }
+            else {
                 bool processed = false;
                 for (const auto& b : prim.StaticBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip); processed = true; }
                 for (const auto& b : prim.AnimatedBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip); processed = true; }
                 if (!processed && !prim.IndexBuffer.empty()) { ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false); }
-                indexOffset += prim.VertexCount;
             }
+            indexOffset += totalVerts;
 
             RenderBatch batch; batch.IndexStart = batchStart; batch.IndexCount = (uint32_t)indices.size() - batchStart; batch.MaterialIndex = prim.MaterialIndex; Batches.push_back(batch);
         }
@@ -408,7 +433,6 @@ public:
         device->CreateTexture2D(&dDesc, nullptr, &DepthTex); device->CreateDepthStencilView(DepthTex, nullptr, &DSV);
     }
 
-    // NEW: We now accept an array of BoneTransforms from the UI
     ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false, const std::vector<XMMATRIX>* animatedBones = nullptr) {
         if (!VS || !VBuffer) return nullptr;
         if (ImGui::IsWindowHovered()) {
@@ -432,7 +456,6 @@ public:
         cb.Color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
         cb.LightDir = XMFLOAT4(0.5f, 1.0f, -0.5f, 0.0f);
 
-        // Populate Bone Transforms for Hardware Skinning
         cb.HasAnimation = (animatedBones && !animatedBones->empty()) ? 1 : 0;
         if (cb.HasAnimation) {
             for (size_t i = 0; i < animatedBones->size() && i < 256; i++) {
@@ -497,7 +520,7 @@ public:
         worldCam = worldCam * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
 
         CBMatrix cb;
-        cb.HasAnimation = 0; // Disable bone multiplication for bounds
+        cb.HasAnimation = 0;
 
         float bSize[3] = { bMax[0] - bMin[0], bMax[1] - bMin[1], bMax[2] - bMin[2] };
         float bCenter[3] = { bMin[0] + bSize[0] * 0.5f, bMin[1] + bSize[1] * 0.5f, bMin[2] + bSize[2] * 0.5f };
