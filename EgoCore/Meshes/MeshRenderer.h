@@ -56,7 +56,6 @@ private:
 
     std::vector<RenderBatch> Batches;
     float Width = 0, Height = 0;
-    float CamRotX = 0.0f; float CamRotY = 0.0f; float CamDist = 10.0f; XMFLOAT2 CamPan = { 0, 0 };
 
     ID3D11Buffer* DebugVBuffer = nullptr; ID3D11Buffer* DebugIBuffer = nullptr;
     uint32_t DebugBoxIndexCount = 0;
@@ -107,6 +106,12 @@ private:
     }
 
 public:
+    float CamRotX = 0.0f; float CamRotY = 0.0f; float CamDist = 10.0f; XMFLOAT2 CamPan = { 0, 0 };
+
+    // Allow overlay renderers to borrow the main render target
+    ID3D11RenderTargetView* GetRTV() const { return RTV; }
+    ID3D11DepthStencilView* GetDSV() const { return DSV; }
+
     ~MeshRenderer() { Release(); }
     void Release() {
         if (VS) VS->Release(); VS = nullptr;
@@ -177,7 +182,8 @@ public:
                 float3 n = normalize(input.Norm); 
                 float3 l = normalize(LightDir.xyz); 
                 float diff = max(dot(n, l), 0.2f); 
-                return float4(texColor.rgb * Col.rgb * diff, texColor.a); 
+                // FIX: Multiply texture alpha by constant buffer alpha
+                return float4(texColor.rgb * Col.rgb * diff, texColor.a * Col.a); 
             }
 
             float4 PS_Solid(PS_IN input) : SV_Target { return Col; }
@@ -236,7 +242,6 @@ public:
             bool isPosComp = (prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0;
             bool isNormComp = (prim.InitFlags & 4) != 0;
 
-            // THE FIX: Type 4 (Particles) claim to be compressed, but are actually raw 32-bit floats.
             if (mesh.MeshType == 4 || (prim.VertexStride == 36 && !hasBones)) {
                 isPosComp = false;
                 isNormComp = false;
@@ -249,7 +254,6 @@ public:
 
             bool hasNormals = true;
 
-            // Handle Overrides for Particle Meshes & Repeated Instances
             if (reps > 1) {
                 isPosComp = false;
                 isNormComp = false;
@@ -290,12 +294,10 @@ public:
                 if (offset + uvOff + 4 <= prim.VertexBuffer.size()) {
                     if (isNormComp) {
                         if (mesh.MeshType == 4) {
-                            // Type 4: Unsigned Normalized (0 to 1)
                             uint16_t* u = (uint16_t*)(prim.VertexBuffer.data() + offset + uvOff);
                             gpuV.UV = XMFLOAT2((float)u[0] / 65535.0f, (float)u[1] / 65535.0f);
                         }
                         else {
-                            // Type 2 / Standard: Signed Compressed (-8 to +8)
                             int16_t* u = (int16_t*)(prim.VertexBuffer.data() + offset + uvOff);
                             gpuV.UV = XMFLOAT2(DecompressUV(u[0]), DecompressUV(u[1]));
                         }
@@ -352,14 +354,8 @@ public:
                         uint16_t i0 = prim.IndexBuffer[start + k];
                         uint16_t i1 = prim.IndexBuffer[start + k + 1];
                         uint16_t i2 = prim.IndexBuffer[start + k + 2];
-                        if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) {
-                            parity = 0;
-                            continue;
-                        }
-                        if (i0 == i1 || i1 == i2 || i0 == i2) {
-                            parity++;
-                            continue;
-                        }
+                        if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) { parity = 0; continue; }
+                        if (i0 == i1 || i1 == i2 || i0 == i2) { parity++; continue; }
                         if (parity % 2 != 0) {
                             indices.push_back(i0 + indexOffset);
                             indices.push_back(i2 + indexOffset);
@@ -433,7 +429,8 @@ public:
         device->CreateTexture2D(&dDesc, nullptr, &DepthTex); device->CreateDepthStencilView(DepthTex, nullptr, &DSV);
     }
 
-    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false, const std::vector<XMMATRIX>* animatedBones = nullptr) {
+    // FIX: Render targets can now be overridden so the overlay draws directly onto the main viewport
+    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false, const std::vector<XMMATRIX>* animatedBones = nullptr, bool clearTarget = true, float alpha = 1.0f, ID3D11RenderTargetView* overrideRTV = nullptr, ID3D11DepthStencilView* overrideDSV = nullptr) {
         if (!VS || !VBuffer) return nullptr;
         if (ImGui::IsWindowHovered()) {
             if (ImGui::IsMouseDragging(1)) { CamRotY += ImGui::GetIO().MouseDelta.x * 0.01f; CamRotX += ImGui::GetIO().MouseDelta.y * 0.01f; }
@@ -441,9 +438,18 @@ public:
             CamDist -= ImGui::GetIO().MouseWheel * CamDist * 0.1f; if (CamDist < 0.1f) CamDist = 0.1f;
         }
 
-        float bgColor[4] = { isPhysics ? 0.15f : 0.1f, 0.12f, isPhysics ? 0.1f : 0.15f, 1.0f };
-        ctx->ClearRenderTargetView(RTV, bgColor); ctx->ClearDepthStencilView(DSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
-        ctx->OMSetRenderTargets(1, &RTV, DSV); D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f }; ctx->RSSetViewports(1, &vp);
+        ID3D11RenderTargetView* activeRTV = overrideRTV ? overrideRTV : RTV;
+        ID3D11DepthStencilView* activeDSV = overrideDSV ? overrideDSV : DSV;
+
+        if (clearTarget) {
+            float bgColor[4] = { isPhysics ? 0.15f : 0.1f, 0.12f, isPhysics ? 0.1f : 0.15f, 1.0f };
+            ctx->ClearRenderTargetView(activeRTV, bgColor);
+            ctx->ClearDepthStencilView(activeDSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
+        }
+
+        ctx->OMSetRenderTargets(1, &activeRTV, activeDSV);
+        D3D11_VIEWPORT vp = { 0, 0, w, h, 0.0f, 1.0f };
+        ctx->RSSetViewports(1, &vp);
 
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
@@ -453,7 +459,7 @@ public:
         CBMatrix cb;
         cb.World = XMMatrixTranspose(world);
         cb.WorldViewProj = XMMatrixTranspose(world * view * proj);
-        cb.Color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
+        cb.Color = XMFLOAT4(isPhysics ? 0.0f : 0.8f, 0.8f, isPhysics ? 1.0f : 0.8f, alpha);
         cb.LightDir = XMFLOAT4(0.5f, 1.0f, -0.5f, 0.0f);
 
         cb.HasAnimation = (animatedBones && !animatedBones->empty()) ? 1 : 0;
@@ -496,7 +502,7 @@ public:
             ctx->RSSetState(RastStateWire);
             ID3D11ShaderResourceView* white = DefaultWhiteSRV;
             ctx->PSSetShaderResources(0, 1, &white);
-            cb.Color = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+            cb.Color = XMFLOAT4(0.0f, 0.0f, 0.0f, alpha);
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             for (const auto& batch : Batches) ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
         }

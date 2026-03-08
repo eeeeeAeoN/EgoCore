@@ -564,6 +564,30 @@ static void DrawBankTab() {
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
 
+                    auto saveMeshToMemory = [&bank]() {
+                        int entryIdx = bank.SelectedEntryIndex;
+                        if (entryIdx != -1) {
+                            // 1. Update the synthesized metadata block in memory
+                            g_ActiveMeshContent.UpdateMetadata(bank.Entries[entryIdx].Size);
+                            std::vector<uint8_t> newMeta = g_ActiveMeshContent.SerializeEntryMetadata();
+
+                            if (newMeta.size() <= 64) {
+                                std::vector<uint8_t> patchedMeta(64, 0);
+                                memcpy(patchedMeta.data(), newMeta.data(), newMeta.size());
+                                bank.SubheaderCache[entryIdx] = patchedMeta;
+                                bank.Entries[entryIdx].InfoSize = 64;
+                            }
+
+                            // 2. DELETE OR COMMENT OUT THESE TWO LINES:
+                            // bank.ModifiedEntryData[entryIdx] = g_ActiveMeshContent.SerializeUncompressed();
+                            // bank.Entries[entryIdx].Size = (uint32_t)bank.ModifiedEntryData[entryIdx].size();
+
+                            // 3. Flag the bank as dirty
+                            //bank.IsDirty = true;
+                            g_BankStatus = "Saved metadata to memory. Click 'Recompile Bank' to write to disk.";
+                        }
+                        };
+
                     std::string typeName = "Unknown";
                     if (bank.Type == EBankType::Text) {
                         if (e.Type == 0) typeName = "Type 0 - Text Entry";
@@ -609,7 +633,12 @@ static void DrawBankTab() {
                     }
 
                     if (ImGui::Button("Save", ImVec2(60, 0))) {
-                        SaveEntryChanges(&bank);
+                        if (bank.Type == EBankType::Graphics && (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH)) {
+                            saveMeshToMemory();
+                        }
+                        else {
+                            SaveEntryChanges(&bank);
+                        }
                     }
 
                     ImGui::SameLine();
@@ -682,11 +711,11 @@ static void DrawBankTab() {
                     if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) DrawTextureProperties();
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
-                    else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
+                    else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { saveMeshToMemory(); });
                     else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
                         DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }
-}
+                }
                 ImGui::EndChild();
 
                 if (g_ShowDeleteBankEntryPopup) ImGui::OpenPopup("Delete Bank Entry?");

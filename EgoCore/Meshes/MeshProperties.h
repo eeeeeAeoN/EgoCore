@@ -13,8 +13,9 @@
 #include "MeshCompiler.h"
 #include "TextureExporter.h"
 #include "GltfMeshImporter.h"
+#include "BigBankCompiler.h"
 
-extern ID3D11Device * g_pd3dDevice;
+extern ID3D11Device* g_pd3dDevice;
 
 static MeshRenderer g_MeshRenderer;
 static bool g_ShowWireframe = false;
@@ -24,6 +25,18 @@ static bool g_ShowRightPanel = true;
 
 // --- DIAGNOSTIC TOGGLES ---
 static bool g_ShowSkeleton = true;
+
+// --- PHYSICS OVERLAY GLOBALS ---
+static MeshRenderer g_PhysicsOverlayRenderer;
+static CBBMParser g_OverlayBBMParser;
+static bool g_ShowPhysicsOverlay = false;
+static int g_LoadedOverlayID = -1;
+
+// --- PHYSICS PICKER GLOBALS ---
+static bool g_TriggerPhysicsPopup = false;
+static bool g_ShowPhysicsSelectPopup = false;
+static char g_PhysicsSearchBuf[128] = "";
+static int g_SelectedPhysicsID = -1;
 
 static std::map<int, ID3D11ShaderResourceView*> g_MeshTextureCache;
 
@@ -38,10 +51,10 @@ static bool g_PreviewAnimPlaying = false;
 static float g_PreviewAnimTime = 0.0f;
 static int g_SelectedAnimBankIndex = -1;
 static int g_SelectedAnimEntryIndex = -1;
-static int g_SelectedAnimType = -1; // Tracks if it is 6, 7, or 9
+static int g_SelectedAnimType = -1;
 static AnimParser g_PreviewAnimParser;
-static std::vector<XMMATRIX> g_PreviewBoneTransforms;     // Sent to Shader
-static std::vector<XMMATRIX> g_PreviewGlobalTransforms;   // Sent to UI Overlay
+static std::vector<XMMATRIX> g_PreviewBoneTransforms;
+static std::vector<XMMATRIX> g_PreviewGlobalTransforms;
 static char g_AnimSearchBuf[128] = "";
 
 inline std::string GetTextureNameForMesh(int textureID) {
@@ -393,18 +406,56 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::Checkbox("Draw Skeleton", &g_ShowSkeleton);
     }
 
+    // FIX 1: Auto-sync physics overlay state when switching entries!
+    if (g_ActiveMeshContent.IsParsed) {
+        if (g_ActiveMeshContent.EntryMeta.PhysicsIndex <= 0) {
+            g_ShowPhysicsOverlay = false; // Turn off if mesh has no physics
+            g_LoadedOverlayID = -1;
+        }
+        else {
+            ImGui::SameLine();
+            ImGui::Checkbox("Show Physics Mesh", &g_ShowPhysicsOverlay);
+
+            // If checked but the ID changed (because we clicked a new entry), auto-load the new one
+            if (g_ShowPhysicsOverlay && g_LoadedOverlayID != g_ActiveMeshContent.EntryMeta.PhysicsIndex) {
+                g_LoadedOverlayID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
+                bool loaded = false;
+                for (auto& bank : g_OpenBanks) {
+                    if (bank.Type == EBankType::Graphics) {
+                        for (int i = 0; i < bank.Entries.size(); ++i) {
+                            if (bank.Entries[i].ID == g_LoadedOverlayID) {
+                                std::vector<uint8_t> rawData;
+                                if (bank.ModifiedEntryData.count(i)) rawData = bank.ModifiedEntryData[i];
+                                else {
+                                    bank.Stream->clear();
+                                    bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
+                                    rawData.resize(bank.Entries[i].Size);
+                                    bank.Stream->read((char*)rawData.data(), bank.Entries[i].Size);
+                                }
+                                g_OverlayBBMParser.Parse(rawData);
+                                g_PhysicsOverlayRenderer.Initialize(g_pd3dDevice);
+                                g_PhysicsOverlayRenderer.UploadBBM(g_pd3dDevice, g_OverlayBBMParser);
+                                loaded = true; break;
+                            }
+                        }
+                    }
+                    if (loaded) break;
+                }
+                if (!loaded) g_ShowPhysicsOverlay = false; // Failsafe if physics mesh ID is invalid
+            }
+        }
+    }
+
     ImGui::SameLine();
     if (ImGui::Button("Export to glTF")) {
         std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
         if (!savePath.empty()) {
             if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
 
-            // Generate the output directory for textures
             std::string expDir = savePath.substr(0, savePath.find_last_of("\\/") + 1);
             auto extFunc = [expDir](int id) { return ExtractTextureForGltf(id, expDir); };
 
             if (g_BBMParser.IsParsed) GltfExporter::ExportBBM(g_BBMParser, savePath);
-            // Pass the lambda into the exporter
             else if (g_ActiveMeshContent.IsParsed) GltfExporter::Export(g_ActiveMeshContent, savePath, nullptr, 6, extFunc);
         }
     }
@@ -430,37 +481,31 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     if (ImGui::Button("Export Uncompressed Binary")) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
-            // Priority 1: If it's an engine mesh, serialize cleanly and uncompressed.
             if (g_ActiveMeshContent.IsParsed) {
                 std::vector<uint8_t> outData = g_ActiveMeshContent.SerializeUncompressed();
                 std::ofstream out(savePath, std::ios::binary);
                 out.write((char*)outData.data(), outData.size());
                 g_BankStatus = "Exported Uncompressed Mesh Binary (C3DMeshContent)!";
             }
-            // Priority 2: Fallback for generic LZO streams (like frontend or UI blobs)
             else if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
                 auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
                 if (!currentBank.CurrentEntryRawData.empty()) {
                     std::vector<uint8_t> outData = currentBank.CurrentEntryRawData;
-
                     if (outData.size() >= 4) {
                         uint32_t magic = *(uint32_t*)outData.data();
                         bool isUncompressed = false;
-
                         if (magic == 0x4853454D) isUncompressed = true; // "MESH"
                         else if (magic == 0x4D424220) isUncompressed = true; // "BBM "
                         else if (magic == 0x3E3E3E3E) isUncompressed = true; // ">>>>"
 
                         if (!isUncompressed) {
                             uint32_t uncompSize = magic;
-                            // Check if the first uint32 looks like a valid LZO uncompressed size
                             if (uncompSize > 0 && uncompSize < 100 * 1024 * 1024) {
                                 std::vector<uint8_t> decomp = DecompressRawLZO(currentBank.CurrentEntryRawData, 4, uncompSize);
                                 if (!decomp.empty()) outData = decomp;
                             }
                         }
                     }
-
                     std::ofstream out(savePath, std::ios::binary);
                     out.write((char*)outData.data(), outData.size());
                     g_BankStatus = "Exported Uncompressed Binary (Fallback)!";
@@ -476,7 +521,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     if (ImGui::Button("Import glTF (Type 2 Grass)")) {
         std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
         if (!gltfPath.empty()) {
-
             std::string exactName = "Fallback_Name";
             if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
                 auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
@@ -489,46 +533,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             std::string err = GltfMeshImporter::ImportType2(gltfPath, exactName, newMesh, 32);
 
             if (err.empty()) {
-                // 1. Trick compiler to get the exact byte-size of JUST LOD 0
-                newMesh.MeshType = 0;
-                auto mainCompiled = MeshCompiler::Compile(newMesh);
-                uint32_t mainLodSize = (uint32_t)mainCompiled.size();
-                newMesh.MeshType = 2; // Restore so the real compile appends the blank LOD
-
-                // 2. FORCE STRICT 64-BYTE FABLE METADATA
-                newMesh.EntryMeta = CMeshEntryMetadata();
-                newMesh.EntryMeta.HasData = true;
-                newMesh.EntryMeta.PhysicsIndex = 0;
-                memcpy(newMesh.EntryMeta.BoundingSphereCenter, newMesh.BoundingSphereCenter, 12);
-                newMesh.EntryMeta.BoundingSphereRadius = newMesh.BoundingSphereRadius;
-                memcpy(newMesh.EntryMeta.BoundingBoxMin, newMesh.BoundingBoxMin, 12);
-                memcpy(newMesh.EntryMeta.BoundingBoxMax, newMesh.BoundingBoxMax, 12);
-
-                // These specific pushes guarantee the Serialize loop creates EXACTLY 64 bytes
-                newMesh.EntryMeta.LODCount = 1;
-                newMesh.EntryMeta.LODSizes.push_back(mainLodSize);
-                newMesh.EntryMeta.SafeBoundingRadius = newMesh.BoundingSphereRadius;
-                newMesh.EntryMeta.TextureIDs.push_back(247); // Default grass texture ID
-
                 g_ActiveMeshContent = newMesh;
                 g_MeshUploadNeeded = true;
-
-                if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
-                    auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
-                    int entryIdx = currentBank.SelectedEntryIndex;
-
-                    if (entryIdx != -1) {
-                        currentBank.Entries[entryIdx].Type = 2;
-
-                        // 3. OVERWRITE THE CACHE WITH THE 64 BYTES BEFORE SAVING
-                        auto cleanInfo = g_ActiveMeshContent.SerializeEntryMetadata();
-                        currentBank.SubheaderCache[entryIdx] = cleanInfo;
-                        currentBank.Entries[entryIdx].InfoSize = (uint32_t)cleanInfo.size();
-
-                        if (saveCallback) saveCallback();
-                        g_BankStatus = "Type 2 Mesh Synthesized! (Hit Save Big Bank to write to disk)";
-                    }
-                }
+                if (saveCallback) saveCallback(); // Safely updates memory headers and data payload
+                g_BankStatus = "Type 2 Mesh Synthesized & Loaded to Memory!";
             }
             else {
                 g_BankStatus = "Import Error: " + err;
@@ -561,11 +569,28 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     ImGui::BeginChild("MeshViewportChild", ImVec2(viewportWidth, avail.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     g_MeshRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
+    if (g_ShowPhysicsOverlay) g_PhysicsOverlayRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
 
     ID3D11DeviceContext* ctx;
     g_pd3dDevice->GetImmediateContext(&ctx);
 
-    ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, viewportWidth, avail.y, g_ShowWireframe, g_BBMParser.IsParsed, &g_PreviewBoneTransforms);
+    // 1. Render Main Mesh (clears background)
+    ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, viewportWidth, avail.y, g_ShowWireframe, g_BBMParser.IsParsed, &g_PreviewBoneTransforms, true, 1.0f);
+
+    // 2. Render Overlay Mesh (does not clear, transparent)
+    if (g_ShowPhysicsOverlay && g_OverlayBBMParser.IsParsed && !g_BBMParser.IsParsed) {
+        g_PhysicsOverlayRenderer.CamRotX = g_MeshRenderer.CamRotX;
+        g_PhysicsOverlayRenderer.CamRotY = g_MeshRenderer.CamRotY;
+        g_PhysicsOverlayRenderer.CamDist = g_MeshRenderer.CamDist;
+        g_PhysicsOverlayRenderer.CamPan = g_MeshRenderer.CamPan;
+
+        // FIX 2: Pass &g_PreviewBoneTransforms so the Physics mesh inherits the Graphical mesh's Root Bone offset!
+        g_PhysicsOverlayRenderer.Render(
+            ctx, viewportWidth, avail.y,
+            true, true, &g_PreviewBoneTransforms, false, 0.5f,
+            g_MeshRenderer.GetRTV(), g_MeshRenderer.GetDSV()
+        );
+    }
 
     if (g_ShowBounds && g_ActiveMeshContent.IsParsed) {
         g_MeshRenderer.RenderBounds(ctx, viewportWidth, avail.y,
@@ -815,18 +840,58 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     if (g_ActiveMeshContent.EntryMeta.HasData) {
                         ImGui::Separator();
                         ImGui::TextColored(ImVec4(0.6f, 1.0f, 1.0f, 1.0f), "TOC Metadata");
-                        ImGui::Text("Physics Index: %d", g_ActiveMeshContent.EntryMeta.PhysicsIndex);
-                        ImGui::Text("Safe Radius: %.3f", g_ActiveMeshContent.EntryMeta.SafeBoundingRadius);
+
+                        bool tocChanged = false;
+
+                        // 1. Physics Index with Picker Button
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Physics Index");
+                        ImGui::SameLine(130);
+                        ImGui::SetNextItemWidth(80);
+                        if (ImGui::InputInt("##phys_idx", &g_ActiveMeshContent.EntryMeta.PhysicsIndex, 0, 0)) tocChanged = true;
+                        ImGui::SameLine();
+                        if (ImGui::Button("+##phys_btn", ImVec2(24, 0))) {
+                            g_SelectedPhysicsID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
+                            g_PhysicsSearchBuf[0] = '\0';
+                            g_TriggerPhysicsPopup = true;
+                        }
+
+                        // 2. Safe Bounding Radius
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Safe Radius");
+                        ImGui::SameLine(130);
+                        ImGui::SetNextItemWidth(80);
+                        if (ImGui::InputFloat("##safe_rad", &g_ActiveMeshContent.EntryMeta.SafeBoundingRadius, 0.0f, 0.0f, "%.3f")) tocChanged = true;
+
+                        // 3. Editable LOD Errors
                         if (g_ActiveMeshContent.EntryMeta.LODCount > 0) {
                             ImGui::Dummy(ImVec2(0, 5));
                             if (ImGui::BeginTable("LODTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                                ImGui::TableSetupColumn("Level"); ImGui::TableSetupColumn("Size"); ImGui::TableSetupColumn("Error"); ImGui::TableHeadersRow();
+                                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 60);
+                                ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 80);
+                                ImGui::TableSetupColumn("Error");
+                                ImGui::TableHeadersRow();
                                 for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
-                                    ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("LOD %d", i); ImGui::TableSetColumnIndex(1); if (i < g_ActiveMeshContent.EntryMeta.LODSizes.size()) ImGui::Text("%d", g_ActiveMeshContent.EntryMeta.LODSizes[i]); ImGui::TableSetColumnIndex(2); if (i < g_ActiveMeshContent.EntryMeta.LODErrors.size()) ImGui::Text("%.4f", g_ActiveMeshContent.EntryMeta.LODErrors[i]); else ImGui::TextDisabled("-");
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0); ImGui::Text("LOD %d", i);
+                                    ImGui::TableSetColumnIndex(1);
+                                    if (i < g_ActiveMeshContent.EntryMeta.LODSizes.size()) ImGui::Text("%d", g_ActiveMeshContent.EntryMeta.LODSizes[i]);
+
+                                    ImGui::TableSetColumnIndex(2);
+                                    if (i < g_ActiveMeshContent.EntryMeta.LODErrors.size()) {
+                                        ImGui::PushID(i);
+                                        ImGui::SetNextItemWidth(-1);
+                                        if (ImGui::InputFloat("##lod_err", &g_ActiveMeshContent.EntryMeta.LODErrors[i], 0.0f, 0.0f, "%.4f")) tocChanged = true;
+                                        ImGui::PopID();
+                                    }
+                                    else {
+                                        ImGui::TextDisabled("-");
+                                    }
                                 }
                                 ImGui::EndTable();
                             }
                         }
+                        if (tocChanged && saveCallback) saveCallback();
                     }
 
                     ImGui::Separator();
@@ -1168,6 +1233,62 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(120, 0))) {
             g_ShowTextureSelectPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // ==========================================
+    // PHYSICS MESH PICKER MODAL (Global Scope)
+    // ==========================================
+    if (g_TriggerPhysicsPopup) {
+        ImGui::OpenPopup("Select Physics Mesh");
+        g_ShowPhysicsSelectPopup = true;
+        g_TriggerPhysicsPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Select Physics Mesh", &g_ShowPhysicsSelectPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputTextWithHint("##PhysSearch", "Search Physics by ID or Name...", g_PhysicsSearchBuf, 128);
+        ImGui::Separator();
+
+        ImGui::BeginChild("PhysList", ImVec2(400, 300), true);
+
+        std::string filter = g_PhysicsSearchBuf;
+        std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+        for (auto& bank : g_OpenBanks) {
+            if (bank.Type == EBankType::Graphics) {
+                for (const auto& entry : bank.Entries) {
+                    if (entry.Type == 3) { // 3 = Physics Mesh BBM
+                        std::string nameLower = entry.Name;
+                        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                        std::string idStr = std::to_string(entry.ID);
+
+                        if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
+                            bool isSelected = (g_SelectedPhysicsID == entry.ID);
+                            if (ImGui::Selectable((idStr + " - " + entry.Name).c_str(), isSelected)) {
+                                g_SelectedPhysicsID = entry.ID;
+                            }
+                            if (isSelected) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                }
+            }
+        }
+        ImGui::EndChild();
+        ImGui::Separator();
+
+        if (ImGui::Button("Choose", ImVec2(120, 0))) {
+            if (g_SelectedPhysicsID >= 0) {
+                g_ActiveMeshContent.EntryMeta.PhysicsIndex = g_SelectedPhysicsID;
+                if (saveCallback) saveCallback();
+            }
+            g_ShowPhysicsSelectPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowPhysicsSelectPopup = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

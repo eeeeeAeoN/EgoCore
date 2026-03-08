@@ -202,7 +202,11 @@ public:
                 out.write((char*)&dCount, 4);
                 for (const auto& s : ce.Entry.Dependencies) WriteBankString(out, s);
 
+                // --- STRICT FABLE METADATA ALIGNMENT ---
+                // Write the promised InfoSize to the header (64 for Type 2)
                 out.write((char*)&ce.Entry.InfoSize, 4);
+
+                // Physically write the vector (which may contain appended Texture IDs, e.g., 68 bytes)
                 if (ce.Entry.InfoSize > 0 && !ce.RawInfo.empty()) {
                     out.write((char*)ce.RawInfo.data(), ce.RawInfo.size());
                 }

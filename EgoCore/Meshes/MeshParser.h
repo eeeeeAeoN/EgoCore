@@ -179,8 +179,6 @@ struct C3DMeshContent {
         EntryMeta.LODSizes.push_back((uint32_t)compiledLZOSize);
         EntryMeta.HasData = true;
 
-        // FIX: Sync our synthesized bounds back to the Engine TOC Header!
-        EntryMeta.PhysicsIndex = 0; // Standard for flora
         memcpy(EntryMeta.BoundingSphereCenter, BoundingSphereCenter, 12);
         EntryMeta.BoundingSphereRadius = BoundingSphereRadius;
         memcpy(EntryMeta.BoundingBoxMin, BoundingBoxMin, 12);
