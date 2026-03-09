@@ -464,22 +464,56 @@ inline std::vector<uint8_t> DecompressRawLZO(const std::vector<uint8_t>& data, s
     return result;
 }
 
+#include "minilzo.h"
+
 inline std::vector<uint8_t> CompressFableBlock(const uint8_t* src, uint32_t src_len) {
+    // Fable's framing requires leaving the last 3 bytes uncompressed. 
+    // If the block is too small, just return empty to trigger the uncompressed fallback.
     if (src_len <= 3) return {};
-    FableLZO::lzo1x_999_swd_t* wrkmem = new FableLZO::lzo1x_999_swd_t();
-    std::vector<uint8_t> comp_buf(src_len + (src_len / 16) + 64);
-    uint32_t out_len = 0;
-    FableLZO::lzo1x_999_compress_internal(src, src_len - 3, comp_buf.data(), &out_len, wrkmem);
+
+    // Standard miniLZO working memory requirement
+    std::vector<lzo_align_t> wrkmem(LZO1X_1_MEM_COMPRESS / sizeof(lzo_align_t) + 1);
+
+    // MiniLZO recommended output buffer size: in_len + (in_len / 16) + 64 + 3
+    uint32_t target_len = src_len - 3;
+    std::vector<uint8_t> comp_buf(target_len + (target_len / 16) + 64 + 3);
+
+    lzo_uint out_len = 0;
+
+    // Compress everything EXCEPT the last 3 bytes
+    int r = lzo1x_1_compress(src, target_len, comp_buf.data(), &out_len, wrkmem.data());
+
+    if (r != LZO_E_OK) {
+        return {}; // If compression fails, MeshCompiler will safely write it uncompressed
+    }
+
     std::vector<uint8_t> result;
-    if (out_len >= (src_len - 3)) {
-        uint16_t zero = 0; result.insert(result.end(), (uint8_t*)&zero, (uint8_t*)&zero + 2);
+
+    // Fable Fallback: If compressed data doesn't actually save space, store it uncompressed
+    if (out_len >= target_len) {
+        uint16_t zero = 0;
+        result.insert(result.end(), (uint8_t*)&zero, (uint8_t*)&zero + 2);
         result.insert(result.end(), src, src + src_len);
     }
     else {
-        if (out_len > 0x7FFF) { uint16_t magic = 0xFFFF; result.insert(result.end(), (uint8_t*)&magic, (uint8_t*)&magic + 2); result.insert(result.end(), (uint8_t*)&out_len, (uint8_t*)&out_len + 4); }
-        else { uint16_t shortLen = (uint16_t)out_len; result.insert(result.end(), (uint8_t*)&shortLen, (uint8_t*)&shortLen + 2); }
+        // 1. Write Fable Size Header
+        if (out_len > 0x7FFF) {
+            uint16_t magic = 0xFFFF;
+            result.insert(result.end(), (uint8_t*)&magic, (uint8_t*)&magic + 2);
+            uint32_t longLen = (uint32_t)out_len;
+            result.insert(result.end(), (uint8_t*)&longLen, (uint8_t*)&longLen + 4);
+        }
+        else {
+            uint16_t shortLen = (uint16_t)out_len;
+            result.insert(result.end(), (uint8_t*)&shortLen, (uint8_t*)&shortLen + 2);
+        }
+
+        // 2. Write the LZO compressed payload
         result.insert(result.end(), comp_buf.data(), comp_buf.data() + out_len);
-        result.insert(result.end(), src + (src_len - 3), src + src_len);
+
+        // 3. Append the uncompressed last 3 bytes
+        result.insert(result.end(), src + target_len, src + src_len);
     }
-    delete wrkmem; return result;
+
+    return result;
 }

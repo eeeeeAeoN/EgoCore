@@ -712,21 +712,20 @@ static void DrawBankTab() {
                                 ImGui::Text("Select a glTF file to import as LOD 0.");
                                 ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Meshes will automatically generate the required Blank LOD.");
                                 ImGui::Separator();
-                                if (ImGui::Button("Browse & Add", ImVec2(120, 0))) {
+                                if (ImGui::Button("Browse & Replace", ImVec2(120, 0))) {
                                     std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
                                     if (!gltfPath.empty()) {
                                         if (e.Type == 2) {
                                             C3DMeshContent newMesh;
                                             std::string err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, 32);
                                             if (err.empty()) {
+                                                // Keep the old structural counts safe
                                                 auto originalMeta = g_ActiveMeshContent.EntryMeta;
                                                 g_ActiveMeshContent = newMesh;
                                                 g_ActiveMeshContent.EntryMeta = originalMeta;
 
-                                                bank.SelectedLOD = 0;
+                                                SaveEntryChanges(&bank); // Run compiler to overwrite the LZO block
                                                 g_MeshUploadNeeded = true;
-                                                SaveEntryChanges(&bank);
-                                                g_BankStatus = "LOD Added and Compiled Successfully!";
                                             }
                                             else {
                                                 g_BankStatus = "Import Error: " + err;
@@ -736,7 +735,7 @@ static void DrawBankTab() {
                                             g_BankStatus = "Import Error: Importer only supports Type 2 meshes.";
                                         }
                                     }
-                                    g_ShowAddLODPopup = false;
+                                    g_ShowReplaceLODPopup = false;
                                     ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::SameLine();

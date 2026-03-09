@@ -983,7 +983,10 @@ inline void SaveEntryChanges(LoadedBank* bank) {
                     bank->ModifiedEntryData[bank->SelectedEntryIndex] = bank->CurrentEntryRawData;
                     e.Size = (uint32_t)bank->CurrentEntryRawData.size();
 
-                    g_BankStatus = "Type 2 Mesh LOD Compiled & Spliced Successfully!";
+                    // 4. Force a re-parse of the live compressed bytes so it renders instantly
+                    ParseSelectedLOD(bank);
+
+                    g_BankStatus = "Type 2 Mesh LOD Compiled & Spliced Successfully! Size: " + std::to_string(compiledLOD.size());
                 }
                 else {
                     g_BankStatus = "Error: Type 2 Mesh Compilation failed!";

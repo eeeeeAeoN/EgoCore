@@ -1,13 +1,14 @@
+// --- START OF FILE MeshCompiler.h ---
+
 #pragma once
 #include "MeshParser.h"
-#include "minilzo.h"
+#include "Utils.h" // Ensures CompressFableBlock is available
 #include <vector>
 #include <string>
 #include <cstring>
 
 class MeshCompiler {
 public:
-    // Compiles a single LOD (the currently active C3DMeshContent)
     static std::vector<uint8_t> CompileSingleLOD(const C3DMeshContent& m) {
         std::vector<uint8_t> data;
         auto Write = [&](const void* val, size_t len) {
@@ -27,29 +28,57 @@ public:
         Write(&m.HelperPointCount, 2);
         Write(&m.DummyObjectCount, 2);
 
-        uint16_t calcPackedNamesSize = (uint16_t)m.PackedNamesRaw.size();
-        Write(&calcPackedNamesSize, 2);
-
+        uint16_t namesSize = (uint16_t)m.PackedNamesRaw.size();
+        Write(&namesSize, 2);
         Write(&m.MeshVolumeCount, 2);
         Write(&m.MeshGeneratorCount, 2);
 
-        for (const auto& h : m.Helpers) { Write(&h.NameCRC, 4); Write(h.Pos, 12); Write(&h.BoneIndex, 4); }
-        for (const auto& d : m.Dummies) { Write(&d.NameCRC, 4); Write(d.Transform, 48); Write(&d.BoneIndex, 4); }
+        // Compress Helper Arrays
+        if (m.HelperPointCount > 0) {
+            std::vector<uint8_t> hRaw(m.Helpers.size() * 20);
+            for (size_t i = 0; i < m.Helpers.size(); i++) {
+                memcpy(hRaw.data() + i * 20, &m.Helpers[i].NameCRC, 4);
+                memcpy(hRaw.data() + i * 20 + 4, m.Helpers[i].Pos, 12);
+                memcpy(hRaw.data() + i * 20 + 16, &m.Helpers[i].BoneIndex, 4);
+            }
+            WriteLZOBlock(data, hRaw);
+        }
 
-        if (!m.PackedNamesRaw.empty()) Write(m.PackedNamesRaw.data(), m.PackedNamesRaw.size());
+        // Compress Dummy Arrays
+        if (m.DummyObjectCount > 0) {
+            std::vector<uint8_t> dRaw(m.Dummies.size() * 56);
+            for (size_t i = 0; i < m.Dummies.size(); i++) {
+                memcpy(dRaw.data() + i * 56, &m.Dummies[i].NameCRC, 4);
+                memcpy(dRaw.data() + i * 56 + 4, m.Dummies[i].Transform, 48);
+                memcpy(dRaw.data() + i * 56 + 52, &m.Dummies[i].BoneIndex, 4);
+            }
+            WriteLZOBlock(data, dRaw);
+        }
 
+        // Compress Packed Strings
+        if (namesSize > 0) {
+            WriteLZOBlock(data, m.PackedNamesRaw);
+        }
+
+        // Compress Volumes
         for (const auto& vol : m.Volumes) {
             Write(&vol.ID, 4); WriteString(vol.Name);
             uint32_t pCount = (uint32_t)vol.Planes.size(); Write(&pCount, 4);
-            if (pCount > 0) Write(vol.Planes.data(), pCount * 16);
+            if (pCount > 0) {
+                std::vector<uint8_t> pRaw(pCount * 16);
+                memcpy(pRaw.data(), vol.Planes.data(), pCount * 16);
+                WriteLZOBlock(data, pRaw);
+            }
         }
 
+        // Uncompressed Generators
         for (const auto& gen : m.Generators) {
             Write(gen.Transform, 48); Write(&gen.BoneIndex, 4); WriteString(gen.ObjectName); Write(&gen.BankIndex, 4); Write(&gen.UseLocalOrigin, 1);
         }
 
         Write(&m.MaterialCount, 4); Write(&m.PrimitiveCount, 4); Write(&m.BoneCount, 4);
 
+        // Compress Bone Names
         std::vector<uint8_t> bNamesBlock;
         for (const auto& s : m.BoneNames) bNamesBlock.insert(bNamesBlock.end(), s.c_str(), s.c_str() + s.length() + 1);
         uint32_t calcBoneNameSize = (uint32_t)bNamesBlock.size();
@@ -57,16 +86,22 @@ public:
 
         Write(&m.ClothFlag, 1); Write(&m.TotalStaticBlocks, 2); Write(&m.TotalAnimatedBlocks, 2);
 
+        // Compress Bone Data
         if (m.BoneCount > 0) {
             Write(m.BoneIndices.data(), 2 * m.BoneCount);
-            if (!bNamesBlock.empty()) Write(bNamesBlock.data(), bNamesBlock.size());
-            if (!m.Bones.empty()) Write(m.Bones.data(), 60 * m.BoneCount);
-            if (!m.BoneKeyframesRaw.empty()) Write(m.BoneKeyframesRaw.data(), 48 * m.BoneCount);
-            if (!m.BoneTransformsRaw.empty()) Write(m.BoneTransformsRaw.data(), 64 * m.BoneCount);
+            WriteLZOBlock(data, bNamesBlock);
+
+            std::vector<uint8_t> bRaw(m.Bones.size() * 60);
+            memcpy(bRaw.data(), m.Bones.data(), m.Bones.size() * 60);
+            WriteLZOBlock(data, bRaw);
+
+            WriteLZOBlock(data, m.BoneKeyframesRaw);
+            WriteLZOBlock(data, m.BoneTransformsRaw);
         }
 
         Write(m.RootMatrix, 48);
 
+        // Uncompressed Materials
         for (const auto& mat : m.Materials) {
             Write(&mat.ID, 4); WriteString(mat.Name); Write(&mat.DecalID, 4); Write(&mat.DiffuseMapID, 4); Write(&mat.BumpMapID, 4);
             Write(&mat.ReflectionMapID, 4); Write(&mat.IlluminationMapID, 4); Write(&mat.MapFlags, 4); Write(&mat.SelfIllumination, 4);
@@ -98,39 +133,43 @@ public:
             uint32_t stride = prim.VertexStride; Write(&stride, 4);
             uint32_t type = prim.BufferType; Write(&type, 4);
 
-            // 2. COMPRESS BUFFERS (LZO)
-            WriteLZO(data, prim.VertexBuffer);
+            // 2. COMPRESS PRIMITIVE BUFFERS USING FABLE'S CUSTOM WRAPPER
+            WriteLZOBlock(data, prim.VertexBuffer);
 
             std::vector<uint8_t> idxBytes(prim.IndexBuffer.size() * 2);
             if (!prim.IndexBuffer.empty()) memcpy(idxBytes.data(), prim.IndexBuffer.data(), idxBytes.size());
-            WriteLZO(data, idxBytes);
+            WriteLZOBlock(data, idxBytes);
 
             uint32_t cpCount = (uint32_t)prim.ClothPrimitives.size(); Write(&cpCount, 4);
             for (const auto& cp : prim.ClothPrimitives) {
                 Write(&cp.PrimitiveIndex, 4); Write(&cp.MaterialIndex, 4);
-                WriteLZO(data, cp.ParticleProgramData);
+                WriteLZOBlock(data, cp.ParticleProgramData);
             }
         }
         return data;
     }
 
 private:
-    static void WriteLZO(std::vector<uint8_t>& out, const std::vector<uint8_t>& uncomp) {
+    static void WriteLZOBlock(std::vector<uint8_t>& out, const std::vector<uint8_t>& uncomp) {
+        // If the uncompressed block is empty, Fable writes a flat 0x0000 
         if (uncomp.empty()) {
             uint16_t zero = 0;
             out.insert(out.end(), (uint8_t*)&zero, ((uint8_t*)&zero) + 2);
             return;
         }
-        if (lzo_init() != LZO_E_OK) return;
 
-        std::vector<uint8_t> compBuf(uncomp.size() + (uncomp.size() / 16) + 64 + 3);
-        lzo_uint compLen = 0;
-        std::vector<uint8_t> wrkmem(LZO1X_1_MEM_COMPRESS);
+        // Delegate to the custom Fable Wrapper in Utils.h
+        std::vector<uint8_t> compressed = CompressFableBlock(uncomp.data(), (uint32_t)uncomp.size());
 
-        if (lzo1x_1_compress(uncomp.data(), uncomp.size(), compBuf.data(), &compLen, wrkmem.data()) == LZO_E_OK) {
-            uint32_t len32 = (uint32_t)compLen;
-            out.insert(out.end(), (uint8_t*)&len32, ((uint8_t*)&len32) + 4);
-            out.insert(out.end(), compBuf.begin(), compBuf.begin() + compLen);
+        // Fable's CompressFableBlock returns empty if the source is <= 3 bytes
+        // In that case, we write size '0' followed by the raw bytes.
+        if (compressed.empty()) {
+            uint16_t zero = 0;
+            out.insert(out.end(), (uint8_t*)&zero, ((uint8_t*)&zero) + 2);
+            out.insert(out.end(), uncomp.begin(), uncomp.end());
+        }
+        else {
+            out.insert(out.end(), compressed.begin(), compressed.end());
         }
     }
 };
