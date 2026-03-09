@@ -130,6 +130,15 @@ namespace GltfMeshImporter {
 
             Acc posAcc = accessors[posAccIdx];
             uint32_t baseVertCount = posAcc.count;
+            uint32_t totalVerts = baseVertCount * reps;
+
+            // --- TYPE 2 OVERFLOW SAFETY CHECK ---
+            // Fable strictly uses 16-bit indices, capping the max vertices per mesh at 65,535.
+            if (totalVerts > 65535) {
+                return "Import Error: Vertex overflow. Base mesh has " + std::to_string(baseVertCount) +
+                    " verts. At " + std::to_string(reps) + " reps, the total is " + std::to_string(totalVerts) +
+                    ", exceeding Fable's 65,535 16-bit limit. Lower reps or simplify the mesh.";
+            }
 
             struct BaseV { float p[3]; float n[3]; float u[2]; };
             std::vector<BaseV> baseVerts(baseVertCount);
@@ -150,8 +159,7 @@ namespace GltfMeshImporter {
 
             // Expand Vertices
             prim.VertexCount = baseVertCount;
-            uint32_t totalVerts = baseVertCount * reps;
-            prim.VertexBuffer.resize(totalVerts * 36);
+            prim.VertexBuffer.resize(totalVerts * 36); // It will use the totalVerts we defined at the top
             uint8_t* vDest = prim.VertexBuffer.data();
 
             for (int r = 0; r < reps; r++) {

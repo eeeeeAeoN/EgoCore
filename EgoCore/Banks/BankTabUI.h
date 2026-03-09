@@ -18,11 +18,14 @@ static int g_ImportFormat = 1; // 0: DXT1, 1: DXT3, 2: DXT5, 3: ARGB
 static int g_ImportType = 0;   // 0: Graphic, 2: Bumpmap, 5: Flat Sequence
 static bool g_ScrollToSelected = false;
 
-
 static bool g_ShowAddLODPopup = false;
 static bool g_ShowDeleteLODPopup = false;
 static bool g_ShowReplaceLODPopup = false;
 static int g_PendingLODActionIndex = -1;
+static int g_ImportReps = 32;
+static bool g_ShowType2SettingsPopup = false;
+static std::string g_PendingGltfPath = "";
+static int g_PendingLODAction = 0; // 0 for Add, 1 for Replace
 
 static bool g_ShowAnimImportPopup = false;
 static int g_ImportAnimType = 6; // Default to 6 (Animation)
@@ -707,36 +710,25 @@ static void DrawBankTab() {
                                 outSize = g_ActiveMeshContent.EntryMeta.LODSizes[lodIndex];
                                 };
 
-                            // --- LOD POPUP MODALS ---
                             if (ImGui::BeginPopupModal("Add LOD?", &g_ShowAddLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
                                 ImGui::Text("Select a glTF file to import as LOD 0.");
                                 ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Meshes will automatically generate the required Blank LOD.");
+
                                 ImGui::Separator();
-                                if (ImGui::Button("Browse & Replace", ImVec2(120, 0))) {
+                                if (ImGui::Button("Browse & Add", ImVec2(120, 0))) {
                                     std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
                                     if (!gltfPath.empty()) {
                                         if (e.Type == 2) {
-                                            C3DMeshContent newMesh;
-                                            std::string err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, 32);
-                                            if (err.empty()) {
-                                                // Keep the old structural counts safe
-                                                auto originalMeta = g_ActiveMeshContent.EntryMeta;
-                                                g_ActiveMeshContent = newMesh;
-                                                g_ActiveMeshContent.EntryMeta = originalMeta;
-
-                                                SaveEntryChanges(&bank); // Run compiler to overwrite the LZO block
-                                                g_MeshUploadNeeded = true;
-                                            }
-                                            else {
-                                                g_BankStatus = "Import Error: " + err;
-                                            }
+                                            g_PendingGltfPath = gltfPath;
+                                            g_PendingLODAction = 0;
+                                            g_ShowType2SettingsPopup = true;
+                                            g_ShowAddLODPopup = false;
+                                            ImGui::CloseCurrentPopup();
                                         }
                                         else {
                                             g_BankStatus = "Import Error: Importer only supports Type 2 meshes.";
                                         }
                                     }
-                                    g_ShowReplaceLODPopup = false;
-                                    ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::SameLine();
                                 if (ImGui::Button("Cancel", ImVec2(120, 0))) {
@@ -796,31 +788,72 @@ static void DrawBankTab() {
                                     std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
                                     if (!gltfPath.empty()) {
                                         if (e.Type == 2) {
-                                            C3DMeshContent newMesh;
-                                            std::string err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, 32);
-                                            if (err.empty()) {
-                                                auto originalMeta = g_ActiveMeshContent.EntryMeta;
-                                                g_ActiveMeshContent = newMesh;
-                                                g_ActiveMeshContent.EntryMeta = originalMeta;
-
-                                                g_MeshUploadNeeded = true;
-                                                SaveEntryChanges(&bank);
-                                                g_BankStatus = "LOD Replaced and Compiled Successfully!";
-                                            }
-                                            else {
-                                                g_BankStatus = "Import Error: " + err;
-                                            }
+                                            g_PendingGltfPath = gltfPath;
+                                            g_PendingLODAction = 1;
+                                            g_ShowType2SettingsPopup = true;
+                                            g_ShowReplaceLODPopup = false;
+                                            ImGui::CloseCurrentPopup();
                                         }
                                         else {
                                             g_BankStatus = "Import Error: Importer only supports Type 2 meshes.";
                                         }
                                     }
-                                    g_ShowReplaceLODPopup = false;
-                                    ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::SameLine();
                                 if (ImGui::Button("Cancel", ImVec2(120, 0))) {
                                     g_ShowReplaceLODPopup = false;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::EndPopup();
+                            }
+
+                            if (g_ShowType2SettingsPopup) {
+                                ImGui::OpenPopup("Type 2 Import Settings");
+                            }
+
+                            if (ImGui::BeginPopupModal("Type 2 Import Settings", &g_ShowType2SettingsPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                                ImGui::Text("File Selected:");
+                                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", g_PendingGltfPath.c_str());
+                                ImGui::Separator();
+
+                                ImGui::Text("Set Repetitions for this mesh:");
+                                const int allowedReps[] = { 4, 8, 16, 32, 64 };
+                                int currentIdx = 0;
+                                for (int i = 0; i < 5; i++) { if (g_ImportReps == allowedReps[i]) currentIdx = i; }
+
+                                if (ImGui::SliderInt("##reps_staging", &currentIdx, 0, 4, std::to_string(allowedReps[currentIdx]).c_str())) {
+                                    g_ImportReps = allowedReps[currentIdx];
+                                }
+
+                                int maxVerts = 65535 / g_ImportReps;
+                                ImGui::TextDisabled("Max base vertices allowed: %d", maxVerts);
+
+                                ImGui::Separator();
+
+                                if (ImGui::Button("Finalize Import", ImVec2(120, 0))) {
+                                    C3DMeshContent newMesh;
+                                    std::string err = GltfMeshImporter::ImportType2(g_PendingGltfPath, e.Name, newMesh, g_ImportReps);
+
+                                    if (err.empty()) {
+                                        auto originalMeta = g_ActiveMeshContent.EntryMeta;
+                                        g_ActiveMeshContent = newMesh;
+                                        g_ActiveMeshContent.EntryMeta = originalMeta;
+
+                                        g_MeshUploadNeeded = true;
+                                        SaveEntryChanges(&bank);
+                                        g_BankStatus = (g_PendingLODAction == 0) ? "LOD Added and Compiled Successfully!" : "LOD Replaced and Compiled Successfully!";
+                                        g_ShowType2SettingsPopup = false;
+                                        ImGui::CloseCurrentPopup();
+                                    }
+                                    else {
+                                        g_BankStatus = "Import Error: " + err;
+                                    }
+                                }
+
+                                ImGui::SameLine();
+                                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                                    g_ShowType2SettingsPopup = false;
+                                    g_PendingGltfPath = "";
                                     ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::EndPopup();

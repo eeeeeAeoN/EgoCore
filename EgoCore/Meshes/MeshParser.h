@@ -357,12 +357,20 @@ struct C3DMeshContent {
         float max[3] = { -1e9, -1e9, -1e9 };
 
         for (const auto& p : Primitives) {
-            for (int v = 0; v < p.VertexCount; v++) {
+            int reps = (p.RepeatingMeshReps > 1) ? p.RepeatingMeshReps : 1;
+            int totalVertsToRead = p.VertexCount * reps;
+
+            // Fable exceptions: Type 2 and Type 4 meshes store raw floats regardless of the InitFlags
+            bool isPosComp = p.IsCompressed;
+            if (MeshType == 4 || (p.VertexStride == 36 && p.AnimatedBlockCount == 0)) isPosComp = false;
+            if (reps > 1) isPosComp = false;
+
+            for (int v = 0; v < totalVertsToRead; v++) {
                 size_t offset = v * p.VertexStride;
-                if (offset + 4 > p.VertexBuffer.size()) break;
+                if (offset + 12 > p.VertexBuffer.size()) break; // Safely ensure 12 bytes exist
 
                 float x, y, z;
-                if (p.IsCompressed) {
+                if (isPosComp) {
                     uint32_t packed = *(uint32_t*)(p.VertexBuffer.data() + offset);
                     UnpackPOSPACKED3(packed, p.Compression.Scale, p.Compression.Offset, x, y, z);
                 }
@@ -383,12 +391,29 @@ struct C3DMeshContent {
 
         float maxDistSq = 0;
         for (const auto& p : Primitives) {
-            for (int v = 0; v < p.VertexCount; v++) {
+            int reps = (p.RepeatingMeshReps > 1) ? p.RepeatingMeshReps : 1;
+            int totalVertsToRead = p.VertexCount * reps;
+
+            bool isPosComp = p.IsCompressed;
+            if (MeshType == 4 || (p.VertexStride == 36 && p.AnimatedBlockCount == 0)) isPosComp = false;
+            if (reps > 1) isPosComp = false;
+
+            for (int v = 0; v < totalVertsToRead; v++) {
                 size_t offset = v * p.VertexStride;
+                if (offset + 12 > p.VertexBuffer.size()) break;
+
                 float x, y, z;
-                if (p.IsCompressed) { UnpackPOSPACKED3(*(uint32_t*)(p.VertexBuffer.data() + offset), p.Compression.Scale, p.Compression.Offset, x, y, z); }
-                else { const float* raw = (const float*)(p.VertexBuffer.data() + offset); x = raw[0]; y = raw[1]; z = raw[2]; }
-                float dx = x - BoundingSphereCenter[0]; float dy = y - BoundingSphereCenter[1]; float dz = z - BoundingSphereCenter[2];
+                if (isPosComp) {
+                    UnpackPOSPACKED3(*(uint32_t*)(p.VertexBuffer.data() + offset), p.Compression.Scale, p.Compression.Offset, x, y, z);
+                }
+                else {
+                    const float* raw = (const float*)(p.VertexBuffer.data() + offset);
+                    x = raw[0]; y = raw[1]; z = raw[2];
+                }
+
+                float dx = x - BoundingSphereCenter[0];
+                float dy = y - BoundingSphereCenter[1];
+                float dz = z - BoundingSphereCenter[2];
                 float dSq = dx * dx + dy * dy + dz * dz;
                 if (dSq > maxDistSq) maxDistSq = dSq;
             }
