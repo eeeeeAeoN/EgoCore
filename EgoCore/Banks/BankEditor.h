@@ -953,45 +953,44 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     // --- MESHES (Types 1, 2, 4, 5) ---
     else if (IsSupportedMesh(e.Type)) {
         if (g_ActiveMeshContent.IsParsed) {
-            newBytes = MeshCompiler::Compile(g_ActiveMeshContent);
-            if (!newBytes.empty()) {
+            if (e.Type == 2) {
+                // 1. Compile ONLY the currently selected LOD into LZO bytes
+                std::vector<uint8_t> compiledLOD = MeshCompiler::CompileSingleLOD(g_ActiveMeshContent);
 
-                // Safely patch the existing subheader in-place!
-                newInfo = bank->SubheaderCache[bank->SelectedEntryIndex];
-                if (newInfo.size() >= 44) {
-                    size_t cursor = 4; // Skip PhysicsIndex
-                    uint32_t bbmFlag = *(uint32_t*)(newInfo.data() + cursor); cursor += 4;
-                    if (bbmFlag != 0 && cursor + 4 <= newInfo.size()) {
-                        uint32_t bbmLen = *(uint32_t*)(newInfo.data() + cursor); cursor += 4;
-                        cursor += bbmLen; // Skip the variable-length string
+                if (!compiledLOD.empty()) {
+                    int lodIdx = bank->SelectedLOD;
+                    size_t off = 0, oldSz = 0;
+
+                    // Calculate exactly where this LOD sits in the raw payload
+                    if (lodIdx < g_ActiveMeshContent.EntryMeta.LODCount) {
+                        for (int i = 0; i < lodIdx; i++) off += g_ActiveMeshContent.EntryMeta.LODSizes[i];
+                        oldSz = g_ActiveMeshContent.EntryMeta.LODSizes[lodIdx];
                     }
-                    cursor += 12; // Skip unknown floats
 
-                    // We are now perfectly aligned at the Bounding Box data
-                    if (cursor + 44 <= newInfo.size()) {
-                        memcpy(newInfo.data() + cursor, g_ActiveMeshContent.BoundingSphereCenter, 12); cursor += 12;
-                        memcpy(newInfo.data() + cursor, &g_ActiveMeshContent.BoundingSphereRadius, 4); cursor += 4;
-                        memcpy(newInfo.data() + cursor, g_ActiveMeshContent.BoundingBoxMin, 12); cursor += 12;
-                        memcpy(newInfo.data() + cursor, g_ActiveMeshContent.BoundingBoxMax, 12); cursor += 12;
-
-                        uint32_t lodCount = *(uint32_t*)(newInfo.data() + cursor); cursor += 4;
-                        if (lodCount > 0 && cursor + 4 <= newInfo.size()) {
-                            uint32_t newLodSize = (uint32_t)newBytes.size();
-                            memcpy(newInfo.data() + cursor, &newLodSize, 4); // Inject compiled LZO size
-                        }
+                    // 2. SPLICE: Erase old LOD bytes, insert new compressed LOD bytes
+                    if (oldSz > 0 && off + oldSz <= bank->CurrentEntryRawData.size()) {
+                        bank->CurrentEntryRawData.erase(bank->CurrentEntryRawData.begin() + off, bank->CurrentEntryRawData.begin() + off + oldSz);
                     }
+                    bank->CurrentEntryRawData.insert(bank->CurrentEntryRawData.begin() + off, compiledLOD.begin(), compiledLOD.end());
+
+                    // 3. Update TOC Metadata to reflect the new compressed size
+                    g_ActiveMeshContent.EntryMeta.LODSizes[lodIdx] = (uint32_t)compiledLOD.size();
+                    std::vector<uint8_t> newInfo = g_ActiveMeshContent.SerializeEntryMetadata();
+
+                    bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
+                    e.InfoSize = (uint32_t)newInfo.size();
+
+                    bank->ModifiedEntryData[bank->SelectedEntryIndex] = bank->CurrentEntryRawData;
+                    e.Size = (uint32_t)bank->CurrentEntryRawData.size();
+
+                    g_BankStatus = "Type 2 Mesh LOD Compiled & Spliced Successfully!";
                 }
-
-                bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
-                e.InfoSize = (uint32_t)newInfo.size();
-
-                bank->CurrentEntryRawData = newBytes;
-                bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-                e.Size = (uint32_t)newBytes.size();
-                g_BankStatus = "Mesh Compiled and Saved to RAM.";
+                else {
+                    g_BankStatus = "Error: Type 2 Mesh Compilation failed!";
+                }
             }
             else {
-                g_BankStatus = "Error: Mesh Compilation failed!";
+                g_BankStatus = "Compiler for this Mesh Type is not implemented yet.";
             }
         }
     }

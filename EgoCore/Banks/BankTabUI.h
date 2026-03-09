@@ -18,6 +18,12 @@ static int g_ImportFormat = 1; // 0: DXT1, 1: DXT3, 2: DXT5, 3: ARGB
 static int g_ImportType = 0;   // 0: Graphic, 2: Bumpmap, 5: Flat Sequence
 static bool g_ScrollToSelected = false;
 
+
+static bool g_ShowAddLODPopup = false;
+static bool g_ShowDeleteLODPopup = false;
+static bool g_ShowReplaceLODPopup = false;
+static int g_PendingLODActionIndex = -1;
+
 static bool g_ShowAnimImportPopup = false;
 static int g_ImportAnimType = 6; // Default to 6 (Animation)
 
@@ -431,7 +437,6 @@ static void DrawBankTab() {
                                 if (ImGui::RadioButton("DXT5 / Bump DXT5", bank.FilterTextureFormatMask == 2)) { bank.FilterTextureFormatMask = 2; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("ARGB8888", bank.FilterTextureFormatMask == 3)) { bank.FilterTextureFormatMask = 3; UpdateFilter(bank); }
                             }
-                            // --- NEW: GRAPHICS BANK FILTERS ---
                             else if (bank.Type == EBankType::Graphics) {
                                 ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mesh Types:");
                                 if (ImGui::RadioButton("Show All Types##Gfx", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
@@ -445,9 +450,7 @@ static void DrawBankTab() {
                                 ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Animation Types:");
                                 if (ImGui::RadioButton("Animation", bank.FilterTypeMask == 6)) { bank.FilterTypeMask = 6; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("Delta Animation", bank.FilterTypeMask == 7)) { bank.FilterTypeMask = 7; UpdateFilter(bank); }
-                                //if (ImGui::RadioButton("Lipsync Animation", bank.FilterTypeMask == 8)) { bank.FilterTypeMask = 8; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("Partial Animation", bank.FilterTypeMask == 9)) { bank.FilterTypeMask = 9; UpdateFilter(bank); }
-                                //if (ImGui::RadioButton("Relative Animation", bank.FilterTypeMask == 10)) { bank.FilterTypeMask = 10; UpdateFilter(bank); }
                             }
 
                             ImGui::EndPopup();
@@ -509,13 +512,12 @@ static void DrawBankTab() {
 
                             if (ImGui::Selectable(e.FriendlyName.c_str(), bank.SelectedEntryIndex == idx)) {
                                 SelectEntry(&bank, idx);
-                                // Intentionally DO NOT set g_ScrollToSelected here so clicking doesn't jerk the list
                             }
 
                             if (ImGui::BeginPopupContextItem()) {
                                 if (ImGui::MenuItem("Duplicate Entry")) {
                                     DuplicateBankEntry(&bank, idx);
-                                    g_ScrollToSelected = true; // Trigger scroll on duplicate
+                                    g_ScrollToSelected = true;
                                 }
                                 if (ImGui::MenuItem("Delete Entry")) {
                                     if (g_AppConfig.ShowBankDeleteConfirm) {
@@ -533,7 +535,7 @@ static void DrawBankTab() {
                             if (bank.SelectedEntryIndex == idx) {
                                 ImGui::SetItemDefaultFocus();
                                 if (g_ScrollToSelected) {
-                                    ImGui::SetScrollHereY(0.5f); // Snaps item to middle of view
+                                    ImGui::SetScrollHereY(0.5f);
                                     g_ScrollToSelected = false;
                                 }
                             }
@@ -554,7 +556,6 @@ static void DrawBankTab() {
                 // --- RIGHT PANE ---
                 ImGui::BeginChild("RightPane", ImVec2(0, 0), true);
 
-                // Top Toolbar for toggling the Left Panel
                 if (ImGui::Button(g_ShowLeftPanel ? "<<##LeftToggle" : ">>##LeftToggle", ImVec2(28, 24))) {
                     g_ShowLeftPanel = !g_ShowLeftPanel;
                 }
@@ -563,30 +564,6 @@ static void DrawBankTab() {
 
                 if (bank.SelectedEntryIndex != -1) {
                     const auto& e = bank.Entries[bank.SelectedEntryIndex];
-
-                    auto saveMeshToMemory = [&bank]() {
-                        int entryIdx = bank.SelectedEntryIndex;
-                        if (entryIdx != -1) {
-                            // 1. Update the synthesized metadata block in memory
-                            g_ActiveMeshContent.UpdateMetadata(bank.Entries[entryIdx].Size);
-                            std::vector<uint8_t> newMeta = g_ActiveMeshContent.SerializeEntryMetadata();
-
-                            if (newMeta.size() <= 64) {
-                                std::vector<uint8_t> patchedMeta(64, 0);
-                                memcpy(patchedMeta.data(), newMeta.data(), newMeta.size());
-                                bank.SubheaderCache[entryIdx] = patchedMeta;
-                                bank.Entries[entryIdx].InfoSize = 64;
-                            }
-
-                            // 2. DELETE OR COMMENT OUT THESE TWO LINES:
-                            // bank.ModifiedEntryData[entryIdx] = g_ActiveMeshContent.SerializeUncompressed();
-                            // bank.Entries[entryIdx].Size = (uint32_t)bank.ModifiedEntryData[entryIdx].size();
-
-                            // 3. Flag the bank as dirty
-                            //bank.IsDirty = true;
-                            g_BankStatus = "Saved metadata to memory. Click 'Recompile Bank' to write to disk.";
-                        }
-                        };
 
                     std::string typeName = "Unknown";
                     if (bank.Type == EBankType::Text) {
@@ -633,12 +610,7 @@ static void DrawBankTab() {
                     }
 
                     if (ImGui::Button("Save", ImVec2(60, 0))) {
-                        if (bank.Type == EBankType::Graphics && (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH)) {
-                            saveMeshToMemory();
-                        }
-                        else {
-                            SaveEntryChanges(&bank);
-                        }
+                        SaveEntryChanges(&bank);
                     }
 
                     ImGui::SameLine();
@@ -676,27 +648,183 @@ static void DrawBankTab() {
                             lastBankID = g_ActiveBankIndex;
                         }
 
-                        ImGui::SetNextItemWidth(500);
+                        ImGui::SetNextItemWidth(300); // Narrowed to fit buttons
                         if (ImGui::InputText("##meshNameEdit", nameBuf, 256)) {
                             bank.Entries[bank.SelectedEntryIndex].Name = nameBuf;
                             bank.Entries[bank.SelectedEntryIndex].FriendlyName = nameBuf;
                             if (IsSupportedMesh(e.Type)) g_ActiveMeshContent.MeshName = nameBuf;
                         }
 
-                        if (IsSupportedMesh(e.Type) && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
+                        if (IsSupportedMesh(e.Type)) { // Ensure it's not Physics (which has no LODs)
                             ImGui::SameLine();
                             ImGui::Text("LOD:");
                             ImGui::SameLine();
-                            ImGui::SetNextItemWidth(50);
+                            ImGui::SetNextItemWidth(100);
                             std::string lodPreview = std::to_string(bank.SelectedLOD);
+
+                            uint32_t displayLODCount = g_ActiveMeshContent.EntryMeta.LODCount > 0 ? g_ActiveMeshContent.EntryMeta.LODCount : 1;
+
                             if (ImGui::BeginCombo("##lod", lodPreview.c_str())) {
-                                for (uint32_t l = 0; l < g_ActiveMeshContent.EntryMeta.LODCount; l++) {
-                                    if (ImGui::Selectable(std::to_string(l).c_str(), bank.SelectedLOD == l)) {
+                                for (uint32_t l = 0; l < displayLODCount; l++) {
+                                    ImGui::PushID(l);
+                                    float availW = ImGui::GetContentRegionAvail().x;
+                                    bool is_selected = (bank.SelectedLOD == l);
+
+                                    if (ImGui::Selectable((std::to_string(l) + "##sel").c_str(), is_selected, 0, ImVec2(availW - 30, 0))) {
                                         bank.SelectedLOD = l;
-                                        ParseSelectedLOD(&bank);
+                                        if (g_ActiveMeshContent.EntryMeta.LODCount > 0) ParseSelectedLOD(&bank);
                                     }
+
+                                    ImGui::SameLine(availW - 20);
+                                    if (ImGui::Button("X", ImVec2(20, 0))) {
+                                        g_PendingLODActionIndex = l;
+                                        g_ShowDeleteLODPopup = true;
+                                    }
+                                    ImGui::PopID();
+                                }
+                                ImGui::Separator();
+                                if (ImGui::Selectable("Add LOD...")) {
+                                    g_ShowAddLODPopup = true;
                                 }
                                 ImGui::EndCombo();
+                            }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("Replace LOD")) {
+                                g_PendingLODActionIndex = bank.SelectedLOD;
+                                g_ShowReplaceLODPopup = true;
+                            }
+
+                            // Trigger Popups outside the combo box context
+                            if (g_ShowAddLODPopup) { ImGui::OpenPopup("Add LOD?"); }
+                            if (g_ShowDeleteLODPopup) { ImGui::OpenPopup("Delete LOD?"); }
+                            if (g_ShowReplaceLODPopup) { ImGui::OpenPopup("Replace LOD?"); }
+
+                            auto getLODOffsetAndSize = [&](int lodIndex, size_t& outOffset, size_t& outSize) {
+                                outOffset = 0; outSize = 0;
+                                if (lodIndex < 0 || lodIndex >= g_ActiveMeshContent.EntryMeta.LODCount) return;
+                                for (int i = 0; i < lodIndex; i++) outOffset += g_ActiveMeshContent.EntryMeta.LODSizes[i];
+                                outSize = g_ActiveMeshContent.EntryMeta.LODSizes[lodIndex];
+                                };
+
+                            // --- LOD POPUP MODALS ---
+                            if (ImGui::BeginPopupModal("Add LOD?", &g_ShowAddLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                                ImGui::Text("Select a glTF file to import as LOD 0.");
+                                ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Meshes will automatically generate the required Blank LOD.");
+                                ImGui::Separator();
+                                if (ImGui::Button("Browse & Add", ImVec2(120, 0))) {
+                                    std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                                    if (!gltfPath.empty()) {
+                                        if (e.Type == 2) {
+                                            C3DMeshContent newMesh;
+                                            std::string err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, 32);
+                                            if (err.empty()) {
+                                                auto originalMeta = g_ActiveMeshContent.EntryMeta;
+                                                g_ActiveMeshContent = newMesh;
+                                                g_ActiveMeshContent.EntryMeta = originalMeta;
+
+                                                bank.SelectedLOD = 0;
+                                                g_MeshUploadNeeded = true;
+                                                SaveEntryChanges(&bank);
+                                                g_BankStatus = "LOD Added and Compiled Successfully!";
+                                            }
+                                            else {
+                                                g_BankStatus = "Import Error: " + err;
+                                            }
+                                        }
+                                        else {
+                                            g_BankStatus = "Import Error: Importer only supports Type 2 meshes.";
+                                        }
+                                    }
+                                    g_ShowAddLODPopup = false;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                                    g_ShowAddLODPopup = false;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::EndPopup();
+                            }
+
+                            if (ImGui::BeginPopupModal("Delete LOD?", &g_ShowDeleteLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                                ImGui::Text("Are you sure you want to delete LOD %d?", g_PendingLODActionIndex);
+                                ImGui::Separator();
+                                if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
+                                    if (g_ActiveMeshContent.EntryMeta.LODCount > 0 && g_PendingLODActionIndex < g_ActiveMeshContent.EntryMeta.LODCount) {
+                                        size_t off = 0, sz = 0;
+                                        getLODOffsetAndSize(g_PendingLODActionIndex, off, sz);
+
+                                        if (sz > 0 && off + sz <= bank.CurrentEntryRawData.size()) {
+                                            bank.CurrentEntryRawData.erase(bank.CurrentEntryRawData.begin() + off, bank.CurrentEntryRawData.begin() + off + sz);
+                                            bank.ModifiedEntryData[bank.SelectedEntryIndex] = bank.CurrentEntryRawData;
+                                            bank.Entries[bank.SelectedEntryIndex].Size = (uint32_t)bank.CurrentEntryRawData.size();
+                                        }
+
+                                        g_ActiveMeshContent.EntryMeta.LODSizes.erase(g_ActiveMeshContent.EntryMeta.LODSizes.begin() + g_PendingLODActionIndex);
+                                        if (!g_ActiveMeshContent.EntryMeta.LODErrors.empty()) {
+                                            int errIdx = (std::min)((int)g_PendingLODActionIndex, (int)g_ActiveMeshContent.EntryMeta.LODErrors.size() - 1);
+                                            g_ActiveMeshContent.EntryMeta.LODErrors.erase(g_ActiveMeshContent.EntryMeta.LODErrors.begin() + errIdx);
+                                        }
+                                        g_ActiveMeshContent.EntryMeta.LODCount--;
+
+                                        bank.SubheaderCache[bank.SelectedEntryIndex] = g_ActiveMeshContent.SerializeEntryMetadata();
+                                        bank.Entries[bank.SelectedEntryIndex].InfoSize = (uint32_t)bank.SubheaderCache[bank.SelectedEntryIndex].size();
+
+                                        bank.SelectedLOD = 0;
+                                        if (g_ActiveMeshContent.EntryMeta.LODCount > 0) ParseSelectedLOD(&bank);
+                                        else {
+                                            g_ActiveMeshContent.IsParsed = false;
+                                            g_MeshUploadNeeded = true;
+                                        }
+                                        g_BankStatus = "LOD deleted from RAM.";
+                                    }
+                                    g_ShowDeleteLODPopup = false;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                                    g_ShowDeleteLODPopup = false;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::EndPopup();
+                            }
+
+                            if (ImGui::BeginPopupModal("Replace LOD?", &g_ShowReplaceLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                                ImGui::Text("Select a glTF file to replace LOD %d.", g_PendingLODActionIndex);
+                                ImGui::Separator();
+                                if (ImGui::Button("Browse & Replace", ImVec2(120, 0))) {
+                                    std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                                    if (!gltfPath.empty()) {
+                                        if (e.Type == 2) {
+                                            C3DMeshContent newMesh;
+                                            std::string err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, 32);
+                                            if (err.empty()) {
+                                                auto originalMeta = g_ActiveMeshContent.EntryMeta;
+                                                g_ActiveMeshContent = newMesh;
+                                                g_ActiveMeshContent.EntryMeta = originalMeta;
+
+                                                g_MeshUploadNeeded = true;
+                                                SaveEntryChanges(&bank);
+                                                g_BankStatus = "LOD Replaced and Compiled Successfully!";
+                                            }
+                                            else {
+                                                g_BankStatus = "Import Error: " + err;
+                                            }
+                                        }
+                                        else {
+                                            g_BankStatus = "Import Error: Importer only supports Type 2 meshes.";
+                                        }
+                                    }
+                                    g_ShowReplaceLODPopup = false;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                                    g_ShowReplaceLODPopup = false;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::EndPopup();
                             }
                         }
                     }
@@ -711,7 +839,7 @@ static void DrawBankTab() {
                     if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) DrawTextureProperties();
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
-                    else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { saveMeshToMemory(); });
+                    else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
                     else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
                         DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }

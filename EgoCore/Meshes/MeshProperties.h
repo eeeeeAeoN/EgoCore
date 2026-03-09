@@ -406,17 +406,15 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::Checkbox("Draw Skeleton", &g_ShowSkeleton);
     }
 
-    // FIX 1: Auto-sync physics overlay state when switching entries!
     if (g_ActiveMeshContent.IsParsed) {
         if (g_ActiveMeshContent.EntryMeta.PhysicsIndex <= 0) {
-            g_ShowPhysicsOverlay = false; // Turn off if mesh has no physics
+            g_ShowPhysicsOverlay = false;
             g_LoadedOverlayID = -1;
         }
         else {
             ImGui::SameLine();
             ImGui::Checkbox("Show Physics Mesh", &g_ShowPhysicsOverlay);
 
-            // If checked but the ID changed (because we clicked a new entry), auto-load the new one
             if (g_ShowPhysicsOverlay && g_LoadedOverlayID != g_ActiveMeshContent.EntryMeta.PhysicsIndex) {
                 g_LoadedOverlayID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
                 bool loaded = false;
@@ -441,7 +439,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     }
                     if (loaded) break;
                 }
-                if (!loaded) g_ShowPhysicsOverlay = false; // Failsafe if physics mesh ID is invalid
+                if (!loaded) g_ShowPhysicsOverlay = false;
             }
         }
     }
@@ -482,64 +480,16 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
             if (g_ActiveMeshContent.IsParsed) {
+                // Ensure flawless uncompressed export byte-for-byte!
                 std::vector<uint8_t> outData = g_ActiveMeshContent.SerializeUncompressed();
                 std::ofstream out(savePath, std::ios::binary);
                 out.write((char*)outData.data(), outData.size());
                 g_BankStatus = "Exported Uncompressed Mesh Binary (C3DMeshContent)!";
-            }
-            else if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
-                auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
-                if (!currentBank.CurrentEntryRawData.empty()) {
-                    std::vector<uint8_t> outData = currentBank.CurrentEntryRawData;
-                    if (outData.size() >= 4) {
-                        uint32_t magic = *(uint32_t*)outData.data();
-                        bool isUncompressed = false;
-                        if (magic == 0x4853454D) isUncompressed = true; // "MESH"
-                        else if (magic == 0x4D424220) isUncompressed = true; // "BBM "
-                        else if (magic == 0x3E3E3E3E) isUncompressed = true; // ">>>>"
-
-                        if (!isUncompressed) {
-                            uint32_t uncompSize = magic;
-                            if (uncompSize > 0 && uncompSize < 100 * 1024 * 1024) {
-                                std::vector<uint8_t> decomp = DecompressRawLZO(currentBank.CurrentEntryRawData, 4, uncompSize);
-                                if (!decomp.empty()) outData = decomp;
-                            }
-                        }
-                    }
-                    std::ofstream out(savePath, std::ios::binary);
-                    out.write((char*)outData.data(), outData.size());
-                    g_BankStatus = "Exported Uncompressed Binary (Fallback)!";
-                }
-                else {
-                    g_BankStatus = "Error: No data available for this entry.";
-                }
-            }
-        }
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Import glTF (Type 2 Grass)")) {
-        std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
-        if (!gltfPath.empty()) {
-            std::string exactName = "Fallback_Name";
-            if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
-                auto& currentBank = g_OpenBanks[g_ActiveBankIndex];
-                if (currentBank.SelectedEntryIndex != -1) {
-                    exactName = currentBank.Entries[currentBank.SelectedEntryIndex].Name;
-                }
-            }
-
-            C3DMeshContent newMesh;
-            std::string err = GltfMeshImporter::ImportType2(gltfPath, exactName, newMesh, 32);
-
-            if (err.empty()) {
-                g_ActiveMeshContent = newMesh;
-                g_MeshUploadNeeded = true;
-                if (saveCallback) saveCallback(); // Safely updates memory headers and data payload
-                g_BankStatus = "Type 2 Mesh Synthesized & Loaded to Memory!";
+                g_ShowSuccessPopup = true;
+                g_SuccessMessage = "Binary dumped correctly!";
             }
             else {
-                g_BankStatus = "Import Error: " + err;
+                g_BankStatus = "Error: No active parsed mesh available to export.";
             }
         }
     }
@@ -584,7 +534,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         g_PhysicsOverlayRenderer.CamDist = g_MeshRenderer.CamDist;
         g_PhysicsOverlayRenderer.CamPan = g_MeshRenderer.CamPan;
 
-        // FIX 2: Pass &g_PreviewBoneTransforms so the Physics mesh inherits the Graphical mesh's Root Bone offset!
         g_PhysicsOverlayRenderer.Render(
             ctx, viewportWidth, avail.y,
             true, true, &g_PreviewBoneTransforms, false, 0.5f,
