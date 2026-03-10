@@ -27,6 +27,29 @@ namespace GltfMeshImporter {
         return "";
     }
 
+    static bool ExtractBool(const std::string& json, const std::string& key, bool defaultVal = false) {
+        size_t pos = json.find("\"" + key + "\"");
+        if (pos == std::string::npos) return defaultVal;
+        pos = json.find(':', pos);
+        if (pos == std::string::npos) return defaultVal;
+        pos++;
+        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+        if (pos + 4 <= json.length() && json.compare(pos, 4, "true") == 0) return true;
+        if (pos + 5 <= json.length() && json.compare(pos, 5, "false") == 0) return false;
+        return defaultVal;
+    }
+
+    static float ExtractFloatClean(const std::string& json, const std::string& key, float defaultVal = 0.0f) {
+        size_t pos = json.find("\"" + key + "\"");
+        if (pos == std::string::npos) return defaultVal;
+        pos = json.find(':', pos);
+        if (pos == std::string::npos) return defaultVal;
+        pos++;
+        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+        try { return std::stof(json.substr(pos)); }
+        catch (...) { return defaultVal; }
+    }
+
     static std::vector<std::string> SplitArray(const std::string& jsonArray) {
         std::vector<std::string> items;
         if (jsonArray.empty() || jsonArray.front() != '[') return items;
@@ -102,111 +125,175 @@ namespace GltfMeshImporter {
         memset(outMesh.RootMatrix, 0, 48);
         outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
 
-        // Failsafe Material
-        C3DMaterial defMat = {};
-        defMat.ID = 0; defMat.Name = "Grass_Material"; defMat.IsTwoSided = true; defMat.IsTransparent = true;
-        outMesh.Materials.push_back(defMat);
-        outMesh.MaterialCount = 1;
+        // Parse Materials from glTF
+        std::string materialsBlock = ExtractBlock(json, "materials");
+        std::vector<std::string> matObjs = SplitArray(materialsBlock);
+
+        outMesh.Materials.clear();
+        if (!matObjs.empty()) {
+            for (int i = 0; i < matObjs.size(); ++i) {
+                C3DMaterial m = {};
+                m.ID = i;
+                m.Name = ExtractString(matObjs[i], "name");
+                if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
+
+                // Recover Fable-specific data from the extras block
+                std::string extras = ExtractBlock(matObjs[i], "extras");
+                if (!extras.empty()) {
+                    m.DiffuseMapID = (int)ExtractFloat(extras, "DiffuseMapID");
+                    m.BumpMapID = (int)ExtractFloat(extras, "BumpMapID");
+                    m.ReflectionMapID = (int)ExtractFloat(extras, "ReflectionMapID");
+                    m.IlluminationMapID = (int)ExtractFloat(extras, "IlluminationMapID");
+                    m.MapFlags = (int)ExtractFloat(extras, "MapFlags");
+                    m.IsTwoSided = ExtractBool(extras, "IsTwoSided", true);
+                    m.IsTransparent = ExtractBool(extras, "IsTransparent", false);
+                    m.BooleanAlpha = ExtractBool(extras, "BooleanAlpha", false);
+                    m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
+                }
+                else {
+                    m.IsTwoSided = true;
+                    m.IsTransparent = true;
+                }
+                outMesh.Materials.push_back(m);
+            }
+        }
+        else {
+            // True Failsafe if the glTF has absolutely no materials
+            C3DMaterial defMat = {};
+            defMat.ID = 0; defMat.Name = "Grass_Material"; defMat.IsTwoSided = true; defMat.IsTransparent = true;
+            outMesh.Materials.push_back(defMat);
+        }
+        outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
 
         std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
         if (meshObjs.empty()) return "No meshes found in glTF.";
 
-        std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObjs[0], "primitives"));
+        // We process ONE Fable Primitive per glTF Mesh
+        for (const auto& meshObj : meshObjs) {
+            std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
+            if (primObjs.empty()) continue;
 
-        for (const auto& pObj : primObjs) {
-            C3DPrimitive prim = {};
-            prim.MaterialIndex = 0;
-            prim.RepeatingMeshReps = reps;
-            prim.VertexStride = 36;
-            prim.InitFlags = 4; // Type 2 is uncompressed floats, despite InitFlags=4
+            C3DPrimitive outPrim = {};
+            outPrim.RepeatingMeshReps = reps;
+            outPrim.VertexStride = 36;
+            outPrim.InitFlags = 4;
+            outPrim.MaterialIndex = -1;
 
-            std::string attrBlock = ExtractBlock(pObj, "attributes");
-            int posAccIdx = (int)ExtractFloat(attrBlock, "POSITION");
-            int normAccIdx = (int)ExtractFloat(attrBlock, "NORMAL");
-            int uvAccIdx = (int)ExtractFloat(attrBlock, "TEXCOORD_0");
-            int indAccIdx = (int)ExtractFloat(pObj, "indices");
+            // --- NEW: Vertex Welder Structures ---
+            struct BaseVertex { float p[3], n[3], u[2]; };
+            std::vector<BaseVertex> uniqueVerts;
+            std::vector<uint32_t> mergedBaseIndices;
+            std::vector<CStaticBlock> baseBlocks;
 
-            if (posAccIdx < 0 || posAccIdx >= accessors.size()) continue;
+            // Simple linear search to deduplicate vertices. 
+            // Loosened epsilon catches Blender's floating-point normal drift!
+            auto FindOrAddVertex = [&](const BaseVertex& v) -> uint32_t {
+                for (size_t i = 0; i < uniqueVerts.size(); ++i) {
+                    const auto& uv = uniqueVerts[i];
+                    if (std::abs(uv.p[0] - v.p[0]) < 0.002f && std::abs(uv.p[1] - v.p[1]) < 0.002f && std::abs(uv.p[2] - v.p[2]) < 0.002f &&
+                        std::abs(uv.n[0] - v.n[0]) < 0.01f && std::abs(uv.n[1] - v.n[1]) < 0.01f && std::abs(uv.n[2] - v.n[2]) < 0.01f &&
+                        std::abs(uv.u[0] - v.u[0]) < 0.002f && std::abs(uv.u[1] - v.u[1]) < 0.002f) {
+                        return (uint32_t)i;
+                    }
+                }
+                uniqueVerts.push_back(v);
+                return (uint32_t)(uniqueVerts.size() - 1);
+                };
 
-            Acc posAcc = accessors[posAccIdx];
-            uint32_t baseVertCount = posAcc.count;
-            uint32_t totalVerts = baseVertCount * reps;
+            for (const auto& pObj : primObjs) {
+                int matIdx = (int)ExtractFloatClean(pObj, "material", 0);
+                if (matIdx < 0 || matIdx >= outMesh.MaterialCount) matIdx = 0;
+                if (outPrim.MaterialIndex == -1) outPrim.MaterialIndex = matIdx;
 
-            // --- TYPE 2 OVERFLOW SAFETY CHECK ---
-            // Fable strictly uses 16-bit indices, capping the max vertices per mesh at 65,535.
-            if (totalVerts > 65535) {
-                return "Import Error: Vertex overflow. Base mesh has " + std::to_string(baseVertCount) +
-                    " verts. At " + std::to_string(reps) + " reps, the total is " + std::to_string(totalVerts) +
-                    ", exceeding Fable's 65,535 16-bit limit. Lower reps or simplify the mesh.";
+                std::string attr = ExtractBlock(pObj, "attributes");
+                int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
+                int normAccIdx = (int)ExtractFloatClean(attr, "NORMAL", -1);
+                int uvAccIdx = (int)ExtractFloatClean(attr, "TEXCOORD_0", -1);
+                int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
+
+                if (posAccIdx < 0 || indAccIdx < 0) continue;
+
+                Acc posAcc = accessors[posAccIdx];
+                Acc iAcc = accessors[indAccIdx];
+
+                float* pData = (float*)(binData.data() + views[posAcc.view].offset + posAcc.offset);
+                float* nData = normAccIdx >= 0 ? (float*)(binData.data() + views[accessors[normAccIdx].view].offset + accessors[normAccIdx].offset) : nullptr;
+                float* uData = uvAccIdx >= 0 ? (float*)(binData.data() + views[accessors[uvAccIdx].view].offset + accessors[uvAccIdx].offset) : nullptr;
+                uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
+
+                uint32_t startIdx = (uint32_t)mergedBaseIndices.size();
+
+                // 1. Map glTF indices to our optimized, unique Fable vertices
+                for (int i = 0; i < iAcc.count; i++) {
+                    uint32_t vIdx = 0;
+                    if (iAcc.compType == 5121) vIdx = iData[i];
+                    else if (iAcc.compType == 5123) vIdx = ((uint16_t*)iData)[i];
+                    else if (iAcc.compType == 5125) vIdx = ((uint32_t*)iData)[i];
+
+                    if (vIdx >= posAcc.count) continue;
+
+                    BaseVertex v = {};
+                    v.p[0] = pData[vIdx * 3]; v.p[1] = pData[vIdx * 3 + 1]; v.p[2] = pData[vIdx * 3 + 2];
+                    if (nData) { v.n[0] = nData[vIdx * 3]; v.n[1] = nData[vIdx * 3 + 1]; v.n[2] = nData[vIdx * 3 + 2]; }
+                    else { v.n[0] = 0; v.n[1] = 1; v.n[2] = 0; } // Fallback normal
+                    if (uData) { v.u[0] = uData[vIdx * 2]; v.u[1] = uData[vIdx * 2 + 1]; }
+                    else { v.u[0] = 0; v.u[1] = 0; } // Fallback UV
+
+                    mergedBaseIndices.push_back(FindOrAddVertex(v));
+                }
+
+                if (iAcc.count > 0) {
+                    CStaticBlock sb = {};
+                    sb.PrimitiveCount = iAcc.count / 3;
+                    sb.StartIndex = startIdx;
+                    sb.MaterialIndex = matIdx;
+                    sb.IsStrip = false;
+                    baseBlocks.push_back(sb);
+                }
             }
 
-            struct BaseV { float p[3]; float n[3]; float u[2]; };
-            std::vector<BaseV> baseVerts(baseVertCount);
+            uint32_t baseVertCount = (uint32_t)uniqueVerts.size();
+            if (baseVertCount == 0) continue;
+            if (baseVertCount * reps > 65535) return "Import Error: Vertex overflow.";
 
-            float* pData = (float*)(binData.data() + views[posAcc.view].offset + posAcc.offset);
-            for (int i = 0; i < baseVertCount; i++) {
-                baseVerts[i].p[0] = pData[i * 3 + 0]; baseVerts[i].p[1] = pData[i * 3 + 1]; baseVerts[i].p[2] = pData[i * 3 + 2];
-            }
-
-            if (normAccIdx >= 0) {
-                float* nData = (float*)(binData.data() + views[accessors[normAccIdx].view].offset + accessors[normAccIdx].offset);
-                for (int i = 0; i < baseVertCount; i++) { baseVerts[i].n[0] = nData[i * 3]; baseVerts[i].n[1] = nData[i * 3 + 1]; baseVerts[i].n[2] = nData[i * 3 + 2]; }
-            }
-            if (uvAccIdx >= 0) {
-                float* uData = (float*)(binData.data() + views[accessors[uvAccIdx].view].offset + accessors[uvAccIdx].offset);
-                for (int i = 0; i < baseVertCount; i++) { baseVerts[i].u[0] = uData[i * 2]; baseVerts[i].u[1] = uData[i * 2 + 1]; }
-            }
-
-            // Expand Vertices
-            prim.VertexCount = baseVertCount;
-            prim.VertexBuffer.resize(totalVerts * 36); // It will use the totalVerts we defined at the top
-            uint8_t* vDest = prim.VertexBuffer.data();
+            // 2. Expand Optimized Vertices for Repetitions
+            outPrim.VertexCount = baseVertCount;
+            outPrim.VertexBuffer.resize(baseVertCount * reps * 36);
+            uint8_t* vDest = outPrim.VertexBuffer.data();
 
             for (int r = 0; r < reps; r++) {
-                for (int v = 0; v < baseVertCount; v++) {
-                    memcpy(vDest, baseVerts[v].p, 12); vDest += 12;
-                    memcpy(vDest, baseVerts[v].n, 12); vDest += 12;
-                    memcpy(vDest, baseVerts[v].u, 8);  vDest += 8;
+                for (uint32_t v = 0; v < baseVertCount; v++) {
+                    memcpy(vDest, &uniqueVerts[v].p, 12); vDest += 12;
+                    memcpy(vDest, &uniqueVerts[v].n, 12); vDest += 12;
+                    memcpy(vDest, &uniqueVerts[v].u, 8);  vDest += 8;
                     uint32_t instID = r;
-                    memcpy(vDest, &instID, 4);         vDest += 4;
+                    memcpy(vDest, &instID, 4); vDest += 4; // Instance ID tracking
                 }
             }
 
-            // Read Base Indices
-            std::vector<uint32_t> baseIndices;
-            if (indAccIdx >= 0) {
-                Acc iAcc = accessors[indAccIdx];
-                uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
-                for (int i = 0; i < iAcc.count; i++) {
-                    if (iAcc.compType == 5121) baseIndices.push_back(iData[i]);
-                    else if (iAcc.compType == 5123) baseIndices.push_back(((uint16_t*)iData)[i]);
-                    else if (iAcc.compType == 5125) baseIndices.push_back(((uint32_t*)iData)[i]);
-                }
-            }
-
-            // Expand Indices
-            prim.IndexCount = (uint32_t)baseIndices.size();
-            prim.TriangleCount = prim.IndexCount / 3;
-            prim.IndexBuffer.resize(prim.IndexCount * reps);
+            // 3. Expand Indices for Repetitions
+            outPrim.IndexCount = (uint32_t)mergedBaseIndices.size();
+            outPrim.TriangleCount = outPrim.IndexCount / 3;
+            outPrim.IndexBuffer.resize(outPrim.IndexCount * reps);
 
             uint32_t outIdx = 0;
             for (int r = 0; r < reps; r++) {
-                for (int i = 0; i < prim.IndexCount; i++) {
-                    prim.IndexBuffer[outIdx++] = (uint16_t)(baseIndices[i] + (r * baseVertCount));
+                for (size_t i = 0; i < mergedBaseIndices.size(); i++) {
+                    outPrim.IndexBuffer[outIdx++] = (uint16_t)(mergedBaseIndices[i] + (r * baseVertCount));
                 }
             }
 
-            // Create Required Static Block for Type 2
-            CStaticBlock sb = {};
-            sb.PrimitiveCount = prim.TriangleCount;
-            sb.StartIndex = prim.IndexCount * (reps - 1); // Fable uses the start of the LAST repetition as stride marker
-            sb.IsStrip = false;
-            prim.StaticBlocks.push_back(sb);
-            prim.StaticBlockCount = 1;
-            prim.StaticBlockCount_2 = 1;
-            outMesh.TotalStaticBlocks++;
+            // 4. Map Fable Blocks to the LAST Repetition Layer
+            for (const auto& baseSb : baseBlocks) {
+                CStaticBlock finalSb = baseSb;
+                finalSb.StartIndex = baseSb.StartIndex + (mergedBaseIndices.size() * (reps - 1));
+                outPrim.StaticBlocks.push_back(finalSb);
+                outMesh.TotalStaticBlocks++;
+            }
 
-            outMesh.Primitives.push_back(prim);
+            outPrim.StaticBlockCount = (uint32_t)outPrim.StaticBlocks.size();
+            outPrim.StaticBlockCount_2 = outPrim.StaticBlockCount;
+            outMesh.Primitives.push_back(outPrim);
         }
 
         outMesh.PrimitiveCount = (int32_t)outMesh.Primitives.size();

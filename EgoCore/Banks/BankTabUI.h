@@ -228,13 +228,15 @@ static void DrawBankTab() {
             ImGui::Dummy(ImVec2(0, 10));
         }
 
-        ImGui::TextColored(ImVec4(0, 1, 1, 1), "Entry Type:");
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mesh Types:");
+        ImGui::RadioButton("Repeated Mesh (2)", &g_ImportAnimType, 2);
 
         ImGui::BeginDisabled();
-        int dummyMesh = 1;
-        ImGui::RadioButton("Static Mesh (1) [Coming Soon]", &dummyMesh, 1);
+        ImGui::RadioButton("Static Mesh (1) [Coming Soon]", &g_ImportAnimType, 1);
         ImGui::EndDisabled();
 
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0, 1, 1, 1), "Animation Types:");
         ImGui::RadioButton("Normal Animation (6)", &g_ImportAnimType, 6);
         ImGui::RadioButton("Delta Animation (7)", &g_ImportAnimType, 7);
         ImGui::TextDisabled("Note: Partial Animations (9) are auto-detected via bitmasks.");
@@ -243,8 +245,16 @@ static void DrawBankTab() {
 
         if (ImGui::Button("Import", ImVec2(120, 0))) {
             if (g_ActiveBankIndex != -1 && g_ActiveBankIndex < g_OpenBanks.size()) {
-                CreateNewAnimationEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingImportPath, g_ImportAnimType);
-                g_ScrollToSelected = true;
+                if (g_ImportAnimType == 2) {
+                    // Route Mesh to the repetitions staging popup!
+                    g_PendingGltfPath = g_PendingImportPath;
+                    g_PendingLODAction = 2; // NEW: 2 means "Create Brand New Entry"
+                    g_ShowType2SettingsPopup = true;
+                }
+                else {
+                    CreateNewAnimationEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingImportPath, g_ImportAnimType);
+                    g_ScrollToSelected = true;
+                }
             }
             g_ShowAnimImportPopup = false;
             ImGui::CloseCurrentPopup();
@@ -806,58 +816,6 @@ static void DrawBankTab() {
                                 }
                                 ImGui::EndPopup();
                             }
-
-                            if (g_ShowType2SettingsPopup) {
-                                ImGui::OpenPopup("Type 2 Import Settings");
-                            }
-
-                            if (ImGui::BeginPopupModal("Type 2 Import Settings", &g_ShowType2SettingsPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-                                ImGui::Text("File Selected:");
-                                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", g_PendingGltfPath.c_str());
-                                ImGui::Separator();
-
-                                ImGui::Text("Set Repetitions for this mesh:");
-                                const int allowedReps[] = { 4, 8, 16, 32, 64 };
-                                int currentIdx = 0;
-                                for (int i = 0; i < 5; i++) { if (g_ImportReps == allowedReps[i]) currentIdx = i; }
-
-                                if (ImGui::SliderInt("##reps_staging", &currentIdx, 0, 4, std::to_string(allowedReps[currentIdx]).c_str())) {
-                                    g_ImportReps = allowedReps[currentIdx];
-                                }
-
-                                int maxVerts = 65535 / g_ImportReps;
-                                ImGui::TextDisabled("Max base vertices allowed: %d", maxVerts);
-
-                                ImGui::Separator();
-
-                                if (ImGui::Button("Finalize Import", ImVec2(120, 0))) {
-                                    C3DMeshContent newMesh;
-                                    std::string err = GltfMeshImporter::ImportType2(g_PendingGltfPath, e.Name, newMesh, g_ImportReps);
-
-                                    if (err.empty()) {
-                                        auto originalMeta = g_ActiveMeshContent.EntryMeta;
-                                        g_ActiveMeshContent = newMesh;
-                                        g_ActiveMeshContent.EntryMeta = originalMeta;
-
-                                        g_MeshUploadNeeded = true;
-                                        SaveEntryChanges(&bank);
-                                        g_BankStatus = (g_PendingLODAction == 0) ? "LOD Added and Compiled Successfully!" : "LOD Replaced and Compiled Successfully!";
-                                        g_ShowType2SettingsPopup = false;
-                                        ImGui::CloseCurrentPopup();
-                                    }
-                                    else {
-                                        g_BankStatus = "Import Error: " + err;
-                                    }
-                                }
-
-                                ImGui::SameLine();
-                                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                                    g_ShowType2SettingsPopup = false;
-                                    g_PendingGltfPath = "";
-                                    ImGui::CloseCurrentPopup();
-                                }
-                                ImGui::EndPopup();
-                            }
                         }
                     }
                     else {
@@ -876,7 +834,78 @@ static void DrawBankTab() {
                         DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }
                 }
-                ImGui::EndChild();
+                ImGui::EndChild(); // End of RightPane
+
+                // --- ROOT LEVEL POPUPS FOR THIS TAB ---
+
+                if (g_ShowType2SettingsPopup) {
+                    ImGui::OpenPopup("Type 2 Import Settings");
+                }
+
+                if (ImGui::BeginPopupModal("Type 2 Import Settings", &g_ShowType2SettingsPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::Text("File Selected:");
+                    ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", g_PendingGltfPath.c_str());
+                    ImGui::Separator();
+
+                    ImGui::Text("Set Repetitions for this mesh:");
+                    const int allowedReps[] = { 4, 8, 16, 32, 64 };
+                    int currentIdx = 0;
+                    for (int i = 0; i < 5; i++) { if (g_ImportReps == allowedReps[i]) currentIdx = i; }
+
+                    if (ImGui::SliderInt("##reps_staging", &currentIdx, 0, 4, std::to_string(allowedReps[currentIdx]).c_str())) {
+                        g_ImportReps = allowedReps[currentIdx];
+                    }
+
+                    int maxVerts = 65535 / g_ImportReps;
+                    ImGui::TextDisabled("Max base vertices allowed: %d", maxVerts);
+
+                    ImGui::Separator();
+
+                    if (ImGui::Button("Finalize Import", ImVec2(120, 0))) {
+                        if (g_PendingLODAction == 2) {
+                            // CREATE BRAND NEW MESH ENTRY
+                            if (CreateNewMeshEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingGltfPath, 2, g_ImportReps)) {
+                                g_BankStatus = "New Type 2 Mesh Created Successfully!";
+                                g_ScrollToSelected = true;
+                                g_ShowType2SettingsPopup = false;
+                                ImGui::CloseCurrentPopup();
+                            }
+                        }
+                        else {
+                            // ADD OR REPLACE LOD LOGIC
+                            std::string meshName = "UnknownMesh";
+                            if (bank.SelectedEntryIndex != -1 && bank.SelectedEntryIndex < bank.Entries.size()) {
+                                meshName = bank.Entries[bank.SelectedEntryIndex].Name;
+                            }
+
+                            C3DMeshContent newMesh;
+                            std::string err = GltfMeshImporter::ImportType2(g_PendingGltfPath, meshName, newMesh, g_ImportReps);
+
+                            if (err.empty()) {
+                                auto originalMeta = g_ActiveMeshContent.EntryMeta;
+                                g_ActiveMeshContent = newMesh;
+                                g_ActiveMeshContent.EntryMeta = originalMeta;
+
+                                g_MeshUploadNeeded = true;
+                                SaveEntryChanges(&bank);
+                                g_BankStatus = (g_PendingLODAction == 0) ? "LOD Added and Compiled Successfully!" : "LOD Replaced and Compiled Successfully!";
+                                g_ShowType2SettingsPopup = false;
+                                ImGui::CloseCurrentPopup();
+                            }
+                            else {
+                                g_BankStatus = "Import Error: " + err;
+                            }
+                        }
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                        g_ShowType2SettingsPopup = false;
+                        g_PendingGltfPath = "";
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
 
                 if (g_ShowDeleteBankEntryPopup) ImGui::OpenPopup("Delete Bank Entry?");
 

@@ -529,6 +529,80 @@ inline void CreateNewAnimationEntry(LoadedBank* bank, const std::string& gltfPat
     g_SuccessMessage = "Animation Entry Created: " + fname + "\nDuration: " + std::to_string(newAnim.Duration) + "s";
 }
 
+inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, int type, int reps) {
+    if (!bank) return false;
+
+    C3DMeshContent newMesh;
+    std::string err;
+
+    // Base the entry name off the file name
+    std::string fname = std::filesystem::path(gltfPath).stem().string();
+    std::transform(fname.begin(), fname.end(), fname.begin(), ::toupper);
+
+    // 1. Import the glTF
+    if (type == 2) {
+        err = GltfMeshImporter::ImportType2(gltfPath, fname, newMesh, reps);
+    }
+
+    if (!err.empty()) {
+        g_ShowSuccessPopup = true;
+        g_SuccessMessage = "Import Error: " + err;
+        return false;
+    }
+
+    // 2. Compile LOD 0 (The actual mesh)
+    std::vector<uint8_t> lod0 = MeshCompiler::CompileSingleLOD(newMesh);
+
+    // 3. Compile LOD 1 (The required Blank mesh for Type 2s)
+    C3DMeshContent blankLOD;
+    blankLOD.MeshName = fname + "_Blank";
+    std::vector<uint8_t> lod1 = MeshCompiler::CompileSingleLOD(blankLOD);
+
+    // 4. Combine Data (Payload gets BOTH LODs)
+    std::vector<uint8_t> finalData;
+    finalData.insert(finalData.end(), lod0.begin(), lod0.end());
+    finalData.insert(finalData.end(), lod1.begin(), lod1.end());
+
+    // 5. Build and Serialize the TOC Metadata (Subheader)
+    newMesh.EntryMeta.PhysicsIndex = -1; // No physics by default
+
+    // --- GHOST LOD FIX ---
+    // We only register the REAL LOD in the metadata. 
+    // Fable ignores the remaining bytes, treating them as the ghost buffer!
+    newMesh.EntryMeta.LODCount = 1;
+    newMesh.EntryMeta.LODSizes = { (uint32_t)lod0.size() };
+    newMesh.EntryMeta.SafeBoundingRadius = newMesh.BoundingSphereRadius;
+    newMesh.EntryMeta.LODErrors.clear(); // 1 real LOD means 0 transition errors
+    // -----------------------
+
+    std::vector<uint8_t> subheaderBytes = newMesh.SerializeEntryMetadata();
+
+    // 6. Create the Fable Bank Entry
+    uint32_t newID = GetNextFreeID(bank);
+    BankEntry be;
+    be.ID = newID;
+    be.Type = type;
+    be.Name = fname;
+    be.FriendlyName = fname;
+    be.Size = (uint32_t)finalData.size();
+    be.InfoSize = (uint32_t)subheaderBytes.size();
+    be.Offset = 0;
+    be.Timestamp = 0;
+
+    // 7. Push to Bank and update UI
+    bank->Entries.push_back(be);
+    int newIndex = (int)bank->Entries.size() - 1;
+
+    bank->ModifiedEntryData[newIndex] = finalData;
+    bank->SubheaderCache[newIndex] = subheaderBytes;
+
+    bank->FilterText[0] = '\0';
+    UpdateFilter(*bank);
+    SelectEntry(bank, newIndex);
+
+    return true;
+}
+
 inline void RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName) {
     if (entryIdx < 0) return;
     bank->Entries[entryIdx].Name = newName;
