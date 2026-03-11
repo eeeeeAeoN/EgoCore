@@ -9,6 +9,8 @@
 #include <thread>
 #include "MeshCompiler.h"
 
+extern float g_ImportBumpFactor;
+
 inline std::string SanitizeEnumName(std::string name) {
     std::string res;
     for (char c : name) {
@@ -101,7 +103,7 @@ inline void SyncBankEnums(LoadedBank* bank) {
     }
 }
 
-inline void WriteBankString(std::ofstream & out, const std::string & s) {
+inline void WriteBankString(std::ofstream& out, const std::string& s) {
     uint32_t len = (uint32_t)s.length(); out.write((char*)&len, 4); if (len > 0) out.write(s.data(), len);
 }
 inline void WriteNullTermString(std::ofstream& out, const std::string& s) {
@@ -250,220 +252,109 @@ inline void SaveAudioBank(LoadedBank* bank) {
     }
 }
 
-inline void CreateNewTextureEntry(LoadedBank* bank, const std::string& filePath, ETextureFormat fmt = ETextureFormat::DXT3, int entryType = 0) {
-    if (!bank) return;
+bool CreateNewTextureEntry(LoadedBank* bank, const std::string& filePath, ETextureFormat format, int type, bool generateBump = false) {
+    if (!bank) return false;
 
     TextureBuilder::ImportOptions opts;
-    opts.Format = fmt;
+    opts.Format = format;
     opts.GenerateMipmaps = true;
     opts.ResizeToPowerOfTwo = true;
 
+    // Hook: Use the user's UI choice for generation
+    opts.IsBumpmap = generateBump;
+    opts.BumpFactor = g_ImportBumpFactor;
+
     auto result = TextureBuilder::ImportImage(filePath, opts);
     if (!result.Success) {
-        g_BankStatus = "Error: " + result.Error;
-        return;
+        g_BankStatus = "Import Failed: " + result.Error;
+        return false;
     }
 
-    uint32_t newID = GetNextFreeID(bank);
-    BankEntry newEntry;
-    newEntry.ID = newID;
+    BankEntry e;
+    e.ID = GetNextFreeID(bank);
+    e.Name = std::filesystem::path(filePath).stem().string();
+    e.FriendlyName = e.Name;
+    e.Type = type;
+    e.Size = (uint32_t)result.FullData.size();
 
-    std::string fname = std::filesystem::path(filePath).stem().string();
-    std::transform(fname.begin(), fname.end(), fname.begin(), ::toupper);
-    newEntry.Name = fname;
-    newEntry.FriendlyName = fname;
-    newEntry.Type = entryType;
-    newEntry.Timestamp = 0;
+    // Store compiled data and metadata
+    bank->Entries.push_back(e);
+    int newIdx = (int)bank->Entries.size() - 1;
+    bank->ModifiedEntryData[newIdx] = result.FullData;
+    bank->SubheaderCache[newIdx] = result.HeaderInfo;
 
-    std::vector<uint8_t> finalBlob = result.HeaderInfo;
-    finalBlob.insert(finalBlob.end(), result.FullData.begin(), result.FullData.end());
-
-    newEntry.InfoSize = (uint32_t)result.HeaderInfo.size();
-    newEntry.Size = (uint32_t)result.FullData.size();
-
-    bank->Entries.push_back(newEntry);
-    int newIndex = (int)bank->Entries.size() - 1;
-
-    bank->SubheaderCache[newIndex] = result.HeaderInfo;
-    bank->ModifiedEntryData[newIndex] = result.FullData;
-
-    bank->FilterText[0] = '\0';
+    bank->SelectedEntryIndex = newIdx;
     UpdateFilter(*bank);
-    SelectEntry(bank, newIndex);
-    g_BankStatus = "Imported: " + fname;
-}
 
-inline void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath) {
-    if (entryIdx < 0 || entryIdx >= bank->Entries.size()) return;
-    if (!bank->SubheaderCache.count(entryIdx)) return;
+    // FIX: Force the parser to instantly read the newly generated data!
+    SelectEntry(bank, newIdx);
 
-    auto& meta = bank->SubheaderCache[entryIdx];
-    CGraphicHeader* header = (CGraphicHeader*)meta.data();
-
-    bool isMultiFrame = (header->FrameCount > 1);
-    uint32_t expectedW = header->Width ? header->Width : header->FrameWidth;
-    uint32_t expectedH = header->Height ? header->Height : header->FrameHeight;
-
-    TextureBuilder::ImportOptions opts;
-    opts.Format = g_TextureParser.DecodedFormat;
-    if (opts.Format == ETextureFormat::Unknown) opts.Format = ETextureFormat::DXT3;
-
-    if (isMultiFrame) {
-        opts.GenerateMipmaps = (header->MipmapLevels > 1);
-        opts.ForceMipLevels = header->MipmapLevels;
-        opts.TargetWidth = expectedW;
-        opts.TargetHeight = expectedH;
-    }
-    else {
-        opts.GenerateMipmaps = true;
-        opts.ResizeToPowerOfTwo = true;
-        opts.TargetWidth = 0;
-        opts.TargetHeight = 0;
-    }
-
-    auto result = TextureBuilder::ImportImage(filePath, opts);
-    if (!result.Success) {
-        g_ShowSuccessPopup = true;
-        g_SuccessMessage = "Error: " + result.Error;
-        return;
-    }
-
-    std::vector<uint8_t>& currentData = bank->ModifiedEntryData[entryIdx];
-
-    if (!isMultiFrame) {
-        CGraphicHeader* newHeaderInfo = (CGraphicHeader*)result.HeaderInfo.data();
-        header->Width = newHeaderInfo->Width;
-        header->Height = newHeaderInfo->Height;
-        header->FrameWidth = newHeaderInfo->FrameWidth;
-        header->FrameHeight = newHeaderInfo->FrameHeight;
-        header->MipmapLevels = newHeaderInfo->MipmapLevels;
-        header->FrameDataSize = newHeaderInfo->FrameDataSize;
-        header->MipSize0 = 0;
-
-        currentData = result.FullData;
-        bank->Entries[entryIdx].Size = (uint32_t)currentData.size();
-
-        SelectEntry(bank, entryIdx);
-        g_BankStatus = "Texture Replaced (" + std::to_string(result.Width) + "x" + std::to_string(result.Height) + ").";
-    }
-    else {
-        bool isCompressed = (header->MipSize0 > 0);
-        uint32_t stride = g_TextureParser.TrueFrameStride;
-
-        if (currentData.empty() && bank->Entries[entryIdx].Size > 0) {
-            currentData = g_TextureParser.DecodedPixels;
-            if (isCompressed) header->MipSize0 = 0;
-        }
-        else if (currentData.size() < (size_t)stride * header->FrameCount) {
-            currentData.resize((size_t)stride * header->FrameCount, 0);
-        }
-
-        size_t offset = (size_t)frameIdx * stride;
-        size_t copySize = (std::min)((size_t)stride, result.FullData.size());
-
-        if (offset + copySize <= currentData.size()) {
-            memcpy(currentData.data() + offset, result.FullData.data(), copySize);
-            bank->Entries[entryIdx].Size = (uint32_t)currentData.size();
-            SelectEntry(bank, entryIdx);
-            g_BankStatus = "Animated Frame Replaced Successfully.";
-        }
-        else {
-            g_ShowSuccessPopup = true;
-            g_SuccessMessage = "Error: Frame offset out of bounds.";
-        }
-    }
+    return true;
 }
 
 inline void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& filePath) {
-    if (entryIdx < 0 || entryIdx >= bank->Entries.size()) return;
-    if (!bank->SubheaderCache.count(entryIdx)) return;
+    if (!bank->StagedEntries.count(entryIdx)) SaveEntryChanges(bank); // Stage if not staged
+    auto& stagedTex = bank->StagedEntries[entryIdx].Texture;
 
-    auto& meta = bank->SubheaderCache[entryIdx];
-    if (meta.size() < 28) return;
-    CGraphicHeader* header = (CGraphicHeader*)meta.data();
+    int x, y, c; stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
+    if (!pixels) { g_BankStatus = "Error loading frame."; return; }
 
-    uint32_t expectedW = header->Width ? header->Width : header->FrameWidth;
-    uint32_t expectedH = header->Height ? header->Height : header->FrameHeight;
+    int physW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
+    int physH = stagedTex->Header.Height ? stagedTex->Header.Height : stagedTex->Header.FrameHeight;
 
-    TextureBuilder::ImportOptions opts;
-    opts.Format = g_TextureParser.DecodedFormat;
-    if (opts.Format == ETextureFormat::Unknown) opts.Format = ETextureFormat::DXT3;
+    std::vector<uint8_t> rgba(physW * physH * 4);
+    stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4); // Force conform to sequence size
+    stbi_image_free(pixels);
 
-    opts.GenerateMipmaps = (header->MipmapLevels > 1);
-    opts.ForceMipLevels = header->MipmapLevels;
-    opts.TargetWidth = expectedW;
-    opts.TargetHeight = expectedH;
-
-    auto result = TextureBuilder::ImportImage(filePath, opts);
-    if (!result.Success) {
-        g_ShowSuccessPopup = true;
-        g_SuccessMessage = "Error: " + result.Error;
-        return;
+    // Apply generation dynamically if adding to a normal map sequence
+    bool isBump = (bank->Entries[entryIdx].Type == 2 || bank->Entries[entryIdx].Type == 3);
+    if (isBump) {
+        TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, g_ImportBumpFactor);
     }
 
-    std::vector<uint8_t>& currentData = bank->ModifiedEntryData[entryIdx];
-    bool isCompressed = (header->MipSize0 > 0);
-    uint32_t stride = g_TextureParser.TrueFrameStride;
+    stagedTex->RawFrames.push_back(rgba);
+    stagedTex->Header.FrameCount = (uint16_t)stagedTex->RawFrames.size();
 
-    if (currentData.empty() && bank->Entries[entryIdx].Size > 0) {
-        currentData = g_TextureParser.DecodedPixels;
-        if (isCompressed) header->MipSize0 = 0;
-    }
-    else if (currentData.size() < (size_t)stride * header->FrameCount) {
-        currentData.resize((size_t)stride * header->FrameCount, 0);
-    }
-
-    std::vector<uint8_t> frameBlock = result.FullData;
-    frameBlock.resize(stride, 0);
-
-    currentData.insert(currentData.end(), frameBlock.begin(), frameBlock.end());
-
-    header->FrameCount++;
-    bank->Entries[entryIdx].Size = (uint32_t)currentData.size();
-
-    int& type = bank->Entries[entryIdx].Type;
-    if (type == 0 && header->FrameCount > 1) type = 1;
-    else if (type == 2 && header->FrameCount > 1) type = 3;
-
-    SelectEntry(bank, entryIdx);
-    g_BankStatus = "Frame Added.";
+    SelectEntry(bank, entryIdx); g_BankStatus = "Frame Added (Staged).";
 }
 
 inline void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx) {
-    if (entryIdx < 0 || entryIdx >= bank->Entries.size()) return;
-    if (g_TextureParser.Header.FrameCount <= 1) {
+    if (!bank->StagedEntries.count(entryIdx)) SaveEntryChanges(bank);
+    auto& stagedTex = bank->StagedEntries[entryIdx].Texture;
+
+    if (stagedTex->RawFrames.size() > 1 && frameIdx < stagedTex->RawFrames.size()) {
+        stagedTex->RawFrames.erase(stagedTex->RawFrames.begin() + frameIdx);
+        stagedTex->Header.FrameCount = (uint16_t)stagedTex->RawFrames.size();
+        SelectEntry(bank, entryIdx); g_BankStatus = "Frame Deleted (Staged).";
+    }
+    else {
         g_BankStatus = "Cannot delete last frame.";
-        return;
+    }
+}
+
+inline void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath) {
+    if (!bank->StagedEntries.count(entryIdx)) SaveEntryChanges(bank);
+    auto& stagedTex = bank->StagedEntries[entryIdx].Texture;
+
+    int x, y, c; stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
+    if (!pixels) { g_BankStatus = "Error loading frame."; return; }
+
+    int physW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
+    int physH = stagedTex->Header.Height ? stagedTex->Header.Height : stagedTex->Header.FrameHeight;
+
+    std::vector<uint8_t> rgba(physW * physH * 4);
+    stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4);
+    stbi_image_free(pixels);
+
+    // Apply generation dynamically if replacing frame on a normal map!
+    bool isBump = (bank->Entries[entryIdx].Type == 2 || bank->Entries[entryIdx].Type == 3);
+    if (isBump) {
+        TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, g_ImportBumpFactor);
     }
 
-    std::vector<uint8_t>& currentData = bank->ModifiedEntryData[entryIdx];
-    auto& meta = bank->SubheaderCache[entryIdx];
-    CGraphicHeader* header = (CGraphicHeader*)meta.data();
-
-    bool isCompressed = (header->MipSize0 > 0);
-    uint32_t stride = g_TextureParser.TrueFrameStride;
-
-    if (currentData.empty() && bank->Entries[entryIdx].Size > 0) {
-        currentData = g_TextureParser.DecodedPixels;
-        if (isCompressed) header->MipSize0 = 0;
-    }
-    else if (currentData.size() < (size_t)stride * header->FrameCount) {
-        currentData.resize((size_t)stride * header->FrameCount, 0);
-    }
-
-    size_t offset = (size_t)frameIdx * stride;
-
-    if (offset + stride <= currentData.size()) {
-        currentData.erase(currentData.begin() + offset, currentData.begin() + offset + stride);
-        header->FrameCount--;
-        bank->Entries[entryIdx].Size = (uint32_t)currentData.size();
-
-        int& type = bank->Entries[entryIdx].Type;
-        if (type == 1 && header->FrameCount <= 1) type = 0;
-        else if (type == 3 && header->FrameCount <= 1) type = 2;
-
-        SelectEntry(bank, entryIdx);
-        g_BankStatus = "Frame " + std::to_string(frameIdx) + " deleted.";
+    if (frameIdx < stagedTex->RawFrames.size()) {
+        stagedTex->RawFrames[frameIdx] = rgba;
+        SelectEntry(bank, entryIdx); g_BankStatus = "Frame Replaced (Staged).";
     }
 }
 
@@ -487,20 +378,12 @@ inline void CreateNewAnimationEntry(LoadedBank* bank, const std::string& gltfPat
         return;
     }
 
-    // --- NEW: Handle Auto-Partial and Delta Stripping ---
-    if (!newAnim.BoneMaskBits.empty()) {
-        outType = 9; // Auto-transform to Partial if a bitmask exists
-    }
-
+    if (!newAnim.BoneMaskBits.empty()) outType = 9;
     if (outType == 7) {
         newAnim.MovementVector = { 0.0f, 0.0f, 0.0f };
         newAnim.HelperTracks.erase(std::remove_if(newAnim.HelperTracks.begin(), newAnim.HelperTracks.end(),
             [](const AnimTrack& t) { return t.BoneName == ""; }), newAnim.HelperTracks.end());
     }
-    // ----------------------------------------------------
-
-    std::vector<uint8_t> payload = AnimCompiler::Compile(newAnim);
-    std::vector<uint8_t> info = newAnim.Serialize();
 
     uint32_t newID = GetNextFreeID(bank);
     BankEntry entry;
@@ -510,23 +393,25 @@ inline void CreateNewAnimationEntry(LoadedBank* bank, const std::string& gltfPat
     entry.Name = fname;
     entry.FriendlyName = fname;
     entry.Type = outType;
-    entry.Size = (uint32_t)payload.size();
-    entry.InfoSize = (uint32_t)info.size();
+    entry.Size = 0;      // Will be calculated during Flush
+    entry.InfoSize = 0;  // Will be calculated during Flush
     entry.Offset = 0;
     entry.Timestamp = 0;
 
     bank->Entries.push_back(entry);
     int newIndex = (int)bank->Entries.size() - 1;
 
-    bank->ModifiedEntryData[newIndex] = payload;
-    bank->SubheaderCache[newIndex] = info;
+    // --- DEFERRED STAGING ---
+    StagedEntry staged;
+    staged.Anim = std::make_shared<C3DAnimationInfo>(newAnim);
+    bank->StagedEntries[newIndex] = staged;
 
     bank->FilterText[0] = '\0';
     UpdateFilter(*bank);
     SelectEntry(bank, newIndex);
 
     g_ShowSuccessPopup = true;
-    g_SuccessMessage = "Animation Entry Created: " + fname + "\nDuration: " + std::to_string(newAnim.Duration) + "s";
+    g_SuccessMessage = "Animation Entry Created: " + fname + "\n(Staged for Compilation)";
 }
 
 inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, int type, int reps) {
@@ -535,14 +420,11 @@ inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, in
     C3DMeshContent newMesh;
     std::string err;
 
-    // Base the entry name off the file name
     std::string fname = std::filesystem::path(gltfPath).stem().string();
     std::transform(fname.begin(), fname.end(), fname.begin(), ::toupper);
 
-    // 1. Import the glTF
-    if (type == 2) {
-        err = GltfMeshImporter::ImportType2(gltfPath, fname, newMesh, reps);
-    }
+    if (type == 1) err = GltfMeshImporter::ImportType1(gltfPath, fname, newMesh);
+    else if (type == 2) err = GltfMeshImporter::ImportType2(gltfPath, fname, newMesh, reps);
 
     if (!err.empty()) {
         g_ShowSuccessPopup = true;
@@ -550,51 +432,30 @@ inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, in
         return false;
     }
 
-    // 2. Compile LOD 0 (The actual mesh)
-    std::vector<uint8_t> lod0 = MeshCompiler::CompileSingleLOD(newMesh);
-
-    // 3. Compile LOD 1 (The required Blank mesh for Type 2s)
-    C3DMeshContent blankLOD;
-    blankLOD.MeshName = fname + "_Blank";
-    std::vector<uint8_t> lod1 = MeshCompiler::CompileSingleLOD(blankLOD);
-
-    // 4. Combine Data (Payload gets BOTH LODs)
-    std::vector<uint8_t> finalData;
-    finalData.insert(finalData.end(), lod0.begin(), lod0.end());
-    finalData.insert(finalData.end(), lod1.begin(), lod1.end());
-
-    // 5. Build and Serialize the TOC Metadata (Subheader)
-    newMesh.EntryMeta.PhysicsIndex = -1; // No physics by default
-
-    // --- GHOST LOD FIX ---
-    // We only register the REAL LOD in the metadata. 
-    // Fable ignores the remaining bytes, treating them as the ghost buffer!
+    newMesh.EntryMeta.PhysicsIndex = 0;
     newMesh.EntryMeta.LODCount = 1;
-    newMesh.EntryMeta.LODSizes = { (uint32_t)lod0.size() };
-    newMesh.EntryMeta.SafeBoundingRadius = newMesh.BoundingSphereRadius;
-    newMesh.EntryMeta.LODErrors.clear(); // 1 real LOD means 0 transition errors
-    // -----------------------
+    newMesh.EntryMeta.LODErrors.clear();
 
-    std::vector<uint8_t> subheaderBytes = newMesh.SerializeEntryMetadata();
-
-    // 6. Create the Fable Bank Entry
     uint32_t newID = GetNextFreeID(bank);
     BankEntry be;
     be.ID = newID;
     be.Type = type;
     be.Name = fname;
     be.FriendlyName = fname;
-    be.Size = (uint32_t)finalData.size();
-    be.InfoSize = (uint32_t)subheaderBytes.size();
+    be.Size = 0;      // Computed during flush
+    be.InfoSize = 0;  // Computed during flush
     be.Offset = 0;
     be.Timestamp = 0;
 
-    // 7. Push to Bank and update UI
     bank->Entries.push_back(be);
     int newIndex = (int)bank->Entries.size() - 1;
 
-    bank->ModifiedEntryData[newIndex] = finalData;
-    bank->SubheaderCache[newIndex] = subheaderBytes;
+    // --- DEFERRED STAGING ---
+    StagedEntry staged;
+    staged.MeshLODs.push_back(std::make_shared<C3DMeshContent>(newMesh));
+    staged.MeshMeta = newMesh.EntryMeta;
+
+    bank->StagedEntries[newIndex] = staged;
 
     bank->FilterText[0] = '\0';
     UpdateFilter(*bank);
@@ -646,18 +507,24 @@ inline void CreateNewTextEntry(LoadedBank* bank, int type) {
     if (!bank) return;
     BankEntry newEntry; newEntry.ID = GetNextFreeID(bank); newEntry.Type = type; newEntry.Offset = 0; newEntry.Size = 0;
     newEntry.Name = "New_Entry_" + std::to_string(newEntry.ID); newEntry.FriendlyName = newEntry.Name;
-    CTextParser tempParser;
+
+    StagedEntry staged;
+
     if (type == 0) {
-        tempParser.IsGroup = false; tempParser.TextData.Content = L"New Text Content";
-        tempParser.TextData.Identifier = "NEW_ID_" + std::to_string(newEntry.ID); tempParser.TextData.Speaker = "NoSpeaker"; tempParser.TextData.SpeechBank = "";
+        CTextEntry t; t.Content = L"New Text Content"; t.Identifier = "NEW_ID_" + std::to_string(newEntry.ID);
+        staged.Text = std::make_shared<CTextEntry>(t);
     }
-    else tempParser.IsGroup = true;
-    std::vector<uint8_t> data = tempParser.Recompile(); newEntry.Size = (uint32_t)data.size();
+    else {
+        CTextGroup g;
+        staged.TextGroup = std::make_shared<CTextGroup>(g);
+    }
+
     bank->Entries.push_back(newEntry);
     int newIndex = (int)bank->Entries.size() - 1;
-    bank->ModifiedEntryData[newIndex] = data;
+    bank->StagedEntries[newIndex] = staged;
+
     bank->FilterText[0] = '\0'; UpdateFilter(*bank); SelectEntry(bank, newIndex);
-    g_BankStatus = "Added Text Entry ID " + std::to_string(newEntry.ID);
+    g_BankStatus = "Added and Staged Text Entry ID " + std::to_string(newEntry.ID);
 }
 
 inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
@@ -802,7 +669,149 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
     bank->SelectedEntryIndex = -1; UpdateFilter(*bank);
 }
 
+inline void FlushStagedEntries(LoadedBank* bank) {
+    if (!bank || bank->StagedEntries.empty()) return;
+
+    for (auto& [idx, staged] : bank->StagedEntries) {
+        BankEntry& e = bank->Entries[idx];
+        std::vector<uint8_t> newBytes;
+        std::vector<uint8_t> newInfo;
+
+        if (staged.Anim) {
+            newInfo = staged.Anim->Serialize();
+            newBytes = AnimCompiler::Compile(*staged.Anim);
+            e.InfoSize = (uint32_t)newInfo.size();
+        }
+        else if (!staged.MeshLODs.empty()) {
+            newBytes.clear();
+            staged.MeshMeta.LODSizes.clear();
+
+            // Compile every LOD in the array sequentially
+            for (size_t i = 0; i < staged.MeshLODs.size(); i++) {
+                auto& lod = staged.MeshLODs[i];
+                lod->AutoCalculateBounds();
+                std::vector<uint8_t> lodBytes = MeshCompiler::CompileSingleLOD(*lod);
+
+                // Only Type 2 needs the Ghost Buffer padding trick
+                if (e.Type == 2 && i == staged.MeshLODs.size() - 1) {
+                    C3DMeshContent blankLOD;
+                    blankLOD.MeshName = lod->MeshName + "_Blank";
+                    std::vector<uint8_t> ghostBytes = MeshCompiler::CompileSingleLOD(blankLOD);
+
+                    staged.MeshMeta.LODSizes.push_back((uint32_t)lodBytes.size());
+                    newBytes.insert(newBytes.end(), lodBytes.begin(), lodBytes.end());
+                    newBytes.insert(newBytes.end(), ghostBytes.begin(), ghostBytes.end());
+                }
+                else {
+                    staged.MeshMeta.LODSizes.push_back((uint32_t)lodBytes.size());
+                    newBytes.insert(newBytes.end(), lodBytes.begin(), lodBytes.end());
+                }
+            }
+
+            staged.MeshMeta.LODCount = (uint32_t)staged.MeshLODs.size();
+
+            // Update Base Metadata from LOD 0
+            memcpy(staged.MeshMeta.BoundingSphereCenter, staged.MeshLODs[0]->BoundingSphereCenter, 12);
+            staged.MeshMeta.BoundingSphereRadius = staged.MeshLODs[0]->BoundingSphereRadius;
+            memcpy(staged.MeshMeta.BoundingBoxMin, staged.MeshLODs[0]->BoundingBoxMin, 12);
+            memcpy(staged.MeshMeta.BoundingBoxMax, staged.MeshLODs[0]->BoundingBoxMax, 12);
+
+            // Collect Unique Texture IDs
+            staged.MeshMeta.TextureIDs.clear();
+            for (const auto& mat : staged.MeshLODs[0]->Materials) {
+                auto addTex = [&](int id) { if (id > 0 && std::find(staged.MeshMeta.TextureIDs.begin(), staged.MeshMeta.TextureIDs.end(), id) == staged.MeshMeta.TextureIDs.end()) staged.MeshMeta.TextureIDs.push_back(id); };
+                addTex(mat.DiffuseMapID); addTex(mat.BumpMapID); addTex(mat.ReflectionMapID); addTex(mat.IlluminationMapID); addTex(mat.DecalID);
+            }
+
+            staged.MeshMeta.HasData = true;
+
+            // Build the TOC
+            auto serializeMeta = [&](const CMeshEntryMetadata& m) {
+                std::vector<uint8_t> d;
+                auto W = [&](const void* v, size_t l) { size_t s = d.size(); d.resize(s + l); memcpy(d.data() + s, v, l); };
+                W(&m.PhysicsIndex, 4); W(m.BoundingSphereCenter, 12); W(&m.BoundingSphereRadius, 4); W(m.BoundingBoxMin, 12); W(m.BoundingBoxMax, 12);
+                W(&m.LODCount, 4); for (uint32_t s : m.LODSizes) W(&s, 4);
+                W(&m.SafeBoundingRadius, 4); for (float err : m.LODErrors) W(&err, 4);
+                uint32_t tC = (uint32_t)m.TextureIDs.size(); W(&tC, 4); for (int32_t id : m.TextureIDs) W(&id, 4);
+                return d;
+                };
+            newInfo = serializeMeta(staged.MeshMeta);
+            e.InfoSize = (uint32_t)newInfo.size();
+        }
+        else if (staged.Physics) {
+            // Note: Physics to LZO compiler doesn't exist yet, but when it does, it goes here!
+            // For now, we fallback to whatever was already in CurrentEntryRawData
+            newBytes = bank->CurrentEntryRawData;
+            e.InfoSize = 0;
+        }
+        else if (staged.Texture) {
+            TextureBuilder::ImportOptions opts;
+            opts.Format = staged.Texture->TargetFormat;
+            opts.GenerateMipmaps = true;
+
+            int w = staged.Texture->Header.Width ? staged.Texture->Header.Width : staged.Texture->Header.FrameWidth;
+            int h = staged.Texture->Header.Height ? staged.Texture->Header.Height : staged.Texture->Header.FrameHeight;
+
+            newBytes.clear();
+
+            // Loop array and run DXT compression on every frame sequentially
+            for (size_t i = 0; i < staged.Texture->RawFrames.size(); i++) {
+                auto result = TextureBuilder::CompileFromRGBA(staged.Texture->RawFrames[i], w, h, opts);
+                if (i == 0) {
+                    staged.Texture->Header.MipmapLevels = ((CGraphicHeader*)result.HeaderInfo.data())->MipmapLevels;
+                    staged.Texture->Header.FrameDataSize = ((CGraphicHeader*)result.HeaderInfo.data())->FrameDataSize;
+                }
+                newBytes.insert(newBytes.end(), result.FullData.begin(), result.FullData.end());
+            }
+
+            staged.Texture->Header.FrameCount = (uint16_t)staged.Texture->RawFrames.size();
+
+            // Fable structural rule for sequences
+            if (staged.Texture->Header.FrameCount > 1) {
+                staged.Texture->Header.MipSize0 = 0;
+                if (e.Type == 0) e.Type = 1;
+                else if (e.Type == 2) e.Type = 3;
+            }
+
+            newInfo.resize(sizeof(CGraphicHeader));
+            memcpy(newInfo.data(), &staged.Texture->Header, sizeof(CGraphicHeader));
+            e.InfoSize = (uint32_t)newInfo.size();
+        }
+        else if (staged.Text || staged.TextGroup || staged.NarratorList) {
+            CTextParser tempParser;
+            if (staged.Text) { tempParser.TextData = *staged.Text; tempParser.IsGroup = false; tempParser.IsNarratorList = false; }
+            else if (staged.TextGroup) { tempParser.GroupData = *staged.TextGroup; tempParser.IsGroup = true; tempParser.IsNarratorList = false; }
+            else if (staged.NarratorList) { tempParser.NarratorStrings = *staged.NarratorList; tempParser.IsGroup = false; tempParser.IsNarratorList = true; }
+            newBytes = tempParser.Recompile();
+            e.InfoSize = 0;
+        }
+        else if (staged.LipSync) {
+            CLipSyncParser tempParser;
+            tempParser.Data = *staged.LipSync;
+            newBytes = tempParser.Recompile();
+            float duration = tempParser.Data.Duration;
+            newInfo.resize(4); memcpy(newInfo.data(), &duration, 4);
+            e.InfoSize = 4;
+        }
+
+        // Commit to the final binary blob cache
+        if (!newBytes.empty()) {
+            bank->ModifiedEntryData[idx] = newBytes;
+            e.Size = (uint32_t)newBytes.size();
+        }
+        if (!newInfo.empty()) {
+            bank->SubheaderCache[idx] = newInfo;
+        }
+    }
+
+    // Clear staged items, they are now permanently baked into the ModifedEntryData blobs!
+    bank->StagedEntries.clear();
+}
+
 inline void SaveBigBank(LoadedBank* bank) {
+
+    FlushStagedEntries(bank);
+
     if (bank->Type == EBankType::Text) {
         if (TextCompiler::CompileTextBank(bank)) {
             SyncBankEnums(bank);
@@ -944,35 +953,35 @@ inline void SaveBigBank(LoadedBank* bank) {
             g_BankStatus = "Text Bank Compilation Failed.";
         }
     }
-else if (bank->Type == EBankType::Dialogue) {
-    if (g_LipSyncState.Stream && g_LipSyncState.Stream->is_open()) g_LipSyncState.Stream->close();
-    if (bank->Stream && bank->Stream->is_open()) bank->Stream->close();
+    else if (bank->Type == EBankType::Dialogue) {
+        if (g_LipSyncState.Stream && g_LipSyncState.Stream->is_open()) g_LipSyncState.Stream->close();
+        if (bank->Stream && bank->Stream->is_open()) bank->Stream->close();
 
-    g_LipSyncState.FilePath = bank->FullPath;
+        g_LipSyncState.FilePath = bank->FullPath;
 
-    if (LoadDialogueBankInBackground()) {
-        if (!g_LipSyncState.Stream) {
-            g_LipSyncState.Stream = std::make_unique<std::fstream>();
-        }
-
-        g_LipSyncState.Stream->open(
-            g_LipSyncState.FilePath,
-            std::ios::binary | std::ios::in | std::ios::out
-        );
-
-        if (g_LipSyncState.Stream->is_open()) {
-            if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
-                SyncBankEnums(bank); 
-                g_BankStatus = "Dialogue Bank Recompiled Successfully.";
-                g_LipSyncState.PendingAdds.clear();
-                g_LipSyncState.PendingDeletes.clear();
-                g_LipSyncState.CachedSubBankIndex = -1;
-                g_LipSyncState.Stream->close();
-                ReloadBankInPlace(bank);
-                g_ShowSuccessPopup = true;
-                g_SuccessMessage = "Dialogue Bank Compiled Successfully!";
+        if (LoadDialogueBankInBackground()) {
+            if (!g_LipSyncState.Stream) {
+                g_LipSyncState.Stream = std::make_unique<std::fstream>();
             }
-        }
+
+            g_LipSyncState.Stream->open(
+                g_LipSyncState.FilePath,
+                std::ios::binary | std::ios::in | std::ios::out
+            );
+
+            if (g_LipSyncState.Stream->is_open()) {
+                if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
+                    SyncBankEnums(bank);
+                    g_BankStatus = "Dialogue Bank Recompiled Successfully.";
+                    g_LipSyncState.PendingAdds.clear();
+                    g_LipSyncState.PendingDeletes.clear();
+                    g_LipSyncState.CachedSubBankIndex = -1;
+                    g_LipSyncState.Stream->close();
+                    ReloadBankInPlace(bank);
+                    g_ShowSuccessPopup = true;
+                    g_SuccessMessage = "Dialogue Bank Compiled Successfully!";
+                }
+            }
             else {
                 g_BankStatus = "Error: Could not open dialogue.big for writing!";
                 ReloadBankInPlace(bank);
@@ -999,136 +1008,114 @@ else if (bank->Type == EBankType::Dialogue) {
 inline void SaveEntryChanges(LoadedBank* bank) {
     if (!bank || bank->SelectedEntryIndex == -1) return;
     BankEntry& e = bank->Entries[bank->SelectedEntryIndex];
-    std::vector<uint8_t> newBytes;
-    std::vector<uint8_t> newInfo;
+
+    StagedEntry staged;
 
     // --- ANIMATIONS (Types 6, 7, 9) ---
     if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
         if (g_AnimParser.Data.IsParsed) {
-
-            // EXACT 24 Byte Subheader requirement
-            newInfo = g_AnimParser.Data.Serialize();
-            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
-            e.InfoSize = (uint32_t)newInfo.size();
-
-            newBytes = AnimCompiler::Compile(g_AnimParser.Data);
-
-            if (!newBytes.empty()) {
-                bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-                bank->CurrentEntryRawData = newBytes;
-                e.Size = (uint32_t)newBytes.size();
-                g_BankStatus = "Animation Full Recompile Success.";
-            }
-            else {
-                g_BankStatus = "Error: Failed to compress animation!";
-            }
+            staged.Anim = std::make_shared<C3DAnimationInfo>(g_AnimParser.Data);
+            g_BankStatus = "Animation staged for compilation.";
         }
     }
     // --- MESHES (Types 1, 2, 4, 5) ---
     else if (IsSupportedMesh(e.Type)) {
         if (g_ActiveMeshContent.IsParsed) {
-            if (e.Type == 2) {
-                // 1. Compile ONLY the currently selected LOD into LZO bytes
-                std::vector<uint8_t> compiledLOD = MeshCompiler::CompileSingleLOD(g_ActiveMeshContent);
-
-                if (!compiledLOD.empty()) {
-                    int lodIdx = bank->SelectedLOD;
-                    size_t off = 0, oldSz = 0;
-
-                    // Calculate exactly where this LOD sits in the raw payload
-                    if (lodIdx < g_ActiveMeshContent.EntryMeta.LODCount) {
-                        for (int i = 0; i < lodIdx; i++) off += g_ActiveMeshContent.EntryMeta.LODSizes[i];
-                        oldSz = g_ActiveMeshContent.EntryMeta.LODSizes[lodIdx];
-                    }
-
-                    // 2. SPLICE: Erase old LOD bytes, insert new compressed LOD bytes
-                    if (oldSz > 0 && off + oldSz <= bank->CurrentEntryRawData.size()) {
-                        bank->CurrentEntryRawData.erase(bank->CurrentEntryRawData.begin() + off, bank->CurrentEntryRawData.begin() + off + oldSz);
-                    }
-                    bank->CurrentEntryRawData.insert(bank->CurrentEntryRawData.begin() + off, compiledLOD.begin(), compiledLOD.end());
-
-                    // 3. Update TOC Metadata to reflect the new compressed size
-                    g_ActiveMeshContent.EntryMeta.LODSizes[lodIdx] = (uint32_t)compiledLOD.size();
-                    std::vector<uint8_t> newInfo = g_ActiveMeshContent.SerializeEntryMetadata();
-
-                    bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
-                    e.InfoSize = (uint32_t)newInfo.size();
-
-                    bank->ModifiedEntryData[bank->SelectedEntryIndex] = bank->CurrentEntryRawData;
-                    e.Size = (uint32_t)bank->CurrentEntryRawData.size();
-
-                    // 4. Force a re-parse of the live compressed bytes so it renders instantly
-                    ParseSelectedLOD(bank);
-
-                    g_BankStatus = "Type 2 Mesh LOD Compiled & Spliced Successfully! Size: " + std::to_string(compiledLOD.size());
-                }
-                else {
-                    g_BankStatus = "Error: Type 2 Mesh Compilation failed!";
-                }
+            // If it's already staged, just grab it to update the active LOD
+            if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {
+                staged = bank->StagedEntries[bank->SelectedEntryIndex];
             }
             else {
-                g_BankStatus = "Compiler for this Mesh Type is not implemented yet.";
+                // First time staging! We must extract ALL LODs from binary into C++ objects.
+                staged.MeshMeta = g_ActiveMeshContent.EntryMeta;
+                size_t offset = 0;
+                for (uint32_t i = 0; i < staged.MeshMeta.LODCount; i++) {
+                    size_t sz = staged.MeshMeta.LODSizes[i];
+                    std::vector<uint8_t> slice(sz);
+                    if (offset + sz <= bank->CurrentEntryRawData.size()) {
+                        memcpy(slice.data(), bank->CurrentEntryRawData.data() + offset, sz);
+                    }
+                    auto lodMesh = std::make_shared<C3DMeshContent>();
+                    lodMesh->ParseEntryMetadata(bank->SubheaderCache[bank->SelectedEntryIndex]);
+                    lodMesh->Parse(slice, e.Type);
+                    staged.MeshLODs.push_back(lodMesh);
+                    offset += sz;
+                }
             }
+
+            // Overwrite the specific LOD we are currently editing
+            if (bank->SelectedLOD < staged.MeshLODs.size()) {
+                staged.MeshLODs[bank->SelectedLOD] = std::make_shared<C3DMeshContent>(g_ActiveMeshContent);
+            }
+            g_BankStatus = "Mesh LOD staged for compilation.";
         }
     }
     // --- PHYSICS MESH (Type 3) ---
     else if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
-        e.InfoSize = 0;
-        bank->SubheaderCache.erase(bank->SelectedEntryIndex);
-        newBytes = bank->CurrentEntryRawData;
-        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-        g_BankStatus = "Physics Mesh Saved.";
+        if (g_BBMParser.IsParsed) {
+            staged.Physics = std::make_shared<CBBMParser>(g_BBMParser);
+            g_BankStatus = "Physics Mesh staged for compilation.";
+        }
     }
     // --- TEXTURES ---
     else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || bank->Type == EBankType::Effects) {
         if (!g_TextureParser.PendingName.empty() && g_TextureParser.PendingName != e.Name) {
             RenameTextureEntry(bank, bank->SelectedEntryIndex, g_TextureParser.PendingName);
         }
-        if (g_TextureParser.IsParsed && bank->SubheaderCache.count(bank->SelectedEntryIndex)) {
-            newInfo = bank->SubheaderCache[bank->SelectedEntryIndex];
-            if (newInfo.size() >= sizeof(CGraphicHeader)) {
-                memcpy(newInfo.data(), &g_TextureParser.Header, sizeof(CGraphicHeader));
+        if (g_TextureParser.IsParsed) {
+            if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {
+                staged = bank->StagedEntries[bank->SelectedEntryIndex];
             }
-            bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
+            else {
+                // First time staging an existing binary texture: Extract ALL DXT frames to Raw RGBA!
+                auto texInfo = std::make_shared<StagedTextureInfo>();
+                texInfo->Header = g_TextureParser.Header;
+                texInfo->TargetFormat = g_TextureParser.DecodedFormat;
+
+                uint32_t w = texInfo->Header.Width ? texInfo->Header.Width : texInfo->Header.FrameWidth;
+                uint32_t h = texInfo->Header.Height ? texInfo->Header.Height : texInfo->Header.FrameHeight;
+                uint32_t frames = (texInfo->Header.FrameCount > 0) ? texInfo->Header.FrameCount : 1;
+
+                for (uint32_t f = 0; f < frames; f++) {
+                    const uint8_t* src = g_TextureParser.DecodedPixels.data() + (f * g_TextureParser.TrueFrameStride);
+                    texInfo->RawFrames.push_back(TextureUtils::DecompressFrameToRGBA(src, w, h, texInfo->TargetFormat));
+                }
+                staged.Texture = texInfo;
+            }
+            g_BankStatus = "Texture staged for compilation.";
         }
-        newBytes = bank->CurrentEntryRawData;
-        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-        g_BankStatus = "Texture Changes Saved.";
     }
     // --- TEXT ---
     else if (bank->Type == EBankType::Text) {
-        g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
-        if (!g_TextParser.TextData.SpeechBank.empty()) SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
-        newBytes = g_TextParser.Recompile();
-        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-        bank->CurrentEntryRawData = newBytes;
-        e.Size = (uint32_t)newBytes.size();
+        if (g_TextParser.IsGroup) {
+            staged.TextGroup = std::make_shared<CTextGroup>(g_TextParser.GroupData);
+        }
+        else if (g_TextParser.IsNarratorList) {
+            staged.NarratorList = std::make_shared<std::vector<std::string>>(g_TextParser.NarratorStrings);
+        }
+        else {
+            g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
+            if (!g_TextParser.TextData.SpeechBank.empty()) SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
+            staged.Text = std::make_shared<CTextEntry>(g_TextParser.TextData);
+        }
         g_IsTextDirty = false;
-        g_BankStatus = "Text Entry Saved.";
+        g_BankStatus = "Text Entry staged for compilation.";
     }
     // --- DIALOGUE ---
     else if (bank->Type == EBankType::Dialogue && g_LipSyncParser.IsParsed) {
-        newBytes = g_LipSyncParser.Recompile();
-        float duration = g_LipSyncParser.Data.Duration;
-        newInfo.resize(4); memcpy(newInfo.data(), &duration, 4);
-        bank->SubheaderCache[bank->SelectedEntryIndex] = newInfo;
-        e.InfoSize = 4;
-
-        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-        bank->CurrentEntryRawData = newBytes;
-        e.Size = (uint32_t)newBytes.size();
-        g_BankStatus = "LipSync Entry Saved.";
+        staged.LipSync = std::make_shared<CLipSyncData>(g_LipSyncParser.Data);
+        g_BankStatus = "LipSync Entry staged for compilation.";
     }
     // --- AUDIO ---
     else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
         bank->LugParserPtr->IsDirty = true;
-        g_BankStatus = "Metadata Saved to RAM.";
+        g_BankStatus = "Audio Metadata staged to RAM.";
+        return; // Audio uses its own bespoke backend, so no need to put in Staged map
     }
-    else {
-        // Fallback
-        newBytes = bank->CurrentEntryRawData;
-        bank->ModifiedEntryData[bank->SelectedEntryIndex] = newBytes;
-        g_BankStatus = "Entry Preserved.";
+
+    // Insert into map if valid
+    if (!staged.MeshLODs.empty() || staged.Anim || staged.Physics || staged.Texture || staged.Text || staged.TextGroup || staged.NarratorList || staged.LipSync) {
+        bank->StagedEntries[bank->SelectedEntryIndex] = staged;
     }
 
     UpdateFilter(*bank);

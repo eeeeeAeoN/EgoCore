@@ -14,6 +14,7 @@
 #include "TextureExporter.h"
 #include "GltfMeshImporter.h"
 #include "BigBankCompiler.h"
+#include "TextureBuilder.h"
 
 extern ID3D11Device* g_pd3dDevice;
 
@@ -77,40 +78,75 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
         if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
             for (int i = 0; i < bank.Entries.size(); ++i) {
                 if (bank.Entries[i].ID == (uint32_t)textureID) {
-                    bank.Stream->clear();
-                    bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
 
-                    size_t fileSize = bank.Entries[i].Size;
-                    std::vector<uint8_t> tempData(fileSize + 64);
-                    bank.Stream->read((char*)tempData.data(), fileSize);
+                    // --- NEW: CHECK IF TEXTURE IS STAGED IN RAM ---
+                    if (bank.StagedEntries.count(i) && bank.StagedEntries[i].Texture) {
+                        auto& tex = bank.StagedEntries[i].Texture;
+                        if (tex->RawFrames.empty()) return nullptr;
+
+                        // Create SRV natively from Uncompressed RGBA (Instant & Flawless)
+                        uint32_t w = tex->Header.Width ? tex->Header.Width : tex->Header.FrameWidth;
+                        uint32_t h = tex->Header.Height ? tex->Header.Height : tex->Header.FrameHeight;
+                        if (w == 0 || h == 0) return nullptr;
+
+                        D3D11_TEXTURE2D_DESC desc = {};
+                        desc.Width = w; desc.Height = h; desc.MipLevels = 1; desc.ArraySize = 1;
+                        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                        desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
+                        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                        D3D11_SUBRESOURCE_DATA subData = {};
+                        subData.pSysMem = tex->RawFrames[0].data(); // Read frame 0 array
+                        subData.SysMemPitch = w * 4;
+
+                        ID3D11Texture2D* d3dTex = nullptr;
+                        ID3D11ShaderResourceView* srv = nullptr;
+                        if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &d3dTex))) {
+                            g_pd3dDevice->CreateShaderResourceView(d3dTex, nullptr, &srv);
+                            d3dTex->Release();
+                            g_MeshTextureCache[textureID] = srv;
+                            return srv;
+                        }
+                    }
+
+                    // --- CHECK IF FLUSHED/MODIFIED OR ON DISK ---
+                    std::vector<uint8_t> tempData;
+                    if (bank.ModifiedEntryData.count(i)) {
+                        tempData = bank.ModifiedEntryData[i];
+                    }
+                    else {
+                        bank.Stream->clear();
+                        bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
+                        tempData.resize(bank.Entries[i].Size + 64);
+                        bank.Stream->read((char*)tempData.data(), bank.Entries[i].Size);
+                    }
 
                     g_TextureParser.Parse(bank.SubheaderCache[i], tempData, bank.Entries[i].Type);
 
                     if (g_TextureParser.IsParsed && !g_TextureParser.DecodedPixels.empty()) {
                         ID3D11ShaderResourceView* srv = nullptr;
-
                         DXGI_FORMAT dxFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
                         uint32_t blockWidth = 1;
+
                         switch (g_TextureParser.DecodedFormat) {
-                        case ETextureFormat::DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
+                        case ETextureFormat::DXT1: case ETextureFormat::NormalMap_DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
                         case ETextureFormat::DXT3: dxFormat = DXGI_FORMAT_BC2_UNORM; blockWidth = 4; break;
-                        case ETextureFormat::DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
-                        case ETextureFormat::NormalMap_DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
-                        case ETextureFormat::NormalMap_DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
+                        case ETextureFormat::DXT5: case ETextureFormat::NormalMap_DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
                         case ETextureFormat::ARGB8888: dxFormat = DXGI_FORMAT_B8G8R8A8_UNORM; break;
                         }
 
+                        uint32_t w = g_TextureParser.Header.Width ? g_TextureParser.Header.Width : g_TextureParser.Header.FrameWidth;
+                        uint32_t h = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
+
                         D3D11_TEXTURE2D_DESC desc = {};
-                        desc.Width = g_TextureParser.Header.Width ? g_TextureParser.Header.Width : g_TextureParser.Header.FrameWidth;
-                        desc.Height = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
-                        desc.MipLevels = 1; desc.ArraySize = 1;
+                        desc.Width = w; desc.Height = h; desc.MipLevels = 1; desc.ArraySize = 1;
                         desc.Format = dxFormat; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
                         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
                         D3D11_SUBRESOURCE_DATA subData = {};
                         subData.pSysMem = g_TextureParser.DecodedPixels.data();
-                        if (blockWidth == 4) subData.SysMemPitch = ((desc.Width + 3) / 4) * ((dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
-                        else subData.SysMemPitch = desc.Width * 4;
+                        if (blockWidth == 4) subData.SysMemPitch = ((w + 3) / 4) * ((dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
+                        else subData.SysMemPitch = w * 4;
 
                         ID3D11Texture2D* tex = nullptr;
                         if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex))) {
@@ -136,18 +172,49 @@ inline std::string ExtractTextureForGltf(int textureID, const std::string& expor
         if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
             for (int i = 0; i < bank.Entries.size(); ++i) {
                 if (bank.Entries[i].ID == (uint32_t)textureID) {
-                    bank.Stream->clear();
-                    bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
-                    size_t fileSize = bank.Entries[i].Size;
-                    std::vector<uint8_t> tempData(fileSize + 64);
-                    bank.Stream->read((char*)tempData.data(), fileSize);
+
+                    std::string fname = "tex_" + std::to_string(textureID) + ".dds";
+                    std::string fullPath = exportDir + fname;
+
+                    // 1. Check if it's currently staged as raw RGBA
+                    if (bank.StagedEntries.count(i) && bank.StagedEntries[i].Texture) {
+                        auto& texInfo = bank.StagedEntries[i].Texture;
+                        if (texInfo->RawFrames.empty()) return "";
+                        TextureBuilder::ImportOptions opts;
+                        opts.Format = texInfo->TargetFormat;
+                        opts.GenerateMipmaps = true;
+
+                        int w = texInfo->Header.Width ? texInfo->Header.Width : texInfo->Header.FrameWidth;
+                        int h = texInfo->Header.Height ? texInfo->Header.Height : texInfo->Header.FrameHeight;
+
+                        auto compiled = TextureBuilder::CompileFromRGBA(texInfo->RawFrames[0], w, h, opts);
+
+                        CTextureParser tempParser;
+                        tempParser.Header = texInfo->Header;
+                        tempParser.Header.MipmapLevels = ((CGraphicHeader*)compiled.HeaderInfo.data())->MipmapLevels;
+                        tempParser.DecodedFormat = texInfo->TargetFormat;
+                        tempParser.DecodedPixels = compiled.FullData;
+                        tempParser.IsParsed = true;
+
+                        if (TextureExporter::ExportDDS(tempParser, fullPath, 0)) return fname;
+                    }
+
+                    // 2. Check if it's in the modified binary cache, else read from disk
+                    std::vector<uint8_t> tempData;
+                    if (bank.ModifiedEntryData.count(i)) {
+                        tempData = bank.ModifiedEntryData[i];
+                    }
+                    else {
+                        bank.Stream->clear();
+                        bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
+                        tempData.resize(bank.Entries[i].Size + 64);
+                        bank.Stream->read((char*)tempData.data(), bank.Entries[i].Size);
+                    }
 
                     CTextureParser parser;
                     parser.Parse(bank.SubheaderCache[i], tempData, bank.Entries[i].Type);
 
                     if (parser.IsParsed && !parser.DecodedPixels.empty()) {
-                        std::string fname = "tex_" + std::to_string(textureID) + ".dds";
-                        std::string fullPath = exportDir + fname;
                         if (TextureExporter::ExportDDS(parser, fullPath, 0)) {
                             return fname;
                         }
@@ -448,6 +515,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     if (ImGui::Button("Export to glTF")) {
         std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
         if (!savePath.empty()) {
+
+            // --- AUTO FLUSH ALL BANKS BEFORE EXPORT ---
+            for (auto& b : g_OpenBanks) FlushStagedEntries(&b);
+
             if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
 
             std::string expDir = savePath.substr(0, savePath.find_last_of("\\/") + 1);
@@ -463,6 +534,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         if (ImGui::Button("Export Mesh + Anim (glTF)")) {
             std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
             if (!savePath.empty()) {
+
+                // -- Flush everything before exporting --
+                for (auto& b : g_OpenBanks) FlushStagedEntries(&b);
+
                 if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
                 GltfExporter::Export(g_ActiveMeshContent, savePath, &g_PreviewAnimParser, g_SelectedAnimType);
             }
@@ -480,7 +555,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
             if (g_ActiveMeshContent.IsParsed) {
-                // Ensure flawless uncompressed export byte-for-byte!
                 std::vector<uint8_t> outData = g_ActiveMeshContent.SerializeUncompressed();
                 std::ofstream out(savePath, std::ios::binary);
                 out.write((char*)outData.data(), outData.size());
@@ -524,10 +598,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     ID3D11DeviceContext* ctx;
     g_pd3dDevice->GetImmediateContext(&ctx);
 
-    // 1. Render Main Mesh (clears background)
     ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, viewportWidth, avail.y, g_ShowWireframe, g_BBMParser.IsParsed, &g_PreviewBoneTransforms, true, 1.0f);
 
-    // 2. Render Overlay Mesh (does not clear, transparent)
     if (g_ShowPhysicsOverlay && g_OverlayBBMParser.IsParsed && !g_BBMParser.IsParsed) {
         g_PhysicsOverlayRenderer.CamRotX = g_MeshRenderer.CamRotX;
         g_PhysicsOverlayRenderer.CamRotY = g_MeshRenderer.CamRotY;
@@ -592,13 +664,13 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             ImVec2 scrPos;
             if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Pos[0], h.Pos[1], h.Pos[2]), scrPos, viewportWidth, avail.y)) {
                 scrPos.x += pMin.x; scrPos.y += pMin.y;
-
                 dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
 
                 float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
                 if (dist < 8.0f) {
                     dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                    std::string name = (i < g_ActiveMeshContent.HelperNameStrings.size()) ? g_ActiveMeshContent.HelperNameStrings[i] : "Helper " + std::to_string(i);
+                    std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
+                    if (name.empty()) name = "CRC: " + std::to_string(h.NameCRC);
                     ImGui::SetTooltip("%s", name.c_str());
                 }
             }
@@ -611,13 +683,13 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             ImVec2 scrPos;
             if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
                 scrPos.x += pMin.x; scrPos.y += pMin.y;
-
                 dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
 
                 float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
                 if (dist < 8.0f) {
                     dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                    std::string name = (i < g_ActiveMeshContent.DummyNameStrings.size()) ? g_ActiveMeshContent.DummyNameStrings[i] : "Dummy " + std::to_string(i);
+                    std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
+                    if (name.empty()) name = "CRC: " + std::to_string(d.NameCRC);
                     ImGui::SetTooltip("%s", name.c_str());
                 }
             }
@@ -955,21 +1027,63 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     ImGui::EndTabItem();
                 }
 
-                if (ImGui::BeginTabItem("Helpers/Gen")) {
+                // --- NEW EXTRAS TAB (Helpers, Dummies, Generators, Volumes) ---
+                if (ImGui::BeginTabItem("Extras")) {
                     if (ImGui::CollapsingHeader("Helper Points", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        if (ImGui::BeginTable("HelpersTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY)) {
+                        if (ImGui::BeginTable("HelpersTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
                             ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name/CRC"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
                             for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
                                 const auto& h = g_ActiveMeshContent.Helpers[i];
                                 ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
-                                ImGui::TableSetColumnIndex(1); if (i < g_ActiveMeshContent.HelperNameStrings.size()) ImGui::Text("%s", g_ActiveMeshContent.HelperNameStrings[i].c_str()); else ImGui::Text("CRC: %08X", h.NameCRC);
+                                ImGui::TableSetColumnIndex(1);
+                                std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
+                                if (!name.empty()) ImGui::Text("%s", name.c_str()); else ImGui::Text("CRC: %08X", h.NameCRC);
                                 ImGui::TableSetColumnIndex(2); ImGui::Text("%d", h.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", h.Pos[0], h.Pos[1], h.Pos[2]);
+                            }
+                            ImGui::EndTable();
+                        }
+                    }
+                    if (ImGui::CollapsingHeader("Dummy Objects", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        if (ImGui::BeginTable("DummiesTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                            ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name/CRC"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
+                            for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
+                                const auto& d = g_ActiveMeshContent.Dummies[i];
+                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
+                                ImGui::TableSetColumnIndex(1);
+                                std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
+                                if (!name.empty()) ImGui::Text("%s", name.c_str()); else ImGui::Text("CRC: %08X", d.NameCRC);
+                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", d.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", d.Transform[9], d.Transform[10], d.Transform[11]);
+                            }
+                            ImGui::EndTable();
+                        }
+                    }
+                    if (ImGui::CollapsingHeader("Generators", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        if (ImGui::BeginTable("GeneratorsTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                            ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Object Name"); ImGui::TableSetupColumn("Bank ID", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
+                            for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
+                                const auto& g = g_ActiveMeshContent.Generators[i];
+                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
+                                ImGui::TableSetColumnIndex(1); ImGui::Text("%s", g.ObjectName.c_str());
+                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", g.BankIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", g.Transform[9], g.Transform[10], g.Transform[11]);
+                            }
+                            ImGui::EndTable();
+                        }
+                    }
+                    if (ImGui::CollapsingHeader("Volumes", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        if (ImGui::BeginTable("VolumesTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                            ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Volume ID", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Planes"); ImGui::TableHeadersRow();
+                            for (int i = 0; i < g_ActiveMeshContent.Volumes.size(); i++) {
+                                const auto& v = g_ActiveMeshContent.Volumes[i];
+                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
+                                ImGui::TableSetColumnIndex(1); ImGui::Text("%s", v.Name.c_str());
+                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", v.ID); ImGui::TableSetColumnIndex(3); ImGui::Text("%zu", v.Planes.size());
                             }
                             ImGui::EndTable();
                         }
                     }
                     ImGui::EndTabItem();
                 }
+
                 if (ImGui::BeginTabItem("Bones")) {
                     if (ImGui::BeginTable("BoneHier", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
                         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Parent"); ImGui::TableSetupColumn("Children"); ImGui::TableHeadersRow();

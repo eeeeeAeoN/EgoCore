@@ -112,6 +112,40 @@ public:
             }
         }
     }
+
+    static std::vector<uint8_t> DecompressFrameToRGBA(const uint8_t* rawData, uint32_t width, uint32_t height, ETextureFormat fmt) {
+        std::vector<uint8_t> rgba(width * height * 4);
+        Color32* output = (Color32*)rgba.data();
+
+        if (fmt == ETextureFormat::ARGB8888) {
+            memcpy(rgba.data(), rawData, rgba.size());
+            return rgba;
+        }
+
+        uint32_t blocksX = (width + 3) / 4;
+        uint32_t blocksY = (height + 3) / 4;
+        uint32_t blockSize = (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) ? 8 : 16;
+
+        for (uint32_t y = 0; y < blocksY; y++) {
+            for (uint32_t x = 0; x < blocksX; x++) {
+                Color32 blockOut[16];
+                const uint8_t* blockSrc = rawData + (y * blocksX + x) * blockSize;
+
+                if (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) DecompressDXT1Block(blockSrc, blockOut, 4);
+                else if (fmt == ETextureFormat::DXT3) DecompressDXT3Block(blockSrc, blockOut, 4);
+                else DecompressDXT5Block(blockSrc, blockOut, 4);
+
+                for (int py = 0; py < 4; py++) {
+                    for (int px = 0; px < 4; px++) {
+                        if (x * 4 + px < width && y * 4 + py < height) {
+                            output[(y * 4 + py) * width + (x * 4 + px)] = blockOut[py * 4 + px];
+                        }
+                    }
+                }
+            }
+        }
+        return rgba;
+    }
 };
 
 class CTextureParser {
@@ -119,8 +153,10 @@ public:
     CGraphicHeader Header;
     CPixelFormatInit FormatInfo;
     ETextureFormat DecodedFormat = ETextureFormat::Unknown;
-    std::vector<uint8_t> DecodedPixels;
+    std::vector<uint8_t> DecodedPixels;       // Used for binary DXT reading
+    std::vector<std::vector<uint8_t>> RawFrames; // NEW: Used for Staged RGBA editing
     bool IsParsed = false;
+    bool IsStagedRaw = false;
     std::string DebugLog;
     uint32_t TrueFrameStride = 0;
     std::string PendingName;
@@ -206,7 +242,9 @@ public:
 
     void Parse(const std::vector<uint8_t>& metadata, const std::vector<uint8_t>& pixelData, int32_t entryType) {
         IsParsed = false;
+        IsStagedRaw = false;
         DecodedPixels.clear();
+        RawFrames.clear(); // <--- Add this clear
         PendingName = "";
 
         if (metadata.size() < 28) return;

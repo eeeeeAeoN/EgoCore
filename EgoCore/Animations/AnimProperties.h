@@ -110,15 +110,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
     if (!parser.Data.IsParsed) { ImGui::Text("No animation loaded or failed to parse."); return; }
     auto& anim = parser.Data;
 
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Name:"); ImGui::SameLine();
-    static char nameBuf[256]; static uint32_t lastID = 0xFFFFFFFF;
-    if (lastID != entryID) { strncpy_s(nameBuf, entryName.c_str(), sizeof(nameBuf) - 1); lastID = entryID; }
-    ImGui::SetNextItemWidth(300);
-    if (ImGui::InputText("##animNameEdit", nameBuf, 256)) entryName = nameBuf;
-
-    ImGui::SameLine();
-
     static int replaceAnimType = 6;
     if (ImGui::Button("Import from glTF", ImVec2(150, 0))) {
         replaceAnimType = (entryType == 7) ? 7 : 6;

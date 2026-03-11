@@ -55,6 +55,29 @@ struct InternalBankInfo {
 // NEW: Filter Modes
 enum class EFilterMode { Name, ID, Speaker };
 
+struct StagedTextureInfo {
+    ETextureFormat TargetFormat = ETextureFormat::DXT3;
+    CGraphicHeader Header;
+    std::vector<std::vector<uint8_t>> RawFrames; // <--- NOW AN ARRAY!
+};
+
+
+struct CLipSyncData;
+
+// Container for any domain object a user modifies
+struct StagedEntry {
+    std::vector<std::shared_ptr<C3DMeshContent>> MeshLODs; // <--- NOW AN ARRAY OF LODS!
+    CMeshEntryMetadata MeshMeta; // Holds the TOC data for the whole mesh
+
+    std::shared_ptr<CBBMParser> Physics;
+    std::shared_ptr<C3DAnimationInfo> Anim;
+    std::shared_ptr<StagedTextureInfo> Texture;
+    std::shared_ptr<CTextEntry> Text;
+    std::shared_ptr<CTextGroup> TextGroup;
+    std::shared_ptr<std::vector<std::string>> NarratorList;
+    std::shared_ptr<CLipSyncData> LipSync;
+};
+
 struct LoadedBank {
     std::string FileName;
     std::string FullPath;
@@ -75,15 +98,17 @@ struct LoadedBank {
     int SelectedEntryIndex = -1;
     int SelectedLOD = 0;
 
-    // --- UPDATED FILTER STATE ---
     char FilterText[128] = "";
-    EFilterMode FilterMode = EFilterMode::Name; // Default: Name
-    int FilterTypeMask = -1; // -1: All, (Maps to Type for Text/Textures)
-    int FilterTextureFormatMask = -1; // -1: All, 0: DXT1, 1: DXT3, 2: DXT5, 3: ARGB
+    EFilterMode FilterMode = EFilterMode::Name;
+    int FilterTypeMask = -1;
+    int FilterTextureFormatMask = -1;
 
     std::map<int, std::vector<uint8_t>> SubheaderCache;
     std::vector<uint8_t> CurrentEntryRawData;
-    std::map<int, std::vector<uint8_t>> ModifiedEntryData;
+
+    std::map<int, StagedEntry> StagedEntries; // Stores Uncompressed C++ Objects
+
+    std::map<int, std::vector<uint8_t>> ModifiedEntryData; // Final Binary Blobs (Post-Flush)
 
     LoadedBank() {
         Stream = std::make_unique<std::fstream>();
@@ -95,7 +120,6 @@ struct LoadedBank {
     LoadedBank& operator=(LoadedBank&&) = default;
 };
 
-// --- GLOBALS ---
 inline std::vector<LoadedBank> g_OpenBanks;
 inline int g_ActiveBankIndex = -1;
 inline bool g_ForceTabSwitch = false;
@@ -288,3 +312,7 @@ inline void UpdateFilter(LoadedBank& bank) {
         if (match) bank.FilteredIndices.push_back((int)i);
     }
 }
+
+// -- I know a project of all headers isn't even remotely how one should program. I don't care, bite me! --
+inline void FlushStagedEntries(LoadedBank* bank);
+inline void SaveEntryChanges(LoadedBank* bank);

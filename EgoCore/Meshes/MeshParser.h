@@ -29,6 +29,18 @@ inline void UnpackNORMPACKED3(uint32_t packed, float& x, float& y, float& z) {
 
 inline float DecompressUV(int16_t v) { return ((float)v / 2048.0f) - 8.0f; }
 
+inline uint32_t CalculateFableCRC(const std::string& str) {
+    uint32_t crc = 0; // Fable uses 0 as the initial value
+    for (char c : str) {
+        crc ^= (uint8_t)c; // Strictly case-sensitive, no tolower()
+        for (int i = 0; i < 8; i++) {
+            if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
+            else crc >>= 1;
+        }
+    }
+    return crc; // No final bitwise inversion!
+}
+
 struct CVertexCompressionParams { float Scale[4]; float Offset[4]; };
 struct CHelperPoint { uint32_t NameCRC; float Pos[3]; int32_t BoneIndex; };
 struct CDummyObject { uint32_t NameCRC; float Transform[12]; int32_t BoneIndex; };
@@ -76,7 +88,7 @@ struct CMeshEntryMetadata {
 
 struct C3DMeshContent {
     std::string MeshName;
-    int32_t MeshType = -1; // NEW: Track the bank entry type for Type 4 fixes
+    int32_t MeshType = -1;
 
     CMeshEntryMetadata EntryMeta;
     bool AnimatedFlag = false;
@@ -85,8 +97,9 @@ struct C3DMeshContent {
     uint16_t HelperPointCount = 0; uint16_t DummyObjectCount = 0; uint16_t PackedNamesSize = 0;
     uint16_t MeshVolumeCount = 0; uint16_t MeshGeneratorCount = 0;
 
-    std::vector<uint8_t> PackedNamesRaw; // NEW: Non-lossy preserve for padding
-    std::vector<std::string> HelperNameStrings; std::vector<std::string> DummyNameStrings;
+    std::vector<uint8_t> PackedNamesRaw;
+    std::map<uint32_t, std::string> CRCNameMap; // Resolves CRCs to actual string names
+
     std::vector<CHelperPoint> Helpers; std::vector<CDummyObject> Dummies;
     std::vector<CMeshVolume> Volumes; std::vector<CMeshGenerator> Generators;
     int32_t MaterialCount = 0; int32_t PrimitiveCount = 0; int32_t BoneCount = 0;
@@ -112,6 +125,75 @@ struct C3DMeshContent {
         memcpy(&dest, buffer + cursor, sizeof(T));
         cursor += sizeof(T);
         return true;
+    }
+
+    void UnpackNames() {
+        CRCNameMap.clear();
+        if (PackedNamesRaw.size() < 2) return;
+        uint16_t dummyOffset = *(uint16_t*)PackedNamesRaw.data();
+
+        // 1. Read Helper Strings
+        size_t cursor = 2;
+        while (cursor < dummyOffset && cursor < PackedNamesRaw.size()) {
+            std::string s = "";
+            while (cursor < dummyOffset && PackedNamesRaw[cursor] != 0) {
+                s += (char)PackedNamesRaw[cursor];
+                cursor++;
+            }
+            if (cursor < dummyOffset) cursor++; // Skip null terminator
+
+            if (!s.empty()) CRCNameMap[CalculateFableCRC(s)] = s;
+        }
+
+        // 2. Read Dummy Strings
+        cursor = dummyOffset;
+        while (cursor < PackedNamesRaw.size()) {
+            std::string s = "";
+            while (cursor < PackedNamesRaw.size() && PackedNamesRaw[cursor] != 0) {
+                s += (char)PackedNamesRaw[cursor];
+                cursor++;
+            }
+            if (cursor < PackedNamesRaw.size()) cursor++; // Skip null terminator
+
+            if (!s.empty()) CRCNameMap[CalculateFableCRC(s)] = s;
+        }
+    }
+
+    void PackNames(const std::vector<std::string>& helperNames, const std::vector<std::string>& dummyNames) {
+        // Sets automatically sort the strings alphabetically, exactly as Fable expects
+        std::set<std::string> hSet(helperNames.begin(), helperNames.end());
+        std::set<std::string> dSet(dummyNames.begin(), dummyNames.end());
+
+        PackedNamesRaw.clear();
+        PackedNamesRaw.push_back(0); PackedNamesRaw.push_back(0);
+
+        for (const auto& s : hSet) {
+            if (s.empty()) continue;
+            PackedNamesRaw.insert(PackedNamesRaw.end(), s.begin(), s.end());
+            PackedNamesRaw.push_back(0);
+        }
+
+        // Fable Engine perfectly aligns the offset by requiring an empty string terminator here
+        PackedNamesRaw.push_back(0);
+
+        uint16_t dummyOffset = (uint16_t)PackedNamesRaw.size();
+        PackedNamesRaw[0] = dummyOffset & 0xFF;
+        PackedNamesRaw[1] = (dummyOffset >> 8) & 0xFF;
+
+        for (const auto& s : dSet) {
+            if (s.empty()) continue;
+            PackedNamesRaw.insert(PackedNamesRaw.end(), s.begin(), s.end());
+            PackedNamesRaw.push_back(0);
+        }
+
+        PackedNamesRaw.push_back(0);
+        PackedNamesSize = (uint16_t)PackedNamesRaw.size();
+    }
+
+    std::string GetNameFromCRC(uint32_t crc) const {
+        auto it = CRCNameMap.find(crc);
+        if (it != CRCNameMap.end()) return it->second;
+        return "";
     }
 
     std::vector<uint8_t> SerializeEntryMetadata() {
@@ -202,9 +284,10 @@ struct C3DMeshContent {
         MeshType = entryType;
         IsParsed = false;
         Helpers.clear(); Dummies.clear(); Volumes.clear(); Generators.clear();
-        Materials.clear(); Primitives.clear(); HelperNameStrings.clear(); DummyNameStrings.clear();
+        Materials.clear(); Primitives.clear();
         BoneIndices.clear(); BoneNames.clear(); Bones.clear();
         PackedNamesRaw.clear();
+        CRCNameMap.clear();
         DebugStatus = "Reset";
 
         if (data.size() < 100) { DebugStatus = "File too small"; return false; }
@@ -223,44 +306,68 @@ struct C3DMeshContent {
         Read(b, cursor, sz, MeshGeneratorCount);
 
         std::vector<uint8_t> helpersRaw, dummiesRaw;
-        if (HelperPointCount > 0) helpersRaw = DecompressLZO(b, cursor, sz, 20 * HelperPointCount);
-        if (DummyObjectCount > 0) dummiesRaw = DecompressLZO(b, cursor, sz, 56 * DummyObjectCount);
 
-        // FIX: Non-lossy PackedNames parsing
-        if (PackedNamesSize > 0) {
-            PackedNamesRaw = DecompressLZO(b, cursor, sz, PackedNamesSize);
-            if (PackedNamesRaw.size() >= 2) {
-                uint16_t dummyOff = *(uint16_t*)PackedNamesRaw.data();
-                size_t nCursor = 2;
-                for (int i = 0; i < HelperPointCount; i++) {
-                    if (nCursor >= dummyOff) break;
-                    HelperNameStrings.push_back(ReadString(PackedNamesRaw.data(), nCursor, dummyOff));
-                }
-                nCursor = dummyOff;
-                for (int i = 0; i < DummyObjectCount; i++) {
-                    if (nCursor >= PackedNamesRaw.size()) break;
-                    DummyNameStrings.push_back(ReadString(PackedNamesRaw.data(), nCursor, PackedNamesRaw.size()));
-                }
+        // 1. Compressed Helpers
+        if (HelperPointCount > 0) {
+            helpersRaw = DecompressLZO(b, cursor, sz, 20 * HelperPointCount);
+            for (int i = 0; i < HelperPointCount && i * 20 + 20 <= helpersRaw.size(); ++i) {
+                CHelperPoint h;
+                memcpy(&h.NameCRC, helpersRaw.data() + i * 20, 4);
+                memcpy(h.Pos, helpersRaw.data() + i * 20 + 4, 12);
+                memcpy(&h.BoneIndex, helpersRaw.data() + i * 20 + 16, 4);
+                Helpers.push_back(h);
             }
         }
 
-        for (int i = 0; i < HelperPointCount && i * 20 < helpersRaw.size(); ++i) {
-            CHelperPoint h; memcpy(&h.NameCRC, helpersRaw.data() + i * 20, 4); memcpy(h.Pos, helpersRaw.data() + i * 20 + 4, 12); memcpy(&h.BoneIndex, helpersRaw.data() + i * 20 + 16, 4); Helpers.push_back(h);
+        // 2. Compressed Dummies
+        if (DummyObjectCount > 0) {
+            dummiesRaw = DecompressLZO(b, cursor, sz, 56 * DummyObjectCount);
+            for (int i = 0; i < DummyObjectCount && i * 56 + 56 <= dummiesRaw.size(); ++i) {
+                CDummyObject d;
+                memcpy(&d.NameCRC, dummiesRaw.data() + i * 56, 4);
+                memcpy(d.Transform, dummiesRaw.data() + i * 56 + 4, 48);
+                memcpy(&d.BoneIndex, dummiesRaw.data() + i * 56 + 52, 4);
+                Dummies.push_back(d);
+            }
         }
-        for (int i = 0; i < DummyObjectCount && i * 56 < dummiesRaw.size(); ++i) {
-            CDummyObject d; memcpy(&d.NameCRC, dummiesRaw.data() + i * 56, 4); memcpy(d.Transform, dummiesRaw.data() + i * 56 + 4, 48); memcpy(&d.BoneIndex, dummiesRaw.data() + i * 56 + 52, 4); Dummies.push_back(d);
+
+        // 3. Compressed Packed Names
+        if (PackedNamesSize > 0) {
+            PackedNamesRaw = DecompressLZO(b, cursor, sz, PackedNamesSize);
+            UnpackNames();
         }
+
+        // 4. Uncompressed Volumes (Contains compressed planes internally)
         for (int i = 0; i < MeshVolumeCount; i++) {
-            CMeshVolume vol; if (!Read(b, cursor, sz, vol.ID)) break; vol.Name = ReadString(b, cursor, sz);
-            uint32_t planeCount = 0; if (!Read(b, cursor, sz, planeCount)) break;
+            CMeshVolume vol;
+            if (!Read(b, cursor, sz, vol.ID)) break;
+            vol.Name = ReadString(b, cursor, sz);
+
+            uint32_t planeCount = 0;
+            if (!Read(b, cursor, sz, planeCount)) break;
+
             if (planeCount > 0) {
                 auto planeData = DecompressLZO(b, cursor, sz, 16 * planeCount);
-                if (planeData.size() == 16 * planeCount) { for (uint32_t p = 0; p < planeCount; p++) { CPlane plane; memcpy(&plane, planeData.data() + (p * 16), 16); vol.Planes.push_back(plane); } }
+                if (planeData.size() == 16 * planeCount) {
+                    for (uint32_t p = 0; p < planeCount; p++) {
+                        CPlane plane;
+                        memcpy(&plane, planeData.data() + (p * 16), 16);
+                        vol.Planes.push_back(plane);
+                    }
+                }
             }
             Volumes.push_back(vol);
         }
+
+        // 5. Uncompressed Generators
         for (int i = 0; i < MeshGeneratorCount; i++) {
-            CMeshGenerator gen; Read(b, cursor, sz, gen.Transform); Read(b, cursor, sz, gen.BoneIndex); gen.ObjectName = ReadString(b, cursor, sz); Read(b, cursor, sz, gen.BankIndex); Read(b, cursor, sz, gen.UseLocalOrigin); Generators.push_back(gen);
+            CMeshGenerator gen;
+            Read(b, cursor, sz, gen.Transform);
+            Read(b, cursor, sz, gen.BoneIndex);
+            gen.ObjectName = ReadString(b, cursor, sz);
+            Read(b, cursor, sz, gen.BankIndex);
+            Read(b, cursor, sz, gen.UseLocalOrigin);
+            Generators.push_back(gen);
         }
 
         if (cursor >= sz) { DebugStatus = "File ended after Stats"; return false; }
@@ -288,7 +395,6 @@ struct C3DMeshContent {
 
         for (int i = 0; i < MaterialCount; i++) {
             if (i > 1000) break; C3DMaterial mat; Read(b, cursor, sz, mat.ID); mat.Name = ReadString(b, cursor, sz); Read(b, cursor, sz, mat.DecalID); Read(b, cursor, sz, mat.DiffuseMapID); Read(b, cursor, sz, mat.BumpMapID); Read(b, cursor, sz, mat.ReflectionMapID); Read(b, cursor, sz, mat.IlluminationMapID); Read(b, cursor, sz, mat.MapFlags); Read(b, cursor, sz, mat.SelfIllumination); Read(b, cursor, sz, mat.IsTwoSided); Read(b, cursor, sz, mat.IsTransparent); Read(b, cursor, sz, mat.BooleanAlpha); Read(b, cursor, sz, mat.DegenerateTriangles); Read(b, cursor, sz, mat.UseFilenames);
-            // FIX: Non-lossy Material Filenames parsing
             if (mat.UseFilenames) {
                 for (int j = 0; j < 4; j++) {
                     mat.TextureFileNames.push_back(ReadString(b, cursor, sz));
@@ -323,10 +429,9 @@ struct C3DMeshContent {
             if (cursor + 32 > sz) { DebugStatus = "Truncated before Vertex Comp"; break; }
             memcpy(&prim.Compression, b + cursor, 32); cursor += 32;
 
-            // FIX: Non-lossy Buffer Type parsing
             uint32_t stride = 0, type = 0; Read(b, cursor, sz, stride); Read(b, cursor, sz, type);
             if (stride > 0) prim.VertexStride = stride;
-            prim.BufferType = type; // Keep the type for correct serialization
+            prim.BufferType = type;
 
             int32_t reps = (prim.RepeatingMeshReps <= 1) ? 1 : prim.RepeatingMeshReps;
             size_t vBufferSize = (size_t)prim.VertexStride * prim.VertexCount * reps;
@@ -421,7 +526,6 @@ struct C3DMeshContent {
         BoundingSphereRadius = sqrtf(maxDistSq);
     }
 
-    // --- NEW: Non-Lossy Uncompressed Binary Serialization ---
     std::vector<uint8_t> SerializeUncompressed() const {
         std::vector<uint8_t> data;
         auto Write = [&](const void* val, size_t len) {
@@ -440,7 +544,6 @@ struct C3DMeshContent {
         Write(&HelperPointCount, 2);
         Write(&DummyObjectCount, 2);
 
-        // Calculate Packed Names Size based on the raw block to preserve exact padding
         uint16_t calcPackedNamesSize = (uint16_t)PackedNamesRaw.size();
         Write(&calcPackedNamesSize, 2);
 
@@ -464,7 +567,6 @@ struct C3DMeshContent {
 
         Write(&MaterialCount, 4); Write(&PrimitiveCount, 4); Write(&BoneCount, 4);
 
-        // Pre-calculate Bone Names block
         std::vector<uint8_t> bNamesBlock;
         for (const auto& s : BoneNames) bNamesBlock.insert(bNamesBlock.end(), s.c_str(), s.c_str() + s.length() + 1);
         uint32_t calcBoneNameSize = (uint32_t)bNamesBlock.size();
@@ -511,7 +613,7 @@ struct C3DMeshContent {
             Write(&prim.Compression, 32);
 
             uint32_t stride = prim.VertexStride; Write(&stride, 4);
-            uint32_t type = prim.BufferType; Write(&type, 4); // Use saved type!
+            uint32_t type = prim.BufferType; Write(&type, 4);
 
             if (!prim.VertexBuffer.empty()) { Write(prim.VertexBuffer.data(), prim.VertexBuffer.size()); }
             else { uint16_t h = 0; Write(&h, 2); }

@@ -93,7 +93,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         player.Reset();
     }
 
-    g_TextureParser.DecodedPixels.clear(); g_TextureParser.IsParsed = false;
+    g_TextureParser.DecodedPixels.clear(); g_TextureParser.IsParsed = false; g_TextureParser.IsStagedRaw = false;
     g_BBMParser.IsParsed = false; g_ActiveMeshContent = C3DMeshContent();
     g_AnimParser.Data = C3DAnimationInfo();
     g_TextParser.IsParsed = false; g_TextParser.TextData = CTextEntry(); g_TextParser.GroupData = CTextGroup(); g_TextParser.NarratorStrings.clear(); g_TextParser.RawData.clear();
@@ -101,6 +101,59 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
 
     bank->SelectedEntryIndex = idx; bank->SelectedLOD = 0;
     const auto& e = bank->Entries[idx];
+
+    // Staged cache check.
+    if (bank->StagedEntries.count(idx)) {
+        const auto& staged = bank->StagedEntries[idx];
+
+        if (!staged.MeshLODs.empty()) {
+            bank->SelectedLOD = 0;
+            g_ActiveMeshContent = *staged.MeshLODs[0];
+            g_ActiveMeshContent.EntryMeta = staged.MeshMeta;
+            g_MeshUploadNeeded = true;
+        }
+        else if (staged.Physics) {
+            g_BBMParser = *staged.Physics;
+            g_MeshUploadNeeded = true;
+        }
+        else if (staged.Anim) {
+            g_AnimParser.Data = *staged.Anim;
+            g_AnimParser.Data.IsParsed = true;
+        }
+        else if (staged.Texture) {
+            g_TextureParser.DecodedFormat = staged.Texture->TargetFormat;
+            g_TextureParser.Header = staged.Texture->Header;
+            g_TextureParser.RawFrames = staged.Texture->RawFrames; // <--- Copy the array
+            g_TextureParser.IsParsed = true;
+            g_TextureParser.IsStagedRaw = true;
+            g_TextureParser.PendingName = e.Name;
+        }
+        else if (staged.Text) {
+            g_TextParser.TextData = *staged.Text;
+            g_TextParser.IsParsed = true;
+            g_TextParser.IsGroup = false;
+            g_TextParser.IsNarratorList = false;
+        }
+        else if (staged.TextGroup) {
+            g_TextParser.GroupData = *staged.TextGroup;
+            g_TextParser.IsParsed = true;
+            g_TextParser.IsGroup = true;
+            g_TextParser.IsNarratorList = false;
+            ResolveGroupMetadata(bank);
+        }
+        else if (staged.NarratorList) {
+            g_TextParser.NarratorStrings = *staged.NarratorList;
+            g_TextParser.IsParsed = true;
+            g_TextParser.IsNarratorList = true;
+        }
+        else if (staged.LipSync) {
+            g_LipSyncParser.Data = *staged.LipSync;
+            g_LipSyncParser.IsParsed = true;
+        }
+
+        // Skip file reading entirely!
+        return;
+    }
 
     if (bank->Type != EBankType::Audio) {
         if (bank->ModifiedEntryData.count(idx)) bank->CurrentEntryRawData = bank->ModifiedEntryData[idx];
@@ -239,7 +292,9 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
         }
 
         // Only add if valid
-        if (magicE == 42) {
+        bool isValidEntry = (magicE == 42) || (e.Size > 0 && e.ID > 0);
+
+        if (isValidEntry) {
             bank->Entries.push_back(e);
             bank->FilteredIndices.push_back((int)bank->Entries.size() - 1);
         }
@@ -437,7 +492,21 @@ inline void JumpToBankEntry(const std::string& targetFile, uint32_t id, const st
 }
 
 inline void ParseSelectedLOD(LoadedBank* bank) {
-    if (!bank || bank->CurrentEntryRawData.empty()) return;
+    if (!bank) return;
+    int idx = bank->SelectedEntryIndex;
+
+    // --- PURE DEFERRED: Read from Staged Array ---
+    if (bank->StagedEntries.count(idx) && !bank->StagedEntries[idx].MeshLODs.empty()) {
+        auto& staged = bank->StagedEntries[idx];
+        if (bank->SelectedLOD >= staged.MeshLODs.size()) bank->SelectedLOD = 0;
+        g_ActiveMeshContent = *staged.MeshLODs[bank->SelectedLOD];
+        g_ActiveMeshContent.EntryMeta = staged.MeshMeta; // Keep TOC synced
+        g_MeshUploadNeeded = true;
+        return;
+    }
+
+    // --- FALLBACK: Binary Slice Reading ---
+    if (bank->CurrentEntryRawData.empty()) return;
     size_t offset = 0; size_t size = bank->CurrentEntryRawData.size();
     if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
         if (bank->SelectedLOD >= g_ActiveMeshContent.EntryMeta.LODCount) bank->SelectedLOD = 0;
@@ -448,7 +517,7 @@ inline void ParseSelectedLOD(LoadedBank* bank) {
     }
     std::vector<uint8_t> slice;
     if (size > 0) { slice.resize(size); memcpy(slice.data(), bank->CurrentEntryRawData.data() + offset, size); }
-    g_ActiveMeshContent.Parse(slice, bank->Entries[bank->SelectedEntryIndex].Type);
+    g_ActiveMeshContent.Parse(slice, bank->Entries[idx].Type);
     g_MeshUploadNeeded = true;
 }
 

@@ -118,7 +118,7 @@ inline void LoadLipSyncSubBankEntries(int sbIdx) {
         g_LipSyncState.Stream->read((char*)&e.Type, 4); g_LipSyncState.Stream->read((char*)&e.Size, 4);
         g_LipSyncState.Stream->read((char*)&e.Offset, 4); g_LipSyncState.Stream->read((char*)&e.CRC, 4);
 
-        if (magicE != 42) continue;
+        if (magicE != 42 && e.Size == 0) continue;
 
         uint32_t nameLen = 0; g_LipSyncState.Stream->read((char*)&nameLen, 4);
         if (nameLen > 0) g_LipSyncState.Stream->seekg(nameLen, std::ios::cur);

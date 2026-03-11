@@ -258,7 +258,7 @@ namespace GltfExporter {
                 if (x > max[0]) max[0] = x; if (y > max[1]) max[1] = y; if (z > max[2]) max[2] = z;
                 posData.push_back(x); posData.push_back(y); posData.push_back(z);
                 normData.push_back(nx); normData.push_back(ny); normData.push_back(nz);
-                uvData.push_back(u); uvData.push_back(v_c);
+                uvData.push_back(u); uvData.push_back(v_c); // -- Flipped normals in Blender. :DD
 
                 if (hasBones) {
                     if (off + iOff + 4 <= prim.VertexBuffer.size()) {
@@ -318,16 +318,18 @@ namespace GltfExporter {
                         if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) { parity = 0; continue; }
                         if (i0 == i1 || i1 == i2 || i0 == i2) { parity++; continue; }
 
-                        if (parity % 2 != 0) { bIdx.push_back(i0); bIdx.push_back(i2); bIdx.push_back(i1); }
-                        else { bIdx.push_back(i0); bIdx.push_back(i1); bIdx.push_back(i2); }
+                        // INVERTED: Swap winding for glTF (Counter-Clockwise)
+                        if (parity % 2 != 0) { bIdx.push_back(i0); bIdx.push_back(i1); bIdx.push_back(i2); }
+                        else { bIdx.push_back(i0); bIdx.push_back(i2); bIdx.push_back(i1); }
                         parity++;
                     }
                 }
                 else {
-                    for (uint32_t k = 0; k < c * 3; k++) {
-                        if (s + k < prim.IndexBuffer.size()) {
-                            uint16_t i = prim.IndexBuffer[s + k];
-                            if (i != 0xFFFF) bIdx.push_back(i);
+                    for (uint32_t k = 0; k < c * 3; k += 3) {
+                        if (s + k + 2 < prim.IndexBuffer.size()) {
+                            bIdx.push_back(prim.IndexBuffer[s + k]);
+                            bIdx.push_back(prim.IndexBuffer[s + k + 2]); // SWAPPED
+                            bIdx.push_back(prim.IndexBuffer[s + k + 1]); // SWAPPED
                         }
                     }
                 }
@@ -570,22 +572,42 @@ namespace GltfExporter {
         }
 
         for (size_t i = 0; i < mesh.Helpers.size(); i++) {
-            const auto& h = mesh.Helpers[i]; std::stringstream ss; ss.imbue(std::locale("C"));
-            ss << "{\"name\":" << Esc(i < mesh.HelperNameStrings.size() ? mesh.HelperNameStrings[i] : "HPNT_" + std::to_string(h.NameCRC)) << ",\"translation\":[" << h.Pos[0] << "," << h.Pos[1] << "," << h.Pos[2] << "],\"extras\":{\"type\":\"Helper\",\"crc\":" << h.NameCRC << "}}";
+            const auto& h = mesh.Helpers[i];
+
+            std::string hName = mesh.GetNameFromCRC(h.NameCRC);
+            if (hName.empty()) hName = "HPNT_" + std::to_string(h.NameCRC) + "_" + std::to_string(i);
+
+            std::stringstream ss; ss.imbue(std::locale("C"));
+            ss << "{\"name\":" << Esc(hName) << ",\"translation\":[" << h.Pos[0] << "," << h.Pos[1] << "," << h.Pos[2] << "],\"extras\":{\"type\":\"Helper\",\"crc\":" << h.NameCRC << "}}";
             nodeStrs.push_back(ss.str());
         }
 
         for (size_t i = 0; i < mesh.Dummies.size(); i++) {
-            const auto& d = mesh.Dummies[i]; Mat4 dMat; memcpy(dMat.m, d.Transform, 48); dMat.m[3] = 0; dMat.m[7] = 0; dMat.m[11] = 0; dMat.m[15] = 1; Mat4 t; Transpose(dMat, t);
+            const auto& d = mesh.Dummies[i];
+            Mat4 dMat = Identity();
+            dMat.m[0] = d.Transform[0]; dMat.m[1] = d.Transform[1]; dMat.m[2] = d.Transform[2];
+            dMat.m[4] = d.Transform[3]; dMat.m[5] = d.Transform[4]; dMat.m[6] = d.Transform[5];
+            dMat.m[8] = d.Transform[6]; dMat.m[9] = d.Transform[7]; dMat.m[10] = d.Transform[8];
+            dMat.m[12] = d.Transform[9]; dMat.m[13] = d.Transform[10]; dMat.m[14] = d.Transform[11];
+
+            std::string dName = mesh.GetNameFromCRC(d.NameCRC);
+            if (dName.empty()) dName = "HDMY_" + std::to_string(d.NameCRC) + "_" + std::to_string(i);
+
             std::stringstream ss; ss.imbue(std::locale("C"));
-            ss << "{\"name\":" << Esc(i < mesh.DummyNameStrings.size() ? mesh.DummyNameStrings[i] : "HDMY_" + std::to_string(d.NameCRC)) << ",\"matrix\":[";
-            for (int k = 0; k < 16; k++) ss << t.m[k] << (k < 15 ? "," : "");
+            ss << "{\"name\":" << Esc(dName) << ",\"matrix\":[";
+            for (int k = 0; k < 16; k++) ss << dMat.m[k] << (k < 15 ? "," : "");
             ss << "],\"extras\":{\"type\":\"Dummy\",\"crc\":" << d.NameCRC << "}}";
             nodeStrs.push_back(ss.str());
         }
 
         for (size_t i = 0; i < mesh.Generators.size(); i++) {
-            Mat4 dMat; memcpy(dMat.m, mesh.Generators[i].Transform, 48); dMat.m[3] = 0; dMat.m[7] = 0; dMat.m[11] = 0; dMat.m[15] = 1; Mat4 t; Transpose(dMat, t);
+            Mat4 dMat = Identity();
+            dMat.m[0] = mesh.Generators[i].Transform[0]; dMat.m[1] = mesh.Generators[i].Transform[1]; dMat.m[2] = mesh.Generators[i].Transform[2];
+            dMat.m[4] = mesh.Generators[i].Transform[3]; dMat.m[5] = mesh.Generators[i].Transform[4]; dMat.m[6] = mesh.Generators[i].Transform[5];
+            dMat.m[8] = mesh.Generators[i].Transform[6]; dMat.m[9] = mesh.Generators[i].Transform[7]; dMat.m[10] = mesh.Generators[i].Transform[8];
+            dMat.m[12] = mesh.Generators[i].Transform[9]; dMat.m[13] = mesh.Generators[i].Transform[10]; dMat.m[14] = mesh.Generators[i].Transform[11];
+            Mat4 t; Transpose(dMat, t);
+
             std::stringstream ss; ss.imbue(std::locale("C"));
             ss << "{\"name\":\"GEN_" << mesh.Generators[i].ObjectName << "\",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << t.m[k] << (k < 15 ? "," : "");
@@ -757,17 +779,39 @@ namespace GltfExporter {
             prim.IndexBuffer = bbm.ParsedIndices; tempMesh.Primitives.push_back(prim); tempMesh.PrimitiveCount++;
         }
 
+        std::vector<std::string> tempHelperNames;
         for (const auto& h : bbm.Helpers) {
-            CHelperPoint hp = {}; hp.NameCRC = 0; hp.BoneIndex = h.BoneIndex; hp.Pos[0] = h.Position.x; hp.Pos[1] = h.Position.y; hp.Pos[2] = h.Position.z;
-            tempMesh.Helpers.push_back(hp); std::string exportName = h.Name; if (h.SubMeshIndex != -1) exportName += "_Sub" + std::to_string(h.SubMeshIndex); tempMesh.HelperNameStrings.push_back(exportName);
+            std::string exportName = h.Name;
+            if (h.SubMeshIndex != -1) exportName += "_Sub" + std::to_string(h.SubMeshIndex);
+
+            CHelperPoint hp = {};
+            hp.NameCRC = CalculateFableCRC(exportName); // Hash the string to get the real CRC
+            hp.BoneIndex = h.BoneIndex;
+            hp.Pos[0] = h.Position.x; hp.Pos[1] = h.Position.y; hp.Pos[2] = h.Position.z;
+
+            tempMesh.Helpers.push_back(hp);
+            tempHelperNames.push_back(exportName);
         }
         tempMesh.HelperPointCount = (uint16_t)tempMesh.Helpers.size();
 
+        std::vector<std::string> tempDummyNames;
         for (const auto& d : bbm.Dummies) {
-            CDummyObject dum = {}; dum.NameCRC = 0; dum.BoneIndex = d.BoneIndex; memcpy(dum.Transform, d.Transform, 48); tempMesh.Dummies.push_back(dum);
-            std::string exportName = d.Name; if (d.UseLocalOrigin) exportName += "_LOC"; tempMesh.DummyNameStrings.push_back(exportName);
+            std::string exportName = d.Name;
+            if (d.UseLocalOrigin) exportName += "_LOC";
+
+            CDummyObject dum = {};
+            dum.NameCRC = CalculateFableCRC(exportName); // Hash the string to get the real CRC
+            dum.BoneIndex = d.BoneIndex;
+            memcpy(dum.Transform, d.Transform, 48);
+
+            tempMesh.Dummies.push_back(dum);
+            tempDummyNames.push_back(exportName);
         }
         tempMesh.DummyObjectCount = (uint16_t)tempMesh.Dummies.size();
+
+        // Pack the names into the temporary mesh's CRC map so Export() can read them!
+        tempMesh.PackNames(tempHelperNames, tempDummyNames);
+        tempMesh.UnpackNames();
 
         for (const auto& v : bbm.Volumes) {
             CMeshVolume vol = {}; vol.ID = v.ID; vol.Name = v.Name;

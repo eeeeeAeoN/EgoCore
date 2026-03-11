@@ -83,7 +83,7 @@ namespace LipSyncCompiler {
                 state.Stream->read((char*)&offset, 4);
                 state.Stream->read((char*)&e.CRC, 4);
 
-                if (magicE != 42) continue;
+                if (magicE != 42 && size == 0) continue;
 
                 e.Name = ReadCompString(*state.Stream);
 

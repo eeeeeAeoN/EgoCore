@@ -60,8 +60,10 @@ public:
         bool GenerateMipmaps = true;
         int ForceMipLevels = 0;
         bool ResizeToPowerOfTwo = true;
-        int TargetWidth = 0;   // [NEW]
-        int TargetHeight = 0;  // [NEW]
+        int TargetWidth = 0;
+        int TargetHeight = 0;
+        bool IsBumpmap = false;       // [NEW] Trigger for auto-generation
+        float BumpFactor = 5.0f;      // [NEW] Intensity multiplier
     };
 
     struct BuildResult {
@@ -71,6 +73,48 @@ public:
         bool Success = false;
         std::string Error;
     };
+
+    // [NEW] The Fable-accurate RGB to Normal Map generator
+    static void ConvertRGBAToFableNormalMap(std::vector<uint8_t>& rgbaPixels, int width, int height, float bumpFactor) {
+        std::vector<uint8_t> normalMap(width * height * 4);
+
+        // Fast perceptual luminance calculator
+        auto getLuminance = [&](int x, int y) -> float {
+            int idx = (y * width + x) * 4;
+            return (rgbaPixels[idx] * 0.299f) + (rgbaPixels[idx + 1] * 0.587f) + (rgbaPixels[idx + 2] * 0.114f);
+            };
+
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                float center = getLuminance(x, y);
+                float right = getLuminance((x + 1) % width, y);
+                float down = getLuminance(x, ((y + 1) % height));
+
+                float du = (right - center) * bumpFactor;
+                float dv = (down - center) * bumpFactor;
+
+                du = std::clamp(du, -127.0f, 127.0f);
+                dv = std::clamp(dv, -127.0f, 127.0f);
+
+                float length = std::sqrt(du * du + dv * dv + (127.0f * 127.0f));
+                float normalizer = 127.0f / length;
+
+                uint8_t r = (uint8_t)std::clamp(std::round(du * normalizer + 128.0f), 0.0f, 255.0f);
+                uint8_t g = (uint8_t)std::clamp(std::round(dv * normalizer + 128.0f), 0.0f, 255.0f);
+                uint8_t b = (uint8_t)std::clamp(std::round(128.0f - (127.0f * normalizer)), 0.0f, 255.0f);
+
+                // Preserve original Alpha for Fable Specular/Gloss masks!
+                uint8_t a = rgbaPixels[(y * width + x) * 4 + 3];
+
+                int outIdx = (y * width + x) * 4;
+                normalMap[outIdx] = r;
+                normalMap[outIdx + 1] = g;
+                normalMap[outIdx + 2] = b;
+                normalMap[outIdx + 3] = a;
+            }
+        }
+        rgbaPixels = normalMap;
+    }
 
     static BuildResult ImportImage(const std::string& path, ImportOptions opts) {
         BuildResult result;
@@ -84,7 +128,6 @@ public:
 
         int physW = x, physH = y;
 
-        // Force resize to target dimensions if provided
         if (opts.TargetWidth > 0 && opts.TargetHeight > 0) {
             physW = opts.TargetWidth;
             physH = opts.TargetHeight;
@@ -104,13 +147,15 @@ public:
         }
         stbi_image_free(pixels);
 
+        // [NEW] Instantly convert the raw pixels to a Normal Map if requested!
+        if (opts.IsBumpmap) {
+            ConvertRGBAToFableNormalMap(sourceData, physW, physH, opts.BumpFactor);
+        }
+
         CGraphicHeader header = {};
-        header.FrameWidth = x;
-        header.FrameHeight = y;
-        header.Width = physW;
-        header.Height = physH;
-        header.Depth = 1;
-        header.FrameCount = 1;
+        header.FrameWidth = x; header.FrameHeight = y;
+        header.Width = physW; header.Height = physH;
+        header.Depth = 1; header.FrameCount = 1;
 
         CPixelFormatInit pixelFmt = {};
         pixelFmt.Type = 1;
@@ -126,7 +171,6 @@ public:
         pixelFmt.RBits = 8; pixelFmt.GBits = 8; pixelFmt.BBits = 8; pixelFmt.ABits = 8;
 
         std::vector<uint8_t> pixelBlob;
-
         int mips = 1;
         if (opts.GenerateMipmaps) {
             int mw = physW, mh = physH;
@@ -140,11 +184,9 @@ public:
 
         header.MipmapLevels = mips;
 
-        int curW = physW;
-        int curH = physH;
+        int curW = physW; int curH = physH;
         std::vector<uint8_t> currentMip = sourceData;
-
-        uint32_t mip0Size = 0; // [FIX] Track Level 0 size
+        uint32_t mip0Size = 0;
 
         for (int m = 0; m < mips; m++) {
             if (opts.Format == ETextureFormat::ARGB8888) {
@@ -166,12 +208,83 @@ public:
                     nextMip.data(), nextW, nextH, 0, 4);
 
                 currentMip = nextMip;
-                curW = nextW;
-                curH = nextH;
+                curW = nextW; curH = nextH;
             }
         }
 
-        // [FIX] FrameDataSize MUST be the size of the base mipmap only!
+        header.FrameDataSize = mip0Size;
+        header.MipSize0 = 0;
+
+        result.HeaderInfo.resize(sizeof(CGraphicHeader) + sizeof(CPixelFormatInit));
+        memcpy(result.HeaderInfo.data(), &header, sizeof(CGraphicHeader));
+        memcpy(result.HeaderInfo.data() + sizeof(CGraphicHeader), &pixelFmt, sizeof(CPixelFormatInit));
+
+        result.FullData = pixelBlob; result.Width = physW; result.Height = physH;
+        result.Success = true;
+
+        return result;
+    }
+
+    static int RoundToPow2(int v) {
+        int p = 1; while (p < v) p <<= 1; return p;
+    }
+
+    static BuildResult CompileFromRGBA(const std::vector<uint8_t>& rgba, int physW, int physH, ImportOptions opts) {
+        BuildResult result;
+
+        std::vector<uint8_t> baseRGBA = rgba;
+        if (opts.IsBumpmap) {
+            ConvertRGBAToFableNormalMap(baseRGBA, physW, physH, opts.BumpFactor);
+        }
+
+        CGraphicHeader header = {};
+        header.FrameWidth = physW; header.FrameHeight = physH;
+        header.Width = physW; header.Height = physH;
+        header.Depth = 1; header.FrameCount = 1;
+
+        CPixelFormatInit pixelFmt = { 1, 8, 8, 8, 8, 8 };
+
+        switch (opts.Format) {
+        case ETextureFormat::DXT1: header.TransparencyType = 0; pixelFmt.ColourDepth = 4; break;
+        case ETextureFormat::DXT3: header.TransparencyType = 1; pixelFmt.ColourDepth = 8; break;
+        case ETextureFormat::DXT5: header.TransparencyType = 3; pixelFmt.ColourDepth = 8; break;
+        case ETextureFormat::ARGB8888: header.TransparencyType = 255; pixelFmt.ColourDepth = 32; break;
+        default: header.TransparencyType = 1; pixelFmt.ColourDepth = 8; break;
+        }
+
+        std::vector<uint8_t> pixelBlob;
+        int mips = 1;
+        if (opts.GenerateMipmaps) {
+            int mw = physW, mh = physH;
+            while (mw > 1 || mh > 1) { mips++; mw = (mw > 1) ? mw >> 1 : 1; mh = (mh > 1) ? mh >> 1 : 1; }
+        }
+        if (opts.ForceMipLevels > 0) mips = opts.ForceMipLevels;
+        header.MipmapLevels = mips;
+
+        int curW = physW, curH = physH;
+        std::vector<uint8_t> currentMip = baseRGBA;
+        uint32_t mip0Size = 0;
+
+        for (int m = 0; m < mips; m++) {
+            if (opts.Format == ETextureFormat::ARGB8888) {
+                pixelBlob.insert(pixelBlob.end(), currentMip.begin(), currentMip.end());
+                if (m == 0) mip0Size = (uint32_t)currentMip.size();
+            }
+            else {
+                std::vector<uint8_t> compData = CompressDXT(currentMip, curW, curH, opts.Format);
+                pixelBlob.insert(pixelBlob.end(), compData.begin(), compData.end());
+                if (m == 0) mip0Size = (uint32_t)compData.size();
+            }
+
+            if (m < mips - 1) {
+                int nextW = (curW > 1) ? curW >> 1 : 1;
+                int nextH = (curH > 1) ? curH >> 1 : 1;
+                std::vector<uint8_t> nextMip(nextW * nextH * 4);
+                stbir_resize_uint8(currentMip.data(), curW, curH, 0, nextMip.data(), nextW, nextH, 0, 4);
+                currentMip = nextMip; curW = nextW; curH = nextH;
+            }
+        }
+
         header.FrameDataSize = mip0Size;
         header.MipSize0 = 0;
 
@@ -180,19 +293,12 @@ public:
         memcpy(result.HeaderInfo.data() + sizeof(CGraphicHeader), &pixelFmt, sizeof(CPixelFormatInit));
 
         result.FullData = pixelBlob;
-        result.Width = physW;
-        result.Height = physH;
+        result.Width = physW; result.Height = physH;
         result.Success = true;
-
         return result;
     }
 
 private:
-    static int RoundToPow2(int v) {
-        int p = 1;
-        while (p < v) p <<= 1;
-        return p;
-    }
 
     static std::vector<uint8_t> CompressDXT(const std::vector<uint8_t>& rgba, int w, int h, ETextureFormat fmt) {
         int blocksX = (w + 3) / 4;

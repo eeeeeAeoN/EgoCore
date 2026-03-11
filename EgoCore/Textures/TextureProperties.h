@@ -60,11 +60,71 @@ struct TextureViewport {
     }
 
     bool Update(ID3D11Device* device, CTextureParser& parser, uint32_t entryID, int frameIdx, int sliceIdx, int channelMode) {
+        // Return immediately if nothing has changed
         if (entryID == CurrentEntryID && frameIdx == CurrentFrame && sliceIdx == CurrentSlice && channelMode == CurrentChannel && SRV) return true;
         Release();
 
-        if (!parser.IsParsed || parser.DecodedPixels.empty() || !device) return false;
+        if (!parser.IsParsed || !device) return false;
 
+        uint32_t width = parser.Header.Width ? parser.Header.Width : parser.Header.FrameWidth;
+        uint32_t height = parser.Header.Height ? parser.Header.Height : parser.Header.FrameHeight;
+
+        if (width == 0 || height == 0) return false;
+
+        // =======================================================
+        // PATH 1: INSTANT RENDER FOR STAGED UNCOMPRESSED TEXTURES
+        // =======================================================
+        if (parser.IsStagedRaw) {
+            if (frameIdx >= parser.RawFrames.size() || parser.RawFrames[frameIdx].empty()) return false;
+
+            const uint8_t* uploadData = parser.RawFrames[frameIdx].data();
+
+            // Handle volume slice offset (if editing 3D textures in raw mode)
+            uint32_t sliceSize = width * height * 4;
+            if (sliceIdx * sliceSize + sliceSize <= parser.RawFrames[frameIdx].size()) {
+                uploadData += (sliceIdx * sliceSize);
+            }
+
+            D3D11_TEXTURE2D_DESC desc = {};
+            desc.Width = width; desc.Height = height; desc.MipLevels = 1; desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+            std::vector<Color32> tempPixels;
+            if (channelMode != 0) {
+                tempPixels.resize(width * height);
+                memcpy(tempPixels.data(), uploadData, width * height * 4);
+                for (auto& px : tempPixels) {
+                    uint8_t val = 0;
+                    if (channelMode == 1) val = px.a; else if (channelMode == 2) val = px.r; else if (channelMode == 3) val = px.g; else if (channelMode == 4) val = px.b;
+                    px.r = val; px.g = val; px.b = val; px.a = 255;
+                }
+                uploadData = (const uint8_t*)tempPixels.data();
+            }
+
+            D3D11_SUBRESOURCE_DATA subData = {};
+            subData.pSysMem = uploadData;
+            subData.SysMemPitch = width * 4;
+
+            ID3D11Texture2D* tex = nullptr;
+            if (SUCCEEDED(device->CreateTexture2D(&desc, &subData, &tex))) {
+                device->CreateShaderResourceView(tex, nullptr, &SRV);
+                tex->Release();
+            }
+            CurrentEntryID = entryID; CurrentFrame = frameIdx; CurrentSlice = sliceIdx; CurrentChannel = channelMode;
+            return true;
+        }
+
+        // =======================================================
+        // PATH 2: STANDARD DECODED BINARY READ (LZO / DXT)
+        // =======================================================
+        if (parser.DecodedPixels.empty()) return false;
+
+        uint32_t singleSliceSize = parser.GetMipSize(width, height, 1);
+        size_t finalOffset = ((size_t)parser.TrueFrameStride * frameIdx) + (sliceIdx * singleSliceSize);
+        if (finalOffset + singleSliceSize > parser.DecodedPixels.size()) return false;
+
+        const uint8_t* rawData = parser.DecodedPixels.data() + finalOffset;
         bool needsSoftwareDecode = (channelMode != 0);
 
         DXGI_FORMAT dxFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -80,18 +140,6 @@ struct TextureViewport {
         case ETextureFormat::ARGB8888:  dxFormat = DXGI_FORMAT_B8G8R8A8_UNORM; break;
         default: return false;
         }
-
-        uint32_t width = parser.Header.Width ? parser.Header.Width : parser.Header.FrameWidth;
-        uint32_t height = parser.Header.Height ? parser.Header.Height : parser.Header.FrameHeight;
-
-        if (width == 0 || height == 0) return false;
-
-        uint32_t singleSliceSize = parser.GetMipSize(width, height, 1);
-        size_t finalOffset = ((size_t)parser.TrueFrameStride * frameIdx) + (sliceIdx * singleSliceSize);
-
-        if (finalOffset + singleSliceSize > parser.DecodedPixels.size()) return false;
-
-        const uint8_t* rawData = parser.DecodedPixels.data() + finalOffset;
 
         if (!needsSoftwareDecode) {
             D3D11_TEXTURE2D_DESC desc = {};
@@ -196,16 +244,10 @@ inline void DrawTextureProperties() {
     if (bank.SelectedEntryIndex == -1) return;
     auto& entry = bank.Entries[bank.SelectedEntryIndex];
 
-    static char nameBuf[512] = "";
     static int lastEntryID = -1;
     if (lastEntryID != entry.ID) {
-        strncpy_s(nameBuf, sizeof(nameBuf), entry.Name.c_str(), _TRUNCATE);
         lastEntryID = entry.ID;
         g_TexZoom = 1.0f; // Reset zoom when opening a new texture
-    }
-
-    if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) {
-        g_TextureParser.PendingName = nameBuf;
     }
 
     ImGui::Separator();
@@ -242,6 +284,8 @@ inline void DrawTextureProperties() {
 
     // Disable Add/Remove on Types 4 and 5
     if (entry.Type != 0x4 && entry.Type != 0x5) {
+
+
         ImGui::SameLine();
         if (ImGui::Button("Add Frame")) {
             std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
