@@ -735,9 +735,24 @@ static void DrawBankTab() {
                             if (e.Type == 3) {
                                 ImGui::SameLine();
                                 if (ImGui::Button("Replace Physics Mesh")) {
-                                    g_PendingLODActionIndex = 0;
-                                    g_LODImportType = 3;
-                                    g_ShowReplaceLODPopup = true;
+                                    std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                                    if (!gltfPath.empty()) {
+                                        CBBMParser newBBM;
+                                        std::string err = GltfMeshImporter::ImportType3(gltfPath, e.Name, newBBM);
+                                        if (err.empty()) {
+                                            // Stage the changes immediately
+                                            if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
+                                            bank.StagedEntries[bank.SelectedEntryIndex].Physics = std::make_shared<CBBMParser>(newBBM);
+
+                                            // Instantly load it into the viewport
+                                            g_BBMParser = newBBM;
+                                            g_MeshUploadNeeded = true;
+                                            g_BankStatus = "Physics Mesh Replaced (Staged).";
+                                        }
+                                        else {
+                                            g_BankStatus = "Import Error: " + err;
+                                        }
+                                    }
                                 }
                             }
                             else {

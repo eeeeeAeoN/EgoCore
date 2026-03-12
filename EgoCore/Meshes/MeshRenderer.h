@@ -108,7 +108,6 @@ private:
 public:
     float CamRotX = 0.0f; float CamRotY = 0.0f; float CamDist = 10.0f; XMFLOAT2 CamPan = { 0, 0 };
 
-    // Allow overlay renderers to borrow the main render target
     ID3D11RenderTargetView* GetRTV() const { return RTV; }
     ID3D11DepthStencilView* GetDSV() const { return DSV; }
 
@@ -182,7 +181,6 @@ public:
                 float3 n = normalize(input.Norm); 
                 float3 l = normalize(LightDir.xyz); 
                 float diff = max(dot(n, l), 0.2f); 
-                // FIX: Multiply texture alpha by constant buffer alpha
                 return float4(texColor.rgb * Col.rgb * diff, texColor.a * Col.a); 
             }
 
@@ -417,7 +415,9 @@ public:
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
         RenderBatch batch = { 0, (uint32_t)indices.size(), -1 }; Batches.push_back(batch);
-        float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f; CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
+        
+        // FIX: Removed the stuck CamRotX lock
+        float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f; CamPan = { 0, 0 }; CamRotX = 0.2f; CamRotY = XM_PI;
     }
 
     void Resize(ID3D11Device* device, float w, float h) {
@@ -429,7 +429,6 @@ public:
         device->CreateTexture2D(&dDesc, nullptr, &DepthTex); device->CreateDepthStencilView(DepthTex, nullptr, &DSV);
     }
 
-    // FIX: Render targets can now be overridden so the overlay draws directly onto the main viewport
     ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false, const std::vector<XMMATRIX>* animatedBones = nullptr, bool clearTarget = true, float alpha = 1.0f, ID3D11RenderTargetView* overrideRTV = nullptr, ID3D11DepthStencilView* overrideDSV = nullptr) {
         if (!VS || !VBuffer) return nullptr;
         if (ImGui::IsWindowHovered()) {
@@ -453,12 +452,16 @@ public:
 
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
-        XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
-        world = world * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+        XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+
+        // FIX: Visually rotate Z-up physics meshes so they stand upright in the viewport
+        if (isPhysics) {
+            worldCam = XMMatrixRotationX(-XM_PIDIV2) * worldCam;
+        }
 
         CBMatrix cb;
-        cb.World = XMMatrixTranspose(world);
-        cb.WorldViewProj = XMMatrixTranspose(world * view * proj);
+        cb.World = XMMatrixTranspose(worldCam);
+        cb.WorldViewProj = XMMatrixTranspose(worldCam * view * proj);
         cb.Color = XMFLOAT4(isPhysics ? 0.0f : 0.8f, 0.8f, isPhysics ? 1.0f : 0.8f, alpha);
         cb.LightDir = XMFLOAT4(0.5f, 1.0f, -0.5f, 0.0f);
 
@@ -509,10 +512,58 @@ public:
         return SRV;
     }
 
-    void RenderVolumes(ID3D11DeviceContext* ctx, float w, float h, const std::vector<CPlane>& planes) {
+    void RenderBounds(ID3D11DeviceContext* ctx, float w, float h, const float* bMin, const float* bMax, const float* sCenter, float sRadius) {
+        if (!VS || !DebugVBuffer) return;
+
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        ctx->PSSetShader(PS_Solid, nullptr, 0);
+        ctx->RSSetState(RastStateSolid);
+
+        UINT stride = sizeof(GPUVertex); UINT offset = 0;
+        ctx->IASetVertexBuffers(0, 1, &DebugVBuffer, &stride, &offset);
+        ctx->IASetIndexBuffer(DebugIBuffer, DXGI_FORMAT_R32_UINT, 0);
+
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
+        XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
+        XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+
+        CBMatrix cb;
+        cb.HasAnimation = 0;
+
+        float bSize[3] = { bMax[0] - bMin[0], bMax[1] - bMin[1], bMax[2] - bMin[2] };
+        float bCenter[3] = { bMin[0] + bSize[0] * 0.5f, bMin[1] + bSize[1] * 0.5f, bMin[2] + bSize[2] * 0.5f };
+
+        XMMATRIX boxWorld = XMMatrixScaling(bSize[0], bSize[1], bSize[2]) * XMMatrixTranslation(bCenter[0], bCenter[1], bCenter[2]) * worldCam;
+        cb.World = XMMatrixTranspose(boxWorld);
+        cb.WorldViewProj = XMMatrixTranspose(boxWorld * view * proj);
+        cb.Color = XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugBoxIndexCount, 0, 0);
+
+        XMMATRIX sphereScaleTrans = XMMatrixScaling(sRadius, sRadius, sRadius) * XMMatrixTranslation(sCenter[0], sCenter[1], sCenter[2]);
+        cb.Color = XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
+
+        XMMATRIX ring1 = sphereScaleTrans * worldCam;
+        cb.WorldViewProj = XMMatrixTranspose(ring1 * view * proj);
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+        XMMATRIX ring2 = XMMatrixRotationX(XM_PIDIV2) * sphereScaleTrans * worldCam;
+        cb.WorldViewProj = XMMatrixTranspose(ring2 * view * proj);
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+        XMMATRIX ring3 = XMMatrixRotationY(XM_PIDIV2) * sphereScaleTrans * worldCam;
+        cb.WorldViewProj = XMMatrixTranspose(ring3 * view * proj);
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    }
+
+    void RenderVolumes(ID3D11DeviceContext* ctx, float w, float h, const std::vector<CPlane>& planes, bool isPhysics = false) {
         if (!VS || !DebugVBuffer || planes.empty()) return;
 
-        // Mathematically generate the Convex Hull from Fable's infinite planes
         std::vector<XMFLOAT3> vertices;
         for (size_t i = 0; i < planes.size(); i++) {
             for (size_t j = i + 1; j < planes.size(); j++) {
@@ -550,8 +601,13 @@ public:
 
         std::vector<GPUVertex> gpuVerts;
         std::vector<uint32_t> gpuInds;
-        for (const auto& v : vertices) gpuVerts.push_back({ v, {0,0,0}, {0,0}, 0, {0,0,0,0} });
 
+        for (const auto& v : vertices) {
+            XMFLOAT3 flippedV = { -v.x, -v.y, -v.z };
+            gpuVerts.push_back({ flippedV, {0,0,0}, {0,0}, 0, {0,0,0,0} });
+        }
+
+        // Mathematical edge detection uses the original un-flipped `vertices` array
         for (uint32_t i = 0; i < vertices.size(); i++) {
             for (uint32_t j = i + 1; j < vertices.size(); j++) {
                 int sharedPlanes = 0;
@@ -576,7 +632,7 @@ public:
 
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)gpuInds.size(); iDesc.Usage = D3D11_USAGE_IMMUTABLE; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { gpuInds.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &iBuf);
-        device->Release(); // Properly release the retrieved device
+        device->Release();
 
         UINT stride = sizeof(GPUVertex); UINT offset = 0;
         ctx->IASetVertexBuffers(0, 1, &vBuf, &stride, &offset);
@@ -586,11 +642,15 @@ public:
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
         XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
 
+        if (isPhysics) {
+            worldCam = XMMatrixRotationX(-XM_PIDIV2) * worldCam;
+        }
+
         CBMatrix cb;
         cb.HasAnimation = 0;
         cb.World = XMMatrixTranspose(worldCam);
         cb.WorldViewProj = XMMatrixTranspose(worldCam * view * proj);
-        cb.Color = XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f); // Bright Purple for Volumes
+        cb.Color = XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f);
 
         ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
         ctx->DrawIndexed((UINT)gpuInds.size(), 0, 0);
@@ -600,61 +660,15 @@ public:
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     }
 
-    void RenderBounds(ID3D11DeviceContext* ctx, float w, float h, const float* bMin, const float* bMax, const float* sCenter, float sRadius) {
-        if (!VS || !DebugVBuffer) return;
-
-        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
-        ctx->PSSetShader(PS_Solid, nullptr, 0);
-        ctx->RSSetState(RastStateSolid);
-
-        UINT stride = sizeof(GPUVertex); UINT offset = 0;
-        ctx->IASetVertexBuffers(0, 1, &DebugVBuffer, &stride, &offset);
-        ctx->IASetIndexBuffer(DebugIBuffer, DXGI_FORMAT_R32_UINT, 0);
-
-        XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
-        XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
-        XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
-        worldCam = worldCam * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
-
-        CBMatrix cb;
-        cb.HasAnimation = 0;
-
-        float bSize[3] = { bMax[0] - bMin[0], bMax[1] - bMin[1], bMax[2] - bMin[2] };
-        float bCenter[3] = { bMin[0] + bSize[0] * 0.5f, bMin[1] + bSize[1] * 0.5f, bMin[2] + bSize[2] * 0.5f };
-
-        XMMATRIX boxWorld = XMMatrixScaling(bSize[0], bSize[1], bSize[2]) * XMMatrixTranslation(bCenter[0], bCenter[1], bCenter[2]) * worldCam;
-        cb.World = XMMatrixTranspose(boxWorld);
-        cb.WorldViewProj = XMMatrixTranspose(boxWorld * view * proj);
-        cb.Color = XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
-        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
-        ctx->DrawIndexed(DebugBoxIndexCount, 0, 0);
-
-        XMMATRIX sphereScaleTrans = XMMatrixScaling(sRadius, sRadius, sRadius) * XMMatrixTranslation(sCenter[0], sCenter[1], sCenter[2]);
-        cb.Color = XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
-
-        XMMATRIX ring1 = sphereScaleTrans * worldCam;
-        cb.WorldViewProj = XMMatrixTranspose(ring1 * view * proj);
-        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
-        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
-
-        XMMATRIX ring2 = XMMatrixRotationX(XM_PIDIV2) * sphereScaleTrans * worldCam;
-        cb.WorldViewProj = XMMatrixTranspose(ring2 * view * proj);
-        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
-        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
-
-        XMMATRIX ring3 = XMMatrixRotationY(XM_PIDIV2) * sphereScaleTrans * worldCam;
-        cb.WorldViewProj = XMMatrixTranspose(ring3 * view * proj);
-        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
-        ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
-
-        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    }
-
-    bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH) {
+    bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH, bool isPhysics = false) {
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), screenW / screenH, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
-        XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY);
-        world = world * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+        XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+        
+        if (isPhysics) {
+            world = XMMatrixRotationX(-XM_PIDIV2) * world;
+        }
+
         XMMATRIX wvp = world * view * proj;
         XMVECTOR v = XMVectorSet(worldPos.x, worldPos.y, worldPos.z, 1.0f);
         XMVECTOR vClip = XMVector3TransformCoord(v, wvp);

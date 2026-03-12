@@ -588,10 +588,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     g_MeshRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
     if (g_ShowPhysicsOverlay) g_PhysicsOverlayRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
 
-    if (g_BBMParser.IsParsed) {
-        g_MeshRenderer.CamRotX = -XM_PIDIV2; // Standardize physics Y-up orientation
-    }
-
     ID3D11DeviceContext* ctx;
     g_pd3dDevice->GetImmediateContext(&ctx);
 
@@ -602,13 +598,13 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             for (const auto& v : g_BBMParser.Volumes) {
                 std::vector<CPlane> pCnv;
                 for (const auto& pl : v.Planes) pCnv.push_back({ {pl.Normal[0], pl.Normal[1], pl.Normal[2]}, pl.D });
-                g_MeshRenderer.RenderVolumes(ctx, viewportWidth, avail.y, pCnv);
+                g_MeshRenderer.RenderVolumes(ctx, viewportWidth, avail.y, pCnv, true); // Pass True for physics!
             }
         }
         else if (g_ActiveMeshContent.IsParsed) {
             g_MeshRenderer.RenderBounds(ctx, viewportWidth, avail.y, g_ActiveMeshContent.BoundingBoxMin, g_ActiveMeshContent.BoundingBoxMax, g_ActiveMeshContent.BoundingSphereCenter, g_ActiveMeshContent.BoundingSphereRadius);
             for (const auto& v : g_ActiveMeshContent.Volumes) {
-                g_MeshRenderer.RenderVolumes(ctx, viewportWidth, avail.y, v.Planes);
+                g_MeshRenderer.RenderVolumes(ctx, viewportWidth, avail.y, v.Planes, false);
             }
         }
     }
@@ -664,7 +660,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             for (int i = 0; i < g_BBMParser.Helpers.size(); i++) {
                 const auto& h = g_BBMParser.Helpers[i];
                 ImVec2 scrPos;
-                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Position.x, h.Position.y, h.Position.z), scrPos, viewportWidth, avail.y)) {
+                // ADDED `true` to ProjectToScreen!
+                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Position.x, h.Position.y, h.Position.z), scrPos, viewportWidth, avail.y, true)) {
                     scrPos.x += pMin.x; scrPos.y += pMin.y;
                     dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
 
@@ -678,7 +675,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             for (int i = 0; i < g_BBMParser.Dummies.size(); i++) {
                 const auto& d = g_BBMParser.Dummies[i];
                 ImVec2 scrPos;
-                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]), scrPos, viewportWidth, avail.y)) {
+                // ADDED `true` to ProjectToScreen!
+                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]), scrPos, viewportWidth, avail.y, true)) {
                     scrPos.x += pMin.x; scrPos.y += pMin.y;
                     dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
 
@@ -1034,11 +1032,82 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             // --- 5. MATERIALS TAB ---
             if (ImGui::BeginTabItem("Materials")) {
                 if (g_BBMParser.IsParsed) {
+                    auto PackBGRA = [](const ImVec4& c) -> uint32_t {
+                        uint32_t r = (uint32_t)(std::clamp(c.x, 0.0f, 1.0f) * 255.0f) & 0xFF;
+                        uint32_t g = (uint32_t)(std::clamp(c.y, 0.0f, 1.0f) * 255.0f) & 0xFF;
+                        uint32_t b = (uint32_t)(std::clamp(c.z, 0.0f, 1.0f) * 255.0f) & 0xFF;
+                        uint32_t a = (uint32_t)(std::clamp(c.w, 0.0f, 1.0f) * 255.0f) & 0xFF;
+                        return (a << 24) | (r << 16) | (g << 8) | b;
+                        };
+
+                    auto DrawBBMTexRow = [&](const char* label, int& mapID, int matIdx, int type) {
+                        ImGui::AlignTextToFramePadding(); ImGui::Text("%s", label); ImGui::SameLine(130);
+                        ImGui::SetNextItemWidth(80);
+                        std::string idStr = "##bbm_id" + std::to_string(type) + "_" + std::to_string(matIdx);
+                        if (ImGui::InputInt(idStr.c_str(), &mapID, 0, 0)) {
+                            g_MeshUploadNeeded = true;
+                            if (saveCallback) saveCallback();
+                        }
+                        ImGui::SameLine();
+                        std::string btnStr = "+##bbm_btn" + std::to_string(type) + "_" + std::to_string(matIdx);
+                        if (ImGui::Button(btnStr.c_str(), ImVec2(24, 0))) {
+                            g_EditingMaterialIndex = matIdx; g_EditingTextureType = type; g_SelectedTextureID = mapID;
+                            g_TextureSearchBuf[0] = '\0'; g_TriggerTexPopup = true;
+                        }
+                        if (mapID > 0) {
+                            ImGui::SameLine(); ID3D11ShaderResourceView* srv = LoadTextureForMesh(mapID);
+                            if (srv) {
+                                ImGui::Image((void*)srv, ImVec2(24, 24));
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::BeginTooltip(); ImGui::Image((void*)srv, ImVec2(256, 256));
+                                    ImGui::PushTextWrapPos(256.0f); ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", GetTextureNameForMesh(mapID).c_str());
+                                    ImGui::PopTextWrapPos(); ImGui::EndTooltip();
+                                }
+                            }
+                        }
+                        };
+
                     ImGui::BeginChild("BBMMatList", ImVec2(0, 0), true);
                     for (int i = 0; i < g_BBMParser.ParsedMaterials.size(); i++) {
                         auto& m = g_BBMParser.ParsedMaterials[i];
                         if (ImGui::CollapsingHeader(("Material " + std::to_string(m.Index) + " - " + m.Name).c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                            ImGui::TextDisabled("Physics Materials are structural, UI editing mapped to graphic materials.");
+                            ImGui::PushID(i);
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Name"); ImGui::SameLine(130);
+                            char nameBuf[128]; strncpy_s(nameBuf, m.Name.c_str(), 127); ImGui::SetNextItemWidth(200);
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { m.Name = nameBuf; if (saveCallback) saveCallback(); }
+
+                            DrawBBMTexRow("Diffuse", m.DiffuseBank, i, 0);
+                            DrawBBMTexRow("Bump", m.BumpBank, i, 1);
+                            DrawBBMTexRow("Specular", m.ReflectBank, i, 2);
+                            DrawBBMTexRow("Illumination", m.IllumBank, i, 3);
+
+                            ImGui::Separator();
+
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Ambient Color"); ImGui::SameLine(130);
+                            ImVec4 cAmb = UnpackBGRA(m.Ambient);
+                            if (ImGui::ColorEdit4("##Amb", (float*)&cAmb, ImGuiColorEditFlags_NoInputs)) { m.Ambient = PackBGRA(cAmb); if (saveCallback) saveCallback(); }
+
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Diffuse Color"); ImGui::SameLine(130);
+                            ImVec4 cDif = UnpackBGRA(m.Diffuse);
+                            if (ImGui::ColorEdit4("##Dif", (float*)&cDif, ImGuiColorEditFlags_NoInputs)) { m.Diffuse = PackBGRA(cDif); if (saveCallback) saveCallback(); }
+
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Shiny"); ImGui::SameLine(130); ImGui::SetNextItemWidth(120);
+                            if (ImGui::DragFloat("##Shi", &m.Shiny, 0.01f)) { if (saveCallback) saveCallback(); }
+
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Shiny Str"); ImGui::SameLine(130); ImGui::SetNextItemWidth(120);
+                            if (ImGui::DragFloat("##ShiStr", &m.ShinyStrength, 0.01f)) { if (saveCallback) saveCallback(); }
+
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Transparency"); ImGui::SameLine(130); ImGui::SetNextItemWidth(120);
+                            if (ImGui::DragFloat("##Trans", &m.Transparency, 0.01f)) { if (saveCallback) saveCallback(); }
+
+                            ImGui::Dummy(ImVec2(0, 5));
+                            if (ImGui::Checkbox("Two-Sided", &m.TwoSided)) { if (saveCallback) saveCallback(); } ImGui::SameLine();
+                            if (ImGui::Checkbox("Transparent", &m.Transparent)) { if (saveCallback) saveCallback(); }
+                            if (ImGui::Checkbox("Boolean Alpha", &m.BooleanAlpha)) { if (saveCallback) saveCallback(); } ImGui::SameLine();
+                            if (ImGui::Checkbox("Degenerate Tris", &m.DegenerateTriangles)) { if (saveCallback) saveCallback(); }
+
+                            ImGui::PopID();
+                            ImGui::Separator();
                         }
                     }
                     ImGui::EndChild();

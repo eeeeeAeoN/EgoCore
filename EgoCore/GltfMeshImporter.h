@@ -1,3 +1,5 @@
+// --- START OF FILE GltfMeshImporter.h ---
+
 #pragma once
 #include "MeshParser.h"
 #include <string>
@@ -1091,8 +1093,8 @@ namespace GltfMeshImporter {
 
         outBBM = CBBMParser();
         outBBM.IsParsed = true;
-        outBBM.FileVersion = 2;
-        outBBM.FileComment = "Imported Physics Mesh from EgoCore";
+        outBBM.FileVersion = 100; // <--- SYNCHRONIZED VERSION (0x64)
+        outBBM.FileComment = "Copyright Big Blue Box Studios Ltd."; // <--- SYNCHRONIZED FILE COMMENT
         outBBM.PhysicsMaterialIndex = 0;
 
         bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
@@ -1108,10 +1110,17 @@ namespace GltfMeshImporter {
             for (int i = 0; i < matObjs.size(); ++i) {
                 CBBMParser::BBMMaterial m = {};
                 m.Index = i;
-
-                // FIXED: Use ExtractStringClean instead of ExtractStringParam
                 m.Name = ExtractStringClean(matObjs[i], "name");
                 if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
+
+                // --- INJECT FABLE DEFAULTS ---
+                m.Ambient = 0xFFFFFFFF;
+                m.Diffuse = 0xFFFFFFFF;
+                m.Specular = 0xFFFFFFFF;
+                m.Shiny = 0.0f;
+                m.ShinyStrength = 0.0f;
+                m.Transparency = 0.0f;
+                m.TwoSided = true;
 
                 std::string extras = ExtractBlock(matObjs[i], "extras");
                 if (!extras.empty()) {
@@ -1125,15 +1134,17 @@ namespace GltfMeshImporter {
                     m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
                     m.SelfIllumination = (uint32_t)ExtractFloatClean(extras, "SelfIllumination", 0);
                 }
-                else {
-                    m.TwoSided = true;
-                }
                 outBBM.ParsedMaterials.push_back(m);
             }
         }
         else {
             CBBMParser::BBMMaterial defMat = {};
-            defMat.Index = 0; defMat.Name = "DefaultPhysicsMat"; defMat.TwoSided = true;
+            defMat.Index = 0;
+            defMat.Name = "DefaultPhysicsMat";
+            defMat.TwoSided = true;
+            defMat.Ambient = 0xFFFFFFFF;
+            defMat.Diffuse = 0xFFFFFFFF;
+            defMat.Specular = 0xFFFFFFFF;
             outBBM.ParsedMaterials.push_back(defMat);
         }
 
@@ -1210,16 +1221,6 @@ namespace GltfMeshImporter {
                             }
 
                             v.UV.u = 0; v.UV.v = 0; // Physics meshes ignore UVs
-
-                            if (applyBlenderFix) {
-                                float temp_y = v.Position.y;
-                                v.Position.y = -v.Position.z;
-                                v.Position.z = temp_y;
-
-                                float temp_ny = v.Normal.y;
-                                v.Normal.y = -v.Normal.z;
-                                v.Normal.z = temp_ny;
-                            }
 
                             outBBM.ParsedIndices.push_back((uint16_t)FindOrAddVertex(v));
                         }

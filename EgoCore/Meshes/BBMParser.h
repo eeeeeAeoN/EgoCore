@@ -376,17 +376,13 @@ private:
         if (stride >= 12 && vertCount > 0) {
             size_t prevSize = ParsedVertices.size();
             ParsedVertices.reserve(prevSize + vertCount);
-            float* m = LastTransform;
             for (uint32_t i = 0; i < vertCount; i++) {
                 size_t vOffset = cursor + 4 + (i * stride);
                 C3DVertex2 vert = {};
                 if (vOffset + 12 <= end) memcpy(&vert.Position, base + vOffset, 12);
-                if (HasTransform) {
-                    float x = vert.Position.x, y = vert.Position.y, z = vert.Position.z;
-                    vert.Position.x = x * m[0] + y * m[3] + z * m[6] + m[9];
-                    vert.Position.y = x * m[1] + y * m[4] + z * m[7] + m[10];
-                    vert.Position.z = x * m[2] + y * m[5] + z * m[8] + m[11];
-                }
+
+                // DELETED TRFM MULTIPLICATION HERE!
+
                 if (stride >= 24 && vOffset + 24 <= end) memcpy(&vert.Normal, base + vOffset + 12, 12);
                 if (stride >= 32 && vOffset + 32 <= end) memcpy(&vert.UV, base + vOffset + 24, 8);
                 ParsedVertices.push_back(vert);
@@ -435,14 +431,8 @@ private:
         if (h.BoneIndex >= 0) h.BoneIndex += CurrentBoneOffset;
         h.Name = ReadString(base, cursor, nextChunkOffset);
 
-        // Apply TRFM so helpers don't decouple from vertices
-        if (HasTransform) {
-            float x = h.Position.x, y = h.Position.y, z = h.Position.z;
-            float* m = LastTransform;
-            h.Position.x = x * m[0] + y * m[3] + z * m[6] + m[9];
-            h.Position.y = x * m[1] + y * m[4] + z * m[7] + m[10];
-            h.Position.z = x * m[2] + y * m[5] + z * m[8] + m[11];
-        }
+        // DELETED TRFM MULTIPLICATION HERE!
+
         Helpers.push_back(h);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
     }
@@ -462,19 +452,8 @@ private:
             d.Name = ReadString(base, cursor, nextChunkOffset);
         }
 
-        // Apply TRFM to Dummies
-        if (HasTransform) {
-            float x = d.Position.x, y = d.Position.y, z = d.Position.z;
-            float* m = LastTransform;
-            d.Position.x = x * m[0] + y * m[3] + z * m[6] + m[9];
-            d.Position.y = x * m[1] + y * m[4] + z * m[7] + m[10];
-            d.Position.z = x * m[2] + y * m[5] + z * m[8] + m[11];
+        // DELETED TRFM MULTIPLICATION HERE!
 
-            float dx = d.Transform[9], dy = d.Transform[10], dz = d.Transform[11];
-            d.Transform[9] = dx * m[0] + dy * m[3] + dz * m[6] + m[9];
-            d.Transform[10] = dx * m[1] + dy * m[4] + dz * m[7] + m[10];
-            d.Transform[11] = dx * m[2] + dy * m[5] + dz * m[8] + m[11];
-        }
         Dummies.push_back(d);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
     }
