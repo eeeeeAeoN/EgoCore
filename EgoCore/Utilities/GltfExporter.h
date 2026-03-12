@@ -753,17 +753,31 @@ namespace GltfExporter {
         }
 
         if (!bbm.Bones.empty()) {
-            tempMesh.BoneCount = (int32_t)bbm.Bones.size(); tempMesh.Bones.resize(tempMesh.BoneCount); tempMesh.BoneIndices.resize(tempMesh.BoneCount); tempMesh.BoneTransformsRaw.resize(tempMesh.BoneCount * 64);
+            tempMesh.BoneCount = (int32_t)bbm.Bones.size();
+            tempMesh.Bones.resize(tempMesh.BoneCount);
+            tempMesh.BoneIndices.resize(tempMesh.BoneCount);
+            tempMesh.BoneTransformsRaw.resize(tempMesh.BoneCount * 64);
+
             for (size_t i = 0; i < bbm.Bones.size(); i++) {
                 const auto& src = bbm.Bones[i]; C3DBone& dst = tempMesh.Bones[i];
                 dst.NameCRC = 0; dst.ParentIndex = src.ParentIndex; dst.OriginalNoChildren = 0;
                 memcpy(dst.LocalizationMatrix, src.LocalTransform, 48);
-                tempMesh.BoneNames.push_back(src.Name); tempMesh.BoneIndices[i] = (uint16_t)src.Index;
+                tempMesh.BoneNames.push_back(src.Name);
+                tempMesh.BoneIndices[i] = (uint16_t)src.Index;
+
+                // FIX: BBM stores World Matrices. C3DMeshContent expects Inverse Bind Matrices (IBM).
+                // Convert the 4x3 World Matrix to a 4x4, invert it to IBM, and save it for glTF!
+                Mat4 worldMat = Identity();
+                worldMat.m[0] = src.LocalTransform[0]; worldMat.m[1] = src.LocalTransform[1]; worldMat.m[2] = src.LocalTransform[2];
+                worldMat.m[4] = src.LocalTransform[3]; worldMat.m[5] = src.LocalTransform[4]; worldMat.m[6] = src.LocalTransform[5];
+                worldMat.m[8] = src.LocalTransform[6]; worldMat.m[9] = src.LocalTransform[7]; worldMat.m[10] = src.LocalTransform[8];
+                worldMat.m[12] = src.LocalTransform[9]; worldMat.m[13] = src.LocalTransform[10]; worldMat.m[14] = src.LocalTransform[11];
+
+                Mat4 ibm;
+                if (!Invert(worldMat, ibm)) ibm = Identity();
+
                 float* dstMat = (float*)(tempMesh.BoneTransformsRaw.data() + (i * 64));
-                dstMat[0] = src.LocalTransform[0]; dstMat[1] = src.LocalTransform[1]; dstMat[2] = src.LocalTransform[2]; dstMat[3] = 0.0f;
-                dstMat[4] = src.LocalTransform[3]; dstMat[5] = src.LocalTransform[4]; dstMat[6] = src.LocalTransform[5]; dstMat[7] = 0.0f;
-                dstMat[8] = src.LocalTransform[6]; dstMat[9] = src.LocalTransform[7]; dstMat[10] = src.LocalTransform[8]; dstMat[11] = 0.0f;
-                dstMat[12] = src.LocalTransform[9]; dstMat[13] = src.LocalTransform[10]; dstMat[14] = src.LocalTransform[11]; dstMat[15] = 1.0f;
+                memcpy(dstMat, ibm.m, 64);
             }
         }
 
@@ -785,7 +799,7 @@ namespace GltfExporter {
             if (h.SubMeshIndex != -1) exportName += "_Sub" + std::to_string(h.SubMeshIndex);
 
             CHelperPoint hp = {};
-            hp.NameCRC = CalculateFableCRC(exportName); // Hash the string to get the real CRC
+            hp.NameCRC = CalculateFableCRC(exportName);
             hp.BoneIndex = h.BoneIndex;
             hp.Pos[0] = h.Position.x; hp.Pos[1] = h.Position.y; hp.Pos[2] = h.Position.z;
 
@@ -800,16 +814,20 @@ namespace GltfExporter {
             if (d.UseLocalOrigin) exportName += "_LOC";
 
             CDummyObject dum = {};
-            dum.NameCRC = CalculateFableCRC(exportName); // Hash the string to get the real CRC
+            dum.NameCRC = CalculateFableCRC(exportName);
             dum.BoneIndex = d.BoneIndex;
             memcpy(dum.Transform, d.Transform, 48);
+
+            // FIX: Sync explicit BBM Position to the translation row of the matrix for glTF!
+            dum.Transform[9] = d.Position.x;
+            dum.Transform[10] = d.Position.y;
+            dum.Transform[11] = d.Position.z;
 
             tempMesh.Dummies.push_back(dum);
             tempDummyNames.push_back(exportName);
         }
         tempMesh.DummyObjectCount = (uint16_t)tempMesh.Dummies.size();
 
-        // Pack the names into the temporary mesh's CRC map so Export() can read them!
         tempMesh.PackNames(tempHelperNames, tempDummyNames);
         tempMesh.UnpackNames();
 

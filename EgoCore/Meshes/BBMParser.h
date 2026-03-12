@@ -143,10 +143,20 @@ public:
         size_t c = 0;
         size_t end = data.size();
 
-        uint32_t magic = 0; Read(data, c, magic);
-        std::string fileType = ReadStringFixed(data, c, 4);
-        Read(data, c, FileVersion);
-        FileComment = ReadString(data, c, end);
+        // FIX: Strictly detect Fable's native "3DMF" start offset
+        std::string magic = ReadStringFixed(data, c, 4);
+        if (magic == "3DMF") {
+            Read(data, c, FileVersion);
+            FileComment = ReadString(data, c, end);
+        }
+        else {
+            // Fallback for custom ego-core generated headers
+            c = 0;
+            uint32_t tempMagic = 0; Read(data, c, tempMagic);
+            std::string fileType = ReadStringFixed(data, c, 4);
+            Read(data, c, FileVersion);
+            FileComment = ReadString(data, c, end);
+        }
         Align(c);
 
         DebugInfo += "Version: " + std::to_string(FileVersion) + "\n";

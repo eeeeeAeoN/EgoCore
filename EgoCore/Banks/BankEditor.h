@@ -417,14 +417,49 @@ inline void CreateNewAnimationEntry(LoadedBank* bank, const std::string& gltfPat
 inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, int type, int reps) {
     if (!bank) return false;
 
-    C3DMeshContent newMesh;
-    std::string err;
-
     std::string fname = std::filesystem::path(gltfPath).stem().string();
     std::transform(fname.begin(), fname.end(), fname.begin(), ::toupper);
 
+    uint32_t newID = GetNextFreeID(bank);
+    BankEntry be;
+    be.ID = newID;
+    be.Type = type;
+    be.Name = fname;
+    be.FriendlyName = fname;
+    be.Size = 0;
+    be.InfoSize = 0;
+    be.Offset = 0;
+    be.Timestamp = 0;
+
+    // --- HANDLE PHYSICS MESH (TYPE 3) ---
+    if (type == 3) {
+        CBBMParser newBBM;
+        std::string err = GltfMeshImporter::ImportType3(gltfPath, fname, newBBM);
+        if (!err.empty()) {
+            g_ShowSuccessPopup = true;
+            g_SuccessMessage = "Import Error: " + err;
+            return false;
+        }
+        bank->Entries.push_back(be);
+        int newIndex = (int)bank->Entries.size() - 1;
+
+        StagedEntry staged;
+        staged.Physics = std::make_shared<CBBMParser>(newBBM); // DEFERRED TO RAM
+        bank->StagedEntries[newIndex] = staged;
+
+        bank->FilterText[0] = '\0';
+        UpdateFilter(*bank);
+        SelectEntry(bank, newIndex);
+        return true;
+    }
+
+    // --- HANDLE GRAPHICS MESHES (TYPES 1, 2, 4) ---
+    C3DMeshContent newMesh;
+    std::string err;
+
     if (type == 1) err = GltfMeshImporter::ImportType1(gltfPath, fname, newMesh);
     else if (type == 2) err = GltfMeshImporter::ImportType2(gltfPath, fname, newMesh, reps);
+    else if (type == 4) err = GltfMeshImporter::ImportType4(gltfPath, fname, newMesh);
 
     if (!err.empty()) {
         g_ShowSuccessPopup = true;
@@ -436,27 +471,14 @@ inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, in
     newMesh.EntryMeta.LODCount = 1;
     newMesh.EntryMeta.LODErrors.clear();
 
-    uint32_t newID = GetNextFreeID(bank);
-    BankEntry be;
-    be.ID = newID;
-    be.Type = type;
-    be.Name = fname;
-    be.FriendlyName = fname;
-    be.Size = 0;      // Computed during flush
-    be.InfoSize = 0;  // Computed during flush
-    be.Offset = 0;
-    be.Timestamp = 0;
-
     bank->Entries.push_back(be);
     int newIndex = (int)bank->Entries.size() - 1;
 
-    // --- DEFERRED STAGING ---
     StagedEntry staged;
     staged.MeshLODs.push_back(std::make_shared<C3DMeshContent>(newMesh));
     staged.MeshMeta = newMesh.EntryMeta;
 
     bank->StagedEntries[newIndex] = staged;
-
     bank->FilterText[0] = '\0';
     UpdateFilter(*bank);
     SelectEntry(bank, newIndex);
@@ -739,16 +761,15 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             e.InfoSize = (uint32_t)newInfo.size();
         }
         else if (staged.Physics) {
-            // Note: Physics to LZO compiler doesn't exist yet, but when it does, it goes here!
-            // For now, we fallback to whatever was already in CurrentEntryRawData
-            newBytes = bank->CurrentEntryRawData;
-            e.InfoSize = 0;
+            newBytes = MeshCompiler::CompilePhysics(*staged.Physics);
+            e.InfoSize = 0; // The Engine generates BVH/Partition trees natively on load!
+            e.Type = TYPE_STATIC_PHYSICS_MESH;
         }
         else if (staged.Texture) {
             TextureBuilder::ImportOptions opts;
             opts.Format = staged.Texture->TargetFormat;
             opts.GenerateMipmaps = true;
-
+            
             int w = staged.Texture->Header.Width ? staged.Texture->Header.Width : staged.Texture->Header.FrameWidth;
             int h = staged.Texture->Header.Height ? staged.Texture->Header.Height : staged.Texture->Header.FrameHeight;
 

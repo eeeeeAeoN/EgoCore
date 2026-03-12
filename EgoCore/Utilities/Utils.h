@@ -517,3 +517,20 @@ inline std::vector<uint8_t> CompressFableBlock(const uint8_t* src, uint32_t src_
 
     return result;
 }
+
+inline std::vector<uint8_t> CompressLZORaw(const uint8_t* src, uint32_t src_len) {
+    if (src_len == 0) return {};
+    std::vector<lzo_align_t> wrkmem(LZO1X_1_MEM_COMPRESS / sizeof(lzo_align_t) + 1);
+
+    // MiniLZO safety buffer calculation
+    std::vector<uint8_t> comp_buf(src_len + (src_len / 16) + 64 + 3);
+    lzo_uint out_len = 0;
+
+    int r = lzo1x_1_compress(src, src_len, comp_buf.data(), &out_len, wrkmem.data());
+
+    if (r == LZO_E_OK) {
+        comp_buf.resize(out_len);
+        return comp_buf;
+    }
+    return {};
+}

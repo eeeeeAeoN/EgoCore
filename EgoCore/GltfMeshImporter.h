@@ -343,8 +343,35 @@ namespace GltfMeshImporter {
 
         outMesh = C3DMeshContent();
         outMesh.MeshName = originalName;
-        outMesh.MeshType = 1; // Type 1 Static Mesh
-        outMesh.AnimatedFlag = 0;
+        outMesh.MeshType = 1;
+        outMesh.AnimatedFlag = 0; // Strictly Static
+
+        // TARGETED BLENDER FIX:
+        // EgoCore writes an artificial 'Scene_Root' to make Z-up meshes look Y-up in viewers.
+        // Blender "helpfully" bakes this coordinate conversion permanently into the binary vertex buffer, 
+        // physically swapping Y and Z, but it leaves the local helper/bone translations completely alone!
+        // This is why complex matrix multiplication broke your helpers. We just need to un-swap the vertices.
+        bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
+        bool hasSceneRoot = json.find("\"name\":\"Scene_Root\"") != std::string::npos || json.find("\"name\": \"Scene_Root\"") != std::string::npos;
+        bool applyBlenderFix = isBlender && hasSceneRoot;
+
+        memset(outMesh.RootMatrix, 0, 48);
+        outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
+
+        std::string nodesBlock = ExtractBlock(json, "nodes");
+        std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
+        for (const auto& node : nodeObjs) {
+            if (ExtractStringClean(node, "name") == "Scene_Root") {
+                std::vector<float> mat = ExtractFloatArray(node, "matrix");
+                if (mat.size() >= 16) {
+                    outMesh.RootMatrix[0] = mat[0]; outMesh.RootMatrix[1] = mat[1]; outMesh.RootMatrix[2] = mat[2];
+                    outMesh.RootMatrix[3] = mat[4]; outMesh.RootMatrix[4] = mat[5]; outMesh.RootMatrix[5] = mat[6];
+                    outMesh.RootMatrix[6] = mat[8]; outMesh.RootMatrix[7] = mat[9]; outMesh.RootMatrix[8] = mat[10];
+                    outMesh.RootMatrix[9] = mat[12]; outMesh.RootMatrix[10] = mat[13]; outMesh.RootMatrix[11] = mat[14];
+                }
+                break;
+            }
+        }
 
         std::vector<std::string> viewObjs = SplitArray(ExtractBlock(json, "bufferViews"));
         struct BV { int offset, length; }; std::vector<BV> views;
@@ -360,9 +387,7 @@ namespace GltfMeshImporter {
         outMesh.Materials.clear();
         if (!matObjs.empty()) {
             for (int i = 0; i < matObjs.size(); ++i) {
-                C3DMaterial m = {};
-                m.ID = i;
-                m.Name = ExtractString(matObjs[i], "name");
+                C3DMaterial m = {}; m.ID = i; m.Name = ExtractString(matObjs[i], "name");
                 if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
 
                 std::string extras = ExtractBlock(matObjs[i], "extras");
@@ -377,9 +402,7 @@ namespace GltfMeshImporter {
                     m.BooleanAlpha = ExtractBool(extras, "BooleanAlpha", false);
                     m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
                 }
-                else {
-                    m.IsTwoSided = true; m.IsTransparent = false;
-                }
+                else { m.IsTwoSided = true; m.IsTransparent = false; }
                 outMesh.Materials.push_back(m);
             }
         }
@@ -392,34 +415,22 @@ namespace GltfMeshImporter {
         std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
         if (meshObjs.empty()) return "No meshes found in glTF.";
 
-        for (const auto& meshObj : meshObjs) {
+        for (int mIdx = 0; mIdx < meshObjs.size(); mIdx++) {
+            const auto& meshObj = meshObjs[mIdx];
             std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
             if (primObjs.empty()) continue;
 
             C3DPrimitive outPrim = {};
-            outPrim.InitFlags = 4;       
-            outPrim.IsCompressed = true;  
-            outPrim.VertexStride = 24;    
+            outPrim.InitFlags = 4;
+            outPrim.IsCompressed = true;
             outPrim.BufferType = 0;
+            outPrim.VertexStride = 24;
             outPrim.MaterialIndex = -1;
 
             struct BaseVertex { float p[3], n[3], u[2]; };
             std::vector<BaseVertex> uniqueVerts;
             std::vector<uint32_t> mergedBaseIndices;
             std::vector<CStaticBlock> baseBlocks;
-
-            auto FindOrAddVertex = [&](const BaseVertex& v) -> uint32_t {
-                for (size_t i = 0; i < uniqueVerts.size(); ++i) {
-                    const auto& uv = uniqueVerts[i];
-                    if (std::abs(uv.p[0] - v.p[0]) < 0.002f && std::abs(uv.p[1] - v.p[1]) < 0.002f && std::abs(uv.p[2] - v.p[2]) < 0.002f &&
-                        std::abs(uv.n[0] - v.n[0]) < 0.01f && std::abs(uv.n[1] - v.n[1]) < 0.01f && std::abs(uv.n[2] - v.n[2]) < 0.01f &&
-                        std::abs(uv.u[0] - v.u[0]) < 0.002f && std::abs(uv.u[1] - v.u[1]) < 0.002f) {
-                        return (uint32_t)i;
-                    }
-                }
-                uniqueVerts.push_back(v);
-                return (uint32_t)(uniqueVerts.size() - 1);
-                };
 
             for (const auto& pObj : primObjs) {
                 int matIdx = (int)ExtractFloatClean(pObj, "material", 0);
@@ -433,6 +444,19 @@ namespace GltfMeshImporter {
                 int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
 
                 if (posAccIdx < 0 || indAccIdx < 0) continue;
+
+                auto FindOrAddVertex = [&](const BaseVertex& v) -> uint32_t {
+                    for (size_t i = 0; i < uniqueVerts.size(); ++i) {
+                        const auto& uv = uniqueVerts[i];
+                        if (std::abs(uv.p[0] - v.p[0]) < 0.002f && std::abs(uv.p[1] - v.p[1]) < 0.002f && std::abs(uv.p[2] - v.p[2]) < 0.002f &&
+                            std::abs(uv.n[0] - v.n[0]) < 0.01f && std::abs(uv.n[1] - v.n[1]) < 0.01f && std::abs(uv.n[2] - v.n[2]) < 0.01f &&
+                            std::abs(uv.u[0] - v.u[0]) < 0.002f && std::abs(uv.u[1] - v.u[1]) < 0.002f) {
+                            return (uint32_t)i;
+                        }
+                    }
+                    uniqueVerts.push_back(v);
+                    return (uint32_t)(uniqueVerts.size() - 1);
+                    };
 
                 Acc posAcc = accessors[posAccIdx];
                 Acc iAcc = accessors[indAccIdx];
@@ -453,8 +477,7 @@ namespace GltfMeshImporter {
                         return 0xFFFFFFFF;
                         };
 
-                    // Swapped glTF indices to fix Fable's Clockwise Winding!
-                    uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) };
+                    uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) }; // Swap winding for Fable
 
                     for (int j = 0; j < 3; j++) {
                         uint32_t vIdx = idxs[j];
@@ -468,6 +491,17 @@ namespace GltfMeshImporter {
                         if (uData) { v.u[0] = uData[vIdx * 2]; v.u[1] = uData[vIdx * 2 + 1]; }
                         else { v.u[0] = 0; v.u[1] = 0; }
 
+                        // ONLY apply fix if Blender baked the rotation into the binary buffer
+                        if (applyBlenderFix) {
+                            float temp_y = v.p[1];
+                            v.p[1] = -v.p[2];
+                            v.p[2] = temp_y;
+
+                            float temp_ny = v.n[1];
+                            v.n[1] = -v.n[2];
+                            v.n[2] = temp_ny;
+                        }
+
                         mergedBaseIndices.push_back(FindOrAddVertex(v));
                     }
                 }
@@ -477,7 +511,6 @@ namespace GltfMeshImporter {
                     sb.PrimitiveCount = iAcc.count / 3;
                     sb.StartIndex = startIdx;
                     sb.MaterialIndex = matIdx;
-                    sb.IsStrip = false;
                     baseBlocks.push_back(sb);
                 }
             }
@@ -486,8 +519,7 @@ namespace GltfMeshImporter {
             if (baseVertCount == 0) continue;
             if (baseVertCount > 65535) return "Import Error: Vertex overflow. Fable limit is 65,535.";
 
-            float minP[3] = { 1e9f, 1e9f, 1e9f };
-            float maxP[3] = { -1e9f, -1e9f, -1e9f };
+            float minP[3] = { 1e9f, 1e9f, 1e9f }; float maxP[3] = { -1e9f, -1e9f, -1e9f };
             for (const auto& v : uniqueVerts) {
                 for (int j = 0; j < 3; j++) {
                     if (v.p[j] < minP[j]) minP[j] = v.p[j];
@@ -500,9 +532,8 @@ namespace GltfMeshImporter {
                 if (outPrim.Compression.Scale[j] < 0.0001f) outPrim.Compression.Scale[j] = 0.0001f;
             }
 
-            // EXACT 24-BYTE PACKING
             outPrim.VertexCount = baseVertCount;
-            outPrim.VertexBuffer.resize(baseVertCount * 24, 0);
+            outPrim.VertexBuffer.resize(baseVertCount * outPrim.VertexStride, 0);
             uint8_t* vDest = outPrim.VertexBuffer.data();
 
             for (uint32_t v = 0; v < baseVertCount; v++) {
@@ -516,7 +547,7 @@ namespace GltfMeshImporter {
                 memcpy(vDest + 8, &compU, 2);
                 memcpy(vDest + 10, &compV, 2);
 
-                vDest += 24;
+                vDest += outPrim.VertexStride;
             }
 
             outPrim.IndexCount = (uint32_t)mergedBaseIndices.size();
@@ -531,12 +562,12 @@ namespace GltfMeshImporter {
             outMesh.Primitives.push_back(outPrim);
         }
 
-        ParseNodes(json, outMesh);
+        ParseNodes(json, outMesh); // Helpers are parsed directly from local JSON translates
 
         outMesh.PrimitiveCount = (int32_t)outMesh.Primitives.size();
         outMesh.AutoCalculateBounds();
         outMesh.IsParsed = true;
-        outMesh.DebugStatus = "Successfully Synthesized Type 1 Static Mesh";
+        outMesh.DebugStatus = "Successfully Synthesized Pure Static Mesh with Targeted Blender Fix";
 
         return "";
     }
@@ -761,6 +792,497 @@ namespace GltfMeshImporter {
         outMesh.AutoCalculateBounds();
         outMesh.IsParsed = true;
         outMesh.DebugStatus = "Successfully Synthesized Type 2 Mesh";
+
+        return "";
+    }
+
+    struct Mat4 { float m[16]; };
+
+    static Mat4 Identity() { return { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }; }
+
+    static Mat4 TransformToMat4(const std::vector<float>& t, const std::vector<float>& r, const std::vector<float>& s) {
+        Mat4 m = Identity();
+        float tx = t.size() >= 3 ? t[0] : 0, ty = t.size() >= 3 ? t[1] : 0, tz = t.size() >= 3 ? t[2] : 0;
+        float qx = r.size() >= 4 ? r[0] : 0, qy = r.size() >= 4 ? r[1] : 0, qz = r.size() >= 4 ? r[2] : 0, qw = r.size() >= 4 ? r[3] : 1;
+        float sx = s.size() >= 3 ? s[0] : 1, sy = s.size() >= 3 ? s[1] : 1, sz = s.size() >= 3 ? s[2] : 1;
+
+        float xx = qx * qx, yy = qy * qy, zz = qz * qz;
+        float xy = qx * qy, xz = qx * qz, yz = qy * qz;
+        float wx = qw * qx, wy = qw * qy, wz = qw * qz;
+
+        m.m[0] = (1.0f - 2.0f * (yy + zz)) * sx; m.m[1] = (2.0f * (xy + wz)) * sx;       m.m[2] = (2.0f * (xz - wy)) * sx;
+        m.m[4] = (2.0f * (xy - wz)) * sy;       m.m[5] = (1.0f - 2.0f * (xx + zz)) * sy; m.m[6] = (2.0f * (yz + wx)) * sy;
+        m.m[8] = (2.0f * (xz + wy)) * sz;       m.m[9] = (2.0f * (yz - wx)) * sz;       m.m[10] = (1.0f - 2.0f * (xx + yy)) * sz;
+        m.m[12] = tx; m.m[13] = ty; m.m[14] = tz;
+        return m;
+    }
+
+    static std::string ImportType4(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh) {
+        std::ifstream file(gltfPath);
+        if (!file.is_open()) return "Could not open glTF file.";
+        std::stringstream buffer; buffer << file.rdbuf();
+        std::string json = buffer.str();
+
+        std::string binPath = gltfPath.substr(0, gltfPath.find_last_of('.')) + ".bin";
+        std::ifstream binFile(binPath, std::ios::binary | std::ios::ate);
+        if (!binFile.is_open()) return "Could not open associated .bin file.";
+        std::streamsize size = binFile.tellg();
+        binFile.seekg(0, std::ios::beg);
+        std::vector<uint8_t> binData((size_t)size);
+        if (!binFile.read((char*)binData.data(), size)) return "Failed to read .bin data.";
+
+        outMesh = C3DMeshContent();
+        outMesh.MeshName = originalName;
+        outMesh.MeshType = 4; // Type 4 Particle Mesh
+        outMesh.AnimatedFlag = 0;
+
+        memset(outMesh.RootMatrix, 0, 48);
+        outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
+
+        auto GetJsonFloatArray = [](const std::string& j, const std::string& key) -> std::vector<float> {
+            std::vector<float> res; size_t pos = j.find("\"" + key + "\""); if (pos == std::string::npos) return res;
+            pos = j.find(':', pos); if (pos == std::string::npos) return res; pos = j.find('[', pos); if (pos == std::string::npos) return res;
+            size_t end = j.find(']', pos); if (end == std::string::npos) return res;
+            std::string arr = j.substr(pos + 1, end - pos - 1);
+            for (char& c : arr) if (c == ',' || c == '\n' || c == '\r' || c == '\t') c = ' ';
+            std::stringstream ss(arr); float f; while (ss >> f) res.push_back(f);
+            return res;
+            };
+
+        auto ExtractStringParam = [](const std::string& json, const std::string& key) -> std::string {
+            size_t pos = json.find("\"" + key + "\"");
+            if (pos == std::string::npos) return "";
+            pos = json.find(':', pos);
+            if (pos == std::string::npos) return "";
+            pos = json.find('\"', pos);
+            if (pos == std::string::npos) return "";
+            size_t end = json.find('\"', pos + 1);
+            if (end == std::string::npos) return "";
+            return json.substr(pos + 1, end - pos - 1);
+            };
+
+        // Parse Root Node Matrix directly from either Matrix array or Rotation Quaternion!
+        std::string nodesBlock = ExtractBlock(json, "nodes");
+        std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
+        for (const auto& node : nodeObjs) {
+            std::string nName = ExtractStringParam(node, "name");
+            if (nName == "Scene_Root" || nName == "Scene Root") {
+                std::vector<float> mat = GetJsonFloatArray(node, "matrix");
+                if (mat.size() >= 16) {
+                    outMesh.RootMatrix[0] = mat[0]; outMesh.RootMatrix[1] = mat[1]; outMesh.RootMatrix[2] = mat[2];
+                    outMesh.RootMatrix[3] = mat[4]; outMesh.RootMatrix[4] = mat[5]; outMesh.RootMatrix[5] = mat[6];
+                    outMesh.RootMatrix[6] = mat[8]; outMesh.RootMatrix[7] = mat[9]; outMesh.RootMatrix[8] = mat[10];
+                    outMesh.RootMatrix[9] = mat[12]; outMesh.RootMatrix[10] = mat[13]; outMesh.RootMatrix[11] = mat[14];
+                }
+                else {
+                    std::vector<float> t = GetJsonFloatArray(node, "translation");
+                    std::vector<float> r = GetJsonFloatArray(node, "rotation");
+                    std::vector<float> s = GetJsonFloatArray(node, "scale");
+                    Mat4 rMat = TransformToMat4(t, r, s);
+
+                    // Assign the calculated 4x4 matrix to Fable's 4x3 RootMatrix format
+                    outMesh.RootMatrix[0] = rMat.m[0]; outMesh.RootMatrix[1] = rMat.m[1]; outMesh.RootMatrix[2] = rMat.m[2];
+                    outMesh.RootMatrix[3] = rMat.m[4]; outMesh.RootMatrix[4] = rMat.m[5]; outMesh.RootMatrix[5] = rMat.m[6];
+                    outMesh.RootMatrix[6] = rMat.m[8]; outMesh.RootMatrix[7] = rMat.m[9]; outMesh.RootMatrix[8] = rMat.m[10];
+                    outMesh.RootMatrix[9] = rMat.m[12]; outMesh.RootMatrix[10] = rMat.m[13]; outMesh.RootMatrix[11] = rMat.m[14];
+                }
+                break;
+            }
+        }
+
+        std::vector<std::string> viewObjs = SplitArray(ExtractBlock(json, "bufferViews"));
+        struct BV { int offset, length; }; std::vector<BV> views;
+        for (const auto& v : viewObjs) views.push_back({ (int)ExtractFloatClean(v, "byteOffset", 0), (int)ExtractFloatClean(v, "byteLength", 0) });
+
+        std::vector<std::string> accObjs = SplitArray(ExtractBlock(json, "accessors"));
+        struct Acc { int view, offset, count, compType; }; std::vector<Acc> accessors;
+        for (const auto& a : accObjs) accessors.push_back({ (int)ExtractFloatClean(a, "bufferView", 0), (int)ExtractFloatClean(a, "byteOffset", 0), (int)ExtractFloatClean(a, "count", 0), (int)ExtractFloatClean(a, "componentType", 0) });
+
+        std::string materialsBlock = ExtractBlock(json, "materials");
+        std::vector<std::string> matObjs = SplitArray(materialsBlock);
+
+        outMesh.Materials.clear();
+        if (!matObjs.empty()) {
+            for (int i = 0; i < matObjs.size(); ++i) {
+                C3DMaterial m = {}; m.ID = i; m.Name = ExtractStringParam(matObjs[i], "name");
+                if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
+                std::string extras = ExtractBlock(matObjs[i], "extras");
+                if (!extras.empty()) {
+                    m.DiffuseMapID = (int)ExtractFloatClean(extras, "DiffuseMapID", 0);
+                    m.BumpMapID = (int)ExtractFloatClean(extras, "BumpMapID", 0);
+                    m.ReflectionMapID = (int)ExtractFloatClean(extras, "ReflectionMapID", 0);
+                    m.IlluminationMapID = (int)ExtractFloatClean(extras, "IlluminationMapID", 0);
+                    m.MapFlags = (int)ExtractFloatClean(extras, "MapFlags", 0);
+                    m.IsTwoSided = ExtractBool(extras, "IsTwoSided", true);
+                    m.IsTransparent = ExtractBool(extras, "IsTransparent", false);
+                    m.BooleanAlpha = ExtractBool(extras, "BooleanAlpha", false);
+                    m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
+                }
+                else { m.IsTwoSided = true; m.IsTransparent = false; }
+                outMesh.Materials.push_back(m);
+            }
+        }
+        else {
+            C3DMaterial defMat = {}; defMat.ID = 0; defMat.Name = "Default_Material"; defMat.IsTwoSided = true;
+            outMesh.Materials.push_back(defMat);
+        }
+        outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
+
+        std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
+        if (meshObjs.empty()) return "No meshes found in glTF.";
+
+        for (int mIdx = 0; mIdx < meshObjs.size(); mIdx++) {
+            const auto& meshObj = meshObjs[mIdx];
+            std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
+            if (primObjs.empty()) continue;
+
+            C3DPrimitive outPrim = {};
+            outPrim.InitFlags = 0;
+            outPrim.IsCompressed = false;
+            outPrim.BufferType = 0;
+            outPrim.VertexStride = 32;    // Back to 32 bytes for Fable's floats!
+            outPrim.MaterialIndex = -1;
+
+            struct BaseVertex { float p[3], n[3], u[2]; };
+            std::vector<BaseVertex> uniqueVerts;
+            std::vector<uint32_t> mergedBaseIndices;
+            std::vector<CStaticBlock> baseBlocks;
+
+            for (const auto& pObj : primObjs) {
+                int matIdx = (int)ExtractFloatClean(pObj, "material", 0);
+                if (matIdx < 0 || matIdx >= outMesh.MaterialCount) matIdx = 0;
+                if (outPrim.MaterialIndex == -1) outPrim.MaterialIndex = matIdx;
+
+                std::string attr = ExtractBlock(pObj, "attributes");
+                int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
+                int normAccIdx = (int)ExtractFloatClean(attr, "NORMAL", -1);
+                int uvAccIdx = (int)ExtractFloatClean(attr, "TEXCOORD_0", -1);
+                int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
+
+                if (posAccIdx < 0 || indAccIdx < 0) continue;
+
+                auto FindOrAddVertex = [&](const BaseVertex& v) -> uint32_t {
+                    for (size_t i = 0; i < uniqueVerts.size(); ++i) {
+                        const auto& uv = uniqueVerts[i];
+                        if (std::abs(uv.p[0] - v.p[0]) < 0.002f && std::abs(uv.p[1] - v.p[1]) < 0.002f && std::abs(uv.p[2] - v.p[2]) < 0.002f &&
+                            std::abs(uv.n[0] - v.n[0]) < 0.01f && std::abs(uv.n[1] - v.n[1]) < 0.01f && std::abs(uv.n[2] - v.n[2]) < 0.01f &&
+                            std::abs(uv.u[0] - v.u[0]) < 0.002f && std::abs(uv.u[1] - v.u[1]) < 0.002f) {
+                            return (uint32_t)i;
+                        }
+                    }
+                    uniqueVerts.push_back(v);
+                    return (uint32_t)(uniqueVerts.size() - 1);
+                    };
+
+                Acc posAcc = accessors[posAccIdx];
+                Acc iAcc = accessors[indAccIdx];
+
+                float* pData = (float*)(binData.data() + views[posAcc.view].offset + posAcc.offset);
+                float* nData = normAccIdx >= 0 ? (float*)(binData.data() + views[accessors[normAccIdx].view].offset + accessors[normAccIdx].offset) : nullptr;
+                float* uData = uvAccIdx >= 0 ? (float*)(binData.data() + views[accessors[uvAccIdx].view].offset + accessors[uvAccIdx].offset) : nullptr;
+                uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
+
+                uint32_t startIdx = (uint32_t)mergedBaseIndices.size();
+
+                for (int i = 0; i < iAcc.count; i += 3) {
+                    auto getVIdx = [&](int offset) -> uint32_t {
+                        if (i + offset >= iAcc.count) return 0xFFFFFFFF;
+                        if (iAcc.compType == 5121) return iData[i + offset];
+                        if (iAcc.compType == 5123) return ((uint16_t*)iData)[i + offset];
+                        if (iAcc.compType == 5125) return ((uint32_t*)iData)[i + offset];
+                        return 0xFFFFFFFF;
+                        };
+
+                    uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) }; // Swap winding
+
+                    for (int j = 0; j < 3; j++) {
+                        uint32_t vIdx = idxs[j];
+                        if (vIdx >= posAcc.count || vIdx == 0xFFFFFFFF) continue;
+
+                        BaseVertex v = {};
+                        v.p[0] = pData[vIdx * 3]; v.p[1] = pData[vIdx * 3 + 1]; v.p[2] = pData[vIdx * 3 + 2];
+                        if (nData) { v.n[0] = nData[vIdx * 3]; v.n[1] = nData[vIdx * 3 + 1]; v.n[2] = nData[vIdx * 3 + 2]; }
+                        else { v.n[0] = 0; v.n[1] = 1; v.n[2] = 0; }
+
+                        if (uData) { v.u[0] = uData[vIdx * 2]; v.u[1] = uData[vIdx * 2 + 1]; }
+                        else { v.u[0] = 0; v.u[1] = 0; }
+
+                        mergedBaseIndices.push_back(FindOrAddVertex(v));
+                    }
+                }
+
+                if (iAcc.count > 0) {
+                    CStaticBlock sb = {};
+                    sb.PrimitiveCount = iAcc.count / 3;
+                    sb.StartIndex = startIdx;
+                    sb.MaterialIndex = matIdx;
+                    baseBlocks.push_back(sb);
+                }
+            }
+
+            uint32_t baseVertCount = (uint32_t)uniqueVerts.size();
+            if (baseVertCount == 0) continue;
+            if (baseVertCount > 65535) return "Import Error: Vertex overflow. Fable limit is 65,535.";
+
+            float minP[3] = { 1e9f, 1e9f, 1e9f }; float maxP[3] = { -1e9f, -1e9f, -1e9f };
+            for (const auto& v : uniqueVerts) {
+                for (int j = 0; j < 3; j++) {
+                    if (v.p[j] < minP[j]) minP[j] = v.p[j];
+                    if (v.p[j] > maxP[j]) maxP[j] = v.p[j];
+                }
+            }
+            for (int j = 0; j < 3; j++) {
+                outPrim.Compression.Offset[j] = minP[j];
+                outPrim.Compression.Scale[j] = maxP[j] - minP[j];
+                if (outPrim.Compression.Scale[j] < 0.0001f) outPrim.Compression.Scale[j] = 0.0001f;
+            }
+
+            outPrim.VertexCount = baseVertCount;
+            outPrim.VertexBuffer.resize(baseVertCount * outPrim.VertexStride, 0);
+            uint8_t* vDest = outPrim.VertexBuffer.data();
+
+            for (uint32_t v = 0; v < baseVertCount; v++) {
+                float pos[3] = { uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2] };
+                float norm[3] = { uniqueVerts[v].n[0], uniqueVerts[v].n[1], uniqueVerts[v].n[2] };
+                float uv[2] = { uniqueVerts[v].u[0], uniqueVerts[v].u[1] }; // Pure uncompressed floats
+
+                memcpy(vDest + 0, pos, 12);
+                memcpy(vDest + 12, norm, 12);
+                memcpy(vDest + 24, uv, 8); // Strided nicely for 32 bytes
+
+                vDest += outPrim.VertexStride;
+            }
+
+            outPrim.IndexCount = (uint32_t)mergedBaseIndices.size();
+            outPrim.TriangleCount = outPrim.IndexCount / 3;
+            outPrim.IndexBuffer.resize(outPrim.IndexCount);
+            for (size_t i = 0; i < mergedBaseIndices.size(); i++) outPrim.IndexBuffer[i] = (uint16_t)mergedBaseIndices[i];
+
+            outPrim.StaticBlocks = baseBlocks;
+            outPrim.StaticBlockCount = (uint32_t)outPrim.StaticBlocks.size();
+            outPrim.StaticBlockCount_2 = outPrim.StaticBlockCount;
+
+            outMesh.Primitives.push_back(outPrim);
+        }
+
+        ParseNodes(json, outMesh);
+
+        outMesh.PrimitiveCount = (int32_t)outMesh.Primitives.size();
+        outMesh.AutoCalculateBounds();
+        outMesh.IsParsed = true;
+        outMesh.DebugStatus = "Successfully Synthesized Type 4 Particle Mesh";
+
+        return "";
+    }
+
+    static std::string ImportType3(const std::string& gltfPath, const std::string& bankEntryName, CBBMParser& outBBM) {
+        std::ifstream file(gltfPath);
+        if (!file.is_open()) return "Could not open glTF file.";
+        std::stringstream buffer; buffer << file.rdbuf();
+        std::string json = buffer.str();
+
+        std::string binPath = gltfPath.substr(0, gltfPath.find_last_of('.')) + ".bin";
+        std::ifstream binFile(binPath, std::ios::binary | std::ios::ate);
+        if (!binFile.is_open()) return "Could not open associated .bin file.";
+        std::streamsize size = binFile.tellg();
+        binFile.seekg(0, std::ios::beg);
+        std::vector<uint8_t> binData((size_t)size);
+        if (!binFile.read((char*)binData.data(), size)) return "Failed to read .bin data.";
+
+        outBBM = CBBMParser();
+        outBBM.IsParsed = true;
+        outBBM.FileVersion = 2;
+        outBBM.FileComment = "Imported Physics Mesh from EgoCore";
+        outBBM.PhysicsMaterialIndex = 0;
+
+        bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
+        bool hasSceneRoot = json.find("\"name\":\"Scene_Root\"") != std::string::npos || json.find("\"name\": \"Scene_Root\"") != std::string::npos;
+        bool applyBlenderFix = isBlender && hasSceneRoot;
+
+        // --- FIX ISSUE 6: Parse BBM Materials ---
+        std::string materialsBlock = ExtractBlock(json, "materials");
+        std::vector<std::string> matObjs = SplitArray(materialsBlock);
+
+        outBBM.ParsedMaterials.clear();
+        if (!matObjs.empty()) {
+            for (int i = 0; i < matObjs.size(); ++i) {
+                CBBMParser::BBMMaterial m = {};
+                m.Index = i;
+
+                // FIXED: Use ExtractStringClean instead of ExtractStringParam
+                m.Name = ExtractStringClean(matObjs[i], "name");
+                if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
+
+                std::string extras = ExtractBlock(matObjs[i], "extras");
+                if (!extras.empty()) {
+                    m.DiffuseBank = (int)ExtractFloatClean(extras, "DiffuseMapID", 0);
+                    m.BumpBank = (int)ExtractFloatClean(extras, "BumpMapID", 0);
+                    m.ReflectBank = (int)ExtractFloatClean(extras, "ReflectionMapID", 0);
+                    m.IllumBank = (int)ExtractFloatClean(extras, "IlluminationMapID", 0);
+                    m.TwoSided = ExtractBool(extras, "IsTwoSided", true);
+                    m.Transparent = ExtractBool(extras, "IsTransparent", false);
+                    m.BooleanAlpha = ExtractBool(extras, "BooleanAlpha", false);
+                    m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
+                    m.SelfIllumination = (uint32_t)ExtractFloatClean(extras, "SelfIllumination", 0);
+                }
+                else {
+                    m.TwoSided = true;
+                }
+                outBBM.ParsedMaterials.push_back(m);
+            }
+        }
+        else {
+            CBBMParser::BBMMaterial defMat = {};
+            defMat.Index = 0; defMat.Name = "DefaultPhysicsMat"; defMat.TwoSided = true;
+            outBBM.ParsedMaterials.push_back(defMat);
+        }
+
+        std::vector<BView> views;
+        for (const auto& obj : SplitArray(ExtractBlock(json, "bufferViews")))
+            views.push_back({ (size_t)ExtractFloat(obj, "byteOffset"), (size_t)ExtractFloat(obj, "byteLength") });
+
+        std::vector<Acc> accessors;
+        for (const auto& obj : SplitArray(ExtractBlock(json, "accessors"))) {
+            Acc a; a.view = (int)ExtractFloat(obj, "bufferView"); a.count = (int)ExtractFloat(obj, "count");
+            a.compType = (int)ExtractFloat(obj, "componentType"); a.offset = (size_t)ExtractFloat(obj, "byteOffset");
+            accessors.push_back(a);
+        }
+
+        std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
+        if (!meshObjs.empty()) {
+            for (const auto& meshObj : meshObjs) {
+                std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
+                for (const auto& pObj : primObjs) {
+                    std::string attr = ExtractBlock(pObj, "attributes");
+                    int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
+                    int normAccIdx = (int)ExtractFloatClean(attr, "NORMAL", -1); // <--- FIX ISSUE 5
+                    int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
+
+                    if (posAccIdx < 0 || indAccIdx < 0) continue;
+
+                    Acc posAcc = accessors[posAccIdx];
+                    Acc iAcc = accessors[indAccIdx];
+
+                    float* pData = (float*)(binData.data() + views[posAcc.view].offset + posAcc.offset);
+                    float* nData = normAccIdx >= 0 ? (float*)(binData.data() + views[accessors[normAccIdx].view].offset + accessors[normAccIdx].offset) : nullptr;
+                    uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
+
+                    auto FindOrAddVertex = [&](const CBBMParser::C3DVertex2& v) -> uint32_t {
+                        for (size_t i = 0; i < outBBM.ParsedVertices.size(); ++i) {
+                            const auto& uv = outBBM.ParsedVertices[i];
+                            if (std::abs(uv.Position.x - v.Position.x) < 0.001f &&
+                                std::abs(uv.Position.y - v.Position.y) < 0.001f &&
+                                std::abs(uv.Position.z - v.Position.z) < 0.001f &&
+                                std::abs(uv.Normal.x - v.Normal.x) < 0.01f &&
+                                std::abs(uv.Normal.y - v.Normal.y) < 0.01f &&
+                                std::abs(uv.Normal.z - v.Normal.z) < 0.01f) {
+                                return (uint32_t)i;
+                            }
+                        }
+                        outBBM.ParsedVertices.push_back(v);
+                        return (uint32_t)(outBBM.ParsedVertices.size() - 1);
+                        };
+
+                    for (int i = 0; i < iAcc.count; i += 3) {
+                        auto getVIdx = [&](int offset) -> uint32_t {
+                            if (i + offset >= iAcc.count) return 0xFFFFFFFF;
+                            if (iAcc.compType == 5121) return iData[i + offset];
+                            if (iAcc.compType == 5123) return ((uint16_t*)iData)[i + offset];
+                            if (iAcc.compType == 5125) return ((uint32_t*)iData)[i + offset];
+                            return 0xFFFFFFFF;
+                            };
+
+                        uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) }; // Swap winding
+
+                        for (int j = 0; j < 3; j++) {
+                            uint32_t vIdx = idxs[j];
+                            if (vIdx >= posAcc.count || vIdx == 0xFFFFFFFF) continue;
+
+                            CBBMParser::C3DVertex2 v = {};
+                            v.Position.x = pData[vIdx * 3]; v.Position.y = pData[vIdx * 3 + 1]; v.Position.z = pData[vIdx * 3 + 2];
+
+                            // --- FIX ISSUE 5: Parse Normals ---
+                            if (nData) {
+                                v.Normal.x = nData[vIdx * 3]; v.Normal.y = nData[vIdx * 3 + 1]; v.Normal.z = nData[vIdx * 3 + 2];
+                            }
+                            else {
+                                v.Normal.x = 0; v.Normal.y = 1; v.Normal.z = 0;
+                            }
+
+                            v.UV.u = 0; v.UV.v = 0; // Physics meshes ignore UVs
+
+                            if (applyBlenderFix) {
+                                float temp_y = v.Position.y;
+                                v.Position.y = -v.Position.z;
+                                v.Position.z = temp_y;
+
+                                float temp_ny = v.Normal.y;
+                                v.Normal.y = -v.Normal.z;
+                                v.Normal.z = temp_ny;
+                            }
+
+                            outBBM.ParsedIndices.push_back((uint16_t)FindOrAddVertex(v));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Steal the JSON logic from Type 1/2 to perfectly recover Navmeshes/Helpers from GLTF nodes
+        C3DMeshContent tempMesh;
+        ParseNodes(json, tempMesh);
+
+        for (const auto& h : tempMesh.Helpers) {
+            CBBMParser::HelperPoint hp;
+            hp.Name = tempMesh.GetNameFromCRC(h.NameCRC);
+            if (hp.Name.empty()) hp.Name = "HPNT_UNKNOWN";
+
+            hp.SubMeshIndex = -1;
+            size_t subPos = hp.Name.find("_Sub");
+            if (subPos != std::string::npos) {
+                try { hp.SubMeshIndex = std::stoi(hp.Name.substr(subPos + 4)); }
+                catch (...) {}
+                hp.Name = hp.Name.substr(0, subPos);
+            }
+
+            hp.Position = { h.Pos[0], h.Pos[1], h.Pos[2] };
+            hp.BoneIndex = h.BoneIndex;
+            outBBM.Helpers.push_back(hp);
+        }
+
+        for (const auto& d : tempMesh.Dummies) {
+            CBBMParser::DummyObject dum;
+            dum.Name = tempMesh.GetNameFromCRC(d.NameCRC);
+            if (dum.Name.empty()) dum.Name = "HDMY_UNKNOWN";
+
+            size_t locPos = dum.Name.find("_LOC");
+            if (locPos != std::string::npos && locPos == dum.Name.length() - 4) {
+                dum.Name = dum.Name.substr(0, locPos);
+                dum.UseLocalOrigin = true;
+            }
+            else {
+                dum.UseLocalOrigin = false;
+            }
+
+            memcpy(dum.Transform, d.Transform, 48);
+            dum.BoneIndex = d.BoneIndex;
+            dum.SubMeshIndex = -1;
+            dum.Direction = { d.Transform[6], d.Transform[7], d.Transform[8] };
+            dum.Position = { d.Transform[9], d.Transform[10], d.Transform[11] };
+            outBBM.Dummies.push_back(dum);
+        }
+
+        for (const auto& v : tempMesh.Volumes) {
+            CBBMParser::Volume vol;
+            vol.Name = v.Name;
+            vol.ID = v.ID;
+            for (const auto& pl : v.Planes) {
+                CBBMParser::BBMPlane bbmPlane = { {pl.Normal[0], pl.Normal[1], pl.Normal[2]}, pl.D };
+                vol.Planes.push_back(bbmPlane);
+            }
+            vol.PlaneCount = (uint32_t)vol.Planes.size();
+            outBBM.Volumes.push_back(vol);
+        }
 
         return "";
     }

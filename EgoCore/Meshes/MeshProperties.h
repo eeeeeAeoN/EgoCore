@@ -656,41 +656,75 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         }
     }
 
-    if (g_ShowHelpers && g_ActiveMeshContent.IsParsed) {
+    if (g_ShowHelpers) {
         ImVec2 mousePos = ImGui::GetMousePos();
 
-        for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
-            const auto& h = g_ActiveMeshContent.Helpers[i];
-            ImVec2 scrPos;
-            if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Pos[0], h.Pos[1], h.Pos[2]), scrPos, viewportWidth, avail.y)) {
-                scrPos.x += pMin.x; scrPos.y += pMin.y;
-                dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
+        // --- RENDER BBM HELPERS ---
+        if (g_BBMParser.IsParsed) {
+            for (int i = 0; i < g_BBMParser.Helpers.size(); i++) {
+                const auto& h = g_BBMParser.Helpers[i];
+                ImVec2 scrPos;
+                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Position.x, h.Position.y, h.Position.z), scrPos, viewportWidth, avail.y)) {
+                    scrPos.x += pMin.x; scrPos.y += pMin.y;
+                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
 
-                float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                if (dist < 8.0f) {
-                    dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                    std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
-                    if (name.empty()) name = "CRC: " + std::to_string(h.NameCRC);
-                    ImGui::SetTooltip("%s", name.c_str());
+                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
+                    if (dist < 8.0f) {
+                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
+                        ImGui::SetTooltip("%s", h.Name.c_str());
+                    }
+                }
+            }
+            for (int i = 0; i < g_BBMParser.Dummies.size(); i++) {
+                const auto& d = g_BBMParser.Dummies[i];
+                ImVec2 scrPos;
+                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]), scrPos, viewportWidth, avail.y)) {
+                    scrPos.x += pMin.x; scrPos.y += pMin.y;
+                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
+
+                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
+                    if (dist < 8.0f) {
+                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
+                        ImGui::SetTooltip("%s", d.Name.c_str());
+                    }
                 }
             }
         }
 
-        for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
-            const auto& d = g_ActiveMeshContent.Dummies[i];
-            XMFLOAT3 pos = XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]);
+        // --- RENDER GRAPHICS HELPERS ---
+        if (g_ActiveMeshContent.IsParsed) {
+            for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
+                const auto& h = g_ActiveMeshContent.Helpers[i];
+                ImVec2 scrPos;
+                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Pos[0], h.Pos[1], h.Pos[2]), scrPos, viewportWidth, avail.y)) {
+                    scrPos.x += pMin.x; scrPos.y += pMin.y;
+                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
 
-            ImVec2 scrPos;
-            if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
-                scrPos.x += pMin.x; scrPos.y += pMin.y;
-                dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
+                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
+                    if (dist < 8.0f) {
+                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
+                        std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
+                        if (name.empty()) name = "CRC: " + std::to_string(h.NameCRC);
+                        ImGui::SetTooltip("%s", name.c_str());
+                    }
+                }
+            }
+            for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
+                const auto& d = g_ActiveMeshContent.Dummies[i];
+                XMFLOAT3 pos = XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]);
 
-                float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                if (dist < 8.0f) {
-                    dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                    std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
-                    if (name.empty()) name = "CRC: " + std::to_string(d.NameCRC);
-                    ImGui::SetTooltip("%s", name.c_str());
+                ImVec2 scrPos;
+                if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
+                    scrPos.x += pMin.x; scrPos.y += pMin.y;
+                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
+
+                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
+                    if (dist < 8.0f) {
+                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
+                        std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
+                        if (name.empty()) name = "CRC: " + std::to_string(d.NameCRC);
+                        ImGui::SetTooltip("%s", name.c_str());
+                    }
                 }
             }
         }
@@ -1027,56 +1061,35 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     ImGui::EndTabItem();
                 }
 
-                // --- NEW EXTRAS TAB (Helpers, Dummies, Generators, Volumes) ---
                 if (ImGui::BeginTabItem("Extras")) {
                     if (ImGui::CollapsingHeader("Helper Points", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        if (ImGui::BeginTable("HelpersTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                            ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name/CRC"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
-                            for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
-                                const auto& h = g_ActiveMeshContent.Helpers[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
-                                ImGui::TableSetColumnIndex(1);
-                                std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
-                                if (!name.empty()) ImGui::Text("%s", name.c_str()); else ImGui::Text("CRC: %08X", h.NameCRC);
-                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", h.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", h.Pos[0], h.Pos[1], h.Pos[2]);
+                        if (ImGui::BeginTable("BBMHelpers", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY)) {
+                            ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("SubMesh", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
+                            int id = 0;
+                            for (const auto& h : g_BBMParser.Helpers) {
+                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", id++); ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(h.Name.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%d", h.BoneIndex); ImGui::TableSetColumnIndex(3); if (h.SubMeshIndex == -1) ImGui::TextDisabled("-"); else ImGui::Text("%d", h.SubMeshIndex); ImGui::TableSetColumnIndex(4); ImGui::Text("%.3f, %.3f, %.3f", h.Position.x, h.Position.y, h.Position.z);
                             }
                             ImGui::EndTable();
                         }
                     }
+
                     if (ImGui::CollapsingHeader("Dummy Objects", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        if (ImGui::BeginTable("DummiesTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                            ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name/CRC"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
-                            for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
-                                const auto& d = g_ActiveMeshContent.Dummies[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
-                                ImGui::TableSetColumnIndex(1);
-                                std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
-                                if (!name.empty()) ImGui::Text("%s", name.c_str()); else ImGui::Text("CRC: %08X", d.NameCRC);
-                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", d.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", d.Transform[9], d.Transform[10], d.Transform[11]);
+                        if (ImGui::BeginTable("BBMDummies", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY)) {
+                            ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("SubMesh", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
+                            int id = 0;
+                            for (const auto& d : g_BBMParser.Dummies) {
+                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", id++); ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(d.Name.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%d", d.BoneIndex); ImGui::TableSetColumnIndex(3); if (d.SubMeshIndex == -1) ImGui::TextDisabled("-"); else ImGui::Text("%d", d.SubMeshIndex); ImGui::TableSetColumnIndex(4); ImGui::Text("%.3f, %.3f, %.3f", d.Transform[9], d.Transform[10], d.Transform[11]);
                             }
                             ImGui::EndTable();
                         }
                     }
-                    if (ImGui::CollapsingHeader("Generators", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        if (ImGui::BeginTable("GeneratorsTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                            ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Object Name"); ImGui::TableSetupColumn("Bank ID", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
-                            for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
-                                const auto& g = g_ActiveMeshContent.Generators[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
-                                ImGui::TableSetColumnIndex(1); ImGui::Text("%s", g.ObjectName.c_str());
-                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", g.BankIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", g.Transform[9], g.Transform[10], g.Transform[11]);
-                            }
-                            ImGui::EndTable();
-                        }
-                    }
+
                     if (ImGui::CollapsingHeader("Volumes", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        if (ImGui::BeginTable("VolumesTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                            ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Volume ID", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Planes"); ImGui::TableHeadersRow();
-                            for (int i = 0; i < g_ActiveMeshContent.Volumes.size(); i++) {
-                                const auto& v = g_ActiveMeshContent.Volumes[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
-                                ImGui::TableSetColumnIndex(1); ImGui::Text("%s", v.Name.c_str());
-                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", v.ID); ImGui::TableSetColumnIndex(3); ImGui::Text("%zu", v.Planes.size());
+                        if (ImGui::BeginTable("BBMVolumes", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY)) {
+                            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Vol ID", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Planes"); ImGui::TableHeadersRow();
+                            int id = 0;
+                            for (const auto& v : g_BBMParser.Volumes) {
+                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", id++); ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(v.Name.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%d", v.ID); ImGui::TableSetColumnIndex(3); ImGui::Text("%zu", v.Planes.size());
                             }
                             ImGui::EndTable();
                         }
