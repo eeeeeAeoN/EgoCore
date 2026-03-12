@@ -434,6 +434,15 @@ private:
         memcpy(&h.BoneIndex, base + cursor, 4); cursor += 4;
         if (h.BoneIndex >= 0) h.BoneIndex += CurrentBoneOffset;
         h.Name = ReadString(base, cursor, nextChunkOffset);
+
+        // Apply TRFM so helpers don't decouple from vertices
+        if (HasTransform) {
+            float x = h.Position.x, y = h.Position.y, z = h.Position.z;
+            float* m = LastTransform;
+            h.Position.x = x * m[0] + y * m[3] + z * m[6] + m[9];
+            h.Position.y = x * m[1] + y * m[4] + z * m[7] + m[10];
+            h.Position.z = x * m[2] + y * m[5] + z * m[8] + m[11];
+        }
         Helpers.push_back(h);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
     }
@@ -452,8 +461,45 @@ private:
             if (d.BoneIndex >= 0) d.BoneIndex += CurrentBoneOffset;
             d.Name = ReadString(base, cursor, nextChunkOffset);
         }
+
+        // Apply TRFM to Dummies
+        if (HasTransform) {
+            float x = d.Position.x, y = d.Position.y, z = d.Position.z;
+            float* m = LastTransform;
+            d.Position.x = x * m[0] + y * m[3] + z * m[6] + m[9];
+            d.Position.y = x * m[1] + y * m[4] + z * m[7] + m[10];
+            d.Position.z = x * m[2] + y * m[5] + z * m[8] + m[11];
+
+            float dx = d.Transform[9], dy = d.Transform[10], dz = d.Transform[11];
+            d.Transform[9] = dx * m[0] + dy * m[3] + dz * m[6] + m[9];
+            d.Transform[10] = dx * m[1] + dy * m[4] + dz * m[7] + m[10];
+            d.Transform[11] = dx * m[2] + dy * m[5] + dz * m[8] + m[11];
+        }
         Dummies.push_back(d);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
+    }
+
+    void ParseHCVL(const uint8_t* base, size_t& cursor, size_t end, int depth) {
+        if ((end - cursor) < 8) return;
+        Volume v;
+
+        // ASM Proves this is a Version (1u), not a Volume ID.
+        uint32_t version = 0;
+        memcpy(&version, base + cursor, 4); cursor += 4;
+
+        v.Name = ReadString(base, cursor, end);
+        v.ID = 0; // Hardcode to 0 since we don't have an ID
+
+        // ASM Proves NO padding alignment happens here!
+        if (cursor + 4 <= end) {
+            memcpy(&v.PlaneCount, base + cursor, 4); cursor += 4;
+            for (uint32_t i = 0; i < v.PlaneCount && cursor + 16 <= end; i++) {
+                BBMPlane p; memcpy(&p, base + cursor, 16);
+                v.Planes.push_back(p);
+                cursor += 16;
+            }
+        }
+        Volumes.push_back(v);
     }
 
     void ParseMTRL(const uint8_t* base, size_t& cursor, size_t nextChunkOffset, int depth) {
@@ -484,19 +530,6 @@ private:
         }
         ParsedMaterials.push_back(mat);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
-    }
-
-    void ParseHCVL(const uint8_t* base, size_t& cursor, size_t end, int depth) {
-        if ((end - cursor) < 8) return; Volume v;
-        memcpy(&v.ID, base + cursor, 4); cursor += 4;
-        v.Name = ReadString(base, cursor, end); Align(cursor);
-        if (cursor + 4 <= end) {
-            memcpy(&v.PlaneCount, base + cursor, 4); cursor += 4;
-            for (uint32_t i = 0; i < v.PlaneCount && cursor + 16 <= end; i++) {
-                BBMPlane p; memcpy(&p, base + cursor, 16); v.Planes.push_back(p); cursor += 16;
-            }
-        }
-        Volumes.push_back(v);
     }
 
     void ParseUNIV(const uint8_t* base, size_t& cursor, size_t end, int depth) {

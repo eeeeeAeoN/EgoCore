@@ -509,6 +509,97 @@ public:
         return SRV;
     }
 
+    void RenderVolumes(ID3D11DeviceContext* ctx, float w, float h, const std::vector<CPlane>& planes) {
+        if (!VS || !DebugVBuffer || planes.empty()) return;
+
+        // Mathematically generate the Convex Hull from Fable's infinite planes
+        std::vector<XMFLOAT3> vertices;
+        for (size_t i = 0; i < planes.size(); i++) {
+            for (size_t j = i + 1; j < planes.size(); j++) {
+                for (size_t k = j + 1; k < planes.size(); k++) {
+                    XMVECTOR n1 = XMVectorSet(planes[i].Normal[0], planes[i].Normal[1], planes[i].Normal[2], 0);
+                    XMVECTOR n2 = XMVectorSet(planes[j].Normal[0], planes[j].Normal[1], planes[j].Normal[2], 0);
+                    XMVECTOR n3 = XMVectorSet(planes[k].Normal[0], planes[k].Normal[1], planes[k].Normal[2], 0);
+
+                    XMVECTOR n2xn3 = XMVector3Cross(n2, n3);
+                    float det = XMVectorGetX(XMVector3Dot(n1, n2xn3));
+
+                    if (std::abs(det) > 0.0001f) {
+                        XMVECTOR n3xn1 = XMVector3Cross(n3, n1);
+                        XMVECTOR n1xn2 = XMVector3Cross(n1, n2);
+
+                        XMVECTOR p = (n2xn3 * -planes[i].D + n3xn1 * -planes[j].D + n1xn2 * -planes[k].D) / det;
+
+                        bool valid = true;
+                        for (size_t m = 0; m < planes.size(); m++) {
+                            float dist = XMVectorGetX(p) * planes[m].Normal[0] + XMVectorGetY(p) * planes[m].Normal[1] + XMVectorGetZ(p) * planes[m].Normal[2] + planes[m].D;
+                            if (dist > 0.01f) { valid = false; break; }
+                        }
+
+                        if (valid) vertices.push_back(XMFLOAT3(XMVectorGetX(p), XMVectorGetY(p), XMVectorGetZ(p)));
+                    }
+                }
+            }
+        }
+
+        if (vertices.empty()) return;
+
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        ctx->PSSetShader(PS_Solid, nullptr, 0);
+        ctx->RSSetState(RastStateSolid);
+
+        std::vector<GPUVertex> gpuVerts;
+        std::vector<uint32_t> gpuInds;
+        for (const auto& v : vertices) gpuVerts.push_back({ v, {0,0,0}, {0,0}, 0, {0,0,0,0} });
+
+        for (uint32_t i = 0; i < vertices.size(); i++) {
+            for (uint32_t j = i + 1; j < vertices.size(); j++) {
+                int sharedPlanes = 0;
+                for (const auto& plane : planes) {
+                    float d1 = vertices[i].x * plane.Normal[0] + vertices[i].y * plane.Normal[1] + vertices[i].z * plane.Normal[2] + plane.D;
+                    float d2 = vertices[j].x * plane.Normal[0] + vertices[j].y * plane.Normal[1] + vertices[j].z * plane.Normal[2] + plane.D;
+                    if (std::abs(d1) < 0.01f && std::abs(d2) < 0.01f) sharedPlanes++;
+                }
+                if (sharedPlanes >= 2) { gpuInds.push_back(i); gpuInds.push_back(j); }
+            }
+        }
+
+        if (gpuInds.empty()) return;
+
+        ID3D11Device* device = nullptr;
+        ctx->GetDevice(&device);
+        if (!device) return;
+
+        ID3D11Buffer* vBuf = nullptr, * iBuf = nullptr;
+        D3D11_BUFFER_DESC vDesc = {}; vDesc.ByteWidth = sizeof(GPUVertex) * (UINT)gpuVerts.size(); vDesc.Usage = D3D11_USAGE_IMMUTABLE; vDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        D3D11_SUBRESOURCE_DATA vData = { gpuVerts.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &vBuf);
+
+        D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)gpuInds.size(); iDesc.Usage = D3D11_USAGE_IMMUTABLE; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+        D3D11_SUBRESOURCE_DATA iData = { gpuInds.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &iBuf);
+        device->Release(); // Properly release the retrieved device
+
+        UINT stride = sizeof(GPUVertex); UINT offset = 0;
+        ctx->IASetVertexBuffers(0, 1, &vBuf, &stride, &offset);
+        ctx->IASetIndexBuffer(iBuf, DXGI_FORMAT_R32_UINT, 0);
+
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
+        XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
+        XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+
+        CBMatrix cb;
+        cb.HasAnimation = 0;
+        cb.World = XMMatrixTranspose(worldCam);
+        cb.WorldViewProj = XMMatrixTranspose(worldCam * view * proj);
+        cb.Color = XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f); // Bright Purple for Volumes
+
+        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+        ctx->DrawIndexed((UINT)gpuInds.size(), 0, 0);
+
+        if (vBuf) vBuf->Release();
+        if (iBuf) iBuf->Release();
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    }
+
     void RenderBounds(ID3D11DeviceContext* ctx, float w, float h, const float* bMin, const float* bMax, const float* sCenter, float sRadius) {
         if (!VS || !DebugVBuffer) return;
 

@@ -556,8 +556,11 @@ struct C3DMeshContent {
         if (!PackedNamesRaw.empty()) Write(PackedNamesRaw.data(), PackedNamesRaw.size());
 
         for (const auto& vol : Volumes) {
-            Write(&vol.ID, 4); WriteString(vol.Name);
-            uint32_t pCount = (uint32_t)vol.Planes.size(); Write(&pCount, 4);
+            uint32_t version = 1; // ASM hardcodes this to 1u
+            Write(&version, 4);
+            WriteString(vol.Name);
+            uint32_t pCount = (uint32_t)vol.Planes.size();
+            Write(&pCount, 4);
             if (pCount > 0) Write(vol.Planes.data(), pCount * 16);
         }
 

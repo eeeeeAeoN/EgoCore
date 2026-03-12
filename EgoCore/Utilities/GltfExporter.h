@@ -630,7 +630,7 @@ namespace GltfExporter {
 
         for (size_t i = 0; i < mesh.Volumes.size(); i++) {
             const auto& v = mesh.Volumes[i]; std::stringstream ss; ss.imbue(std::locale("C"));
-            ss << "{\"name\":\"VOL_" << v.Name << "\",\"extras\":{\"type\":\"Volume\",\"ID\":" << v.ID << ",\"planes\":[";
+            ss << "{\"name\":\"VOL_" << v.Name << "\",\"extras\":{\"type\":\"Volume\",\"planes\":[";
             for (size_t p = 0; p < v.Planes.size(); p++) {
                 const auto& plane = v.Planes[p];
                 if (p > 0) ss << ",";

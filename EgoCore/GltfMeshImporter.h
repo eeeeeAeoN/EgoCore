@@ -298,7 +298,7 @@ namespace GltfMeshImporter {
             }
             else if (type == "Volume") {
                 CMeshVolume v = {};
-                v.ID = (uint32_t)ExtractFloatClean(extras, "ID", 0);
+                v.ID = 0; // Fixed: Version tags are ignored from the JSON
                 if (name.find("VOL_") == 0) v.Name = name.substr(4);
                 else v.Name = name;
 

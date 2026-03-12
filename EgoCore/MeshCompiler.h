@@ -62,8 +62,11 @@ public:
 
         // Compress Volumes
         for (const auto& vol : m.Volumes) {
-            Write(&vol.ID, 4); WriteString(vol.Name);
-            uint32_t pCount = (uint32_t)vol.Planes.size(); Write(&pCount, 4);
+            uint32_t version = 1; // ASM hardcodes this to 1u
+            Write(&version, 4);
+            WriteString(vol.Name);
+            uint32_t pCount = (uint32_t)vol.Planes.size();
+            Write(&pCount, 4);
             if (pCount > 0) {
                 std::vector<uint8_t> pRaw(pCount * 16);
                 memcpy(pRaw.data(), vol.Planes.data(), pCount * 16);
@@ -291,9 +294,12 @@ public:
             }
             for (const auto& vol : bbm.Volumes) {
                 w.PushChunk("HCVL");
-                w.Write(&vol.ID, 4);
+                uint32_t version = 1; // ASM hardcodes this to 1u
+                w.Write(&version, 4);
                 w.WriteString(vol.Name);
-                w.Align();
+
+                // NO ALIGN() CALL HERE!
+
                 uint32_t pCount = (uint32_t)vol.Planes.size();
                 w.Write(&pCount, 4);
                 if (pCount > 0) w.Write(vol.Planes.data(), pCount * 16);
