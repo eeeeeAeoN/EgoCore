@@ -460,6 +460,7 @@ inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, in
     if (type == 1) err = GltfMeshImporter::ImportType1(gltfPath, fname, newMesh);
     else if (type == 2) err = GltfMeshImporter::ImportType2(gltfPath, fname, newMesh, reps);
     else if (type == 4) err = GltfMeshImporter::ImportType4(gltfPath, fname, newMesh);
+    else if (type == 5) err = GltfMeshImporter::ImportType5(gltfPath, fname, newMesh);
 
     if (!err.empty()) {
         g_ShowSuccessPopup = true;
@@ -762,7 +763,12 @@ inline void FlushStagedEntries(LoadedBank* bank) {
         }
         else if (staged.Physics) {
             newBytes = MeshCompiler::CompilePhysics(*staged.Physics);
-            e.InfoSize = 0; // The Engine generates BVH/Partition trees natively on load!
+
+            // CRITICAL TOC FIX: Physics meshes DO NOT use TOC Info blocks! 
+            // The InfoSize MUST be strictly 0, or the engine will misalign the next file.
+            e.InfoSize = 0;
+            newInfo.clear();
+
             e.Type = TYPE_STATIC_PHYSICS_MESH;
         }
         else if (staged.Texture) {

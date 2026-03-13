@@ -251,8 +251,9 @@ static void DrawBankTab() {
         ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mesh Types:");
         ImGui::RadioButton("Static Mesh (1)", &g_ImportAnimType, 1);
         ImGui::RadioButton("Repeated Mesh (2)", &g_ImportAnimType, 2);
-        ImGui::RadioButton("Physics Mesh (3)", &g_ImportAnimType, 3); // <-- ADDED
+        ImGui::RadioButton("Physics Mesh (3)", &g_ImportAnimType, 3);
         ImGui::RadioButton("Particle Mesh (4)", &g_ImportAnimType, 4);
+        ImGui::RadioButton("Animated Mesh (5)", &g_ImportAnimType, 5);
 
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0, 1, 1, 1), "Animation Types:");
@@ -264,9 +265,8 @@ static void DrawBankTab() {
 
         if (ImGui::Button("Import", ImVec2(120, 0))) {
             if (g_ActiveBankIndex != -1 && g_ActiveBankIndex < g_OpenBanks.size()) {
-                if (g_ImportAnimType == 1 || g_ImportAnimType == 2 || g_ImportAnimType == 3 || g_ImportAnimType == 4) {
-                    if (g_ImportAnimType == 1 || g_ImportAnimType == 3 || g_ImportAnimType == 4) {
-                        // Direct import for Type 1, 3 and 4 
+                if (g_ImportAnimType == 1 || g_ImportAnimType == 2 || g_ImportAnimType == 3 || g_ImportAnimType == 4 || g_ImportAnimType == 5) {
+                    if (g_ImportAnimType == 1 || g_ImportAnimType == 3 || g_ImportAnimType == 4 || g_ImportAnimType == 5) {
                         if (CreateNewMeshEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingImportPath, g_ImportAnimType, 0)) {
                             g_BankStatus = "New Mesh Created Successfully!";
                             g_ScrollToSelected = true;
@@ -817,7 +817,9 @@ static void DrawBankTab() {
                                 ImGui::SameLine();
                                 ImGui::RadioButton("Type 2 (Repeated)", &g_LODImportType, 2);
                                 ImGui::SameLine();
-                                ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4); // <-- ADDED
+                                ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4);
+                                ImGui::SameLine();
+                                ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
 
                                 if (g_LODImportType == 2) {
                                     ImGui::Separator();
@@ -839,7 +841,8 @@ static void DrawBankTab() {
 
                                         if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh);
                                         else if (g_LODImportType == 2) err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, g_ImportReps);
-                                        else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh); // <-- ADDED
+                                        else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh);
+                                        else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh);
 
                                         if (err.empty()) {
                                             // Ensure the mesh is fully staged as an array
@@ -911,7 +914,9 @@ static void DrawBankTab() {
                                 ImGui::SameLine();
                                 ImGui::RadioButton("Type 2 (Repeated)", &g_LODImportType, 2);
                                 ImGui::SameLine();
-                                ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4); // <-- ADDED
+                                ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4);
+                                ImGui::SameLine();
+                                ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
 
                                 if (g_LODImportType == 2) {
                                     ImGui::Separator();
@@ -954,6 +959,7 @@ static void DrawBankTab() {
                                             if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh);
                                             else if (g_LODImportType == 2) err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, g_ImportReps);
                                             else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh);
+                                            else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh);
 
                                             if (err.empty()) {
                                                 if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);

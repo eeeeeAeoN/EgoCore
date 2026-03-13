@@ -522,13 +522,18 @@ inline std::vector<uint8_t> CompressLZORaw(const uint8_t* src, uint32_t src_len)
     if (src_len == 0) return {};
     std::vector<lzo_align_t> wrkmem(LZO1X_1_MEM_COMPRESS / sizeof(lzo_align_t) + 1);
 
-    // MiniLZO safety buffer calculation
+    // MiniLZO safety buffer calculation + 3 bytes for EOF marker
     std::vector<uint8_t> comp_buf(src_len + (src_len / 16) + 64 + 3);
     lzo_uint out_len = 0;
 
     int r = lzo1x_1_compress(src, src_len, comp_buf.data(), &out_len, wrkmem.data());
 
     if (r == LZO_E_OK) {
+        // FABLE CRITICAL FIX: Append the LZO1X EOF marker (17 00 00)
+        comp_buf[out_len++] = 17;
+        comp_buf[out_len++] = 0;
+        comp_buf[out_len++] = 0;
+
         comp_buf.resize(out_len);
         return comp_buf;
     }

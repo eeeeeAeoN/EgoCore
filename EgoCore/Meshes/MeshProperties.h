@@ -547,7 +547,17 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     if (ImGui::Button("Export Uncompressed Binary")) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
-            if (g_ActiveMeshContent.IsParsed) {
+            if (g_BBMParser.IsParsed) {
+                // EXPORT RAW PHYSICS CHUNKS
+                std::vector<uint8_t> outData = MeshCompiler::CompilePhysicsUncompressed(g_BBMParser);
+                std::ofstream out(savePath, std::ios::binary);
+                out.write((char*)outData.data(), outData.size());
+                g_BankStatus = "Exported Uncompressed Physics Mesh (BBM)!";
+                g_ShowSuccessPopup = true;
+                g_SuccessMessage = "Physics Binary dumped correctly!";
+            }
+            else if (g_ActiveMeshContent.IsParsed) {
+                // EXPORT RAW GRAPHICS MESH BLOCKS
                 std::vector<uint8_t> outData = g_ActiveMeshContent.SerializeUncompressed();
                 std::ofstream out(savePath, std::ios::binary);
                 out.write((char*)outData.data(), outData.size());
