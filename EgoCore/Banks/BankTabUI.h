@@ -721,7 +721,7 @@ static void DrawBankTab() {
                             bank.Entries[bank.SelectedEntryIndex].FriendlyName = nameBuf;
 
                             // Sync changes dynamically to whichever internal struct is currently loaded
-                            if (IsSupportedMesh(e.Type)) g_ActiveMeshContent.MeshName = nameBuf;
+                            if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type) && e.Type != 3) g_ActiveMeshContent.MeshName = nameBuf;
                             if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
                                 g_TextureParser.PendingName = nameBuf;
                             }
@@ -730,7 +730,7 @@ static void DrawBankTab() {
                             }
                         }
 
-                        if (IsSupportedMesh(e.Type)) {
+                        if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) {
                             // --- FIX ISSUES 3 & 4: Physics meshes don't have LODs ---
                             if (e.Type == 3) {
                                 ImGui::SameLine();
@@ -995,8 +995,8 @@ static void DrawBankTab() {
                     if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) DrawTextureProperties();
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
-                    else if (IsSupportedMesh(e.Type) || e.Type == TYPE_STATIC_PHYSICS_MESH) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
-                    else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
+                    else if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
+                    else if (bank.Type == EBankType::Graphics && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
                         DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }
                 }

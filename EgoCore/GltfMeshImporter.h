@@ -193,7 +193,7 @@ namespace GltfMeshImporter {
         std::vector<std::string> nodes = SplitArray(nodesBlock);
         if (nodes.empty()) return;
 
-        // --- NEW: BONE ATTACHMENT MAPPING ---
+        // --- BONE ATTACHMENT MAPPING ---
         std::map<int, int> nodeParentMap;
         for (int i = 0; i < nodes.size(); i++) {
             std::vector<float> children = GetJsonFloatArray(nodes[i], "children");
@@ -258,12 +258,10 @@ namespace GltfMeshImporter {
             // --- RESOLVE BONE INDEX ---
             int resolvedBoneIdx = -1;
 
-            // 1. Try to read it explicitly from the extras block (Survives Blender!)
             if (extras.find("\"boneId\"") != std::string::npos) {
                 resolvedBoneIdx = (int)ExtractFloatClean(extras, "boneId", -1);
             }
             else {
-                // 2. Fallback: Traverse glTF hierarchy up to find the armature joint
                 int currNode = i;
                 while (nodeParentMap.count(currNode)) {
                     int parentNode = nodeParentMap[currNode];
@@ -278,7 +276,7 @@ namespace GltfMeshImporter {
             if (type == "Helper") {
                 CHelperPoint h = {};
                 h.NameCRC = nameCrc;
-                h.BoneIndex = resolvedBoneIdx; // FIXED
+                h.BoneIndex = resolvedBoneIdx;
                 std::vector<float> trans = GetJsonFloatArray(node, "translation");
                 if (trans.size() >= 3) { h.Pos[0] = trans[0]; h.Pos[1] = trans[1]; h.Pos[2] = trans[2]; }
                 outMesh.Helpers.push_back(h);
@@ -312,7 +310,7 @@ namespace GltfMeshImporter {
                 if (type == "Dummy") {
                     CDummyObject d = {};
                     d.NameCRC = nameCrc;
-                    d.BoneIndex = resolvedBoneIdx; // FIXED
+                    d.BoneIndex = resolvedBoneIdx;
                     memcpy(d.Transform, Transform, 48);
                     outMesh.Dummies.push_back(d);
                     if (!exportName.empty()) tempDummyNames.push_back(exportName);
@@ -320,7 +318,7 @@ namespace GltfMeshImporter {
                 else {
                     CMeshGenerator g = {};
                     g.BankIndex = (uint32_t)ExtractFloatClean(extras, "bankId", 0);
-                    g.BoneIndex = resolvedBoneIdx; // FIXED
+                    g.BoneIndex = resolvedBoneIdx;
                     g.UseLocalOrigin = false;
                     g.ObjectName = exportName;
                     memcpy(g.Transform, Transform, 48);
@@ -347,8 +345,14 @@ namespace GltfMeshImporter {
         outMesh.DummyObjectCount = (uint16_t)outMesh.Dummies.size();
         outMesh.MeshGeneratorCount = (uint16_t)outMesh.Generators.size();
         outMesh.MeshVolumeCount = (uint16_t)outMesh.Volumes.size();
-        outMesh.PackNames(tempHelperNames, tempDummyNames);
-        outMesh.UnpackNames();
+        
+        // --- CRITICAL FIX: Only pack names if entities exist to prevent Ghost LZO blocks ---
+        if (outMesh.HelperPointCount > 0 || outMesh.DummyObjectCount > 0) {
+            outMesh.PackNames(tempHelperNames, tempDummyNames);
+            outMesh.UnpackNames();
+        } else {
+            outMesh.PackedNamesRaw.clear(); 
+        }
     }
 
     struct Acc { int view, count, compType; size_t offset; };
@@ -1314,7 +1318,7 @@ namespace GltfMeshImporter {
 
         outMesh = C3DMeshContent();
         outMesh.MeshName = originalName;
-        outMesh.MeshType = 5; // Animated Mesh
+        outMesh.MeshType = 5;
         outMesh.AnimatedFlag = true;
         outMesh.TotalAnimatedBlocks = 0;
 
@@ -1333,7 +1337,6 @@ namespace GltfMeshImporter {
         struct Acc { int view, offset, count, compType; }; std::vector<Acc> accessors;
         for (const auto& a : accObjs) accessors.push_back({ (int)ExtractFloatClean(a, "bufferView", 0), (int)ExtractFloatClean(a, "byteOffset", 0), (int)ExtractFloatClean(a, "count", 0), (int)ExtractFloatClean(a, "componentType", 0) });
 
-        // --- 1. PARSE SKELETON (SKINS) ---
         std::string skinsBlock = ExtractBlock(json, "skins");
         std::vector<std::string> skinObjs = SplitArray(skinsBlock);
         if (skinObjs.empty()) return "Error: No skin/armature found. Type 5 must be rigged.";
@@ -1365,7 +1368,6 @@ namespace GltfMeshImporter {
             }
         }
 
-        // Copy Inverse Bind Matrices & Transpose them from Column-Major to Row-Major
         Acc ibmAcc = accessors[ibmAccIdx];
         float* ibmData = (float*)(binData.data() + views[ibmAcc.view].offset + ibmAcc.offset);
         float* fableIbmDest = (float*)outMesh.BoneTransformsRaw.data();
@@ -1385,7 +1387,6 @@ namespace GltfMeshImporter {
             std::string boneName = ExtractStringClean(nodeObjs[nodeIdx], "name");
             outMesh.BoneNames.push_back(boneName);
 
-            // --- CRITICAL FIX: RECOVER ORIGINAL FABLE BONE ID ---
             int fableId = i;
             std::string extras = ExtractBlock(nodeObjs[nodeIdx], "extras");
             if (extras.find("\"FableID\"") != std::string::npos) {
@@ -1394,7 +1395,7 @@ namespace GltfMeshImporter {
             outMesh.BoneIndices.push_back((uint16_t)fableId);
 
             C3DBone b = {};
-            b.NameCRC = CalculateFableCRC(boneName); // <--- CRITICAL FIX: Link animations
+            b.NameCRC = CalculateFableCRC(boneName);
             b.OriginalNoChildren = 0;
             b.ParentIndex = -1;
             if (nodeParentMap.count(nodeIdx)) {
@@ -1404,7 +1405,6 @@ namespace GltfMeshImporter {
                 }
             }
 
-            // Extract Local Transform
             std::vector<float> trans = GetJsonFloatArray(nodeObjs[nodeIdx], "translation");
             std::vector<float> rot = GetJsonFloatArray(nodeObjs[nodeIdx], "rotation");
             std::vector<float> scale = GetJsonFloatArray(nodeObjs[nodeIdx], "scale");
@@ -1414,11 +1414,12 @@ namespace GltfMeshImporter {
             TempMat4 lMat = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 
             if (mat.size() >= 16) {
-                // Transpose glTF Column-Major to Fable Row-Major
                 lMat.m[0] = mat[0]; lMat.m[1] = mat[4]; lMat.m[2] = mat[8];
                 lMat.m[4] = mat[1]; lMat.m[5] = mat[5]; lMat.m[6] = mat[9];
                 lMat.m[8] = mat[2]; lMat.m[9] = mat[6]; lMat.m[10] = mat[10];
-                lMat.m[12] = mat[3]; lMat.m[13] = mat[7]; lMat.m[14] = mat[11];
+
+                // CRITICAL FIX: Extract Translation from indices 12, 13, 14 (not 3, 7, 11)
+                lMat.m[12] = mat[12]; lMat.m[13] = mat[13]; lMat.m[14] = mat[14];
             }
             else {
                 float tx = trans.size() >= 3 ? trans[0] : 0, ty = trans.size() >= 3 ? trans[1] : 0, tz = trans.size() >= 3 ? trans[2] : 0;
@@ -1444,7 +1445,6 @@ namespace GltfMeshImporter {
             outMesh.Bones.push_back(b);
         }
 
-        // Count OriginalNoChildren
         for (int i = 0; i < outMesh.BoneCount; i++) {
             outMesh.Bones[i].OriginalNoChildren = 0;
             for (int j = 0; j < outMesh.BoneCount; j++) {
@@ -1454,7 +1454,6 @@ namespace GltfMeshImporter {
             }
         }
 
-        // --- 2. PARSE MATERIALS ---
         std::string materialsBlock = ExtractBlock(json, "materials");
         std::vector<std::string> matObjs = SplitArray(materialsBlock);
 
@@ -1485,14 +1484,12 @@ namespace GltfMeshImporter {
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
 
-        // --- 3. PARSE MESHES & PALETTE BONE BLOCKS ---
         std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
         for (const auto& meshObj : meshObjs) {
             std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
             if (primObjs.empty()) continue;
 
             C3DPrimitive outPrim = {};
-            // --- CRITICAL FIX: EXPLICITLY ZERO ALL PADDING ---
             outPrim.RepeatingMeshReps = 1;
             outPrim.InitFlags = 4;
             outPrim.IsCompressed = true;
@@ -1520,14 +1517,12 @@ namespace GltfMeshImporter {
                 int wIdx = (int)ExtractFloatClean(attr, "WEIGHTS_0", -1);
                 int iIdx = (int)ExtractFloatClean(pObj, "indices", -1);
 
-                if (pIdx < 0 || jIdx < 0 || wIdx < 0 || iIdx < 0) return "Error: Missing required skinning attributes.";
+                if (pIdx < 0 || jIdx < 0 || wIdx < 0 || iIdx < 0) continue;
 
                 Acc pAcc = accessors[pIdx], iAcc = accessors[iIdx], jAcc = accessors[jIdx], wAcc = accessors[wIdx];
                 float* pData = (float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
                 float* nData = nIdx >= 0 ? (float*)(binData.data() + views[accessors[nIdx].view].offset + accessors[nIdx].offset) : nullptr;
                 float* uData = uIdx >= 0 ? (float*)(binData.data() + views[accessors[uIdx].view].offset + accessors[uIdx].offset) : nullptr;
-                uint8_t* jData = binData.data() + views[jAcc.view].offset + jAcc.offset;
-                float* wData = (float*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
                 uint8_t* indData = binData.data() + views[iAcc.view].offset + iAcc.offset;
 
                 uint32_t vOffset = (uint32_t)rawVerts.size();
@@ -1537,15 +1532,31 @@ namespace GltfMeshImporter {
                     if (nData) { rv.n[0] = nData[v * 3]; rv.n[1] = nData[v * 3 + 1]; rv.n[2] = nData[v * 3 + 2]; }
                     else { rv.n[0] = 0; rv.n[1] = 1; rv.n[2] = 0; }
                     if (uData) { rv.u[0] = uData[v * 2]; rv.u[1] = uData[v * 2 + 1]; }
-                    rv.w[0] = wData[v * 4]; rv.w[1] = wData[v * 4 + 1]; rv.w[2] = wData[v * 4 + 2]; rv.w[3] = wData[v * 4 + 3];
 
-                    if (jAcc.compType == 5121) { rv.j[0] = jData[v * 4]; rv.j[1] = jData[v * 4 + 1]; rv.j[2] = jData[v * 4 + 2]; rv.j[3] = jData[v * 4 + 3]; }
-                    else if (jAcc.compType == 5123) { uint16_t* js = (uint16_t*)jData; rv.j[0] = (uint8_t)js[v * 4]; rv.j[1] = (uint8_t)js[v * 4 + 1]; rv.j[2] = (uint8_t)js[v * 4 + 2]; rv.j[3] = (uint8_t)js[v * 4 + 3]; }
-
-                    if (applyBlenderFix) {
-                        float ty = rv.p[1]; rv.p[1] = -rv.p[2]; rv.p[2] = ty;
-                        float ny = rv.n[1]; rv.n[1] = -rv.n[2]; rv.n[2] = ny;
+                    // SAFE WEIGHT EXTRACTION
+                    if (wAcc.compType == 5126) {
+                        float* wData = (float*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
+                        rv.w[0] = wData[v * 4]; rv.w[1] = wData[v * 4 + 1]; rv.w[2] = wData[v * 4 + 2]; rv.w[3] = wData[v * 4 + 3];
                     }
+                    else if (wAcc.compType == 5123) {
+                        uint16_t* wData = (uint16_t*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
+                        rv.w[0] = wData[v * 4] / 65535.0f; rv.w[1] = wData[v * 4 + 1] / 65535.0f; rv.w[2] = wData[v * 4 + 2] / 65535.0f; rv.w[3] = wData[v * 4 + 3] / 65535.0f;
+                    }
+                    else if (wAcc.compType == 5121) {
+                        uint8_t* wData = (uint8_t*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
+                        rv.w[0] = wData[v * 4] / 255.0f; rv.w[1] = wData[v * 4 + 1] / 255.0f; rv.w[2] = wData[v * 4 + 2] / 255.0f; rv.w[3] = wData[v * 4 + 3] / 255.0f;
+                    }
+
+                    // SAFE JOINT EXTRACTION
+                    if (jAcc.compType == 5121) {
+                        uint8_t* jData = binData.data() + views[jAcc.view].offset + jAcc.offset;
+                        rv.j[0] = jData[v * 4]; rv.j[1] = jData[v * 4 + 1]; rv.j[2] = jData[v * 4 + 2]; rv.j[3] = jData[v * 4 + 3];
+                    }
+                    else if (jAcc.compType == 5123) {
+                        uint16_t* jData = (uint16_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset);
+                        rv.j[0] = (uint8_t)jData[v * 4]; rv.j[1] = (uint8_t)jData[v * 4 + 1]; rv.j[2] = (uint8_t)jData[v * 4 + 2]; rv.j[3] = (uint8_t)jData[v * 4 + 3];
+                    }
+
                     rawVerts.push_back(rv);
                 }
 
@@ -1562,7 +1573,6 @@ namespace GltfMeshImporter {
                 }
             }
 
-            // Calculate Compression Bounds
             float minP[3] = { 1e9f, 1e9f, 1e9f }, maxP[3] = { -1e9f, -1e9f, -1e9f };
             for (const auto& v : rawVerts) {
                 for (int j = 0; j < 3; j++) {
@@ -1570,12 +1580,24 @@ namespace GltfMeshImporter {
                     if (v.p[j] > maxP[j]) maxP[j] = v.p[j];
                 }
             }
-            for (int j = 0; j < 3; j++) {
-                outPrim.Compression.Offset[j] = minP[j];
-                outPrim.Compression.Scale[j] = (std::max)(maxP[j] - minP[j], 0.0001f);
-            }
 
-            // Bone Block Splitter (Hardware Skinning Palette limits)
+            float maxExtent = 0.0f;
+            for (int j = 0; j < 3; j++) {
+                maxExtent = (std::max)(maxExtent, std::abs(minP[j]));
+                maxExtent = (std::max)(maxExtent, std::abs(maxP[j]));
+            }
+            float uniformScale = (std::max)(150.0f, maxExtent * 1.5f);
+
+            for (int j = 0; j < 3; j++) {
+                outPrim.Compression.Scale[j] = uniformScale;
+                outPrim.Compression.Offset[j] = 0.0f;
+            }
+            outPrim.Compression.Scale[3] = 1.0f;
+
+            // CRITICAL FIX: Shift the Z-Axis offset, not the W-Axis offset, to prevent 10-bit integer overflow wrappers!
+            outPrim.Compression.Offset[2] = 100.0f;
+            outPrim.Compression.Offset[3] = 0.0f;
+
             struct AnimBlockTemp { std::vector<uint32_t> faces; std::vector<uint8_t> palette; };
             std::vector<AnimBlockTemp> blocks;
             AnimBlockTemp currentBlock;
@@ -1597,7 +1619,6 @@ namespace GltfMeshImporter {
 
                 addJ(v0); addJ(v1); addJ(v2);
 
-                // CRITICAL FIX: Ensure palette is never empty
                 if (faceJoints.empty()) faceJoints.push_back(0);
 
                 std::vector<uint8_t> testPalette = currentBlock.palette;
@@ -1625,7 +1646,7 @@ namespace GltfMeshImporter {
                 CAnimatedBlock fBlock = {};
                 fBlock.PrimitiveCount = (uint32_t)b.faces.size() / 3;
                 fBlock.StartIndex = (uint32_t)outPrim.IndexBuffer.size();
-                fBlock.BonesPerVertex = 4;
+                fBlock.BonesPerVertex = 3;
                 fBlock.PalettedFlag = true;
                 fBlock.Groups = b.palette;
 
@@ -1650,20 +1671,48 @@ namespace GltfMeshImporter {
                     uint32_t pN = PackNormal(v.n[0], v.n[1], v.n[2]);
                     int16_t cU = CompressUV(v.u[0]), cV = CompressUV(v.u[1]);
 
-                    uint8_t fw[4]; float sum = v.w[0] + v.w[1] + v.w[2] + v.w[3];
-                    if (sum < 0.001f) { fw[0] = 255; fw[1] = 0; fw[2] = 0; fw[3] = 0; }
-                    else { for (int k = 0; k < 4; k++) fw[k] = (uint8_t)std::round((v.w[k] / sum) * 255.0f); }
+                    // SAFE WEIGHT NORMALIZATION
+                    struct Influence { float w; uint8_t j; };
+                    Influence infs[4] = {
+                        { v.w[0], v.j[0] }, { v.w[1], v.j[1] },
+                        { v.w[2], v.j[2] }, { v.w[3], v.j[3] }
+                    };
 
-                    uint8_t fj[4] = { 0,0,0,0 };
-                    for (int k = 0; k < 4; k++) {
-                        // --- CRITICAL FIX: If weight is 0, force joint to 0 to prevent GPU Segfaults! ---
-                        if (fw[k] == 0) {
-                            fj[k] = 0;
-                            continue;
+                    std::sort(infs, infs + 4, [](const Influence& a, const Influence& b) {
+                        return a.w > b.w;
+                        });
+
+                    infs[3].w = 0.0f;
+                    infs[3].j = 0;
+
+                    uint8_t fw[4] = { 0, 0, 0, 0 };
+                    float sum = infs[0].w + infs[1].w + infs[2].w;
+
+                    if (sum < 0.001f) {
+                        fw[0] = 255;
+                    }
+                    else {
+                        fw[0] = (uint8_t)std::clamp((int)std::round((infs[0].w / sum) * 255.0f), 0, 255);
+                        fw[1] = (uint8_t)std::clamp((int)std::round((infs[1].w / sum) * 255.0f), 0, 255);
+                        fw[2] = (uint8_t)std::clamp((int)std::round((infs[2].w / sum) * 255.0f), 0, 255);
+
+                        int total = fw[0] + fw[1] + fw[2];
+                        if (total != 255 && fw[0] > 0) {
+                            int remainder = 255 - total;
+                            fw[0] = (uint8_t)std::clamp((int)fw[0] + remainder, 0, 255);
                         }
+                    }
+
+                    uint8_t fj[4] = { 0, 0, 0, 0 };
+                    for (int k = 0; k < 3; k++) {
+                        if (fw[k] == 0) continue;
 
                         for (size_t p = 0; p < b.palette.size(); p++) {
-                            if (b.palette[p] == v.j[k]) { fj[k] = (uint8_t)(p * 3); break; }
+                            if (b.palette[p] == infs[k].j) {
+                                // CRITICAL FIX: Fable expects Matrix Register Offsets in the vertex stream
+                                fj[k] = (uint8_t)(p * 3);
+                                break;
+                            }
                         }
                     }
 
@@ -1686,7 +1735,6 @@ namespace GltfMeshImporter {
             outPrim.AnimatedBlockCount = (uint32_t)outPrim.AnimatedBlocks.size();
             outPrim.AnimatedBlockCount_2 = outPrim.AnimatedBlockCount;
 
-            // --- CRITICAL FIX: TELL THE ENGINE TO ALLOCATE PALETTE BUFFERS ---
             outMesh.TotalAnimatedBlocks += outPrim.AnimatedBlockCount;
 
             outMesh.Primitives.push_back(outPrim);

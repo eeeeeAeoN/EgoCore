@@ -152,6 +152,46 @@ public:
         return data;
     }
 
+    static std::vector<uint8_t> CompileWithGhostLOD(const C3DMeshContent& m) {
+        // Compile the primary mesh
+        std::vector<uint8_t> data = CompileSingleLOD(m);
+
+        // Compile a 1:1 identical ghost LOD
+        std::vector<uint8_t> ghost = CompileSingleLOD(m);
+
+        // Append the ghost LOD directly to the binary stream
+        data.insert(data.end(), ghost.begin(), ghost.end());
+
+        return data;
+    }
+
+    static std::vector<uint8_t> CompileAnimatedMesh(const C3DMeshContent& m) {
+        // 1. Generate the raw, uncompressed bytes for LOD 0
+        std::vector<uint8_t> uncompressed = CompileSingleLOD(m);
+
+        // 2. Duplicate it for the Ghost LOD
+        std::vector<uint8_t> ghost = CompileSingleLOD(m);
+
+        // 3. Append Ghost LOD to the uncompressed stream BEFORE compression
+        uncompressed.insert(uncompressed.end(), ghost.begin(), ghost.end());
+
+        // 4. Now run Fable's Monolithic LZO Compression on the combined buffer
+        uint32_t uncompSize = (uint32_t)uncompressed.size();
+        std::vector<uint8_t> outBytes;
+        outBytes.resize(4);
+        memcpy(outBytes.data(), &uncompSize, 4); // Combined Uncompressed Size Header
+
+        std::vector<uint8_t> lzoData = CompressLZORaw(uncompressed.data(), uncompSize);
+        if (lzoData.empty()) {
+            outBytes.insert(outBytes.end(), uncompressed.begin(), uncompressed.end());
+        }
+        else {
+            outBytes.insert(outBytes.end(), lzoData.begin(), lzoData.end());
+        }
+
+        return outBytes;
+    }
+
     // --- NEW: GENERATES THE RAW UNCOMPRESSED BINARY FOR DEBUGGING ---
     static std::vector<uint8_t> CompilePhysicsUncompressed(const CBBMParser& bbm) {
         struct ChunkWriter {

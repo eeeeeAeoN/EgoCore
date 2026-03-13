@@ -180,7 +180,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         }
     }
 
-    if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend) {
+    if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || bank->Type == EBankType::Effects) {
         if (bank->SubheaderCache.count(idx)) g_TextureParser.Parse(bank->SubheaderCache[idx], bank->CurrentEntryRawData, e.Type);
         g_TextureParser.PendingName = e.Name;
     }
@@ -190,7 +190,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         if (g_TextParser.IsGroup) ResolveGroupMetadata(bank);
     }
     else if (bank->Type != EBankType::Audio) {
-        if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
+        if (e.Type == 3) {
             g_BBMParser.Parse(bank->CurrentEntryRawData);
             g_MeshUploadNeeded = true;
         }

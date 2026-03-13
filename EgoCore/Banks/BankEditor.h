@@ -276,6 +276,9 @@ bool CreateNewTextureEntry(LoadedBank* bank, const std::string& filePath, ETextu
     e.FriendlyName = e.Name;
     e.Type = type;
     e.Size = (uint32_t)result.FullData.size();
+    e.InfoSize = (uint32_t)result.HeaderInfo.size(); // [FIX] Properly flag compiler that it requires metadata
+    e.Offset = 0;
+    e.Timestamp = 0;
 
     // Store compiled data and metadata
     bank->Entries.push_back(e);
@@ -715,11 +718,20 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 lod->AutoCalculateBounds();
                 std::vector<uint8_t> lodBytes = MeshCompiler::CompileSingleLOD(*lod);
 
-                // Only Type 2 needs the Ghost Buffer padding trick
-                if (e.Type == 2 && i == staged.MeshLODs.size() - 1) {
-                    C3DMeshContent blankLOD;
-                    blankLOD.MeshName = lod->MeshName + "_Blank";
-                    std::vector<uint8_t> ghostBytes = MeshCompiler::CompileSingleLOD(blankLOD);
+                // FIX: Apply the Ghost Buffer padding trick to BOTH Type 2 (Foliage) and Type 5 (Animated) meshes!
+                if ((e.Type == 2 || e.Type == 5) && i == staged.MeshLODs.size() - 1) {
+                    // Create an exact structural copy of LOD 0 (keeps bounds, skeleton, helpers)
+                    C3DMeshContent ghostLOD = *lod;
+
+                    // Strip out the renderable geometry Fable doesn't need in a Ghost LOD
+                    ghostLOD.Materials.clear();
+                    ghostLOD.MaterialCount = 0;
+                    ghostLOD.Primitives.clear();
+                    ghostLOD.PrimitiveCount = 0;
+                    ghostLOD.TotalStaticBlocks = 0;
+                    ghostLOD.TotalAnimatedBlocks = 0;
+
+                    std::vector<uint8_t> ghostBytes = MeshCompiler::CompileSingleLOD(ghostLOD);
 
                     staged.MeshMeta.LODSizes.push_back((uint32_t)lodBytes.size());
                     newBytes.insert(newBytes.end(), lodBytes.begin(), lodBytes.end());
@@ -775,11 +787,12 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             TextureBuilder::ImportOptions opts;
             opts.Format = staged.Texture->TargetFormat;
             opts.GenerateMipmaps = true;
-            
+
             int w = staged.Texture->Header.Width ? staged.Texture->Header.Width : staged.Texture->Header.FrameWidth;
             int h = staged.Texture->Header.Height ? staged.Texture->Header.Height : staged.Texture->Header.FrameHeight;
 
             newBytes.clear();
+            newInfo.clear();
 
             // Loop array and run DXT compression on every frame sequentially
             for (size_t i = 0; i < staged.Texture->RawFrames.size(); i++) {
@@ -787,6 +800,7 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 if (i == 0) {
                     staged.Texture->Header.MipmapLevels = ((CGraphicHeader*)result.HeaderInfo.data())->MipmapLevels;
                     staged.Texture->Header.FrameDataSize = ((CGraphicHeader*)result.HeaderInfo.data())->FrameDataSize;
+                    newInfo = result.HeaderInfo; // [FIX] Grab 34 byte header
                 }
                 newBytes.insert(newBytes.end(), result.FullData.begin(), result.FullData.end());
             }
@@ -800,8 +814,11 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 else if (e.Type == 2) e.Type = 3;
             }
 
-            newInfo.resize(sizeof(CGraphicHeader));
-            memcpy(newInfo.data(), &staged.Texture->Header, sizeof(CGraphicHeader));
+            // [FIX] Update only the structural section of our extracted 34 byte array. 
+            // Avoids wiping out Fable pixel formats.
+            if (newInfo.size() >= sizeof(CGraphicHeader)) {
+                memcpy(newInfo.data(), &staged.Texture->Header, sizeof(CGraphicHeader));
+            }
             e.InfoSize = (uint32_t)newInfo.size();
         }
         else if (staged.Text || staged.TextGroup || staged.NarratorList) {
@@ -1039,14 +1056,21 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     StagedEntry staged;
 
     // --- ANIMATIONS (Types 6, 7, 9) ---
-    if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
+    if (bank->Type == EBankType::Graphics && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
         if (g_AnimParser.Data.IsParsed) {
             staged.Anim = std::make_shared<C3DAnimationInfo>(g_AnimParser.Data);
             g_BankStatus = "Animation staged for compilation.";
         }
     }
+    // --- PHYSICS MESH (Type 3) ---
+    else if (bank->Type == EBankType::Graphics && e.Type == 3) {
+        if (g_BBMParser.IsParsed) {
+            staged.Physics = std::make_shared<CBBMParser>(g_BBMParser);
+            g_BankStatus = "Physics Mesh staged for compilation.";
+        }
+    }
     // --- MESHES (Types 1, 2, 4, 5) ---
-    else if (IsSupportedMesh(e.Type)) {
+    else if (bank->Type == EBankType::Graphics && IsSupportedMesh(e.Type)) {
         if (g_ActiveMeshContent.IsParsed) {
             // If it's already staged, just grab it to update the active LOD
             if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {
@@ -1075,13 +1099,6 @@ inline void SaveEntryChanges(LoadedBank* bank) {
                 staged.MeshLODs[bank->SelectedLOD] = std::make_shared<C3DMeshContent>(g_ActiveMeshContent);
             }
             g_BankStatus = "Mesh LOD staged for compilation.";
-        }
-    }
-    // --- PHYSICS MESH (Type 3) ---
-    else if (e.Type == TYPE_STATIC_PHYSICS_MESH) {
-        if (g_BBMParser.IsParsed) {
-            staged.Physics = std::make_shared<CBBMParser>(g_BBMParser);
-            g_BankStatus = "Physics Mesh staged for compilation.";
         }
     }
     // --- TEXTURES ---
