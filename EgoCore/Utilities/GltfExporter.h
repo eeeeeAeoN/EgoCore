@@ -573,12 +573,12 @@ namespace GltfExporter {
 
         for (size_t i = 0; i < mesh.Helpers.size(); i++) {
             const auto& h = mesh.Helpers[i];
-
             std::string hName = mesh.GetNameFromCRC(h.NameCRC);
             if (hName.empty()) hName = "HPNT_" + std::to_string(h.NameCRC) + "_" + std::to_string(i);
 
             std::stringstream ss; ss.imbue(std::locale("C"));
-            ss << "{\"name\":" << Esc(hName) << ",\"translation\":[" << h.Pos[0] << "," << h.Pos[1] << "," << h.Pos[2] << "],\"extras\":{\"type\":\"Helper\",\"crc\":" << h.NameCRC << "}}";
+            // FIX: Added boneId to extras
+            ss << "{\"name\":" << Esc(hName) << ",\"translation\":[" << h.Pos[0] << "," << h.Pos[1] << "," << h.Pos[2] << "],\"extras\":{\"type\":\"Helper\",\"crc\":" << h.NameCRC << ",\"boneId\":" << h.BoneIndex << "}}";
             nodeStrs.push_back(ss.str());
         }
 
@@ -594,9 +594,10 @@ namespace GltfExporter {
             if (dName.empty()) dName = "HDMY_" + std::to_string(d.NameCRC) + "_" + std::to_string(i);
 
             std::stringstream ss; ss.imbue(std::locale("C"));
+            // FIX: Added boneId to extras
             ss << "{\"name\":" << Esc(dName) << ",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << dMat.m[k] << (k < 15 ? "," : "");
-            ss << "],\"extras\":{\"type\":\"Dummy\",\"crc\":" << d.NameCRC << "}}";
+            ss << "],\"extras\":{\"type\":\"Dummy\",\"crc\":" << d.NameCRC << ",\"boneId\":" << d.BoneIndex << "}}";
             nodeStrs.push_back(ss.str());
         }
 
@@ -624,7 +625,7 @@ namespace GltfExporter {
                 }
                 ss << "]";
             }
-            ss << ",\"extras\":{\"type\":\"Generator\",\"bankId\":" << mesh.Generators[i].BankIndex << "}}";
+            ss << ",\"extras\":{\"type\":\"Generator\",\"bankId\":" << mesh.Generators[i].BankIndex << ",\"boneId\":" << mesh.Generators[i].BoneIndex << "}}";
             nodeStrs.push_back(ss.str());
         }
 
