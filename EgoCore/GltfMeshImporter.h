@@ -48,7 +48,12 @@ namespace GltfMeshImporter {
         if (pos == std::string::npos) return defaultVal;
         pos++;
         while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-        try { return std::stof(json.substr(pos)); }
+        try {
+            std::stringstream ss(json.substr(pos));
+            ss.imbue(std::locale("C")); // Force dot decimals
+            float f; if (ss >> f) return f;
+            return defaultVal;
+        }
         catch (...) { return defaultVal; }
     }
 
@@ -86,7 +91,9 @@ namespace GltfMeshImporter {
         size_t end = j.find(']', pos); if (end == std::string::npos) return res;
         std::string arr = j.substr(pos + 1, end - pos - 1);
         for (char& c : arr) if (c == ',' || c == '\n' || c == '\r' || c == '\t') c = ' ';
-        std::stringstream ss(arr); float f; while (ss >> f) res.push_back(f);
+        std::stringstream ss(arr);
+        ss.imbue(std::locale("C")); // Force dot decimals
+        float f; while (ss >> f) res.push_back(f);
         return res;
     }
 
@@ -359,7 +366,7 @@ namespace GltfMeshImporter {
     struct Acc { int view, count, compType; size_t offset; };
     struct BView { size_t offset, length; };
 
-    static std::string ImportType1(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh) {
+    static std::string ImportType1(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh, bool forceRecalculate = false) {
         std::ifstream file(gltfPath);
         if (!file.is_open()) return "Could not open glTF file.";
         std::stringstream buffer; buffer << file.rdbuf();
@@ -376,13 +383,8 @@ namespace GltfMeshImporter {
         outMesh = C3DMeshContent();
         outMesh.MeshName = originalName;
         outMesh.MeshType = 1;
-        outMesh.AnimatedFlag = 0; // Strictly Static
+        outMesh.AnimatedFlag = 0; // Static
 
-        // TARGETED BLENDER FIX:
-        // EgoCore writes an artificial 'Scene_Root' to make Z-up meshes look Y-up in viewers.
-        // Blender "helpfully" bakes this coordinate conversion permanently into the binary vertex buffer, 
-        // physically swapping Y and Z, but it leaves the local helper/bone translations completely alone!
-        // This is why complex matrix multiplication broke your helpers. We just need to un-swap the vertices.
         bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
         bool hasSceneRoot = json.find("\"name\":\"Scene_Root\"") != std::string::npos || json.find("\"name\": \"Scene_Root\"") != std::string::npos;
         bool applyBlenderFix = isBlender && hasSceneRoot;
@@ -419,7 +421,7 @@ namespace GltfMeshImporter {
         outMesh.Materials.clear();
         if (!matObjs.empty()) {
             for (int i = 0; i < matObjs.size(); ++i) {
-                C3DMaterial m = {}; m.ID = i; m.Name = ExtractString(matObjs[i], "name");
+                C3DMaterial m = {}; m.ID = i; m.Name = ExtractStringClean(matObjs[i], "name");
                 if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
 
                 std::string extras = ExtractBlock(matObjs[i], "extras");
@@ -444,13 +446,36 @@ namespace GltfMeshImporter {
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
 
-        std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
-        if (meshObjs.empty()) return "No meshes found in glTF.";
+        // --- GLOBAL BOUNDS PRE-PASS (Same logic as Type 5) ---
+        float globalMin[3] = { 1e9f, 1e9f, 1e9f };
+        float globalMax[3] = { -1e9f, -1e9f, -1e9f };
+        std::vector<std::string> preMeshObjs = SplitArray(ExtractBlock(json, "meshes"));
+        for (const auto& meshObj : preMeshObjs) {
+            std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
+            for (const auto& pObj : primObjs) {
+                std::string attr = ExtractBlock(pObj, "attributes");
+                int pIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
+                if (pIdx < 0 || pIdx >= accessors.size()) continue;
+                Acc pAcc = accessors[pIdx];
+                float* pData = (float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
+                for (int v = 0; v < pAcc.count; v++) {
+                    for (int j = 0; j < 3; j++) {
+                        float val = pData[v * 3 + j];
+                        if (val < globalMin[j]) globalMin[j] = val;
+                        if (val > globalMax[j]) globalMax[j] = val;
+                    }
+                }
+            }
+        }
+        // ------------------------------------------------------
 
+        std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
         for (int mIdx = 0; mIdx < meshObjs.size(); mIdx++) {
             const auto& meshObj = meshObjs[mIdx];
             std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
             if (primObjs.empty()) continue;
+
+            std::string meshExtras = ExtractBlock(meshObj, "extras");
 
             C3DPrimitive outPrim = {};
             outPrim.InitFlags = 4;
@@ -458,6 +483,10 @@ namespace GltfMeshImporter {
             outPrim.BufferType = 0;
             outPrim.VertexStride = 12;
             outPrim.MaterialIndex = -1;
+
+            outPrim.AvgTextureStretch = ExtractFloatClean(meshExtras, "AvgTextureStretch", 0.1f);
+            outPrim.SphereRadius = ExtractFloatClean(meshExtras, "SphereRadius", 0.0f);
+            memset(outPrim.SphereCenter, 0, 12);
 
             struct BaseVertex { float p[3], n[3], u[2]; };
             std::vector<BaseVertex> uniqueVerts;
@@ -477,22 +506,8 @@ namespace GltfMeshImporter {
 
                 if (posAccIdx < 0 || indAccIdx < 0) continue;
 
-                auto FindOrAddVertex = [&](const BaseVertex& v) -> uint32_t {
-                    for (size_t i = 0; i < uniqueVerts.size(); ++i) {
-                        const auto& uv = uniqueVerts[i];
-                        if (std::abs(uv.p[0] - v.p[0]) < 0.002f && std::abs(uv.p[1] - v.p[1]) < 0.002f && std::abs(uv.p[2] - v.p[2]) < 0.002f &&
-                            std::abs(uv.n[0] - v.n[0]) < 0.01f && std::abs(uv.n[1] - v.n[1]) < 0.01f && std::abs(uv.n[2] - v.n[2]) < 0.01f &&
-                            std::abs(uv.u[0] - v.u[0]) < 0.002f && std::abs(uv.u[1] - v.u[1]) < 0.002f) {
-                            return (uint32_t)i;
-                        }
-                    }
-                    uniqueVerts.push_back(v);
-                    return (uint32_t)(uniqueVerts.size() - 1);
-                    };
-
                 Acc posAcc = accessors[posAccIdx];
                 Acc iAcc = accessors[indAccIdx];
-
                 float* pData = (float*)(binData.data() + views[posAcc.view].offset + posAcc.offset);
                 float* nData = normAccIdx >= 0 ? (float*)(binData.data() + views[accessors[normAccIdx].view].offset + accessors[normAccIdx].offset) : nullptr;
                 float* uData = uvAccIdx >= 0 ? (float*)(binData.data() + views[accessors[uvAccIdx].view].offset + accessors[uvAccIdx].offset) : nullptr;
@@ -509,7 +524,7 @@ namespace GltfMeshImporter {
                         return 0xFFFFFFFF;
                         };
 
-                    uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) }; // Swap winding for Fable
+                    uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) };
 
                     for (int j = 0; j < 3; j++) {
                         uint32_t vIdx = idxs[j];
@@ -519,66 +534,71 @@ namespace GltfMeshImporter {
                         v.p[0] = pData[vIdx * 3]; v.p[1] = pData[vIdx * 3 + 1]; v.p[2] = pData[vIdx * 3 + 2];
                         if (nData) { v.n[0] = nData[vIdx * 3]; v.n[1] = nData[vIdx * 3 + 1]; v.n[2] = nData[vIdx * 3 + 2]; }
                         else { v.n[0] = 0; v.n[1] = 1; v.n[2] = 0; }
-
                         if (uData) { v.u[0] = uData[vIdx * 2]; v.u[1] = uData[vIdx * 2 + 1]; }
-                        else { v.u[0] = 0; v.u[1] = 0; }
 
-                        // ONLY apply fix if Blender baked the rotation into the binary buffer
                         if (applyBlenderFix) {
-                            float temp_y = v.p[1];
-                            v.p[1] = -v.p[2];
-                            v.p[2] = temp_y;
-
-                            float temp_ny = v.n[1];
-                            v.n[1] = -v.n[2];
-                            v.n[2] = temp_ny;
+                            float ty = v.p[1]; v.p[1] = -v.p[2]; v.p[2] = ty;
+                            float tny = v.n[1]; v.n[1] = -v.n[2]; v.n[2] = tny;
                         }
 
-                        mergedBaseIndices.push_back(FindOrAddVertex(v));
+                        // Unique vertex merging
+                        bool found = false;
+                        for (size_t k = 0; k < uniqueVerts.size(); ++k) {
+                            if (memcmp(&uniqueVerts[k], &v, sizeof(BaseVertex)) == 0) {
+                                mergedBaseIndices.push_back((uint32_t)k);
+                                found = true; break;
+                            }
+                        }
+                        if (!found) {
+                            mergedBaseIndices.push_back((uint32_t)uniqueVerts.size());
+                            uniqueVerts.push_back(v);
+                        }
                     }
                 }
-
                 if (iAcc.count > 0) {
-                    CStaticBlock sb = {};
-                    sb.PrimitiveCount = iAcc.count / 3;
-                    sb.StartIndex = startIdx;
-                    sb.MaterialIndex = matIdx;
+                    CStaticBlock sb = {}; sb.PrimitiveCount = iAcc.count / 3; sb.StartIndex = startIdx; sb.MaterialIndex = matIdx;
                     baseBlocks.push_back(sb);
                 }
             }
 
-            uint32_t baseVertCount = (uint32_t)uniqueVerts.size();
-            if (baseVertCount == 0) continue;
-            if (baseVertCount > 65535) return "Import Error: Vertex overflow. Fable limit is 65,535.";
+            if (uniqueVerts.empty()) continue;
 
-            float minP[3] = { 1e9f, 1e9f, 1e9f }; float maxP[3] = { -1e9f, -1e9f, -1e9f };
-            for (const auto& v : uniqueVerts) {
+            // --- SMART LOSSLESS COMPRESSION WITH OVERRIDE ---
+            std::vector<float> savedScale = GetJsonFloatArray(meshExtras, "compScale");
+            std::vector<float> savedOffset = GetJsonFloatArray(meshExtras, "compOffset");
+
+            if (!forceRecalculate && savedScale.size() >= 3 && savedOffset.size() >= 3) {
+                // LOSSLESS MODE: Restore the original grid
+                outPrim.Compression.Scale[0] = savedScale[0];
+                outPrim.Compression.Scale[1] = savedScale[1];
+                outPrim.Compression.Scale[2] = savedScale[2];
+                outPrim.Compression.Offset[0] = savedOffset[0];
+                outPrim.Compression.Offset[1] = savedOffset[1];
+                outPrim.Compression.Offset[2] = savedOffset[2];
+            }
+            else {
+                // CUSTOM MODE: Flawless Center/Extents Math
                 for (int j = 0; j < 3; j++) {
-                    if (v.p[j] < minP[j]) minP[j] = v.p[j];
-                    if (v.p[j] > maxP[j]) maxP[j] = v.p[j];
+                    outPrim.Compression.Offset[j] = (globalMax[j] + globalMin[j]) * 0.5f;
+                    outPrim.Compression.Scale[j] = (globalMax[j] - globalMin[j]) * 0.505f;
+                    if (outPrim.Compression.Scale[j] < 0.0001f) outPrim.Compression.Scale[j] = 0.0001f;
                 }
             }
-            for (int j = 0; j < 3; j++) {
-                outPrim.Compression.Offset[j] = minP[j];
-                outPrim.Compression.Scale[j] = maxP[j] - minP[j];
-                if (outPrim.Compression.Scale[j] < 0.0001f) outPrim.Compression.Scale[j] = 0.0001f;
-            }
+            outPrim.Compression.Scale[3] = 1.0f;
+            outPrim.Compression.Offset[3] = 0.0f;
+            // ------------------------------------------------
 
-            outPrim.VertexCount = baseVertCount;
-            outPrim.VertexBuffer.resize(baseVertCount * outPrim.VertexStride, 0);
+            outPrim.VertexCount = (uint32_t)uniqueVerts.size();
+            outPrim.VertexBuffer.resize(outPrim.VertexCount * outPrim.VertexStride, 0);
             uint8_t* vDest = outPrim.VertexBuffer.data();
 
-            for (uint32_t v = 0; v < baseVertCount; v++) {
-                uint32_t packedPos = PackPOSPACKED3(uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2], outPrim.Compression.Scale, outPrim.Compression.Offset);
-                uint32_t packedNorm = PackNormal(uniqueVerts[v].n[0], uniqueVerts[v].n[1], uniqueVerts[v].n[2]);
-                int16_t compU = CompressUV(uniqueVerts[v].u[0]);
-                int16_t compV = CompressUV(uniqueVerts[v].u[1]);
+            for (uint32_t v = 0; v < outPrim.VertexCount; v++) {
+                uint32_t pP = PackPOSPACKED3(uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2], outPrim.Compression.Scale, outPrim.Compression.Offset);
+                uint32_t pN = PackNormal(uniqueVerts[v].n[0], uniqueVerts[v].n[1], uniqueVerts[v].n[2]);
+                int16_t cU = CompressUV(uniqueVerts[v].u[0]), cV = CompressUV(uniqueVerts[v].u[1]);
 
-                memcpy(vDest + 0, &packedPos, 4);
-                memcpy(vDest + 4, &packedNorm, 4);
-                memcpy(vDest + 8, &compU, 2);
-                memcpy(vDest + 10, &compV, 2);
-
+                memcpy(vDest + 0, &pP, 4); memcpy(vDest + 4, &pN, 4);
+                memcpy(vDest + 8, &cU, 2); memcpy(vDest + 10, &cV, 2);
                 vDest += outPrim.VertexStride;
             }
 
@@ -594,12 +614,25 @@ namespace GltfMeshImporter {
             outMesh.Primitives.push_back(outPrim);
         }
 
-        ParseNodes(json, outMesh); // Helpers are parsed directly from local JSON translates
+        // Auto-sort Opaque vs Transparent for Z-fighting
+        std::sort(outMesh.Primitives.begin(), outMesh.Primitives.end(), [&](const C3DPrimitive& a, const C3DPrimitive& b) {
+            bool aT = false, bT = false;
+            if (a.MaterialIndex >= 0 && a.MaterialIndex < outMesh.MaterialCount) aT = outMesh.Materials[a.MaterialIndex].IsTransparent || outMesh.Materials[a.MaterialIndex].BooleanAlpha;
+            if (b.MaterialIndex >= 0 && b.MaterialIndex < outMesh.MaterialCount) bT = outMesh.Materials[b.MaterialIndex].IsTransparent || outMesh.Materials[b.MaterialIndex].BooleanAlpha;
+            return aT < bT;
+            });
+
+        outMesh.TotalStaticBlocks = 0;
+        for (const auto& prim : outMesh.Primitives)
+            outMesh.TotalStaticBlocks += (uint16_t)prim.StaticBlockCount;
+
+        ParseNodes(json, outMesh);
+
 
         outMesh.PrimitiveCount = (int32_t)outMesh.Primitives.size();
         outMesh.AutoCalculateBounds();
         outMesh.IsParsed = true;
-        outMesh.DebugStatus = "Successfully Synthesized Pure Static Mesh with Targeted Blender Fix";
+        outMesh.DebugStatus = "Successfully Synthesized Type 1 Static Mesh";
 
         return "";
     }
@@ -1303,7 +1336,7 @@ namespace GltfMeshImporter {
         return "";
     }
 
-    static std::string ImportType5(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh) {
+    static std::string ImportType5(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh, bool forceRecalculate = false) {
         std::ifstream file(gltfPath);
         if (!file.is_open()) return "Could not open glTF file.";
         std::stringstream buffer; buffer << file.rdbuf();
@@ -1459,7 +1492,8 @@ namespace GltfMeshImporter {
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
 
         // --- GLOBAL BOUNDS PRE-PASS TO PREVENT SEAM TEARING ---
-        float globalMaxExtent = 0.0f;
+        float globalMin[3] = { 1e9f, 1e9f, 1e9f };
+        float globalMax[3] = { -1e9f, -1e9f, -1e9f };
         std::vector<std::string> preMeshObjs = SplitArray(ExtractBlock(json, "meshes"));
         for (const auto& meshObj : preMeshObjs) {
             std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
@@ -1471,13 +1505,13 @@ namespace GltfMeshImporter {
                 float* pData = (float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
                 for (int v = 0; v < pAcc.count; v++) {
                     for (int j = 0; j < 3; j++) {
-                        float val = std::abs(pData[v * 3 + j]);
-                        if (val > globalMaxExtent) globalMaxExtent = val;
+                        float val = pData[v * 3 + j];
+                        if (val < globalMin[j]) globalMin[j] = val;
+                        if (val > globalMax[j]) globalMax[j] = val;
                     }
                 }
             }
         }
-        float globalUniformScale = (std::max)(150.0f, globalMaxExtent * 1.1f);
         // ------------------------------------------------------
 
         std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
@@ -1572,13 +1606,30 @@ namespace GltfMeshImporter {
                 }
             }
 
-            for (int j = 0; j < 3; j++) {
-                outPrim.Compression.Scale[j] = globalUniformScale;
-                outPrim.Compression.Offset[j] = 0.0f;
+            // --- SMART LOSSLESS COMPRESSION WITH OVERRIDE ---
+            std::vector<float> savedScale = GetJsonFloatArray(meshExtras, "compScale");
+            std::vector<float> savedOffset = GetJsonFloatArray(meshExtras, "compOffset");
+
+            if (!forceRecalculate && savedScale.size() >= 3 && savedOffset.size() >= 3) {
+                // LOSSLESS MODE: Restore the exact original Fable grid
+                outPrim.Compression.Scale[0] = savedScale[0];
+                outPrim.Compression.Scale[1] = savedScale[1];
+                outPrim.Compression.Scale[2] = savedScale[2];
+                outPrim.Compression.Offset[0] = savedOffset[0];
+                outPrim.Compression.Offset[1] = savedOffset[1];
+                outPrim.Compression.Offset[2] = savedOffset[2];
+            }
+            else {
+                // CUSTOM MESH MODE: Flawless Center/Extents Math
+                for (int j = 0; j < 3; j++) {
+                    outPrim.Compression.Offset[j] = (globalMax[j] + globalMin[j]) * 0.5f;
+                    outPrim.Compression.Scale[j] = (globalMax[j] - globalMin[j]) * 0.505f; // 1% buffer
+                    if (outPrim.Compression.Scale[j] < 0.0001f) outPrim.Compression.Scale[j] = 0.0001f;
+                }
             }
             outPrim.Compression.Scale[3] = 1.0f;
-            outPrim.Compression.Offset[2] = 100.0f;
             outPrim.Compression.Offset[3] = 0.0f;
+            // ------------------------------------------------
 
             struct AnimBlockTemp { std::vector<uint32_t> faces; std::vector<uint8_t> palette; };
             std::vector<AnimBlockTemp> blocks;
@@ -1717,12 +1768,27 @@ namespace GltfMeshImporter {
             outMesh.Primitives.push_back(outPrim);
         }
 
+        // --- AUTO-SORT PRIMITIVES FOR DIRECTX DRAW ORDER ---
+        std::sort(outMesh.Primitives.begin(), outMesh.Primitives.end(), [&](const C3DPrimitive& a, const C3DPrimitive& b) {
+            bool aTrans = false, bTrans = false;
+
+            if (a.MaterialIndex >= 0 && a.MaterialIndex < outMesh.MaterialCount) {
+                aTrans = outMesh.Materials[a.MaterialIndex].IsTransparent || outMesh.Materials[a.MaterialIndex].BooleanAlpha;
+            }
+            if (b.MaterialIndex >= 0 && b.MaterialIndex < outMesh.MaterialCount) {
+                bTrans = outMesh.Materials[b.MaterialIndex].IsTransparent || outMesh.Materials[b.MaterialIndex].BooleanAlpha;
+            }
+
+            return aTrans < bTrans; // Opaque (false) comes before Transparent (true)
+            });
+        // ---------------------------------------------------
+
         ParseNodes(json, outMesh);
 
         outMesh.PrimitiveCount = (int32_t)outMesh.Primitives.size();
         outMesh.AutoCalculateBounds();
         outMesh.IsParsed = true;
-        outMesh.DebugStatus = "Successfully Synthesized Type 5 Animated Mesh";
+        outMesh.DebugStatus = "Successfully Synthesized Type 5 Animated Mesh (With Override Support)";
 
         return "";
     }

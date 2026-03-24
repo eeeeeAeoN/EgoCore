@@ -417,7 +417,7 @@ inline void CreateNewAnimationEntry(LoadedBank* bank, const std::string& gltfPat
     g_SuccessMessage = "Animation Entry Created: " + fname + "\n(Staged for Compilation)";
 }
 
-inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, int type, int reps) {
+inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, int type, int reps, bool forceRecalculate = false) {
     if (!bank) return false;
 
     std::string fname = std::filesystem::path(gltfPath).stem().string();
@@ -456,14 +456,15 @@ inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, in
         return true;
     }
 
-    // --- HANDLE GRAPHICS MESHES (TYPES 1, 2, 4) ---
+    // --- HANDLE GRAPHICS MESHES (TYPES 1, 2, 4, 5) ---
     C3DMeshContent newMesh;
     std::string err;
 
+    // PASS THE BOOLEAN TO TYPE 1 AND TYPE 5
     if (type == 1) err = GltfMeshImporter::ImportType1(gltfPath, fname, newMesh);
     else if (type == 2) err = GltfMeshImporter::ImportType2(gltfPath, fname, newMesh, reps);
     else if (type == 4) err = GltfMeshImporter::ImportType4(gltfPath, fname, newMesh);
-    else if (type == 5) err = GltfMeshImporter::ImportType5(gltfPath, fname, newMesh);
+    else if (type == 5) err = GltfMeshImporter::ImportType5(gltfPath, fname, newMesh, forceRecalculate);
 
     if (!err.empty()) {
         g_ShowSuccessPopup = true;

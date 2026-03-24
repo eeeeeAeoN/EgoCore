@@ -28,6 +28,7 @@ static bool g_ShowType2SettingsPopup = false;
 static std::string g_PendingGltfPath = "";
 static int g_PendingLODAction = 0; // 0 for Add, 1 for Replace
 static int g_LODImportType = 1;
+static bool g_ForceRecalculateBounds = false;
 
 static bool g_ShowAnimImportPopup = false;
 static int g_ImportAnimType = 6; // Default to 6 (Animation)
@@ -255,6 +256,15 @@ static void DrawBankTab() {
         ImGui::RadioButton("Particle Mesh (4)", &g_ImportAnimType, 4);
         ImGui::RadioButton("Animated Mesh (5)", &g_ImportAnimType, 5);
 
+        //Recalculate local bounding data and compression scale prompt
+        if (g_ImportAnimType == 1 || g_ImportAnimType == 5) {
+            ImGui::Separator();
+            ImGui::Checkbox("Recalculate Bounds & Scale", &g_ForceRecalculateBounds);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Tick this if you have physically enlarged the mesh in Blender.\nLeave unticked for Lossless mode (best for texture/vertex tweaks).");
+            }
+        }
+
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0, 1, 1, 1), "Animation Types:");
         ImGui::RadioButton("Normal Animation (6)", &g_ImportAnimType, 6);
@@ -267,7 +277,7 @@ static void DrawBankTab() {
             if (g_ActiveBankIndex != -1 && g_ActiveBankIndex < g_OpenBanks.size()) {
                 if (g_ImportAnimType == 1 || g_ImportAnimType == 2 || g_ImportAnimType == 3 || g_ImportAnimType == 4 || g_ImportAnimType == 5) {
                     if (g_ImportAnimType == 1 || g_ImportAnimType == 3 || g_ImportAnimType == 4 || g_ImportAnimType == 5) {
-                        if (CreateNewMeshEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingImportPath, g_ImportAnimType, 0)) {
+                        if (CreateNewMeshEntry(&g_OpenBanks[g_ActiveBankIndex], g_PendingImportPath, g_ImportAnimType, 0, g_ForceRecalculateBounds)) {
                             g_BankStatus = "New Mesh Created Successfully!";
                             g_ScrollToSelected = true;
                         }
@@ -821,6 +831,12 @@ static void DrawBankTab() {
                                 ImGui::SameLine();
                                 ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
 
+                                if (g_LODImportType == 1 || g_LODImportType == 5) {
+                                    ImGui::Separator();
+                                    ImGui::Checkbox("Recalculate Bounds & Scale", &g_ForceRecalculateBounds);
+                                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick this if you enlarged the mesh. Untick for Lossless.");
+                                }
+
                                 if (g_LODImportType == 2) {
                                     ImGui::Separator();
                                     ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Settings:");
@@ -839,10 +855,10 @@ static void DrawBankTab() {
                                         C3DMeshContent newMesh;
                                         std::string err;
 
-                                        if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh);
+                                        if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
                                         else if (g_LODImportType == 2) err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, g_ImportReps);
                                         else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh);
-                                        else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh);
+                                        else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
 
                                         if (err.empty()) {
                                             // Ensure the mesh is fully staged as an array
@@ -918,6 +934,12 @@ static void DrawBankTab() {
                                 ImGui::SameLine();
                                 ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
 
+                                if (g_LODImportType == 1 || g_LODImportType == 5) {
+                                    ImGui::Separator();
+                                    ImGui::Checkbox("Recalculate Bounds & Scale", &g_ForceRecalculateBounds);
+                                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick this if you enlarged the mesh. Untick for Lossless.");
+                                }
+
                                 if (g_LODImportType == 2) {
                                     ImGui::Separator();
                                     ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Settings:");
@@ -956,10 +978,10 @@ static void DrawBankTab() {
                                         else {
                                             // Handle graphics replacements (Types 1, 2, 4)
                                             C3DMeshContent newMesh;
-                                            if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh);
+                                            if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
                                             else if (g_LODImportType == 2) err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, g_ImportReps);
                                             else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh);
-                                            else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh);
+                                            else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
 
                                             if (err.empty()) {
                                                 if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);

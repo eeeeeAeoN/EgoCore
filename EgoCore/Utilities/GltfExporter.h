@@ -356,10 +356,20 @@ namespace GltfExporter {
                 }
             }
 
-            // Save this Fable primitive as its own isolated glTF mesh, preserving metadata
+            // Save this Fable primitive as its own isolated glTF mesh, preserving metadata and lossless compression grids
+            std::stringstream extras;
+            extras.imbue(std::locale("C"));
+            extras << "\"AvgTextureStretch\":" << prim.AvgTextureStretch
+                << ",\"SphereRadius\":" << prim.SphereRadius;
+
+            // ONLY export the grid if the Fable original actually used one!
+            if (isPosComp) {
+                extras << ",\"compScale\":[" << prim.Compression.Scale[0] << "," << prim.Compression.Scale[1] << "," << prim.Compression.Scale[2] << "]"
+                    << ",\"compOffset\":[" << prim.Compression.Offset[0] << "," << prim.Compression.Offset[1] << "," << prim.Compression.Offset[2] << "]";
+            }
+
             meshJsonStrings.push_back("{\"name\":" + Esc(mesh.MeshName + "_P" + std::to_string(pIdx)) +
-                ",\"extras\":{\"AvgTextureStretch\":" + std::to_string(prim.AvgTextureStretch) +
-                ",\"SphereRadius\":" + std::to_string(prim.SphereRadius) + "},\"primitives\":[" + primitivesJson.str() + "]}");
+                ",\"extras\":{" + extras.str() + "},\"primitives\":[" + primitivesJson.str() + "]}");
         }
 
         int ibmAcc = -1;
