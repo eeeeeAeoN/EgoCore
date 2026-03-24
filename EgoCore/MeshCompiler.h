@@ -9,7 +9,7 @@
 
 class MeshCompiler {
 public:
-    static std::vector<uint8_t> CompileSingleLOD(const C3DMeshContent& m) {
+    static std::vector<uint8_t> CompileSingleLOD(const C3DMeshContent& m, bool disableLZO = false) {
         std::vector<uint8_t> data;
         auto Write = [&](const void* val, size_t len) {
             size_t s = data.size(); data.resize(s + len); memcpy(data.data() + s, val, len);
@@ -41,7 +41,7 @@ public:
                 memcpy(hRaw.data() + i * 20 + 4, m.Helpers[i].Pos, 12);
                 memcpy(hRaw.data() + i * 20 + 16, &m.Helpers[i].BoneIndex, 4);
             }
-            WriteLZOBlock(data, hRaw);
+            WriteLZOBlock(data, hRaw, disableLZO);
         }
 
         // Compress Dummy Arrays
@@ -52,12 +52,12 @@ public:
                 memcpy(dRaw.data() + i * 56 + 4, m.Dummies[i].Transform, 48);
                 memcpy(dRaw.data() + i * 56 + 52, &m.Dummies[i].BoneIndex, 4);
             }
-            WriteLZOBlock(data, dRaw);
+            WriteLZOBlock(data, dRaw, disableLZO);
         }
 
         // Compress Packed Strings
         if (namesSize > 0) {
-            WriteLZOBlock(data, m.PackedNamesRaw);
+            WriteLZOBlock(data, m.PackedNamesRaw, disableLZO);
         }
 
         // Compress Volumes
@@ -70,7 +70,7 @@ public:
             if (pCount > 0) {
                 std::vector<uint8_t> pRaw(pCount * 16);
                 memcpy(pRaw.data(), vol.Planes.data(), pCount * 16);
-                WriteLZOBlock(data, pRaw);
+                WriteLZOBlock(data, pRaw, disableLZO);
             }
         }
 
@@ -92,14 +92,14 @@ public:
         // Compress Bone Data
         if (m.BoneCount > 0) {
             Write(m.BoneIndices.data(), 2 * m.BoneCount);
-            WriteLZOBlock(data, bNamesBlock);
+            WriteLZOBlock(data, bNamesBlock, disableLZO);
 
             std::vector<uint8_t> bRaw(m.Bones.size() * 60);
             memcpy(bRaw.data(), m.Bones.data(), m.Bones.size() * 60);
-            WriteLZOBlock(data, bRaw);
+            WriteLZOBlock(data, bRaw, disableLZO);
 
-            WriteLZOBlock(data, m.BoneKeyframesRaw);
-            WriteLZOBlock(data, m.BoneTransformsRaw);
+            WriteLZOBlock(data, m.BoneKeyframesRaw, disableLZO);
+            WriteLZOBlock(data, m.BoneTransformsRaw, disableLZO);
         }
 
         Write(m.RootMatrix, 48);
@@ -137,59 +137,46 @@ public:
             uint32_t type = prim.BufferType; Write(&type, 4);
 
             // 2. COMPRESS PRIMITIVE BUFFERS USING FABLE'S CUSTOM WRAPPER
-            WriteLZOBlock(data, prim.VertexBuffer);
+            WriteLZOBlock(data, prim.VertexBuffer, disableLZO);
 
             std::vector<uint8_t> idxBytes(prim.IndexBuffer.size() * 2);
             if (!prim.IndexBuffer.empty()) memcpy(idxBytes.data(), prim.IndexBuffer.data(), idxBytes.size());
-            WriteLZOBlock(data, idxBytes);
+            WriteLZOBlock(data, idxBytes, disableLZO);
 
             uint32_t cpCount = (uint32_t)prim.ClothPrimitives.size(); Write(&cpCount, 4);
             for (const auto& cp : prim.ClothPrimitives) {
                 Write(&cp.PrimitiveIndex, 4); Write(&cp.MaterialIndex, 4);
-                WriteLZOBlock(data, cp.ParticleProgramData);
+                WriteLZOBlock(data, cp.ParticleProgramData, disableLZO);
             }
         }
         return data;
     }
 
-    static std::vector<uint8_t> CompileWithGhostLOD(const C3DMeshContent& m) {
-        // Compile the primary mesh
-        std::vector<uint8_t> data = CompileSingleLOD(m);
+    static std::vector<uint8_t> CompileForExport(const C3DMeshContent& m, bool disableLZO = false) {
+        std::vector<uint8_t> data = CompileSingleLOD(m, disableLZO);
 
-        // Compile a 1:1 identical ghost LOD
-        std::vector<uint8_t> ghost = CompileSingleLOD(m);
+        if (m.MeshType == 2 || m.MeshType == 5) {
+            // Replicate exactly what the internal Fable compiler does on flush
+            C3DMeshContent ghostLOD = m;
+            ghostLOD.Materials.clear();
+            ghostLOD.MaterialCount = 0;
+            ghostLOD.Primitives.clear();
+            ghostLOD.PrimitiveCount = 0;
+            ghostLOD.TotalStaticBlocks = 0;
+            ghostLOD.TotalAnimatedBlocks = 0;
 
-        // Append the ghost LOD directly to the binary stream
-        data.insert(data.end(), ghost.begin(), ghost.end());
-
+            std::vector<uint8_t> ghostBytes = CompileSingleLOD(ghostLOD, disableLZO);
+            data.insert(data.end(), ghostBytes.begin(), ghostBytes.end());
+        }
         return data;
     }
 
+    static std::vector<uint8_t> CompileWithGhostLOD(const C3DMeshContent& m) {
+        return CompileForExport(m, false);
+    }
+
     static std::vector<uint8_t> CompileAnimatedMesh(const C3DMeshContent& m) {
-        // 1. Generate the raw, uncompressed bytes for LOD 0
-        std::vector<uint8_t> uncompressed = CompileSingleLOD(m);
-
-        // 2. Duplicate it for the Ghost LOD
-        std::vector<uint8_t> ghost = CompileSingleLOD(m);
-
-        // 3. Append Ghost LOD to the uncompressed stream BEFORE compression
-        uncompressed.insert(uncompressed.end(), ghost.begin(), ghost.end());
-
-        // 4. Now run Fable's Monolithic LZO Compression on the combined buffer
-        uint32_t uncompSize = (uint32_t)uncompressed.size();
-        std::vector<uint8_t> outBytes;
-        outBytes.resize(4);
-        memcpy(outBytes.data(), &uncompSize, 4); // Combined Uncompressed Size Header
-
-        std::vector<uint8_t> lzoData = CompressLZORaw(uncompressed.data(), uncompSize);
-        if (lzoData.empty()) {
-            outBytes.insert(outBytes.end(), uncompressed.begin(), uncompressed.end());
-        }
-        else {
-            outBytes.insert(outBytes.end(), lzoData.begin(), lzoData.end());
-        }
-
-        return outBytes;
+        return CompileForExport(m, false);
     }
 
     // --- NEW: GENERATES THE RAW UNCOMPRESSED BINARY FOR DEBUGGING ---
@@ -417,10 +404,11 @@ public:
     }
 
 private:
-    static void WriteLZOBlock(std::vector<uint8_t>& out, const std::vector<uint8_t>& uncomp) {
-        if (uncomp.empty()) {
+    static void WriteLZOBlock(std::vector<uint8_t>& out, const std::vector<uint8_t>& uncomp, bool disableLZO = false) {
+        if (disableLZO || uncomp.empty()) {
             uint16_t zero = 0;
             out.insert(out.end(), (uint8_t*)&zero, ((uint8_t*)&zero) + 2);
+            out.insert(out.end(), uncomp.begin(), uncomp.end());
             return;
         }
 

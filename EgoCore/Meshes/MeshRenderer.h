@@ -415,7 +415,7 @@ public:
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
         RenderBatch batch = { 0, (uint32_t)indices.size(), -1 }; Batches.push_back(batch);
-        
+
         // FIX: Removed the stuck CamRotX lock
         float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f; CamPan = { 0, 0 }; CamRotX = 0.2f; CamRotY = XM_PI;
     }
@@ -664,7 +664,7 @@ public:
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), screenW / screenH, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
         XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
-        
+
         if (isPhysics) {
             world = XMMatrixRotationX(-XM_PIDIV2) * world;
         }

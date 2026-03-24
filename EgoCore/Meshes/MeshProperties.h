@@ -557,13 +557,13 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 g_SuccessMessage = "Physics Binary dumped correctly!";
             }
             else if (g_ActiveMeshContent.IsParsed) {
-                // EXPORT RAW GRAPHICS MESH BLOCKS
-                std::vector<uint8_t> outData = g_ActiveMeshContent.SerializeUncompressed();
+                // EXPORT RAW GRAPHICS MESH BLOCKS (LZO BYPASSED)
+                std::vector<uint8_t> outData = MeshCompiler::CompileForExport(g_ActiveMeshContent, true);
                 std::ofstream out(savePath, std::ios::binary);
                 out.write((char*)outData.data(), outData.size());
-                g_BankStatus = "Exported Uncompressed Mesh Binary (C3DMeshContent)!";
+                g_BankStatus = "Exported Uncompressed Mesh Binary (LZO Bypassed)!";
                 g_ShowSuccessPopup = true;
-                g_SuccessMessage = "Binary dumped correctly!";
+                g_SuccessMessage = "Binary dumped correctly (LZO Bypassed)!";
             }
             else {
                 g_BankStatus = "Error: No active parsed mesh available to export.";

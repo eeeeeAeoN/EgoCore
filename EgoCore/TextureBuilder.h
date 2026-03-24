@@ -161,9 +161,11 @@ public:
         pixelFmt.Type = 1;
 
         switch (opts.Format) {
-        case ETextureFormat::DXT1: header.TransparencyType = 0; pixelFmt.ColourDepth = 4; break;
+        case ETextureFormat::DXT1:
+        case ETextureFormat::NormalMap_DXT1: header.TransparencyType = 0; pixelFmt.ColourDepth = 4; break;
         case ETextureFormat::DXT3: header.TransparencyType = 1; pixelFmt.ColourDepth = 8; break;
-        case ETextureFormat::DXT5: header.TransparencyType = 3; pixelFmt.ColourDepth = 8; break;
+        case ETextureFormat::DXT5:
+        case ETextureFormat::NormalMap_DXT5: header.TransparencyType = 3; pixelFmt.ColourDepth = 8; break;
         case ETextureFormat::ARGB8888: header.TransparencyType = 255; pixelFmt.ColourDepth = 32; break;
         default: header.TransparencyType = 1; pixelFmt.ColourDepth = 8; break;
         }
@@ -245,9 +247,11 @@ public:
         CPixelFormatInit pixelFmt = { 1, 8, 8, 8, 8, 8 };
 
         switch (opts.Format) {
-        case ETextureFormat::DXT1: header.TransparencyType = 0; pixelFmt.ColourDepth = 4; break;
+        case ETextureFormat::DXT1:
+        case ETextureFormat::NormalMap_DXT1: header.TransparencyType = 0; pixelFmt.ColourDepth = 4; break;
         case ETextureFormat::DXT3: header.TransparencyType = 1; pixelFmt.ColourDepth = 8; break;
-        case ETextureFormat::DXT5: header.TransparencyType = 3; pixelFmt.ColourDepth = 8; break;
+        case ETextureFormat::DXT5:
+        case ETextureFormat::NormalMap_DXT5: header.TransparencyType = 3; pixelFmt.ColourDepth = 8; break;
         case ETextureFormat::ARGB8888: header.TransparencyType = 255; pixelFmt.ColourDepth = 32; break;
         default: header.TransparencyType = 1; pixelFmt.ColourDepth = 8; break;
         }
@@ -303,7 +307,7 @@ private:
     static std::vector<uint8_t> CompressDXT(const std::vector<uint8_t>& rgba, int w, int h, ETextureFormat fmt) {
         int blocksX = (w + 3) / 4;
         int blocksY = (h + 3) / 4;
-        int blockSize = (fmt == ETextureFormat::DXT1) ? 8 : 16;
+        int blockSize = (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) ? 8 : 16;
 
         std::vector<uint8_t> output;
         output.resize(blocksX * blocksY * blockSize);
@@ -325,7 +329,7 @@ private:
 
                 uint8_t* dest = &output[(y * blocksX + x) * blockSize];
 
-                if (fmt == ETextureFormat::DXT1) {
+                if (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) {
                     // [FIX] Alpha=0 (Fable DXT1 is opaque). Mode=STB_DXT_HIGHQUAL (2) for max quality.
                     stb_compress_dxt_block(dest, block, 0, STB_DXT_HIGHQUAL);
                 }
@@ -333,7 +337,7 @@ private:
                     DXT::EmitAlphaBlock3(dest, block);
                     stb_compress_dxt_block(dest + 8, block, 0, STB_DXT_HIGHQUAL);
                 }
-                else if (fmt == ETextureFormat::DXT5) {
+                else if (fmt == ETextureFormat::DXT5 || fmt == ETextureFormat::NormalMap_DXT5) {
                     DXT::EmitAlphaBlock5(dest, block);
                     stb_compress_dxt_block(dest + 8, block, 0, STB_DXT_HIGHQUAL);
                 }

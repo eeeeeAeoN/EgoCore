@@ -356,8 +356,10 @@ namespace GltfExporter {
                 }
             }
 
-            // Save this Fable primitive as its own isolated glTF mesh
-            meshJsonStrings.push_back("{\"name\":" + Esc(mesh.MeshName + "_P" + std::to_string(pIdx)) + ",\"primitives\":[" + primitivesJson.str() + "]}");
+            // Save this Fable primitive as its own isolated glTF mesh, preserving metadata
+            meshJsonStrings.push_back("{\"name\":" + Esc(mesh.MeshName + "_P" + std::to_string(pIdx)) +
+                ",\"extras\":{\"AvgTextureStretch\":" + std::to_string(prim.AvgTextureStretch) +
+                ",\"SphereRadius\":" + std::to_string(prim.SphereRadius) + "},\"primitives\":[" + primitivesJson.str() + "]}");
         }
 
         int ibmAcc = -1;
@@ -625,7 +627,9 @@ namespace GltfExporter {
                 }
                 ss << "]";
             }
-            ss << ",\"extras\":{\"type\":\"Generator\",\"bankId\":" << mesh.Generators[i].BankIndex << ",\"boneId\":" << mesh.Generators[i].BoneIndex << "}}";
+            ss << ",\"extras\":{\"type\":\"Generator\",\"bankId\":" << mesh.Generators[i].BankIndex <<
+                ",\"boneId\":" << mesh.Generators[i].BoneIndex <<
+                ",\"useLocalOrigin\":" << (mesh.Generators[i].UseLocalOrigin ? "true" : "false") << "}}";
             nodeStrs.push_back(ss.str());
         }
 

@@ -489,31 +489,23 @@ inline std::vector<uint8_t> CompressFableBlock(const uint8_t* src, uint32_t src_
 
     std::vector<uint8_t> result;
 
-    // Fable Fallback: If compressed data doesn't actually save space, store it uncompressed
-    if (out_len >= target_len) {
-        uint16_t zero = 0;
-        result.insert(result.end(), (uint8_t*)&zero, (uint8_t*)&zero + 2);
-        result.insert(result.end(), src, src + src_len);
+    // 1. Write Fable Size Header (Force LZO framing to match original compiler)
+    if (out_len > 0x7FFF) {
+        uint16_t magic = 0xFFFF;
+        result.insert(result.end(), (uint8_t*)&magic, (uint8_t*)&magic + 2);
+        uint32_t longLen = (uint32_t)out_len;
+        result.insert(result.end(), (uint8_t*)&longLen, (uint8_t*)&longLen + 4);
     }
     else {
-        // 1. Write Fable Size Header
-        if (out_len > 0x7FFF) {
-            uint16_t magic = 0xFFFF;
-            result.insert(result.end(), (uint8_t*)&magic, (uint8_t*)&magic + 2);
-            uint32_t longLen = (uint32_t)out_len;
-            result.insert(result.end(), (uint8_t*)&longLen, (uint8_t*)&longLen + 4);
-        }
-        else {
-            uint16_t shortLen = (uint16_t)out_len;
-            result.insert(result.end(), (uint8_t*)&shortLen, (uint8_t*)&shortLen + 2);
-        }
-
-        // 2. Write the LZO compressed payload
-        result.insert(result.end(), comp_buf.data(), comp_buf.data() + out_len);
-
-        // 3. Append the uncompressed last 3 bytes
-        result.insert(result.end(), src + target_len, src + src_len);
+        uint16_t shortLen = (uint16_t)out_len;
+        result.insert(result.end(), (uint8_t*)&shortLen, (uint8_t*)&shortLen + 2);
     }
+
+    // 2. Write the LZO compressed payload
+    result.insert(result.end(), comp_buf.data(), comp_buf.data() + out_len);
+
+    // 3. Append the uncompressed last 3 bytes
+    result.insert(result.end(), src + target_len, src + src_len);
 
     return result;
 }
