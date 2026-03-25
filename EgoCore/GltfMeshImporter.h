@@ -106,7 +106,7 @@ namespace GltfMeshImporter {
             if (pos == std::string::npos) break;
             int depth = 0; size_t end = pos; bool inStr = false;
             for (; end < jsonArray.length(); ++end) {
-                if (jsonArray[end] == '"' && jsonArray[end - 1] != '\\') inStr = !inStr;
+                if (jsonArray[end] == '"' && (end == 0 || jsonArray[end - 1] != '\\')) inStr = !inStr;
                 if (!inStr) {
                     if (jsonArray[end] == '{') depth++;
                     else if (jsonArray[end] == '}') { depth--; if (depth == 0) { items.push_back(jsonArray.substr(pos, end - pos + 1)); pos = end + 1; break; } }
@@ -182,6 +182,61 @@ namespace GltfMeshImporter {
         return (int16_t)std::clamp(std::round((uv + 8.0f) * 2048.0f), -32768.0f, 32767.0f);
     }
 
+    static uint32_t ExtractCRC(const std::string& json) {
+        size_t pos = json.find("\"crc\"");
+        if (pos == std::string::npos) return 0;
+        pos = json.find(':', pos);
+        if (pos == std::string::npos) return 0;
+        pos++;
+
+        // Skip whitespace
+        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+
+        // Check if the value is wrapped in quotes (Blender String Bug)
+        if (pos < json.length() && json[pos] == '\"') {
+            pos++; // Skip opening quote
+            size_t endPos = json.find('\"', pos);
+            if (endPos == std::string::npos) return 0;
+            std::string val = json.substr(pos, endPos - pos);
+            try { return (uint32_t)std::stoull(val); }
+            catch (...) { return 0; }
+        }
+        // Otherwise, read it as a raw integer
+        else {
+            size_t endPos = pos;
+            while (endPos < json.length() && (isdigit(json[endPos]) || json[endPos] == '.')) endPos++;
+            std::string val = json.substr(pos, endPos - pos);
+            try { return (uint32_t)std::stoull(val); }
+            catch (...) { return 0; }
+        }
+    }
+
+
+    struct Mat4 { float m[16]; };
+
+    static Mat4 Identity() { return { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }; }
+
+    static Mat4 TransformToMat4(const std::vector<float>& t, const std::vector<float>& r, const std::vector<float>& s) {
+        Mat4 m = Identity();
+        float tx = t.size() >= 3 ? t[0] : 0, ty = t.size() >= 3 ? t[1] : 0, tz = t.size() >= 3 ? t[2] : 0;
+        float qx = r.size() >= 4 ? r[0] : 0, qy = r.size() >= 4 ? r[1] : 0, qz = r.size() >= 4 ? r[2] : 0, qw = r.size() >= 4 ? r[3] : 1;
+        float sx = s.size() >= 3 ? s[0] : 1, sy = s.size() >= 3 ? s[1] : 1, sz = s.size() >= 3 ? s[2] : 1;
+
+        float xx = qx * qx, yy = qy * qy, zz = qz * qz;
+        float xy = qx * qy, xz = qx * qz, yz = qy * qz;
+        float wx = qw * qx, wy = qw * qy, wz = qw * qz;
+
+        // Strict glTF Column-Major mapping
+        m.m[0] = (1.0f - 2.0f * (yy + zz)) * sx; m.m[1] = (2.0f * (xy + wz)) * sx;       m.m[2] = (2.0f * (xz - wy)) * sx;
+        m.m[4] = (2.0f * (xy - wz)) * sy;       m.m[5] = (1.0f - 2.0f * (xx + zz)) * sy; m.m[6] = (2.0f * (yz + wx)) * sy;
+        m.m[8] = (2.0f * (xz + wy)) * sz;       m.m[9] = (2.0f * (yz - wx)) * sz;       m.m[10] = (1.0f - 2.0f * (xx + yy)) * sz;
+        m.m[12] = tx; m.m[13] = ty; m.m[14] = tz;
+        return m;
+    }
+
+    struct Acc { int view, count, compType; size_t offset; };
+    struct BView { size_t offset, length; };
+
     static void ParseNodes(const std::string& json, C3DMeshContent& outMesh) {
         std::string nodesBlock;
         size_t searchPos = 0;
@@ -240,44 +295,76 @@ namespace GltfMeshImporter {
             std::string exportName = name;
             uint32_t nameCrc = 0;
 
+            // Strip Blender's .001 suffixes safely
             size_t dotPos = exportName.find_last_of('.');
             if (dotPos != std::string::npos && dotPos + 4 == exportName.length() && isdigit(exportName[dotPos + 1])) {
                 exportName = exportName.substr(0, dotPos);
             }
 
             if (type == "Helper" || type == "Dummy") {
-                if (exportName.find("HPNT_") == 0 || exportName.find("HDMY_") == 0) {
-                    std::string crcStr = exportName.substr(5);
-                    size_t usPos = crcStr.find('_');
-                    if (usPos != std::string::npos) crcStr = crcStr.substr(0, usPos);
-                    try { nameCrc = (uint32_t)std::stoull(crcStr); }
-                    catch (...) {}
-                    exportName = "";
-                }
-                else {
-                    nameCrc = CalculateFableCRC(exportName);
+                nameCrc = ExtractCRC(extras);
+
+                // Fallback if missing
+                if (nameCrc == 0) {
+                    if (exportName.find("HPNT_") == 0 || exportName.find("HDMY_") == 0) {
+                        std::string crcStrFallback = exportName.substr(5);
+                        size_t usPos = crcStrFallback.find('_');
+                        if (usPos != std::string::npos) crcStrFallback = crcStrFallback.substr(0, usPos);
+                        try { nameCrc = (uint32_t)std::stoull(crcStrFallback); }
+                        catch (...) {}
+                        exportName = "";
+                    }
+                    else {
+                        nameCrc = CalculateFableCRC(exportName);
+                    }
                 }
             }
             else if (type == "Generator") {
                 if (exportName.find("GEN_") == 0) exportName = exportName.substr(4);
             }
 
-            // --- RESOLVE BONE INDEX ---
+            // --- THE FIX: RESOLVE SCRAMBLED BONE INDEX PRIORITY ---
+            bool isParentedToBone = false;
             int resolvedBoneIdx = -1;
 
-            if (extras.find("\"boneId\"") != std::string::npos) {
-                resolvedBoneIdx = (int)ExtractFloatClean(extras, "boneId", -1);
-            }
-            else {
-                int currNode = i;
-                while (nodeParentMap.count(currNode)) {
-                    int parentNode = nodeParentMap[currNode];
-                    if (gltfNodeToFableBone.count(parentNode)) {
-                        resolvedBoneIdx = gltfNodeToFableBone[parentNode];
-                        break;
-                    }
-                    currNode = parentNode;
+            // 1. Try real glTF hierarchy (Handles Modder who physically parented Dummy to Bone)
+            int currNode = i;
+            while (nodeParentMap.count(currNode)) {
+                int parentNode = nodeParentMap[currNode];
+                if (gltfNodeToFableBone.count(parentNode)) {
+                    resolvedBoneIdx = gltfNodeToFableBone[parentNode];
+                    isParentedToBone = true;
+                    break;
                 }
+                currNode = parentNode;
+            }
+
+            // 2. Fallback to stale extras ONLY if unparented
+            if (!isParentedToBone && extras.find("\"boneId\"") != std::string::npos) {
+                int staleBoneId = (int)ExtractFloatClean(extras, "boneId", -1);
+
+                // --- CROSS-REFERENCE OLD ID TO NEW SCRAMBLED ARRAY INDEX USING FABLE ID RANKING ---
+                if (staleBoneId >= 0 && outMesh.BoneCount > 0 && outMesh.BoneIndices.size() == outMesh.BoneCount) {
+                    // Create a sorted copy of FableIDs to reconstruct the original array order
+                    std::vector<uint16_t> sortedFableIDs = outMesh.BoneIndices;
+                    std::sort(sortedFableIDs.begin(), sortedFableIDs.end());
+
+                    // The staleBoneId is the index in the ORIGINAL sorted array
+                    if (staleBoneId < sortedFableIDs.size()) {
+                        uint16_t targetFableID = sortedFableIDs[staleBoneId];
+
+                        // Find which index in the CURRENT shuffled array holds this FableID
+                        for (int bIdx = 0; bIdx < outMesh.BoneCount; bIdx++) {
+                            if (outMesh.BoneIndices[bIdx] == targetFableID) {
+                                resolvedBoneIdx = bIdx; // Found its new home!
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Failsafe for un-rigged static meshes
+                if (resolvedBoneIdx == -1) resolvedBoneIdx = staleBoneId;
             }
 
             if (type == "Helper") {
@@ -348,12 +435,26 @@ namespace GltfMeshImporter {
                 outMesh.Volumes.push_back(v);
             }
         }
+
+        std::sort(outMesh.Helpers.begin(), outMesh.Helpers.end(), [](const CHelperPoint& a, const CHelperPoint& b) {
+            return a.NameCRC < b.NameCRC;
+            });
+
+        std::sort(outMesh.Dummies.begin(), outMesh.Dummies.end(), [](const CDummyObject& a, const CDummyObject& b) {
+            return a.NameCRC < b.NameCRC;
+            });
+
+        std::sort(outMesh.Generators.begin(), outMesh.Generators.end(), [](const CMeshGenerator& a, const CMeshGenerator& b) {
+            uint32_t crcA = CalculateFableCRC(a.ObjectName);
+            uint32_t crcB = CalculateFableCRC(b.ObjectName);
+            return crcA < crcB;
+            });
+
         outMesh.HelperPointCount = (uint16_t)outMesh.Helpers.size();
         outMesh.DummyObjectCount = (uint16_t)outMesh.Dummies.size();
         outMesh.MeshGeneratorCount = (uint16_t)outMesh.Generators.size();
         outMesh.MeshVolumeCount = (uint16_t)outMesh.Volumes.size();
 
-        // --- CRITICAL FIX: Only pack names if entities exist to prevent Ghost LZO blocks ---
         if (outMesh.HelperPointCount > 0 || outMesh.DummyObjectCount > 0) {
             outMesh.PackNames(tempHelperNames, tempDummyNames);
             outMesh.UnpackNames();
@@ -362,9 +463,6 @@ namespace GltfMeshImporter {
             outMesh.PackedNamesRaw.clear();
         }
     }
-
-    struct Acc { int view, count, compType; size_t offset; };
-    struct BView { size_t offset, length; };
 
     static std::string ImportType1(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh, bool forceRecalculate = false) {
         std::ifstream file(gltfPath);
@@ -385,27 +483,37 @@ namespace GltfMeshImporter {
         outMesh.MeshType = 1;
         outMesh.AnimatedFlag = 0; // Static
 
-        bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
-        bool hasSceneRoot = json.find("\"name\":\"Scene_Root\"") != std::string::npos || json.find("\"name\": \"Scene_Root\"") != std::string::npos;
-        bool applyBlenderFix = isBlender && hasSceneRoot;
-
         memset(outMesh.RootMatrix, 0, 48);
         outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
 
+        // --- ROOT MATRIX PARSING (Supports both Matrix and TRS Quaternions) ---
         std::string nodesBlock = ExtractBlock(json, "nodes");
         std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
         for (const auto& node : nodeObjs) {
-            if (ExtractStringClean(node, "name") == "Scene_Root") {
-                std::vector<float> mat = ExtractFloatArray(node, "matrix");
+            std::string nName = ExtractStringClean(node, "name");
+            if (nName == "Scene_Root" || nName == "Scene Root") {
+                std::vector<float> mat = GetJsonFloatArray(node, "matrix");
                 if (mat.size() >= 16) {
                     outMesh.RootMatrix[0] = mat[0]; outMesh.RootMatrix[1] = mat[1]; outMesh.RootMatrix[2] = mat[2];
                     outMesh.RootMatrix[3] = mat[4]; outMesh.RootMatrix[4] = mat[5]; outMesh.RootMatrix[5] = mat[6];
                     outMesh.RootMatrix[6] = mat[8]; outMesh.RootMatrix[7] = mat[9]; outMesh.RootMatrix[8] = mat[10];
                     outMesh.RootMatrix[9] = mat[12]; outMesh.RootMatrix[10] = mat[13]; outMesh.RootMatrix[11] = mat[14];
                 }
+                else {
+                    std::vector<float> t = GetJsonFloatArray(node, "translation");
+                    std::vector<float> r = GetJsonFloatArray(node, "rotation");
+                    std::vector<float> s = GetJsonFloatArray(node, "scale");
+                    Mat4 rMat = TransformToMat4(t, r, s);
+
+                    outMesh.RootMatrix[0] = rMat.m[0]; outMesh.RootMatrix[1] = rMat.m[1]; outMesh.RootMatrix[2] = rMat.m[2];
+                    outMesh.RootMatrix[3] = rMat.m[4]; outMesh.RootMatrix[4] = rMat.m[5]; outMesh.RootMatrix[5] = rMat.m[6];
+                    outMesh.RootMatrix[6] = rMat.m[8]; outMesh.RootMatrix[7] = rMat.m[9]; outMesh.RootMatrix[8] = rMat.m[10];
+                    outMesh.RootMatrix[9] = rMat.m[12]; outMesh.RootMatrix[10] = rMat.m[13]; outMesh.RootMatrix[11] = rMat.m[14];
+                }
                 break;
             }
         }
+        // ----------------------------------------------------------------------
 
         std::vector<std::string> viewObjs = SplitArray(ExtractBlock(json, "bufferViews"));
         struct BV { int offset, length; }; std::vector<BV> views;
@@ -446,7 +554,7 @@ namespace GltfMeshImporter {
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
 
-        // --- GLOBAL BOUNDS PRE-PASS (Same logic as Type 5) ---
+        // --- GLOBAL BOUNDS PRE-PASS ---
         float globalMin[3] = { 1e9f, 1e9f, 1e9f };
         float globalMax[3] = { -1e9f, -1e9f, -1e9f };
         std::vector<std::string> preMeshObjs = SplitArray(ExtractBlock(json, "meshes"));
@@ -536,11 +644,6 @@ namespace GltfMeshImporter {
                         else { v.n[0] = 0; v.n[1] = 1; v.n[2] = 0; }
                         if (uData) { v.u[0] = uData[vIdx * 2]; v.u[1] = uData[vIdx * 2 + 1]; }
 
-                        if (applyBlenderFix) {
-                            float ty = v.p[1]; v.p[1] = -v.p[2]; v.p[2] = ty;
-                            float tny = v.n[1]; v.n[1] = -v.n[2]; v.n[2] = tny;
-                        }
-
                         // Unique vertex merging
                         bool found = false;
                         for (size_t k = 0; k < uniqueVerts.size(); ++k) {
@@ -627,7 +730,6 @@ namespace GltfMeshImporter {
             outMesh.TotalStaticBlocks += (uint16_t)prim.StaticBlockCount;
 
         ParseNodes(json, outMesh);
-
 
         outMesh.PrimitiveCount = (int32_t)outMesh.Primitives.size();
         outMesh.AutoCalculateBounds();
@@ -859,27 +961,6 @@ namespace GltfMeshImporter {
         outMesh.DebugStatus = "Successfully Synthesized Type 2 Mesh";
 
         return "";
-    }
-
-    struct Mat4 { float m[16]; };
-
-    static Mat4 Identity() { return { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }; }
-
-    static Mat4 TransformToMat4(const std::vector<float>& t, const std::vector<float>& r, const std::vector<float>& s) {
-        Mat4 m = Identity();
-        float tx = t.size() >= 3 ? t[0] : 0, ty = t.size() >= 3 ? t[1] : 0, tz = t.size() >= 3 ? t[2] : 0;
-        float qx = r.size() >= 4 ? r[0] : 0, qy = r.size() >= 4 ? r[1] : 0, qz = r.size() >= 4 ? r[2] : 0, qw = r.size() >= 4 ? r[3] : 1;
-        float sx = s.size() >= 3 ? s[0] : 1, sy = s.size() >= 3 ? s[1] : 1, sz = s.size() >= 3 ? s[2] : 1;
-
-        float xx = qx * qx, yy = qy * qy, zz = qz * qz;
-        float xy = qx * qy, xz = qx * qz, yz = qy * qz;
-        float wx = qw * qx, wy = qw * qy, wz = qw * qz;
-
-        m.m[0] = (1.0f - 2.0f * (yy + zz)) * sx; m.m[1] = (2.0f * (xy + wz)) * sx;       m.m[2] = (2.0f * (xz - wy)) * sx;
-        m.m[4] = (2.0f * (xy - wz)) * sy;       m.m[5] = (1.0f - 2.0f * (xx + zz)) * sy; m.m[6] = (2.0f * (yz + wx)) * sy;
-        m.m[8] = (2.0f * (xz + wy)) * sz;       m.m[9] = (2.0f * (yz - wx)) * sz;       m.m[10] = (1.0f - 2.0f * (xx + yy)) * sz;
-        m.m[12] = tx; m.m[13] = ty; m.m[14] = tz;
-        return m;
     }
 
     static std::string ImportType4(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh) {
@@ -1356,6 +1437,12 @@ namespace GltfMeshImporter {
         outMesh.AnimatedFlag = true;
         outMesh.TotalAnimatedBlocks = 0;
 
+        // --- BLENDER DETECTION ---
+        bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
+        bool hasSceneRoot = json.find("\"name\":\"Scene_Root\"") != std::string::npos || json.find("\"name\": \"Scene_Root\"") != std::string::npos;
+        bool applyBlenderFix = isBlender && hasSceneRoot;
+        // -------------------------
+
         memset(outMesh.RootMatrix, 0, 48);
         outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
 
@@ -1380,7 +1467,23 @@ namespace GltfMeshImporter {
         outMesh.BoneKeyframesRaw.resize(outMesh.BoneCount * 48, 0);
 
         std::map<int, int> nodeParentMap;
-        std::string nodesBlock = ExtractBlock(json, "nodes");
+
+        // --- BLENDER SCENE BYPASS PATCH ---
+        std::string nodesBlock;
+        size_t searchPos = 0;
+        while (true) {
+            size_t foundIdx = json.find("\"nodes\"", searchPos);
+            if (foundIdx == std::string::npos) break;
+
+            std::string block = ExtractBlock(json, "nodes", searchPos);
+            if (!block.empty() && block.find('{') != std::string::npos) {
+                nodesBlock = block;
+                break;
+            }
+            searchPos = foundIdx + 7;
+        }
+        // ----------------------------------
+
         std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
 
         for (int i = 0; i < (int)nodeObjs.size(); i++) {
@@ -1392,7 +1495,6 @@ namespace GltfMeshImporter {
         float* ibmData = (float*)(binData.data() + views[ibmAcc.view].offset + ibmAcc.offset);
         float* fableIbmDest = (float*)outMesh.BoneTransformsRaw.data();
 
-        // 1. Transpose glTF to Row-Major for the GPU (Fixes the mesh vertices!)
         for (int i = 0; i < outMesh.BoneCount; i++) {
             float* srcMat = ibmData + (i * 16);
             float* dstMat = fableIbmDest + (i * 16);
@@ -1401,6 +1503,17 @@ namespace GltfMeshImporter {
             dstMat[4] = srcMat[1]; dstMat[5] = srcMat[5]; dstMat[6] = srcMat[9];  dstMat[7] = srcMat[13];
             dstMat[8] = srcMat[2]; dstMat[9] = srcMat[6]; dstMat[10] = srcMat[10]; dstMat[11] = srcMat[14];
             dstMat[12] = srcMat[3]; dstMat[13] = srcMat[7]; dstMat[14] = srcMat[11]; dstMat[15] = srcMat[15];
+
+            // --- BLENDER SKELETON IBM ROTATION ---
+            if (applyBlenderFix) {
+                for (int r = 0; r < 3; r++) {
+                    float c1 = dstMat[r * 4 + 1];
+                    float c2 = dstMat[r * 4 + 2];
+                    dstMat[r * 4 + 1] = -c2;
+                    dstMat[r * 4 + 2] = c1;
+                }
+            }
+            // -------------------------------------
         }
 
         for (int i = 0; i < outMesh.BoneCount; i++) {
@@ -1430,20 +1543,24 @@ namespace GltfMeshImporter {
                 }
             }
 
-            float* bt = fableIbmDest + (i * 16); // Keep this row-major array for the keyframes
-            float* srcMat = ibmData + (i * 16);  // Fetch the raw column-major glTF matrix for the CPU
+            float* bt = fableIbmDest + (i * 16);
 
-            // 2. Feed the un-transposed glTF rotation to the CPU (Fixes the generators!)
-            b.LocalizationMatrix[0] = srcMat[0];  b.LocalizationMatrix[1] = srcMat[1];  b.LocalizationMatrix[2] = srcMat[2];
-            b.LocalizationMatrix[3] = srcMat[4];  b.LocalizationMatrix[4] = srcMat[5];  b.LocalizationMatrix[5] = srcMat[6];
-            b.LocalizationMatrix[6] = srcMat[8];  b.LocalizationMatrix[7] = srcMat[9];  b.LocalizationMatrix[8] = srcMat[10];
+            b.LocalizationMatrix[0] = bt[0];  b.LocalizationMatrix[1] = bt[4];  b.LocalizationMatrix[2] = bt[8];
+            b.LocalizationMatrix[3] = bt[1];  b.LocalizationMatrix[4] = bt[5];  b.LocalizationMatrix[5] = bt[9];
+            b.LocalizationMatrix[6] = bt[2];  b.LocalizationMatrix[7] = bt[6];  b.LocalizationMatrix[8] = bt[10];
+            b.LocalizationMatrix[9] = bt[3];  b.LocalizationMatrix[10] = bt[7];  b.LocalizationMatrix[11] = bt[11];
 
-            // The translation still maps to Tx, Ty, Tz
-            b.LocalizationMatrix[9] = srcMat[12]; b.LocalizationMatrix[10] = srcMat[13]; b.LocalizationMatrix[11] = srcMat[14];
+            // --- BONE PIVOT ROTATION ---
+            float kx = -bt[3], ky = -bt[7], kz = -bt[11];
+            if (applyBlenderFix) {
+                float tmp = ky;
+                ky = -kz;
+                kz = tmp;
+            }
 
             float kf[12] = {};
             kf[0] = 0.0f;    kf[1] = 0.0f;    kf[2] = 0.0f;    kf[3] = 1.0f;
-            kf[4] = -bt[3];  kf[5] = -bt[7];  kf[6] = -bt[11]; // Keyframes continue to use the GPU translation
+            kf[4] = kx;      kf[5] = ky;      kf[6] = kz;
             kf[7] = 0.0f;
             kf[8] = 1.0f;    kf[9] = 1.0f;    kf[10] = 1.0f;
             kf[11] = 0.0f;
@@ -1503,12 +1620,26 @@ namespace GltfMeshImporter {
                 if (pIdx < 0 || pIdx >= accessors.size()) continue;
                 Acc pAcc = accessors[pIdx];
                 float* pData = (float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
+
                 for (int v = 0; v < pAcc.count; v++) {
-                    for (int j = 0; j < 3; j++) {
-                        float val = pData[v * 3 + j];
-                        if (val < globalMin[j]) globalMin[j] = val;
-                        if (val > globalMax[j]) globalMax[j] = val;
+                    float px = pData[v * 3];
+                    float py = pData[v * 3 + 1];
+                    float pz = pData[v * 3 + 2];
+
+                    // --- BLENDER X-AXIS ROTATION FIX ---
+                    if (applyBlenderFix) {
+                        float tmp = py;
+                        py = -pz;
+                        pz = tmp;
                     }
+                    // -----------------------------------
+
+                    if (px < globalMin[0]) globalMin[0] = px;
+                    if (px > globalMax[0]) globalMax[0] = px;
+                    if (py < globalMin[1]) globalMin[1] = py;
+                    if (py > globalMax[1]) globalMax[1] = py;
+                    if (pz < globalMin[2]) globalMin[2] = pz;
+                    if (pz > globalMax[2]) globalMax[2] = pz;
                 }
             }
         }
@@ -1529,7 +1660,6 @@ namespace GltfMeshImporter {
             outPrim.VertexStride = 20;
             outPrim.MaterialIndex = -1;
 
-            // Safe fallback value defaults to 0.1f 
             outPrim.AvgTextureStretch = ExtractFloatClean(meshExtras, "AvgTextureStretch", 0.1f);
             outPrim.SphereRadius = ExtractFloatClean(meshExtras, "SphereRadius", 0.0f);
             memset(outPrim.SphereCenter, 0, 12);
@@ -1567,6 +1697,20 @@ namespace GltfMeshImporter {
                     if (nData) { rv.n[0] = nData[v * 3]; rv.n[1] = nData[v * 3 + 1]; rv.n[2] = nData[v * 3 + 2]; }
                     else { rv.n[0] = 0; rv.n[1] = 1; rv.n[2] = 0; }
                     if (uData) { rv.u[0] = uData[v * 2]; rv.u[1] = uData[v * 2 + 1]; }
+
+                    // --- BLENDER ROTATION FIX ---
+                    if (applyBlenderFix) {
+                        float tmp;
+
+                        tmp = rv.p[1];
+                        rv.p[1] = -rv.p[2];
+                        rv.p[2] = tmp;
+
+                        tmp = rv.n[1];
+                        rv.n[1] = -rv.n[2];
+                        rv.n[2] = tmp;
+                    }
+                    // ----------------------------
 
                     if (wAcc.compType == 5126) {
                         float* wData = (float*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
@@ -1606,12 +1750,10 @@ namespace GltfMeshImporter {
                 }
             }
 
-            // --- SMART LOSSLESS COMPRESSION WITH OVERRIDE ---
             std::vector<float> savedScale = GetJsonFloatArray(meshExtras, "compScale");
             std::vector<float> savedOffset = GetJsonFloatArray(meshExtras, "compOffset");
 
             if (!forceRecalculate && savedScale.size() >= 3 && savedOffset.size() >= 3) {
-                // LOSSLESS MODE: Restore the exact original Fable grid
                 outPrim.Compression.Scale[0] = savedScale[0];
                 outPrim.Compression.Scale[1] = savedScale[1];
                 outPrim.Compression.Scale[2] = savedScale[2];
@@ -1620,16 +1762,14 @@ namespace GltfMeshImporter {
                 outPrim.Compression.Offset[2] = savedOffset[2];
             }
             else {
-                // CUSTOM MESH MODE: Flawless Center/Extents Math
                 for (int j = 0; j < 3; j++) {
                     outPrim.Compression.Offset[j] = (globalMax[j] + globalMin[j]) * 0.5f;
-                    outPrim.Compression.Scale[j] = (globalMax[j] - globalMin[j]) * 0.505f; // 1% buffer
+                    outPrim.Compression.Scale[j] = (globalMax[j] - globalMin[j]) * 0.505f;
                     if (outPrim.Compression.Scale[j] < 0.0001f) outPrim.Compression.Scale[j] = 0.0001f;
                 }
             }
             outPrim.Compression.Scale[3] = 1.0f;
             outPrim.Compression.Offset[3] = 0.0f;
-            // ------------------------------------------------
 
             struct AnimBlockTemp { std::vector<uint32_t> faces; std::vector<uint8_t> palette; };
             std::vector<AnimBlockTemp> blocks;
@@ -1768,7 +1908,6 @@ namespace GltfMeshImporter {
             outMesh.Primitives.push_back(outPrim);
         }
 
-        // --- AUTO-SORT PRIMITIVES FOR DIRECTX DRAW ORDER ---
         std::sort(outMesh.Primitives.begin(), outMesh.Primitives.end(), [&](const C3DPrimitive& a, const C3DPrimitive& b) {
             bool aTrans = false, bTrans = false;
 
@@ -1779,9 +1918,8 @@ namespace GltfMeshImporter {
                 bTrans = outMesh.Materials[b.MaterialIndex].IsTransparent || outMesh.Materials[b.MaterialIndex].BooleanAlpha;
             }
 
-            return aTrans < bTrans; // Opaque (false) comes before Transparent (true)
+            return aTrans < bTrans;
             });
-        // ---------------------------------------------------
 
         ParseNodes(json, outMesh);
 
