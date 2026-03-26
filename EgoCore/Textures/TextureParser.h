@@ -153,7 +153,7 @@ public:
     CGraphicHeader Header;
     CPixelFormatInit FormatInfo;
     ETextureFormat DecodedFormat = ETextureFormat::Unknown;
-    std::vector<uint8_t> DecodedPixels;    
+    std::vector<uint8_t> DecodedPixels;
     std::vector<std::vector<uint8_t>> RawFrames;
     bool IsParsed = false;
     bool IsStagedRaw = false;

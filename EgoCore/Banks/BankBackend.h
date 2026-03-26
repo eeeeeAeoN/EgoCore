@@ -21,18 +21,6 @@ namespace fs = std::filesystem;
 
 inline bool g_ShowSuccessPopup = false;
 inline std::string g_SuccessMessage = "";
-inline std::vector<LoadedBank> g_OpenBanks;
-inline int g_ActiveBankIndex = -1;
-inline bool g_ForceTabSwitch = false;
-inline std::string g_BankStatus = "Ready";
-inline C3DMeshContent g_ActiveMeshContent;
-inline CBBMParser g_BBMParser;
-inline CTextureParser g_TextureParser;
-inline bool g_MeshUploadNeeded = false;
-inline C3DAnimationInfo g_ActiveAnim;
-inline bool             g_AnimParseSuccess = false;
-inline AnimUIContext g_AnimUIState;
-inline AnimParser g_AnimParser;
 
 enum class EBankType {
     Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio
@@ -68,14 +56,15 @@ enum class EFilterMode { Name, ID, Speaker };
 struct StagedTextureInfo {
     ETextureFormat TargetFormat = ETextureFormat::DXT3;
     CGraphicHeader Header;
-    std::vector<std::vector<uint8_t>> RawFrames;
+    std::vector<std::vector<uint8_t>> RawFrames; 
 };
+
 
 struct CLipSyncData;
 
 struct StagedEntry {
-    std::vector<std::shared_ptr<C3DMeshContent>> MeshLODs;
-    CMeshEntryMetadata MeshMeta;
+    std::vector<std::shared_ptr<C3DMeshContent>> MeshLODs; 
+    CMeshEntryMetadata MeshMeta; 
 
     std::shared_ptr<CBBMParser> Physics;
     std::shared_ptr<C3DAnimationInfo> Anim;
@@ -114,9 +103,9 @@ struct LoadedBank {
     std::map<int, std::vector<uint8_t>> SubheaderCache;
     std::vector<uint8_t> CurrentEntryRawData;
 
-    std::map<int, StagedEntry> StagedEntries; // Stores Uncompressed C++ Objects
+    std::map<int, StagedEntry> StagedEntries; 
 
-    std::map<int, std::vector<uint8_t>> ModifiedEntryData; // Final Binary Blobs (Post-Flush)
+    std::map<int, std::vector<uint8_t>> ModifiedEntryData; 
 
     LoadedBank() {
         Stream = std::make_unique<std::fstream>();
@@ -127,6 +116,20 @@ struct LoadedBank {
     LoadedBank(LoadedBank&&) = default;
     LoadedBank& operator=(LoadedBank&&) = default;
 };
+
+inline std::vector<LoadedBank> g_OpenBanks;
+inline int g_ActiveBankIndex = -1;
+inline bool g_ForceTabSwitch = false;
+inline std::string g_BankStatus = "Ready";
+
+inline C3DMeshContent g_ActiveMeshContent;
+inline CBBMParser g_BBMParser;
+inline CTextureParser g_TextureParser;
+inline bool g_MeshUploadNeeded = false;
+inline C3DAnimationInfo g_ActiveAnim;
+inline bool             g_AnimParseSuccess = false;
+inline AnimUIContext g_AnimUIState;
+inline AnimParser g_AnimParser;
 
 inline bool StartsWith(const std::string& str, const std::string& prefix) {
     if (str.length() < prefix.length()) return false;
@@ -176,7 +179,7 @@ inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) 
 
 inline std::string PeekSpeakerFast(LoadedBank& bank, int index) {
     const auto& e = bank.Entries[index];
-    if (e.Type != 0) return "";
+    if (e.Type != 0) return ""; 
 
     if (bank.ModifiedEntryData.count(index)) {
         CTextParser p; p.Parse(bank.ModifiedEntryData[index], 0);
@@ -255,6 +258,7 @@ inline void UpdateFilter(LoadedBank& bank) {
         if (bank.FilterTypeMask != -1) {
             if (bank.Entries[i].Type != bank.FilterTypeMask) continue;
         }
+
         if (isTextureBank && bank.FilterTextureFormatMask != -1) {
             ETextureFormat fmt = PeekTextureFormatFast(bank, (int)i);
             int mappedFmt = -1;
@@ -265,6 +269,7 @@ inline void UpdateFilter(LoadedBank& bank) {
 
             if (mappedFmt != bank.FilterTextureFormatMask) continue;
         }
+
         if (filter.empty()) {
             bank.FilteredIndices.push_back((int)i);
             continue;
