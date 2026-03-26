@@ -22,6 +22,7 @@ struct GPUVertex {
     XMFLOAT4 Weights;
 };
 
+// Ensure this is 16-byte aligned!
 struct CBMatrix {
     XMMATRIX WorldViewProj;
     XMMATRIX World;
@@ -29,7 +30,11 @@ struct CBMatrix {
     XMFLOAT4 LightDir;
     XMMATRIX BoneTransforms[256];
     int HasAnimation;
-    XMFLOAT3 Padding;
+    float SelfIllum;
+    int HasBump;    // NEW
+    int HasSpec;    // NEW
+    XMFLOAT3 CamPos;
+    float Pad2;
 };
 
 struct RenderBatch {
@@ -39,6 +44,14 @@ struct RenderBatch {
 };
 
 class MeshRenderer {
+public:
+    struct RenderMaterial {
+        ID3D11ShaderResourceView* Diffuse = nullptr;
+        ID3D11ShaderResourceView* Bump = nullptr;
+        ID3D11ShaderResourceView* Specular = nullptr;
+        float SelfIllumination = 0.0f;
+    };
+
 private:
     ID3D11VertexShader* VS = nullptr; ID3D11PixelShader* PS = nullptr; ID3D11PixelShader* PS_Solid = nullptr;
     ID3D11InputLayout* Layout = nullptr;
@@ -49,7 +62,9 @@ private:
 
     ID3D11SamplerState* Sampler = nullptr;
     ID3D11ShaderResourceView* DefaultWhiteSRV = nullptr;
-    std::vector<ID3D11ShaderResourceView*> MaterialTextures;
+    ID3D11ShaderResourceView* DefaultNormalSRV = nullptr;
+    ID3D11ShaderResourceView* DefaultSpecSRV = nullptr;
+    std::vector<RenderMaterial> Materials;
 
     ID3D11Texture2D* RenderTex = nullptr; ID3D11RenderTargetView* RTV = nullptr;
     ID3D11ShaderResourceView* SRV = nullptr; ID3D11Texture2D* DepthTex = nullptr; ID3D11DepthStencilView* DSV = nullptr;
@@ -64,16 +79,35 @@ private:
 
     void CreateDefaultTexture(ID3D11Device* device) {
         if (DefaultWhiteSRV) return;
+
+        // 1. Default White (Diffuse)
         uint32_t white = 0xFFFFFFFF;
         D3D11_TEXTURE2D_DESC desc = {};
         desc.Width = 1; desc.Height = 1; desc.MipLevels = 1; desc.ArraySize = 1;
         desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_IMMUTABLE;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
         D3D11_SUBRESOURCE_DATA data = { &white, 4, 0 };
         ID3D11Texture2D* tex = nullptr;
         if (SUCCEEDED(device->CreateTexture2D(&desc, &data, &tex))) {
             device->CreateShaderResourceView(tex, nullptr, &DefaultWhiteSRV);
+            tex->Release();
+        }
+
+        // 2. Default Normal Map (Flat Normal: R=128, G=128, B=255)
+        uint32_t flatNormal = 0xFFFF8080;
+        D3D11_SUBRESOURCE_DATA normData = { &flatNormal, 4, 0 };
+        if (SUCCEEDED(device->CreateTexture2D(&desc, &normData, &tex))) {
+            device->CreateShaderResourceView(tex, nullptr, &DefaultNormalSRV);
+            tex->Release();
+        }
+
+        // 3. Default Specular Map (Black/No reflection)
+        uint32_t black = 0xFF000000;
+        D3D11_SUBRESOURCE_DATA specData = { &black, 4, 0 };
+        if (SUCCEEDED(device->CreateTexture2D(&desc, &specData, &tex))) {
+            device->CreateShaderResourceView(tex, nullptr, &DefaultSpecSRV);
             tex->Release();
         }
     }
@@ -124,6 +158,8 @@ public:
         if (DepthState) DepthState->Release(); DepthState = nullptr;
         if (Sampler) Sampler->Release(); Sampler = nullptr;
         if (DefaultWhiteSRV) DefaultWhiteSRV->Release(); DefaultWhiteSRV = nullptr;
+        if (DefaultNormalSRV) DefaultNormalSRV->Release(); DefaultNormalSRV = nullptr;
+        if (DefaultSpecSRV) DefaultSpecSRV->Release(); DefaultSpecSRV = nullptr;
         if (BlendState) BlendState->Release(); BlendState = nullptr;
         if (DebugVBuffer) DebugVBuffer->Release(); DebugVBuffer = nullptr;
         if (DebugIBuffer) DebugIBuffer->Release(); DebugIBuffer = nullptr;
@@ -142,19 +178,24 @@ public:
             cbuffer CBuf : register(b0) { 
                 matrix WVP; matrix World; float4 Col; float4 LightDir; 
                 matrix BoneTransforms[256];
-                int HasAnimation; float3 padding;
+                int HasAnimation; float SelfIllum; int HasBump; int HasSpec;
+                float3 CamPos; float pad2;
             };
             struct VS_IN { 
                 float3 Pos : POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; 
                 uint4 Joints : BLENDINDICES; float4 Weights : BLENDWEIGHT;
             };
-            struct PS_IN { float4 Pos : SV_POSITION; float3 Norm : NORMAL; float2 UV : TEXCOORD; };
+            struct PS_IN { 
+                float4 Pos : SV_POSITION; 
+                float3 Norm : NORMAL; 
+                float2 UV : TEXCOORD; 
+                float3 WorldPos : TEXCOORD1; 
+            };
             
             PS_IN VS(VS_IN input) { 
                 PS_IN output; 
-                
                 float4 localPos = float4(input.Pos, 1.0f);
-                float3 localNorm = input.Norm;
+                float3 localNorm = input.Norm; // Make sure this isn't negative anymore!
 
                 float wSum = input.Weights.x + input.Weights.y + input.Weights.z + input.Weights.w;
                 if (HasAnimation == 1 && wSum > 0.001f) {
@@ -168,20 +209,58 @@ public:
                 }
 
                 output.Pos = mul(localPos, WVP); 
+                output.WorldPos = mul(localPos, World).xyz;
                 output.Norm = mul(localNorm, (float3x3)World); 
                 output.UV = input.UV;
                 return output; 
             }
             
-            Texture2D tex : register(t0); SamplerState sam : register(s0);
+            Texture2D texDiffuse : register(t0); 
+            Texture2D texBump : register(t1); 
+            // texSpec has been removed to save GPU cycles!
+            SamplerState sam : register(s0);
+
+            float3x3 ComputeTBN(float3 p, float3 n, float2 uv) {
+                float3 dp1 = ddx(p); float3 dp2 = ddy(p);
+                float2 duv1 = ddx(uv); float2 duv2 = ddy(uv);
+                float3 dp2perp = cross(dp2, n); float3 dp1perp = cross(n, dp1);
+                float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+                float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+                float invMax = rsqrt(max(dot(T,T), dot(B,B)));
+                return float3x3(T * invMax, B * invMax, n);
+            }
 
             float4 PS(PS_IN input) : SV_Target { 
-                float4 texColor = tex.Sample(sam, input.UV);
+                float4 texColor = texDiffuse.Sample(sam, input.UV);
                 clip(texColor.a - 0.1f);
-                float3 n = normalize(input.Norm); 
-                float3 l = normalize(LightDir.xyz); 
-                float diff = max(dot(n, l), 0.2f); 
-                return float4(texColor.rgb * Col.rgb * diff, texColor.a * Col.a); 
+                
+                float3 N = normalize(input.Norm); 
+                
+                if (HasBump == 1) {
+                    float4 bumpSample = texBump.Sample(sam, input.UV);
+                    float3 localNorm = normalize(bumpSample.xyz * 2.0f - 1.0f);
+                    
+                    float3x3 TBN = ComputeTBN(input.WorldPos, N, input.UV);
+                    N = normalize(mul(localNorm, TBN));
+
+                    // Flip the final normal because Fable's UV winding inverts the TBN matrix!
+                    N = -N; 
+                }
+
+                float3 V = normalize(CamPos - input.WorldPos);
+                float3 L = V; 
+                float diff = max(dot(N, L), 0.25f); 
+
+                float spec = 0.0f;
+                if (HasSpec == 1) {
+                    // Because L == V, the half-vector H is also just V.
+                    // A power of 24.0f and a multiplier of 0.45f gives a clean plastic/metal shine.
+                    spec = pow(max(dot(N, V), 0.0), 24.0f) * 0.45f; 
+                }
+
+                float3 emissive = texColor.rgb * SelfIllum;
+                float3 finalColor = (texColor.rgb * Col.rgb * diff) + float3(spec, spec, spec) + emissive;
+                return float4(finalColor, texColor.a * Col.a); 
             }
 
             float4 PS_Solid(PS_IN input) : SV_Target { return Col; }
@@ -222,7 +301,7 @@ public:
         return true;
     }
 
-    void SetMaterialTextures(const std::vector<ID3D11ShaderResourceView*>& textures) { MaterialTextures = textures; }
+    void SetMaterials(const std::vector<RenderMaterial>& materials) { Materials = materials; }
 
     void UploadMesh(ID3D11Device* device, const C3DMeshContent& mesh, bool resetCamera = true) {
         if (!mesh.IsParsed) return;
@@ -475,6 +554,7 @@ public:
         cb.WorldViewProj = XMMatrixTranspose(worldCam * view * proj);
         cb.Color = XMFLOAT4(isPhysics ? 0.0f : 0.8f, 0.8f, isPhysics ? 1.0f : 0.8f, alpha);
         cb.LightDir = XMFLOAT4(0.5f, 1.0f, -0.5f, 0.0f);
+        cb.CamPos = XMFLOAT3(0.0f, 0.0f, -CamDist);
 
         cb.HasAnimation = (animatedBones && !animatedBones->empty()) ? 1 : 0;
         if (cb.HasAnimation) {
@@ -486,17 +566,13 @@ public:
             for (int i = 0; i < 256; i++) cb.BoneTransforms[i] = XMMatrixIdentity();
         }
 
-        ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
-
         UINT stride = sizeof(GPUVertex); UINT offset = 0;
         ctx->IASetVertexBuffers(0, 1, &VBuffer, &stride, &offset);
         ctx->IASetIndexBuffer(IBuffer, DXGI_FORMAT_R32_UINT, 0);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->IASetInputLayout(Layout);
         ctx->VSSetShader(VS, nullptr, 0);
-        ctx->VSSetConstantBuffers(0, 1, &ConstantBuffer);
         ctx->PSSetShader(PS, nullptr, 0);
-        ctx->PSSetConstantBuffers(0, 1, &ConstantBuffer);
         ctx->OMSetDepthStencilState(DepthState, 0);
         ctx->RSSetState(RastStateSolid);
         ctx->PSSetSamplers(0, 1, &Sampler);
@@ -504,19 +580,43 @@ public:
         float blendFactor[4] = { 0,0,0,0 }; ctx->OMSetBlendState(BlendState, blendFactor, 0xffffffff);
 
         for (const auto& batch : Batches) {
-            ID3D11ShaderResourceView* tex = DefaultWhiteSRV;
-            if (batch.MaterialIndex >= 0 && batch.MaterialIndex < MaterialTextures.size()) {
-                if (MaterialTextures[batch.MaterialIndex]) tex = MaterialTextures[batch.MaterialIndex];
+            ID3D11ShaderResourceView* srvs[3] = { DefaultWhiteSRV, DefaultNormalSRV, DefaultSpecSRV };
+            float matIllum = 0.0f;
+
+            // Reset flags per batch
+            cb.HasBump = 0;
+            cb.HasSpec = 0;
+
+            if (batch.MaterialIndex >= 0 && batch.MaterialIndex < Materials.size()) {
+                if (Materials[batch.MaterialIndex].Diffuse) {
+                    srvs[0] = Materials[batch.MaterialIndex].Diffuse;
+                }
+                if (Materials[batch.MaterialIndex].Bump) {
+                    srvs[1] = Materials[batch.MaterialIndex].Bump;
+                    cb.HasBump = 1; // Flag On!
+                }
+                if (Materials[batch.MaterialIndex].Specular) {
+                    srvs[2] = Materials[batch.MaterialIndex].Specular;
+                    cb.HasSpec = 1; // Flag On!
+                }
+                matIllum = Materials[batch.MaterialIndex].SelfIllumination;
             }
-            ctx->PSSetShaderResources(0, 1, &tex);
+
+            cb.SelfIllum = matIllum;
+            ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+            ctx->VSSetConstantBuffers(0, 1, &ConstantBuffer);
+            ctx->PSSetConstantBuffers(0, 1, &ConstantBuffer);
+
+            ctx->PSSetShaderResources(0, 3, srvs);
             ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
         }
 
         if (showWireframe) {
             ctx->RSSetState(RastStateWire);
-            ID3D11ShaderResourceView* white = DefaultWhiteSRV;
-            ctx->PSSetShaderResources(0, 1, &white);
+            ID3D11ShaderResourceView* whiteSRVs[3] = { DefaultWhiteSRV, DefaultNormalSRV, DefaultSpecSRV };
+            ctx->PSSetShaderResources(0, 3, whiteSRVs);
             cb.Color = XMFLOAT4(0.0f, 0.0f, 0.0f, alpha);
+            cb.SelfIllum = 0.0f;
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             for (const auto& batch : Batches) ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
         }

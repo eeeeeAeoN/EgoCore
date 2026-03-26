@@ -228,10 +228,14 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         if (g_StandaloneUploadNeeded) {
             g_StandaloneRenderer.Initialize(g_pd3dDevice);
             g_StandaloneRenderer.UploadMesh(g_pd3dDevice, g_StandaloneMesh);
-            std::vector<ID3D11ShaderResourceView*> textures;
+            std::vector<MeshRenderer::RenderMaterial> materials;
             int maxMat = 0; for (const auto& m : g_StandaloneMesh.Materials) if (m.ID > maxMat) maxMat = m.ID;
-            textures.resize(maxMat + 1, nullptr);
+            materials.resize(maxMat + 1);
+
             for (const auto& m : g_StandaloneMesh.Materials) {
+                // Carry over the self-illumination for the animation previewer
+                materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
+
                 if (m.DiffuseMapID > 0) {
                     for (auto& b : g_OpenBanks) {
                         if (b.Type == EBankType::Textures) {
@@ -253,7 +257,8 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
                                         subData.SysMemPitch = ((desc.Width + 3) / 4) * ((desc.Format == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
                                         ID3D11Texture2D* tex = nullptr;
                                         if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex))) {
-                                            g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &textures[m.ID]);
+                                            // Assign to the Diffuse channel of our new struct
+                                            g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &materials[m.ID].Diffuse);
                                             tex->Release();
                                         }
                                     }
@@ -264,7 +269,8 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
                     }
                 }
             }
-            g_StandaloneRenderer.SetMaterialTextures(textures);
+            // Use the new method name
+            g_StandaloneRenderer.SetMaterials(materials);
             g_StandaloneTime = 0.0f; g_StandalonePlaying = true; g_StandaloneUploadNeeded = false;
         }
 

@@ -240,22 +240,49 @@ inline void CheckMeshUpload(ID3D11Device* device) {
 
         if (g_BBMParser.IsParsed) {
             g_MeshRenderer.UploadBBM(device, g_BBMParser, resetCam);
+
+            // Added BBM Material Support!
+            std::vector<MeshRenderer::RenderMaterial> materials;
+            int maxMat = 0;
+            for (const auto& m : g_BBMParser.ParsedMaterials) if (m.Index > maxMat) maxMat = m.Index;
+            materials.resize(maxMat + 1);
+
+            for (const auto& m : g_BBMParser.ParsedMaterials) {
+                if (m.DiffuseBank > 0) materials[m.Index].Diffuse = LoadTextureForMesh(m.DiffuseBank);
+                if (m.BumpBank > 0) materials[m.Index].Bump = LoadTextureForMesh(m.BumpBank);
+                if (m.ReflectBank > 0) materials[m.Index].Specular = LoadTextureForMesh(m.ReflectBank);
+            }
+            g_MeshRenderer.SetMaterials(materials);
         }
         else if (g_ActiveMeshContent.IsParsed) {
             g_MeshRenderer.UploadMesh(device, g_ActiveMeshContent, resetCam);
 
-            std::vector<ID3D11ShaderResourceView*> textures;
+            std::vector<MeshRenderer::RenderMaterial> materials;
             int maxMat = 0;
             for (const auto& m : g_ActiveMeshContent.Materials) if (m.ID > maxMat) maxMat = m.ID;
-            textures.resize(maxMat + 1, nullptr);
+            materials.resize(maxMat + 1);
 
+            // PASS 1: Load Degenerate/Dummy materials first (as fallbacks)
             for (const auto& m : g_ActiveMeshContent.Materials) {
-                if (m.DiffuseMapID > 0) {
-                    ID3D11ShaderResourceView* tex = LoadTextureForMesh(m.DiffuseMapID);
-                    if (tex) textures[m.ID] = tex;
-                }
+                if (!m.DegenerateTriangles) continue;
+
+                if (m.DiffuseMapID > 0) materials[m.ID].Diffuse = LoadTextureForMesh(m.DiffuseMapID);
+                if (m.BumpMapID > 0) materials[m.ID].Bump = LoadTextureForMesh(m.BumpMapID);
+                if (m.ReflectionMapID > 0) materials[m.ID].Specular = LoadTextureForMesh(m.ReflectionMapID);
+                materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
             }
-            g_MeshRenderer.SetMaterialTextures(textures);
+
+            // PASS 2: Load REAL materials (These will overwrite the dummy data!)
+            for (const auto& m : g_ActiveMeshContent.Materials) {
+                if (m.DegenerateTriangles) continue;
+
+                if (m.DiffuseMapID > 0) materials[m.ID].Diffuse = LoadTextureForMesh(m.DiffuseMapID);
+                if (m.BumpMapID > 0) materials[m.ID].Bump = LoadTextureForMesh(m.BumpMapID);
+                if (m.ReflectionMapID > 0) materials[m.ID].Specular = LoadTextureForMesh(m.ReflectionMapID);
+                materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
+            }
+
+            g_MeshRenderer.SetMaterials(materials);
         }
         g_MeshUploadNeeded = false;
         g_PreserveCamera = false;
@@ -1554,6 +1581,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             ImGui::SameLine(130);
                             ImGui::SetNextItemWidth(120);
                             if (ImGui::SliderInt("##si_slider", &m.SelfIllumination, 0, 255)) {
+                                g_MeshUploadNeeded = true;
+                                g_PreserveCamera = true;
                                 if (saveCallback) saveCallback();
                             }
 
