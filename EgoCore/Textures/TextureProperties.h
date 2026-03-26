@@ -18,7 +18,7 @@ extern ID3D11Device* g_pd3dDevice;
 static int g_SelectedFrame = 0;
 static int g_SelectedSlice = 0;
 static int g_ViewChannel = 0;
-static float g_TexZoom = 1.0f; // Global zoom state
+static float g_TexZoom = 1.0f;
 static ID3D11ShaderResourceView* g_BackgroundSRV = nullptr;
 
 inline void CreateBackgroundTexture() {
@@ -60,7 +60,6 @@ struct TextureViewport {
     }
 
     bool Update(ID3D11Device* device, CTextureParser& parser, uint32_t entryID, int frameIdx, int sliceIdx, int channelMode) {
-        // Return immediately if nothing has changed
         if (entryID == CurrentEntryID && frameIdx == CurrentFrame && sliceIdx == CurrentSlice && channelMode == CurrentChannel && SRV) return true;
         Release();
 
@@ -71,15 +70,11 @@ struct TextureViewport {
 
         if (width == 0 || height == 0) return false;
 
-        // =======================================================
-        // PATH 1: INSTANT RENDER FOR STAGED UNCOMPRESSED TEXTURES
-        // =======================================================
         if (parser.IsStagedRaw) {
             if (frameIdx >= parser.RawFrames.size() || parser.RawFrames[frameIdx].empty()) return false;
 
             const uint8_t* uploadData = parser.RawFrames[frameIdx].data();
 
-            // Handle volume slice offset (if editing 3D textures in raw mode)
             uint32_t sliceSize = width * height * 4;
             if (sliceIdx * sliceSize + sliceSize <= parser.RawFrames[frameIdx].size()) {
                 uploadData += (sliceIdx * sliceSize);
@@ -115,9 +110,6 @@ struct TextureViewport {
             return true;
         }
 
-        // =======================================================
-        // PATH 2: STANDARD DECODED BINARY READ (LZO / DXT)
-        // =======================================================
         if (parser.DecodedPixels.empty()) return false;
 
         uint32_t singleSliceSize = parser.GetMipSize(width, height, 1);
@@ -247,7 +239,7 @@ inline void DrawTextureProperties() {
     static int lastEntryID = -1;
     if (lastEntryID != entry.ID) {
         lastEntryID = entry.ID;
-        g_TexZoom = 1.0f; // Reset zoom when opening a new texture
+        g_TexZoom = 1.0f;
     }
 
     ImGui::Separator();
@@ -282,7 +274,6 @@ inline void DrawTextureProperties() {
     const char* viewModes[] = { "RGB", "Alpha", "Red", "Green", "Blue" };
     ImGui::Combo("##channel", &g_ViewChannel, viewModes, IM_ARRAYSIZE(viewModes));
 
-    // Disable Add/Remove on Types 4 and 5
     if (entry.Type != 0x4 && entry.Type != 0x5) {
 
 
@@ -304,7 +295,6 @@ inline void DrawTextureProperties() {
         }
     }
 
-    // Sliders for Z-Slice and Frames below the buttons
     if (maxFrames > 1) {
         if (g_SelectedFrame >= maxFrames) g_SelectedFrame = 0;
         ImGui::SetNextItemWidth(200.0f);
@@ -321,9 +311,6 @@ inline void DrawTextureProperties() {
 
     ImGui::Dummy(ImVec2(0, 5));
 
-    // ==========================================
-    // VIEWPORT WITH PAN AND ZOOM
-    // ==========================================
     int uploadFrameIdx = isFlatSeq ? 0 : g_SelectedFrame;
     g_TexViewport.Update(g_pd3dDevice, g_TextureParser, entry.ID, uploadFrameIdx, g_SelectedSlice, g_ViewChannel);
 
@@ -332,46 +319,37 @@ inline void DrawTextureProperties() {
         float ratio = (float)physH / (float)physW;
         if (physW == 0) ratio = 1.0f;
 
-        // Base viewport max bounds
         float baseH = (std::min)(510.0f, availW * ratio);
         float baseW = baseH / ratio;
 
-        // Apply zoom scale
         float w = baseW * g_TexZoom;
         float h = baseH * g_TexZoom;
 
-        // Dynamic flags: If zooming, disable mouse scroll temporarily so the view doesn't jump
         ImGuiWindowFlags viewFlags = ImGuiWindowFlags_HorizontalScrollbar;
         if (ImGui::GetIO().KeyCtrl) viewFlags |= ImGuiWindowFlags_NoScrollWithMouse;
 
-        // [QoL 5] Create a scrollable region for the image
         ImGui::BeginChild("TexView", ImVec2(0, baseH + 20), true, viewFlags);
 
-        // [QoL 4] Ctrl + Scroll to Zoom
         if (ImGui::IsWindowHovered() && ImGui::GetIO().KeyCtrl) {
             float wheel = ImGui::GetIO().MouseWheel;
             if (wheel != 0.0f) {
-                // Smooth scaling
                 g_TexZoom += wheel * (g_TexZoom * 0.15f);
                 if (g_TexZoom < 0.1f) g_TexZoom = 0.1f;
                 if (g_TexZoom > 10.0f) g_TexZoom = 10.0f;
             }
         }
 
-        // [QoL 5] Left-Click + Drag to Pan
         if (ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             ImVec2 delta = ImGui::GetIO().MouseDelta;
             ImGui::SetScrollX(ImGui::GetScrollX() - delta.x);
             ImGui::SetScrollY(ImGui::GetScrollY() - delta.y);
         }
 
-        ImVec2 p = ImGui::GetCursorScreenPos(); // Current position taking scrollbars into account
+        ImVec2 p = ImGui::GetCursorScreenPos();
 
-        // Draw Background and Image
         if (g_BackgroundSRV) ImGui::GetWindowDrawList()->AddImage((void*)g_BackgroundSRV, p, ImVec2(p.x + w, p.y + h));
         ImGui::GetWindowDrawList()->AddImage((void*)g_TexViewport.SRV, p, ImVec2(p.x + w, p.y + h));
 
-        // Draw Flat Sequence Yellow Selection Box
         if (logW > 0 && logH > 0 && (logW != physW || logH != physH)) {
             float sx = w / physW;
             float sy = h / physH;
@@ -396,13 +374,11 @@ inline void DrawTextureProperties() {
                 0xFF00FFFF, 0.0f, 0, 2.0f);
         }
 
-        // This Dummy tells ImGui how big the custom-drawn content actually is to trigger the scrollbars
         ImGui::Dummy(ImVec2(w, h));
 
         ImGui::EndChild();
     }
 
-    // EXPORT
     if (ImGui::Button("Export")) {
         std::string path = SaveFileDialog("PNG Image\0*.png\0TGA Image\0*.tga\0DDS Texture\0*.dds\0");
         if (!path.empty()) {

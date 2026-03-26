@@ -11,7 +11,7 @@ struct AnimTrack {
     int32_t ParentIndex = -1;
     std::string BoneName = "";
 
-    uint8_t PreFPSFlag = 0; // It IS 1 byte!
+    uint8_t PreFPSFlag = 0;
 
     float SamplesPerSecond = 30.0f;
     uint32_t FrameCount = 0;
@@ -224,7 +224,7 @@ private:
                 if (payloadStart + 12 <= nextChunkStart) {
                     memcpy(&Data.MovementVector, base + payloadStart, 12);
 
-                    // NEW: MVEC is a SuperChunk! We must parse the hidden collision track inside it.
+                    // MVEC is a SuperChunk! We must parse the hidden collision track inside it.
                     size_t innerCursor = payloadStart + 12;
                     ParseChunkBlock(base, innerCursor, nextChunkStart, isHelper);
                 }
@@ -271,7 +271,6 @@ private:
         // Fable's PositionFactor is exactly the multiplier needed!
         float truePosFactor = track.PositionFactor;
 
-        // 1. UNIQUE ROTATIONS
         uint16_t rotCount = 0;
         if (c + 2 <= end) {
             memcpy(&rotCount, base + c, 2); c += 2;
@@ -281,7 +280,6 @@ private:
             }
         }
 
-        // 2. PALETTED ROTATIONS
         if (c + 2 <= end) {
             uint16_t palRotCount = 0; memcpy(&palRotCount, base + c, 2); c += 2;
             int bpi = (rotCount > 255) ? 2 : 1;
@@ -293,7 +291,6 @@ private:
             }
         }
 
-        // 3. UNIQUE POSITIONS
         uint16_t posCount = 0;
         if (c + 2 <= end) {
             memcpy(&posCount, base + c, 2); c += 2;
@@ -311,7 +308,6 @@ private:
             }
         }
 
-        // 4. PALETTED POSITIONS
         if (c + 2 <= end) {
             uint16_t palPosCount = 0; memcpy(&palPosCount, base + c, 2); c += 2;
             int bpi = (posCount > 255) ? 2 : 1;

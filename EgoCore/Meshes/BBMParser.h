@@ -114,8 +114,6 @@ public:
     SmoothingGroups SmoothGroups;
     float LastTransform[12] = { 1,0,0, 0,1,0, 0,0,1, 0,0,0 };
     bool HasTransform = false;
-
-    // Multi-mesh offset trackers
     uint32_t CurrentVertexOffset = 0;
     uint32_t CurrentBoneOffset = 0;
 
@@ -143,14 +141,12 @@ public:
         size_t c = 0;
         size_t end = data.size();
 
-        // FIX: Strictly detect Fable's native "3DMF" start offset
         std::string magic = ReadStringFixed(data, c, 4);
         if (magic == "3DMF") {
             Read(data, c, FileVersion);
             FileComment = ReadString(data, c, end);
         }
         else {
-            // Fallback for custom ego-core generated headers
             c = 0;
             uint32_t tempMagic = 0; Read(data, c, tempMagic);
             std::string fileType = ReadStringFixed(data, c, 4);
@@ -234,7 +230,7 @@ private:
     }
 
     void ParseSUBM(const uint8_t* base, size_t& cursor, size_t end, int depth) {
-        CurrentBoneOffset = (uint32_t)Bones.size(); // Offset for new skeleton
+        CurrentBoneOffset = (uint32_t)Bones.size();
         std::string indent(depth * 2, ' ');
         std::string name = ReadString(base, cursor, end);
         DebugInfo += indent + "  Name: \"" + name + "\"\n";
@@ -269,7 +265,7 @@ private:
             for (uint32_t i = 0; i < count; i++) {
                 VertexWeight vw;
                 memcpy(&vw.VertexIndex, base + cursor, 2); cursor += 2;
-                vw.VertexIndex += CurrentVertexOffset; // Apply offset
+                vw.VertexIndex += CurrentVertexOffset;
                 memcpy(&vw.BlendValue, base + cursor, 4); cursor += 4;
                 grp.Weights.push_back(vw);
             }
@@ -307,7 +303,7 @@ private:
     }
 
     void ParsePRIM(const uint8_t* base, size_t& cursor, size_t end, int depth) {
-        CurrentVertexOffset = (uint32_t)ParsedVertices.size(); // Offset for new vertices
+        CurrentVertexOffset = (uint32_t)ParsedVertices.size();
         std::string indent(depth * 2, ' ');
         if (cursor + 4 <= end) {
             int32_t headerVal = 0; memcpy(&headerVal, base + cursor, 4);
@@ -380,9 +376,6 @@ private:
                 size_t vOffset = cursor + 4 + (i * stride);
                 C3DVertex2 vert = {};
                 if (vOffset + 12 <= end) memcpy(&vert.Position, base + vOffset, 12);
-
-                // DELETED TRFM MULTIPLICATION HERE!
-
                 if (stride >= 24 && vOffset + 24 <= end) memcpy(&vert.Normal, base + vOffset + 12, 12);
                 if (stride >= 32 && vOffset + 32 <= end) memcpy(&vert.UV, base + vOffset + 24, 8);
                 ParsedVertices.push_back(vert);
@@ -430,9 +423,6 @@ private:
         memcpy(&h.BoneIndex, base + cursor, 4); cursor += 4;
         if (h.BoneIndex >= 0) h.BoneIndex += CurrentBoneOffset;
         h.Name = ReadString(base, cursor, nextChunkOffset);
-
-        // DELETED TRFM MULTIPLICATION HERE!
-
         Helpers.push_back(h);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
     }
@@ -451,9 +441,6 @@ private:
             if (d.BoneIndex >= 0) d.BoneIndex += CurrentBoneOffset;
             d.Name = ReadString(base, cursor, nextChunkOffset);
         }
-
-        // DELETED TRFM MULTIPLICATION HERE!
-
         Dummies.push_back(d);
         if (cursor < nextChunkOffset) ProcessChunks(base, cursor, nextChunkOffset, depth + 1);
     }
@@ -462,14 +449,12 @@ private:
         if ((end - cursor) < 8) return;
         Volume v;
 
-        // ASM Proves this is a Version (1u), not a Volume ID.
         uint32_t version = 0;
         memcpy(&version, base + cursor, 4); cursor += 4;
 
         v.Name = ReadString(base, cursor, end);
-        v.ID = 0; // Hardcode to 0 since we don't have an ID
+        v.ID = 0;
 
-        // ASM Proves NO padding alignment happens here!
         if (cursor + 4 <= end) {
             memcpy(&v.PlaneCount, base + cursor, 4); cursor += 4;
             for (uint32_t i = 0; i < v.PlaneCount && cursor + 16 <= end; i++) {

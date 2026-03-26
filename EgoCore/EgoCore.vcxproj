@@ -19,9 +19,10 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Animations\AnimCompiler.h" />
     <ClInclude Include="Animations\AnimParser.h" />
     <ClInclude Include="Animations\AnimProperties.h" />
-    <ClInclude Include="AnimCompiler.h" />
+    <ClInclude Include="Animations\GltfAnimImporter.h" />
     <ClInclude Include="Audio\AudioBackend.h" />
     <ClInclude Include="Audio\AudioExplorer.h" />
     <ClInclude Include="Audio\AudioHelpers.h" />
@@ -32,26 +33,25 @@
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="Banks\BankLoader.h" />
     <ClInclude Include="Banks\BankTabUI.h" />
+    <ClInclude Include="Banks\BigBankCompiler.h" />
     <ClInclude Include="Banks\BinaryParser.h" />
-    <ClInclude Include="BigBankCompiler.h" />
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
-    <ClInclude Include="GltfAnimImporter.h" />
-    <ClInclude Include="GltfMeshImporter.h" />
-    <ClInclude Include="ImageBackend.h" />
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
     <ClInclude Include="Lipsync\SpeechAnalyzer.h" />
-    <ClInclude Include="MeshCompiler.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
+    <ClInclude Include="Meshes\GltfMeshImporter.h" />
+    <ClInclude Include="Meshes\MeshCompiler.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
-    <ClInclude Include="TextureBuilder.h" />
+    <ClInclude Include="Textures\ImageBackend.h" />
+    <ClInclude Include="Textures\TextureBuilder.h" />
     <ClInclude Include="Textures\TextureExporter.h" />
     <ClInclude Include="Textures\TextureParser.h" />
     <ClInclude Include="Textures\TextureProperties.h" />

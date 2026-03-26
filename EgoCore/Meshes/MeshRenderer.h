@@ -416,7 +416,6 @@ public:
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
         RenderBatch batch = { 0, (uint32_t)indices.size(), -1 }; Batches.push_back(batch);
 
-        // FIX: Removed the stuck CamRotX lock
         float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f; CamPan = { 0, 0 }; CamRotX = 0.2f; CamRotY = XM_PI;
     }
 
@@ -454,7 +453,6 @@ public:
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
         XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
 
-        // FIX: Visually rotate Z-up physics meshes so they stand upright in the viewport
         if (isPhysics) {
             worldCam = XMMatrixRotationX(-XM_PIDIV2) * worldCam;
         }
@@ -607,7 +605,6 @@ public:
             gpuVerts.push_back({ flippedV, {0,0,0}, {0,0}, 0, {0,0,0,0} });
         }
 
-        // Mathematical edge detection uses the original un-flipped `vertices` array
         for (uint32_t i = 0; i < vertices.size(); i++) {
             for (uint32_t j = i + 1; j < vertices.size(); j++) {
                 int sharedPlanes = 0;

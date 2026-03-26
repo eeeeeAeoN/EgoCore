@@ -28,7 +28,6 @@ namespace GltfExporter {
         return R;
     }
 
-    // MATH HELPER: Transform to Matrix
     static Mat4 TransformToMat4(const ::Vec3& t, const ::Vec4& q) {
         Mat4 m = Identity();
         float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
@@ -42,7 +41,6 @@ namespace GltfExporter {
         return m;
     }
 
-    // MATH HELPER: Matrix to Transform
     static void Mat4ToTransform(const Mat4& m, ::Vec3& t, ::Vec4& q) {
         t.x = m.m[12]; t.y = m.m[13]; t.z = m.m[14];
         float tr = m.m[0] + m.m[5] + m.m[10];
@@ -189,7 +187,6 @@ namespace GltfExporter {
         json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"EgoCore\"},";
         bool isRepeatedGlobal = false;
 
-        // Array to hold our separated glTF meshes
         std::vector<std::string> meshJsonStrings;
 
         for (size_t pIdx = 0; pIdx < mesh.Primitives.size(); pIdx++) {
@@ -258,7 +255,7 @@ namespace GltfExporter {
                 if (x > max[0]) max[0] = x; if (y > max[1]) max[1] = y; if (z > max[2]) max[2] = z;
                 posData.push_back(x); posData.push_back(y); posData.push_back(z);
                 normData.push_back(nx); normData.push_back(ny); normData.push_back(nz);
-                uvData.push_back(u); uvData.push_back(v_c); // -- Flipped normals in Blender. :DD
+                uvData.push_back(u); uvData.push_back(v_c);
 
                 if (hasBones) {
                     if (off + iOff + 4 <= prim.VertexBuffer.size()) {
@@ -317,8 +314,6 @@ namespace GltfExporter {
                         uint16_t i2 = prim.IndexBuffer[s + k + 2];
                         if (i0 == 0xFFFF || i1 == 0xFFFF || i2 == 0xFFFF) { parity = 0; continue; }
                         if (i0 == i1 || i1 == i2 || i0 == i2) { parity++; continue; }
-
-                        // INVERTED: Swap winding for glTF (Counter-Clockwise)
                         if (parity % 2 != 0) { bIdx.push_back(i0); bIdx.push_back(i1); bIdx.push_back(i2); }
                         else { bIdx.push_back(i0); bIdx.push_back(i2); bIdx.push_back(i1); }
                         parity++;
@@ -328,8 +323,8 @@ namespace GltfExporter {
                     for (uint32_t k = 0; k < c * 3; k += 3) {
                         if (s + k + 2 < prim.IndexBuffer.size()) {
                             bIdx.push_back(prim.IndexBuffer[s + k]);
-                            bIdx.push_back(prim.IndexBuffer[s + k + 2]); // SWAPPED
-                            bIdx.push_back(prim.IndexBuffer[s + k + 1]); // SWAPPED
+                            bIdx.push_back(prim.IndexBuffer[s + k + 2]); 
+                            bIdx.push_back(prim.IndexBuffer[s + k + 1]); 
                         }
                     }
                 }
@@ -556,7 +551,7 @@ namespace GltfExporter {
             ss << "}"; nodeStrs.push_back(ss.str());
         }
 
-        // --- NEW: NODE HIERARCHY GENERATION ---
+        // --- NODE HIERARCHY GENERATION ---
         int baseMeshNodesStart = totalNodes;
         int genChildNodesStart = baseMeshNodesStart + (int)mesh.Primitives.size();
         int currentGenChild = genChildNodesStart;
@@ -565,7 +560,7 @@ namespace GltfExporter {
         for (size_t p = 0; p < mesh.Primitives.size(); p++) {
             std::stringstream ss; ss.imbue(std::locale("C"));
             ss << "{\"name\":" << Esc(mesh.MeshName + "_P" + std::to_string(p)) << ",\"mesh\":" << p;
-            if (mesh.BoneCount > 0) ss << ",\"skin\":0"; // Bind to armature
+            if (mesh.BoneCount > 0) ss << ",\"skin\":0";
             ss << "}";
             appendedNodes.push_back(ss.str());
         }
@@ -589,7 +584,6 @@ namespace GltfExporter {
             if (hName.empty()) hName = "HPNT_" + std::to_string(h.NameCRC) + "_" + std::to_string(i);
 
             std::stringstream ss; ss.imbue(std::locale("C"));
-            // FIX: Added boneId to extras
             ss << "{\"name\":" << Esc(hName) << ",\"translation\":[" << h.Pos[0] << "," << h.Pos[1] << "," << h.Pos[2] << "],\"extras\":{\"type\":\"Helper\",\"crc\":" << h.NameCRC << ",\"boneId\":" << h.BoneIndex << "}}";
             nodeStrs.push_back(ss.str());
         }
@@ -606,7 +600,6 @@ namespace GltfExporter {
             if (dName.empty()) dName = "HDMY_" + std::to_string(d.NameCRC) + "_" + std::to_string(i);
 
             std::stringstream ss; ss.imbue(std::locale("C"));
-            // FIX: Added boneId to extras
             ss << "{\"name\":" << Esc(dName) << ",\"matrix\":[";
             for (int k = 0; k < 16; k++) ss << dMat.m[k] << (k < 15 ? "," : "");
             ss << "],\"extras\":{\"type\":\"Dummy\",\"crc\":" << d.NameCRC << ",\"boneId\":" << d.BoneIndex << "}}";
@@ -656,7 +649,6 @@ namespace GltfExporter {
 
         { std::stringstream ss; ss.imbue(std::locale("C")); ss << "{\"name\":\"Scene_Root\",\"matrix\":[1,0,0,0,0,0,-1,0,0,1,0,0,0,0,0,1],\"children\":["; if (!nodeChildren[rootWrapperIdx].empty()) for (size_t k = 0; k < nodeChildren[rootWrapperIdx].size(); k++) ss << nodeChildren[rootWrapperIdx][k] << (k < nodeChildren[rootWrapperIdx].size() - 1 ? "," : ""); ss << "]}"; nodeStrs.push_back(ss.str()); }
 
-        // Append delayed nodes
         for (const auto& n : appendedNodes) nodeStrs.push_back(n);
 
         json << "\"nodes\":["; for (size_t i = 0; i < nodeStrs.size(); i++) json << (i > 0 ? "," : "") << nodeStrs[i]; json << "],";
@@ -664,7 +656,6 @@ namespace GltfExporter {
 
         if (hasAnimation) json << "\"animations\":[" << animationJson.str() << "],";
 
-        // Write the newly separated meshes array
         json << "\"meshes\":[";
         for (size_t i = 0; i < meshJsonStrings.size(); i++) {
             json << (i > 0 ? "," : "") << meshJsonStrings[i];
@@ -780,8 +771,6 @@ namespace GltfExporter {
                 tempMesh.BoneNames.push_back(src.Name);
                 tempMesh.BoneIndices[i] = (uint16_t)src.Index;
 
-                // FIX: BBM stores World Matrices. C3DMeshContent expects Inverse Bind Matrices (IBM).
-                // Convert the 4x3 World Matrix to a 4x4, invert it to IBM, and save it for glTF!
                 Mat4 worldMat = Identity();
                 worldMat.m[0] = src.LocalTransform[0]; worldMat.m[1] = src.LocalTransform[1]; worldMat.m[2] = src.LocalTransform[2];
                 worldMat.m[4] = src.LocalTransform[3]; worldMat.m[5] = src.LocalTransform[4]; worldMat.m[6] = src.LocalTransform[5];
@@ -833,7 +822,6 @@ namespace GltfExporter {
             dum.BoneIndex = d.BoneIndex;
             memcpy(dum.Transform, d.Transform, 48);
 
-            // FIX: Sync explicit BBM Position to the translation row of the matrix for glTF!
             dum.Transform[9] = d.Position.x;
             dum.Transform[10] = d.Position.y;
             dum.Transform[11] = d.Position.z;

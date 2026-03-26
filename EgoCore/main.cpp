@@ -1,6 +1,5 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
-
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
@@ -48,8 +47,8 @@ int main(int, char**) {
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    if (std::filesystem::exists("CascadiaMono.ttf")) {
-        g_EditorFont = io.Fonts->AddFontFromFileTTF("CascadiaMono.ttf", 18.0f);
+    if (std::filesystem::exists("Font.ttf")) {
+        g_EditorFont = io.Fonts->AddFontFromFileTTF("Font.ttf", 18.0f);
     }
     else {
         g_EditorFont = io.Fonts->AddFontDefault();

@@ -42,7 +42,6 @@ public:
 
         std::vector<CompiledSubBank> newSubBanks;
 
-        // Process Data Blobs (Payloads)
         for (int i = 0; i < (int)bank->SubBanks.size(); ++i) {
             CompiledSubBank csb;
             csb.Info = bank->SubBanks[i];
@@ -51,7 +50,6 @@ public:
             if (sbAlign == 0) sbAlign = 1;
 
             if (i == bank->ActiveSubBankIndex) {
-                // ACTIVE SUBBANK: Use memory cache
                 for (int k = 0; k < (int)bank->Entries.size(); ++k) {
                     CompiledEntry ce;
                     ce.Entry = bank->Entries[k];
@@ -91,11 +89,9 @@ public:
                 }
             }
             else {
-                // INACTIVE SUBBANK: Read strictly from disk
                 bank->Stream->clear();
                 bank->Stream->seekg(csb.Info.Offset, std::ios::beg);
 
-                // Universal Skip Logic: Reads the number of types, skips the pairs, lands on Magic 42
                 uint32_t numTypes = 0;
                 bank->Stream->read((char*)&numTypes, 4);
                 if (numTypes < 1000) {
@@ -105,7 +101,6 @@ public:
                     bank->Stream->seekg(-4, std::ios::cur);
                 }
 
-                // Read Entries
                 for (uint32_t e = 0; e < csb.Info.EntryCount; ++e) {
                     CompiledEntry ce;
                     uint32_t magic;
@@ -131,7 +126,6 @@ public:
                     if (magic == 42) csb.Entries.push_back(ce);
                 }
 
-                // Copy Blobs
                 for (auto& ce : csb.Entries) {
                     if (sbAlign > 1) {
                         uint32_t p = (uint32_t)out.tellp();
@@ -157,28 +151,21 @@ public:
             newSubBanks.push_back(csb);
         }
 
-        // Align before Table of Contents
         uint32_t tocPos = (uint32_t)out.tellp();
         if (tocPos % 2048 != 0) {
             out.write(zeroBuffer.data(), 2048 - (tocPos % 2048));
         }
 
-        // Write Table of Contents
         for (auto& sb : newSubBanks) {
             sb.Info.Offset = (uint32_t)out.tellp();
-
-            // --- UNIVERSAL ENGINE MEMORY ALLOCATOR HEADER ---
-            // This perfectly recreates the structures you found in the hex dumps automatically.
             std::map<uint32_t, uint32_t> typeCounts;
             for (const auto& ce : sb.Entries) {
                 typeCounts[ce.Entry.Type]++;
             }
 
-            // Write [Number of Types]
             uint32_t numTypes = (uint32_t)typeCounts.size();
             out.write((char*)&numTypes, 4);
 
-            // Write [Type ID, Count] pairs
             for (auto const& [type, count] : typeCounts) {
                 uint32_t t = type;
                 uint32_t c = count;
@@ -186,7 +173,6 @@ public:
                 out.write((char*)&c, 4);
             }
 
-            // Write the actual Entry Data starting with Magic 42 (2A 00 00 00)
             for (const auto& ce : sb.Entries) {
                 uint32_t magic = 42;
                 out.write((char*)&magic, 4);
@@ -202,11 +188,8 @@ public:
                 out.write((char*)&dCount, 4);
                 for (const auto& s : ce.Entry.Dependencies) WriteBankString(out, s);
 
-                // --- STRICT FABLE METADATA ALIGNMENT ---
-                // Write the promised InfoSize to the header (64 for Type 2)
                 out.write((char*)&ce.Entry.InfoSize, 4);
 
-                // Physically write the vector (which may contain appended Texture IDs, e.g., 68 bytes)
                 if (ce.Entry.InfoSize > 0 && !ce.RawInfo.empty()) {
                     out.write((char*)ce.RawInfo.data(), ce.RawInfo.size());
                 }

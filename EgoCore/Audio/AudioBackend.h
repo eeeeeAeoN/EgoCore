@@ -28,7 +28,6 @@ struct LookupEntry {
 
 #pragma pack(pop)
 
-// --- PLAYER CLASS ---
 class AudioPlayer {
     ma_device device;
     bool isInit = false;
@@ -50,10 +49,9 @@ class AudioPlayer {
         if (framesToCopy > 0) {
             size_t samplesToCopy = framesToCopy * player->currentChannels;
 
-            // Apply Hardcoded 50% Volume
             for (size_t i = 0; i < samplesToCopy; i++) {
                 int32_t sample = player->activeBuffer[cursor + i];
-                sample = sample / 2; // Hardcoded 0.5 gain
+                sample = sample / 2;
                 out[i] = (int16_t)sample;
             }
 
@@ -143,12 +141,10 @@ public:
 
     void Play() { if (isInit) ma_device_start(&device); }
     void Pause() { if (isInit) ma_device_stop(&device); }
-
-    // --- ADDED STOP METHOD ---
     void Stop() {
         if (isInit) {
             ma_device_stop(&device);
-            playCursor = 0; // Rewind to beginning
+            playCursor = 0;
         }
     }
 
@@ -175,7 +171,6 @@ public:
     }
 };
 
-// --- BANK PARSER CLASS ---
 class AudioBankParser {
 public:
     std::string FileName;
@@ -460,5 +455,4 @@ private:
     }
 };
 
-// --- GLOBAL PLAYER INSTANCE ---
 inline AudioPlayer player;

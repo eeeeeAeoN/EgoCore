@@ -153,8 +153,8 @@ public:
     CGraphicHeader Header;
     CPixelFormatInit FormatInfo;
     ETextureFormat DecodedFormat = ETextureFormat::Unknown;
-    std::vector<uint8_t> DecodedPixels;       // Used for binary DXT reading
-    std::vector<std::vector<uint8_t>> RawFrames; // NEW: Used for Staged RGBA editing
+    std::vector<uint8_t> DecodedPixels;    
+    std::vector<std::vector<uint8_t>> RawFrames;
     bool IsParsed = false;
     bool IsStagedRaw = false;
     std::string DebugLog;
@@ -244,7 +244,7 @@ public:
         IsParsed = false;
         IsStagedRaw = false;
         DecodedPixels.clear();
-        RawFrames.clear(); // <--- Add this clear
+        RawFrames.clear();
         PendingName = "";
 
         if (metadata.size() < 28) return;
@@ -263,7 +263,6 @@ public:
         uint32_t frames = (Header.FrameCount > 0) ? Header.FrameCount : 1;
         size_t expectedTotalSize = (size_t)TrueFrameStride * frames;
 
-        // Pad to guarantee decompression write safety
         DecodedPixels.resize(expectedTotalSize + 65536, 0);
 
         if (pixelData.empty()) return;

@@ -19,19 +19,12 @@ namespace fs = std::filesystem;
 static std::atomic<bool> g_IsCompiling(false);
 static std::atomic<bool> g_StopWatchdog(false);
 static std::string g_CompileStatus = "";
-
 static std::string g_TargetIniPath = "";
 static std::string g_OriginalIniContent = "";
 static bool g_IniWasPatched = false;
-
-
 static const uintptr_t IDA_TARGET_ADDRESS = 0x00C90613;
 static const uintptr_t IDA_DEFAULT_BASE = 0x00400000;
 static const uintptr_t INSTRUCTION_BYTE_OFFSET = 6;
-
-static void DebugLog(const std::string& msg) {
-    std::cout << "[StealthCompiler] " << msg << std::endl;
-}
 
 struct PatchRule {
     std::string Keyword;
@@ -130,7 +123,6 @@ static bool PatchIniFile(const std::string& rootPath) {
     outFile.close();
 
     g_IniWasPatched = true;
-    DebugLog("Patched configuration file: " + g_TargetIniPath);
     return true;
 }
 
@@ -140,7 +132,6 @@ static void RestoreIniFile() {
         if (outFile.is_open()) {
             outFile << g_OriginalIniContent;
             outFile.close();
-            DebugLog("Restored original configuration.");
         }
         g_IniWasPatched = false;
     }
@@ -178,8 +169,6 @@ static uintptr_t GetModuleBaseAddress(DWORD procId, const wchar_t* modName) {
 }
 
 static bool RunHiddenFable(const std::string& exePath, bool shouldPatchCode) {
-    DebugLog("------------------------------------------------");
-    DebugLog("Starting Run. Patch Mode: " + std::string(shouldPatchCode ? "ON" : "OFF"));
 
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
@@ -222,7 +211,6 @@ static bool RunHiddenFable(const std::string& exePath, bool shouldPatchCode) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    DebugLog("Process finished with code: " + std::to_string(exitCode));
     return true;
 }
 

@@ -6,9 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
-// --- DXT COMPRESSION HELPERS ---
 namespace DXT {
-    // DXT3 Alpha is 4-bits per pixel (explicit)
     inline void EmitAlphaBlock3(uint8_t* dest, const uint8_t* block) {
         for (int i = 0; i < 8; i++) {
             uint8_t a1 = block[(i * 2) * 4 + 3] >> 4;
@@ -17,7 +15,6 @@ namespace DXT {
         }
     }
 
-    // DXT5 Alpha uses 8 interpolated steps and 3-bit indices
     inline void EmitAlphaBlock5(uint8_t* dest, const uint8_t* block) {
         uint8_t minA = 255, maxA = 0;
         for (int i = 0; i < 16; i++) {
@@ -35,7 +32,6 @@ namespace DXT {
             if (maxA > minA) {
                 int dist = maxA - a;
                 int range = maxA - minA;
-                // Calculate which of the 8 steps we are closest to
                 int step = (dist * 7 + (range / 2)) / range;
                 if (step == 0) index = 0;
                 else if (step == 7) index = 1;
@@ -62,8 +58,8 @@ public:
         bool ResizeToPowerOfTwo = true;
         int TargetWidth = 0;
         int TargetHeight = 0;
-        bool IsBumpmap = false;       // [NEW] Trigger for auto-generation
-        float BumpFactor = 5.0f;      // [NEW] Intensity multiplier
+        bool IsBumpmap = false;
+        float BumpFactor = 5.0f;
     };
 
     struct BuildResult {
@@ -74,11 +70,9 @@ public:
         std::string Error;
     };
 
-    // [NEW] The Fable-accurate RGB to Normal Map generator
     static void ConvertRGBAToFableNormalMap(std::vector<uint8_t>& rgbaPixels, int width, int height, float bumpFactor) {
         std::vector<uint8_t> normalMap(width * height * 4);
 
-        // Fast perceptual luminance calculator
         auto getLuminance = [&](int x, int y) -> float {
             int idx = (y * width + x) * 4;
             return (rgbaPixels[idx] * 0.299f) + (rgbaPixels[idx + 1] * 0.587f) + (rgbaPixels[idx + 2] * 0.114f);
@@ -102,8 +96,6 @@ public:
                 uint8_t r = (uint8_t)std::clamp(std::round(du * normalizer + 128.0f), 0.0f, 255.0f);
                 uint8_t g = (uint8_t)std::clamp(std::round(dv * normalizer + 128.0f), 0.0f, 255.0f);
                 uint8_t b = (uint8_t)std::clamp(std::round(128.0f - (127.0f * normalizer)), 0.0f, 255.0f);
-
-                // Preserve original Alpha for Fable Specular/Gloss masks!
                 uint8_t a = rgbaPixels[(y * width + x) * 4 + 3];
 
                 int outIdx = (y * width + x) * 4;
@@ -147,7 +139,6 @@ public:
         }
         stbi_image_free(pixels);
 
-        // [NEW] Instantly convert the raw pixels to a Normal Map if requested!
         if (opts.IsBumpmap) {
             ConvertRGBAToFableNormalMap(sourceData, physW, physH, opts.BumpFactor);
         }
@@ -317,7 +308,6 @@ private:
         for (int y = 0; y < blocksY; y++) {
             for (int x = 0; x < blocksX; x++) {
 
-                // [FIX] Edge-Clamping: Prevents black borders on mipmaps and stops STB from crashing on 0-alpha padding
                 for (int by = 0; by < 4; by++) {
                     for (int bx = 0; bx < 4; bx++) {
                         int sx = (std::min)(x * 4 + bx, w - 1);
@@ -330,7 +320,6 @@ private:
                 uint8_t* dest = &output[(y * blocksX + x) * blockSize];
 
                 if (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) {
-                    // [FIX] Alpha=0 (Fable DXT1 is opaque). Mode=STB_DXT_HIGHQUAL (2) for max quality.
                     stb_compress_dxt_block(dest, block, 0, STB_DXT_HIGHQUAL);
                 }
                 else if (fmt == ETextureFormat::DXT3) {

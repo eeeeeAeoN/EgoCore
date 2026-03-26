@@ -30,37 +30,45 @@ inline void UnpackNORMPACKED3(uint32_t packed, float& x, float& y, float& z) {
 inline float DecompressUV(int16_t v) { return ((float)v / 2048.0f) - 8.0f; }
 
 inline uint32_t CalculateFableCRC(const std::string& str) {
-    uint32_t crc = 0; // Fable uses 0 as the initial value
+    uint32_t crc = 0;
     for (char c : str) {
-        crc ^= (uint8_t)c; // Strictly case-sensitive, no tolower()
+        crc ^= (uint8_t)c;
         for (int i = 0; i < 8; i++) {
             if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
             else crc >>= 1;
         }
     }
-    return crc; // No final bitwise inversion!
+    return crc;
 }
 
 struct CVertexCompressionParams { float Scale[4]; float Offset[4]; };
+
 struct CHelperPoint { uint32_t NameCRC; float Pos[3]; int32_t BoneIndex; };
+
 struct CDummyObject { uint32_t NameCRC; float Transform[12]; int32_t BoneIndex; };
+
 struct C3DBone { uint32_t NameCRC; int32_t ParentIndex; int32_t OriginalNoChildren; float LocalizationMatrix[12]; };
+
 struct CPlane { float Normal[3]; float D; };
+
 struct CMeshVolume { uint32_t ID; std::string Name; std::vector<CPlane> Planes; };
+
 struct CMeshGenerator { float Transform[12]; int32_t BoneIndex; std::string ObjectName; uint32_t BankIndex; bool UseLocalOrigin; };
 
 struct C3DMaterial {
     int32_t ID; std::string Name; int32_t DecalID; int32_t DiffuseMapID; int32_t BumpMapID;
     int32_t ReflectionMapID; int32_t IlluminationMapID; int32_t MapFlags; int32_t SelfIllumination;
     bool IsTwoSided; bool IsTransparent; bool BooleanAlpha; bool DegenerateTriangles; bool UseFilenames;
-    std::vector<std::string> TextureFileNames; // NEW: Non-lossy preserve
+    std::vector<std::string> TextureFileNames;
 };
 
 struct CStaticBlock { uint32_t PrimitiveCount; uint32_t StartIndex; bool IsStrip; uint8_t ChangeFlags; bool DegenerateTriangles; int32_t MaterialIndex; };
+
 struct CAnimatedBlock {
     uint32_t PrimitiveCount; uint32_t StartIndex; bool IsStrip; uint8_t ChangeFlags; bool DegenerateTriangles;
     uint32_t VertexCount; uint16_t BonesPerVertex; bool PalettedFlag; std::vector<uint8_t> Groups;
 };
+
 struct CClothPrimitive { uint32_t PrimitiveIndex; uint32_t MaterialIndex; std::vector<uint8_t> ParticleProgramData; };
 
 struct C3DPrimitive {
@@ -69,7 +77,7 @@ struct C3DPrimitive {
     uint32_t VertexCount; uint32_t TriangleCount; uint32_t IndexCount; uint32_t InitFlags;
     uint32_t StaticBlockCount_2; uint32_t AnimatedBlockCount_2;
     bool IsCompressed; bool HasExtraData; int32_t VertexStride;
-    uint32_t BufferType; // NEW: Non-lossy preserve
+    uint32_t BufferType;
     CVertexCompressionParams Compression;
     std::vector<CStaticBlock> StaticBlocks;
     std::vector<CAnimatedBlock> AnimatedBlocks;
@@ -98,7 +106,7 @@ struct C3DMeshContent {
     uint16_t MeshVolumeCount = 0; uint16_t MeshGeneratorCount = 0;
 
     std::vector<uint8_t> PackedNamesRaw;
-    std::map<uint32_t, std::string> CRCNameMap; // Resolves CRCs to actual string names
+    std::map<uint32_t, std::string> CRCNameMap;
 
     std::vector<CHelperPoint> Helpers; std::vector<CDummyObject> Dummies;
     std::vector<CMeshVolume> Volumes; std::vector<CMeshGenerator> Generators;
@@ -132,7 +140,6 @@ struct C3DMeshContent {
         if (PackedNamesRaw.size() < 2) return;
         uint16_t dummyOffset = *(uint16_t*)PackedNamesRaw.data();
 
-        // 1. Read Helper Strings
         size_t cursor = 2;
         while (cursor < dummyOffset && cursor < PackedNamesRaw.size()) {
             std::string s = "";
@@ -140,12 +147,11 @@ struct C3DMeshContent {
                 s += (char)PackedNamesRaw[cursor];
                 cursor++;
             }
-            if (cursor < dummyOffset) cursor++; // Skip null terminator
+            if (cursor < dummyOffset) cursor++;
 
             if (!s.empty()) CRCNameMap[CalculateFableCRC(s)] = s;
         }
 
-        // 2. Read Dummy Strings
         cursor = dummyOffset;
         while (cursor < PackedNamesRaw.size()) {
             std::string s = "";
@@ -153,14 +159,13 @@ struct C3DMeshContent {
                 s += (char)PackedNamesRaw[cursor];
                 cursor++;
             }
-            if (cursor < PackedNamesRaw.size()) cursor++; // Skip null terminator
+            if (cursor < PackedNamesRaw.size()) cursor++;
 
             if (!s.empty()) CRCNameMap[CalculateFableCRC(s)] = s;
         }
     }
 
     void PackNames(const std::vector<std::string>& helperNames, const std::vector<std::string>& dummyNames) {
-        // Sets automatically sort the strings alphabetically, exactly as Fable expects
         std::set<std::string> hSet(helperNames.begin(), helperNames.end());
         std::set<std::string> dSet(dummyNames.begin(), dummyNames.end());
 
@@ -173,7 +178,6 @@ struct C3DMeshContent {
             PackedNamesRaw.push_back(0);
         }
 
-        // Fable Engine perfectly aligns the offset by requiring an empty string terminator here
         PackedNamesRaw.push_back(0);
 
         uint16_t dummyOffset = (uint16_t)PackedNamesRaw.size();
@@ -272,11 +276,11 @@ struct C3DMeshContent {
         bool isNormComp = (initFlags & 4) != 0;
         bool hasBump = (initFlags & 2) != 0;
         int stride = 0;
-        stride += isPosComp ? 4 : 12; // Pos
-        if (isAnimated) stride += 8; // Weights (4) + Indices (4)
-        stride += isNormComp ? 4 : 12; // Norm
-        stride += isNormComp ? 4 : 8; // UV
-        if (hasBump) stride += isNormComp ? 8 : 16; // Bump
+        stride += isPosComp ? 4 : 12;
+        if (isAnimated) stride += 8;
+        stride += isNormComp ? 4 : 12;
+        stride += isNormComp ? 4 : 8;
+        if (hasBump) stride += isNormComp ? 8 : 16;
         return stride;
     }
 
@@ -307,7 +311,6 @@ struct C3DMeshContent {
 
         std::vector<uint8_t> helpersRaw, dummiesRaw;
 
-        // 1. Compressed Helpers
         if (HelperPointCount > 0) {
             helpersRaw = DecompressLZO(b, cursor, sz, 20 * HelperPointCount);
             for (int i = 0; i < HelperPointCount && i * 20 + 20 <= helpersRaw.size(); ++i) {
@@ -319,7 +322,6 @@ struct C3DMeshContent {
             }
         }
 
-        // 2. Compressed Dummies
         if (DummyObjectCount > 0) {
             dummiesRaw = DecompressLZO(b, cursor, sz, 56 * DummyObjectCount);
             for (int i = 0; i < DummyObjectCount && i * 56 + 56 <= dummiesRaw.size(); ++i) {
@@ -331,13 +333,11 @@ struct C3DMeshContent {
             }
         }
 
-        // 3. Compressed Packed Names
         if (PackedNamesSize > 0) {
             PackedNamesRaw = DecompressLZO(b, cursor, sz, PackedNamesSize);
             UnpackNames();
         }
 
-        // 4. Uncompressed Volumes (Contains compressed planes internally)
         for (int i = 0; i < MeshVolumeCount; i++) {
             CMeshVolume vol;
             if (!Read(b, cursor, sz, vol.ID)) break;
@@ -359,7 +359,6 @@ struct C3DMeshContent {
             Volumes.push_back(vol);
         }
 
-        // 5. Uncompressed Generators
         for (int i = 0; i < MeshGeneratorCount; i++) {
             CMeshGenerator gen;
             Read(b, cursor, sz, gen.Transform);
@@ -465,14 +464,14 @@ struct C3DMeshContent {
             int reps = (p.RepeatingMeshReps > 1) ? p.RepeatingMeshReps : 1;
             int totalVertsToRead = p.VertexCount * reps;
 
-            // Fable exceptions: Type 2 and Type 4 meshes store raw floats regardless of the InitFlags
+            // Type 2 and Type 4 meshes store raw floats regardless of the InitFlags
             bool isPosComp = p.IsCompressed;
             if (MeshType == 4 || (p.VertexStride == 36 && p.AnimatedBlockCount == 0)) isPosComp = false;
             if (reps > 1) isPosComp = false;
 
             for (int v = 0; v < totalVertsToRead; v++) {
                 size_t offset = v * p.VertexStride;
-                if (offset + 12 > p.VertexBuffer.size()) break; // Safely ensure 12 bytes exist
+                if (offset + 12 > p.VertexBuffer.size()) break;
 
                 float x, y, z;
                 if (isPosComp) {
@@ -556,7 +555,7 @@ struct C3DMeshContent {
         if (!PackedNamesRaw.empty()) Write(PackedNamesRaw.data(), PackedNamesRaw.size());
 
         for (const auto& vol : Volumes) {
-            uint32_t version = 1; // ASM hardcodes this to 1u
+            uint32_t version = 1;
             Write(&version, 4);
             WriteString(vol.Name);
             uint32_t pCount = (uint32_t)vol.Planes.size();
@@ -595,7 +594,7 @@ struct C3DMeshContent {
             if (mat.UseFilenames) {
                 for (int j = 0; j < 4; j++) {
                     if (j < mat.TextureFileNames.size()) WriteString(mat.TextureFileNames[j]);
-                    else WriteString(""); // Failsafe
+                    else WriteString("");
                 }
             }
         }

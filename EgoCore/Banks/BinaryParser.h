@@ -8,7 +8,7 @@
 #include <regex>
 #include <filesystem>
 #include <set>
-#include "DefBackend.h" // Access to g_DefWorkspace
+#include "DefBackend.h"
 
 struct BinaryEntry {
     uint32_t CRC;
@@ -26,7 +26,6 @@ public:
     BinaryData Data;
     std::string StatusMessage;
 
-    // --- STANDARD CRC32 (Reference) ---
     static uint32_t CalculateCRC32_Standard(const std::string& str) {
         static uint32_t table[256];
         static bool tableComputed = false;
@@ -45,8 +44,6 @@ public:
         return ~crc;
     }
 
-    // --- FABLE CUSTOM CRC32 ---
-    // Init 0, No Final XOR, Case Sensitive processing
     static uint32_t CalculateCRC32_Fable(const std::string& str) {
         static uint32_t table[256];
         static bool tableComputed = false;
@@ -67,7 +64,6 @@ public:
     }
 
     static uint32_t CalculateCRC32(const std::string& str) {
-        // Wrapper for the checker UI
         return CalculateCRC32_Fable(str);
     }
 
@@ -103,7 +99,6 @@ public:
         StatusMessage = "Loaded " + std::to_string(Data.Entries.size()) + " entries.";
     }
 
-    // --- COMPILER FUNCTION ---
     static void CompileSoundBinaries(const std::string& outputFolder, std::string& outStatus) {
         if (!g_DefWorkspace.IsLoaded) {
             outStatus = "Error: Definitions not loaded! Please set game path first.";
@@ -114,17 +109,14 @@ public:
 
         std::set<std::string> targetHeaders;
 
-        // Defaults
         targetHeaders.insert("dialoguesnds.h");
         targetHeaders.insert("dialoguesnds2.h");
         targetHeaders.insert("scriptdialoguesnds.h");
         targetHeaders.insert("scriptdialoguesnds2.h");
 
-        // Parse SOUND_SETUP definitions to find referenced headers
         if (g_DefWorkspace.CategorizedDefs.count("SOUND_SETUP")) {
             const auto& setups = g_DefWorkspace.CategorizedDefs["SOUND_SETUP"];
 
-            // FIXED: Added 'Rgx' delimiter to avoid conflict with )" in the regex pattern
             std::regex bankRegex(R"Rgx(CSoundBankEntry\s*\(\s*[^,]+,\s*"[^"]+",\s*"([^"]+)")Rgx");
 
             for (const auto& def : setups) {

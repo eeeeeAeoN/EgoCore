@@ -127,8 +127,6 @@ public:
         e.OriginalIndex = -1;
         e.SoundID = newID;
         e.GroupName = "Default";
-
-        // Defaults
         e.Priority = 1; e.Volume = 1.0f; e.Pitch = 1.0f; e.Probability = 100.0f;
         e.LoopCount = 0;
 
@@ -179,8 +177,6 @@ public:
 
         std::vector<uint8_t> riffData;
 
-        // If PCM 16-bit, Encode to ADPCM for space saving (Fable Standard)
-        // If it's already something else, pass it through raw
         if (bits == 16) {
             std::vector<int16_t> pcm16; size_t count = pcmSz / 2;
             const int16_t* s = (const int16_t*)pcm;
@@ -204,7 +200,7 @@ public:
         }
         else {
             riffData = raw;
-            Entries[index].FormatTag = 1; // Assume standard PCM
+            Entries[index].FormatTag = 1;
         }
 
         auto& e = Entries[index];
@@ -357,8 +353,6 @@ private:
 public:
     bool Save(const std::string& path) {
         if (Entries.empty() && GhostSlots.empty()) return false;
-
-        // 1. Pre-load all data into memory blobs to prevent source file conflict
         struct Blob { std::vector<uint8_t> d; uint32_t origOff; uint32_t newOff; };
         std::vector<Blob> blobs;
         std::vector<int> blobIdx(Entries.size(), -1);
@@ -404,16 +398,13 @@ public:
         }
         while (((long)out.tellp() - wStart) % 2 != 0) out.put(0);
 
-        // --- FIXED INDEX ASSIGNMENT ---
         std::map<int, LugEntryRaw*> writeMap;
 
-        // 1. Populate ghosts first
         for (auto& g : GhostSlots) {
             if (ghostBlobIdx.count(g.first) && ghostBlobIdx[g.first] != -1) g.second.Offset = blobs[ghostBlobIdx[g.first]].newOff;
             writeMap[g.first] = &g.second;
         }
 
-        // 2. Find safe Max Index
         int maxI = -1;
         if (!writeMap.empty()) maxI = writeMap.rbegin()->first;
         for (const auto& e : Entries) {
@@ -467,7 +458,6 @@ public:
             if (!e.Flag_Interrupt) m |= MASK_NON_INTERRUPT;
             r.Driver.ControlMask = m;
 
-            // Use calculated maxI to ensure new entries append, not overwrite
             int tIdx = e.OriginalIndex;
             if (tIdx == -1) tIdx = ++maxI;
 

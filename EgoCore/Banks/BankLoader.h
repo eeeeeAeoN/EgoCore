@@ -17,7 +17,7 @@
 #include <map>
 #include <regex>
 
-// --- GLOBAL STATE ---
+
 inline std::vector<BinaryParser> g_LoadedBinaries;
 
 inline std::map<uint32_t, std::string> BuildFriendlyNameMap(const std::string& headerName) {
@@ -102,7 +102,6 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
     bank->SelectedEntryIndex = idx; bank->SelectedLOD = 0;
     const auto& e = bank->Entries[idx];
 
-    // Staged cache check.
     if (bank->StagedEntries.count(idx)) {
         const auto& staged = bank->StagedEntries[idx];
 
@@ -123,7 +122,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         else if (staged.Texture) {
             g_TextureParser.DecodedFormat = staged.Texture->TargetFormat;
             g_TextureParser.Header = staged.Texture->Header;
-            g_TextureParser.RawFrames = staged.Texture->RawFrames; // <--- Copy the array
+            g_TextureParser.RawFrames = staged.Texture->RawFrames;
             g_TextureParser.IsParsed = true;
             g_TextureParser.IsStagedRaw = true;
             g_TextureParser.PendingName = e.Name;
@@ -150,8 +149,6 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
             g_LipSyncParser.Data = *staged.LipSync;
             g_LipSyncParser.IsParsed = true;
         }
-
-        // Skip file reading entirely!
         return;
     }
 
@@ -198,7 +195,6 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
             if (bank->SubheaderCache.count(idx)) g_ActiveMeshContent.ParseEntryMetadata(bank->SubheaderCache[idx]);
             if (!bank->CurrentEntryRawData.empty()) { g_ActiveMeshContent.Parse(bank->CurrentEntryRawData, e.Type);; g_MeshUploadNeeded = true; }
         }
-        // HANDLE ANIMATIONS (Type 6, 7, 9)
         else if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
             if (bank->SubheaderCache.count(idx)) {
                 g_AnimParser.Data.Deserialize(bank->SubheaderCache[idx]);
@@ -219,19 +215,16 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
     bank->FilteredIndices.clear();
     bank->SubheaderCache.clear();
 
-    // We modify the info struct to store the header data, so we use a reference
     auto& info = bank->SubBanks[subBankIndex];
 
     bank->Stream->seekg(info.Offset, std::ios::beg);
 
-    // --- [FIX] CAPTURE HEADER DATA (Partition Info) ---
     uint32_t statsCount = 0;
     bank->Stream->read((char*)&statsCount, 4);
 
-    info.HeaderData.clear(); // Ensure clean slate
+    info.HeaderData.clear();
 
     if (statsCount < 1000) {
-        // Valid Partition Header: Store Count + Pairs
         info.HeaderData.push_back(statsCount);
         for (uint32_t k = 0; k < statsCount * 2; ++k) {
             uint32_t val = 0;
@@ -240,17 +233,14 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
         }
     }
     else {
-        // No Header (or weird legacy format), rewind the 4 bytes we read
         bank->Stream->seekg(-4, std::ios::cur);
-        info.HeaderData.push_back(0); // Treat as 0 count for compilation
+        info.HeaderData.push_back(0);
     }
 
-    // Prepare Friendly Names
     std::string headerFile = GetHeaderForSubBank(info.Name);
     std::map<uint32_t, std::string> friendlyNames;
     if (!headerFile.empty()) friendlyNames = BuildFriendlyNameMap(headerFile);
 
-    // --- READ ENTRIES ---
     for (uint32_t i = 0; i < info.EntryCount; i++) {
         BankEntry e;
         uint32_t magicE;
@@ -262,9 +252,8 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
         bank->Stream->read((char*)&e.Offset, 4);
         bank->Stream->read((char*)&e.CRC, 4);
 
-        // Fable Magic Number Check
         if (magicE != 42) {
-            // If magic is wrong, we might need to skip bytes or abort, 
+            // If magic is wrong (like with CBox entries), we might need to skip bytes or abort, 
             // but usually we just skip adding it to the list.
             // We continue reading to maintain file pointer consistency for now.
         }
@@ -273,7 +262,6 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
         if (friendlyNames.count(e.ID)) e.FriendlyName = friendlyNames[e.ID];
         else e.FriendlyName = e.Name;
 
-        // [FIX] Read Timestamp
         bank->Stream->read((char*)&e.Timestamp, 4);
 
         uint32_t depCount = 0;
@@ -291,7 +279,6 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
             bank->SubheaderCache[i] = infoBuf;
         }
 
-        // Only add if valid
         bool isValidEntry = (magicE == 42) || (e.Size > 0 && e.ID > 0);
 
         if (isValidEntry) {
@@ -328,7 +315,6 @@ inline std::unique_ptr<LoadedBank> CreateBankFromDisk(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-    // --- HANDLE .LUT ---
     if (ext == ".lut") {
         newBank->Type = EBankType::Audio;
         newBank->AudioParser = std::make_shared<AudioBankParser>();
@@ -352,17 +338,12 @@ inline std::unique_ptr<LoadedBank> CreateBankFromDisk(const std::string& path) {
         }
         return nullptr;
     }
-    // --- HANDLE .LUG ---
     else if (ext == ".lug") {
         newBank->Type = EBankType::Audio;
         newBank->LugParserPtr = std::make_shared<LugParser>();
-        newBank->AudioParser = std::make_shared<AudioBankParser>(); // Init player
+        newBank->AudioParser = std::make_shared<AudioBankParser>();
 
         if (newBank->LugParserPtr->Parse(path)) {
-            // FIXED: Removed the auto-loading of .MET file logic here.
-            // We trust the .LUG parser to get all metadata (channels, rate, etc.) directly.
-
-            // Populate UI List
             for (size_t i = 0; i < newBank->LugParserPtr->Entries.size(); i++) {
                 const auto& le = newBank->LugParserPtr->Entries[i];
                 BankEntry be;
@@ -380,7 +361,6 @@ inline std::unique_ptr<LoadedBank> CreateBankFromDisk(const std::string& path) {
         return nullptr;
     }
 
-    // --- HANDLE .BIG ---
     newBank->Stream->open(path, std::ios::binary | std::ios::in | std::ios::out);
     if (!newBank->Stream->is_open()) {
         newBank->Stream->clear();
@@ -439,16 +419,13 @@ inline void JumpToBankEntry(const std::string& targetFile, uint32_t id, const st
 
     int bankIdx = findBankIndex(targetFile);
 
-    // If bank isn't open, search for it dynamically across all possible language folders
     if (bankIdx == -1) {
         std::vector<std::string> pathsToTry;
         const char* langs[] = { "English", "French", "Italian", "Chinese", "German", "Korean", "Japanese", "Spanish" };
 
-        // Add all language paths
         for (const char* l : langs) {
             pathsToTry.push_back(g_AppConfig.GameRootPath + "\\Data\\Lang\\" + std::string(l) + "\\" + targetFile);
         }
-        // Add generic fallback paths
         pathsToTry.push_back(g_AppConfig.GameRootPath + "\\Data\\" + targetFile);
 
         for (const auto& p : pathsToTry) {
@@ -495,17 +472,15 @@ inline void ParseSelectedLOD(LoadedBank* bank) {
     if (!bank) return;
     int idx = bank->SelectedEntryIndex;
 
-    // --- PURE DEFERRED: Read from Staged Array ---
     if (bank->StagedEntries.count(idx) && !bank->StagedEntries[idx].MeshLODs.empty()) {
         auto& staged = bank->StagedEntries[idx];
         if (bank->SelectedLOD >= staged.MeshLODs.size()) bank->SelectedLOD = 0;
         g_ActiveMeshContent = *staged.MeshLODs[bank->SelectedLOD];
-        g_ActiveMeshContent.EntryMeta = staged.MeshMeta; // Keep TOC synced
+        g_ActiveMeshContent.EntryMeta = staged.MeshMeta;
         g_MeshUploadNeeded = true;
         return;
     }
 
-    // --- FALLBACK: Binary Slice Reading ---
     if (bank->CurrentEntryRawData.empty()) return;
     size_t offset = 0; size_t size = bank->CurrentEntryRawData.size();
     if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {

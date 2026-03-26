@@ -1,5 +1,3 @@
-// --- START OF FILE GltfMeshImporter.h ---
-
 #pragma once
 #include "MeshParser.h"
 #include <string>
@@ -50,7 +48,7 @@ namespace GltfMeshImporter {
         while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
         try {
             std::stringstream ss(json.substr(pos));
-            ss.imbue(std::locale("C")); // Force dot decimals
+            ss.imbue(std::locale("C"));
             float f; if (ss >> f) return f;
             return defaultVal;
         }
@@ -92,7 +90,7 @@ namespace GltfMeshImporter {
         std::string arr = j.substr(pos + 1, end - pos - 1);
         for (char& c : arr) if (c == ',' || c == '\n' || c == '\r' || c == '\t') c = ' ';
         std::stringstream ss(arr);
-        ss.imbue(std::locale("C")); // Force dot decimals
+        ss.imbue(std::locale("C"));
         float f; while (ss >> f) res.push_back(f);
         return res;
     }
@@ -155,21 +153,17 @@ namespace GltfMeshImporter {
     }
 
     static uint32_t PackNormal(float x, float y, float z) {
-        // 1. Force normalize to guarantee length is exactly 1.0 to prevent artifacting
         float len = std::sqrt(x * x + y * y + z * z);
         if (len > 0.00001f) { x /= len; y /= len; z /= len; }
 
-        // 2. Clamp strictly to [-1.0, 1.0] to prevent catastrophic bit-overflow wrapper
         x = std::clamp(x, -1.0f, 1.0f);
         y = std::clamp(y, -1.0f, 1.0f);
         z = std::clamp(z, -1.0f, 1.0f);
 
-        // 3. Scale to Fable's exact bit-depth maximums (11 bits = 1023, 10 bits = 511)
         int32_t ix = (int32_t)std::round(x * 1023.0f);
         int32_t iy = (int32_t)std::round(y * 1023.0f);
         int32_t iz = (int32_t)std::round(z * 511.0f);
 
-        // 4. Mask and pack into the 11-11-10 DWORD format Fable expects
         uint32_t ux = (uint32_t)ix & 0x7FF;
         uint32_t uy = ((uint32_t)iy & 0x7FF) << 11;
         uint32_t uz = ((uint32_t)iz & 0x3FF) << 22;
@@ -178,7 +172,6 @@ namespace GltfMeshImporter {
     }
 
     static int16_t CompressUV(float uv) {
-        // EXACT INVERSE OF: return ((float)v / 2048.0f) - 8.0f;
         return (int16_t)std::clamp(std::round((uv + 8.0f) * 2048.0f), -32768.0f, 32767.0f);
     }
 
@@ -189,19 +182,16 @@ namespace GltfMeshImporter {
         if (pos == std::string::npos) return 0;
         pos++;
 
-        // Skip whitespace
         while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
 
-        // Check if the value is wrapped in quotes (Blender String Bug)
         if (pos < json.length() && json[pos] == '\"') {
-            pos++; // Skip opening quote
+            pos++;
             size_t endPos = json.find('\"', pos);
             if (endPos == std::string::npos) return 0;
             std::string val = json.substr(pos, endPos - pos);
             try { return (uint32_t)std::stoull(val); }
             catch (...) { return 0; }
         }
-        // Otherwise, read it as a raw integer
         else {
             size_t endPos = pos;
             while (endPos < json.length() && (isdigit(json[endPos]) || json[endPos] == '.')) endPos++;
@@ -226,7 +216,6 @@ namespace GltfMeshImporter {
         float xy = qx * qy, xz = qx * qz, yz = qy * qz;
         float wx = qw * qx, wy = qw * qy, wz = qw * qz;
 
-        // Strict glTF Column-Major mapping
         m.m[0] = (1.0f - 2.0f * (yy + zz)) * sx; m.m[1] = (2.0f * (xy + wz)) * sx;       m.m[2] = (2.0f * (xz - wy)) * sx;
         m.m[4] = (2.0f * (xy - wz)) * sy;       m.m[5] = (1.0f - 2.0f * (xx + zz)) * sy; m.m[6] = (2.0f * (yz + wx)) * sy;
         m.m[8] = (2.0f * (xz + wy)) * sz;       m.m[9] = (2.0f * (yz - wx)) * sz;       m.m[10] = (1.0f - 2.0f * (xx + yy)) * sz;
@@ -255,7 +244,6 @@ namespace GltfMeshImporter {
         std::vector<std::string> nodes = SplitArray(nodesBlock);
         if (nodes.empty()) return;
 
-        // --- BONE ATTACHMENT MAPPING ---
         std::map<int, int> nodeParentMap;
         for (int i = 0; i < nodes.size(); i++) {
             std::vector<float> children = GetJsonFloatArray(nodes[i], "children");
@@ -295,7 +283,6 @@ namespace GltfMeshImporter {
             std::string exportName = name;
             uint32_t nameCrc = 0;
 
-            // Strip Blender's .001 suffixes safely
             size_t dotPos = exportName.find_last_of('.');
             if (dotPos != std::string::npos && dotPos + 4 == exportName.length() && isdigit(exportName[dotPos + 1])) {
                 exportName = exportName.substr(0, dotPos);
@@ -304,7 +291,6 @@ namespace GltfMeshImporter {
             if (type == "Helper" || type == "Dummy") {
                 nameCrc = ExtractCRC(extras);
 
-                // Fallback if missing
                 if (nameCrc == 0) {
                     if (exportName.find("HPNT_") == 0 || exportName.find("HDMY_") == 0) {
                         std::string crcStrFallback = exportName.substr(5);
@@ -323,11 +309,9 @@ namespace GltfMeshImporter {
                 if (exportName.find("GEN_") == 0) exportName = exportName.substr(4);
             }
 
-            // --- THE FIX: RESOLVE SCRAMBLED BONE INDEX PRIORITY ---
             bool isParentedToBone = false;
             int resolvedBoneIdx = -1;
 
-            // 1. Try real glTF hierarchy (Handles Modder who physically parented Dummy to Bone)
             int currNode = i;
             while (nodeParentMap.count(currNode)) {
                 int parentNode = nodeParentMap[currNode];
@@ -339,31 +323,24 @@ namespace GltfMeshImporter {
                 currNode = parentNode;
             }
 
-            // 2. Fallback to stale extras ONLY if unparented
             if (!isParentedToBone && extras.find("\"boneId\"") != std::string::npos) {
                 int staleBoneId = (int)ExtractFloatClean(extras, "boneId", -1);
 
-                // --- CROSS-REFERENCE OLD ID TO NEW SCRAMBLED ARRAY INDEX USING FABLE ID RANKING ---
                 if (staleBoneId >= 0 && outMesh.BoneCount > 0 && outMesh.BoneIndices.size() == outMesh.BoneCount) {
-                    // Create a sorted copy of FableIDs to reconstruct the original array order
                     std::vector<uint16_t> sortedFableIDs = outMesh.BoneIndices;
                     std::sort(sortedFableIDs.begin(), sortedFableIDs.end());
 
-                    // The staleBoneId is the index in the ORIGINAL sorted array
                     if (staleBoneId < sortedFableIDs.size()) {
                         uint16_t targetFableID = sortedFableIDs[staleBoneId];
 
-                        // Find which index in the CURRENT shuffled array holds this FableID
                         for (int bIdx = 0; bIdx < outMesh.BoneCount; bIdx++) {
                             if (outMesh.BoneIndices[bIdx] == targetFableID) {
-                                resolvedBoneIdx = bIdx; // Found its new home!
+                                resolvedBoneIdx = bIdx;
                                 break;
                             }
                         }
                     }
                 }
-
-                // Failsafe for un-rigged static meshes
                 if (resolvedBoneIdx == -1) resolvedBoneIdx = staleBoneId;
             }
 
@@ -481,12 +458,11 @@ namespace GltfMeshImporter {
         outMesh = C3DMeshContent();
         outMesh.MeshName = originalName;
         outMesh.MeshType = 1;
-        outMesh.AnimatedFlag = 0; // Static
+        outMesh.AnimatedFlag = 0;
 
         memset(outMesh.RootMatrix, 0, 48);
         outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
 
-        // --- ROOT MATRIX PARSING (Supports both Matrix and TRS Quaternions) ---
         std::string nodesBlock = ExtractBlock(json, "nodes");
         std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
         for (const auto& node : nodeObjs) {
@@ -513,7 +489,6 @@ namespace GltfMeshImporter {
                 break;
             }
         }
-        // ----------------------------------------------------------------------
 
         std::vector<std::string> viewObjs = SplitArray(ExtractBlock(json, "bufferViews"));
         struct BV { int offset, length; }; std::vector<BV> views;
@@ -554,7 +529,6 @@ namespace GltfMeshImporter {
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
 
-        // --- GLOBAL BOUNDS PRE-PASS ---
         float globalMin[3] = { 1e9f, 1e9f, 1e9f };
         float globalMax[3] = { -1e9f, -1e9f, -1e9f };
         std::vector<std::string> preMeshObjs = SplitArray(ExtractBlock(json, "meshes"));
@@ -575,7 +549,6 @@ namespace GltfMeshImporter {
                 }
             }
         }
-        // ------------------------------------------------------
 
         std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
         for (int mIdx = 0; mIdx < meshObjs.size(); mIdx++) {
@@ -644,7 +617,6 @@ namespace GltfMeshImporter {
                         else { v.n[0] = 0; v.n[1] = 1; v.n[2] = 0; }
                         if (uData) { v.u[0] = uData[vIdx * 2]; v.u[1] = uData[vIdx * 2 + 1]; }
 
-                        // Unique vertex merging
                         bool found = false;
                         for (size_t k = 0; k < uniqueVerts.size(); ++k) {
                             if (memcmp(&uniqueVerts[k], &v, sizeof(BaseVertex)) == 0) {
@@ -666,12 +638,10 @@ namespace GltfMeshImporter {
 
             if (uniqueVerts.empty()) continue;
 
-            // --- SMART LOSSLESS COMPRESSION WITH OVERRIDE ---
             std::vector<float> savedScale = GetJsonFloatArray(meshExtras, "compScale");
             std::vector<float> savedOffset = GetJsonFloatArray(meshExtras, "compOffset");
 
             if (!forceRecalculate && savedScale.size() >= 3 && savedOffset.size() >= 3) {
-                // LOSSLESS MODE: Restore the original grid
                 outPrim.Compression.Scale[0] = savedScale[0];
                 outPrim.Compression.Scale[1] = savedScale[1];
                 outPrim.Compression.Scale[2] = savedScale[2];
@@ -680,7 +650,6 @@ namespace GltfMeshImporter {
                 outPrim.Compression.Offset[2] = savedOffset[2];
             }
             else {
-                // CUSTOM MODE: Flawless Center/Extents Math
                 for (int j = 0; j < 3; j++) {
                     outPrim.Compression.Offset[j] = (globalMax[j] + globalMin[j]) * 0.5f;
                     outPrim.Compression.Scale[j] = (globalMax[j] - globalMin[j]) * 0.505f;
@@ -689,8 +658,6 @@ namespace GltfMeshImporter {
             }
             outPrim.Compression.Scale[3] = 1.0f;
             outPrim.Compression.Offset[3] = 0.0f;
-            // ------------------------------------------------
-
             outPrim.VertexCount = (uint32_t)uniqueVerts.size();
             outPrim.VertexBuffer.resize(outPrim.VertexCount * outPrim.VertexStride, 0);
             uint8_t* vDest = outPrim.VertexBuffer.data();
@@ -717,7 +684,6 @@ namespace GltfMeshImporter {
             outMesh.Primitives.push_back(outPrim);
         }
 
-        // Auto-sort Opaque vs Transparent for Z-fighting
         std::sort(outMesh.Primitives.begin(), outMesh.Primitives.end(), [&](const C3DPrimitive& a, const C3DPrimitive& b) {
             bool aT = false, bT = false;
             if (a.MaterialIndex >= 0 && a.MaterialIndex < outMesh.MaterialCount) aT = outMesh.Materials[a.MaterialIndex].IsTransparent || outMesh.Materials[a.MaterialIndex].BooleanAlpha;
@@ -773,7 +739,6 @@ namespace GltfMeshImporter {
         memset(outMesh.RootMatrix, 0, 48);
         outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
 
-        // Parse Materials from glTF
         std::string materialsBlock = ExtractBlock(json, "materials");
         std::vector<std::string> matObjs = SplitArray(materialsBlock);
 
@@ -785,7 +750,6 @@ namespace GltfMeshImporter {
                 m.Name = ExtractString(matObjs[i], "name");
                 if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
 
-                // Recover Fable-specific data from the extras block
                 std::string extras = ExtractBlock(matObjs[i], "extras");
                 if (!extras.empty()) {
                     m.DiffuseMapID = (int)ExtractFloat(extras, "DiffuseMapID");
@@ -806,7 +770,6 @@ namespace GltfMeshImporter {
             }
         }
         else {
-            // True Failsafe if the glTF has absolutely no materials
             C3DMaterial defMat = {};
             defMat.ID = 0; defMat.Name = "Grass_Material"; defMat.IsTwoSided = true; defMat.IsTransparent = true;
             outMesh.Materials.push_back(defMat);
@@ -816,7 +779,6 @@ namespace GltfMeshImporter {
         std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
         if (meshObjs.empty()) return "No meshes found in glTF.";
 
-        // We process ONE Fable Primitive per glTF Mesh
         for (const auto& meshObj : meshObjs) {
             std::vector<std::string> primObjs = SplitArray(ExtractBlock(meshObj, "primitives"));
             if (primObjs.empty()) continue;
@@ -827,14 +789,11 @@ namespace GltfMeshImporter {
             outPrim.InitFlags = 4;
             outPrim.MaterialIndex = -1;
 
-            // --- NEW: Vertex Welder Structures ---
             struct BaseVertex { float p[3], n[3], u[2]; };
             std::vector<BaseVertex> uniqueVerts;
             std::vector<uint32_t> mergedBaseIndices;
             std::vector<CStaticBlock> baseBlocks;
 
-            // Simple linear search to deduplicate vertices. 
-            // Loosened epsilon catches Blender's floating-point normal drift!
             auto FindOrAddVertex = [&](const BaseVertex& v) -> uint32_t {
                 for (size_t i = 0; i < uniqueVerts.size(); ++i) {
                     const auto& uv = uniqueVerts[i];
@@ -871,7 +830,6 @@ namespace GltfMeshImporter {
 
                 uint32_t startIdx = (uint32_t)mergedBaseIndices.size();
 
-                // 1. Map glTF indices to our optimized, unique Fable vertices
                 for (int i = 0; i < iAcc.count; i += 3) {
                     auto getVIdx = [&](int offset) -> uint32_t {
                         if (i + offset >= iAcc.count) return 0xFFFFFFFF;
@@ -881,7 +839,6 @@ namespace GltfMeshImporter {
                         return 0xFFFFFFFF;
                         };
 
-                    // SWAP index 1 and 2 to convert glTF Counter-Clockwise back to Fable Clockwise
                     uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) };
 
                     for (int j = 0; j < 3; j++) {
@@ -893,7 +850,6 @@ namespace GltfMeshImporter {
                         if (nData) { v.n[0] = nData[vIdx * 3]; v.n[1] = nData[vIdx * 3 + 1]; v.n[2] = nData[vIdx * 3 + 2]; }
                         else { v.n[0] = 0; v.n[1] = 1; v.n[2] = 0; }
 
-                        // INVERT the V coordinate back to Fable's Top-Left origin!
                         if (uData) { v.u[0] = uData[vIdx * 2]; v.u[1] = uData[vIdx * 2 + 1]; }
                         else { v.u[0] = 0; v.u[1] = 0; }
 
@@ -914,8 +870,6 @@ namespace GltfMeshImporter {
             uint32_t baseVertCount = (uint32_t)uniqueVerts.size();
             if (baseVertCount == 0) continue;
             if (baseVertCount * reps > 65535) return "Import Error: Vertex overflow.";
-
-            // 2. Expand Optimized Vertices for Repetitions
             outPrim.VertexCount = baseVertCount;
             outPrim.VertexBuffer.resize(baseVertCount * reps * 36);
             uint8_t* vDest = outPrim.VertexBuffer.data();
@@ -926,11 +880,10 @@ namespace GltfMeshImporter {
                     memcpy(vDest, &uniqueVerts[v].n, 12); vDest += 12;
                     memcpy(vDest, &uniqueVerts[v].u, 8);  vDest += 8;
                     uint32_t instID = r;
-                    memcpy(vDest, &instID, 4); vDest += 4; // Instance ID tracking
+                    memcpy(vDest, &instID, 4); vDest += 4;
                 }
             }
 
-            // 3. Expand Indices for Repetitions
             outPrim.IndexCount = (uint32_t)mergedBaseIndices.size();
             outPrim.TriangleCount = outPrim.IndexCount / 3;
             outPrim.IndexBuffer.resize(outPrim.IndexCount * reps);
@@ -942,7 +895,6 @@ namespace GltfMeshImporter {
                 }
             }
 
-            // 4. Map Fable Blocks to the LAST Repetition Layer
             for (const auto& baseSb : baseBlocks) {
                 CStaticBlock finalSb = baseSb;
                 finalSb.StartIndex = baseSb.StartIndex + (mergedBaseIndices.size() * (reps - 1));
@@ -979,7 +931,7 @@ namespace GltfMeshImporter {
 
         outMesh = C3DMeshContent();
         outMesh.MeshName = originalName;
-        outMesh.MeshType = 4; // Type 4 Particle Mesh
+        outMesh.MeshType = 4;
         outMesh.AnimatedFlag = 0;
 
         memset(outMesh.RootMatrix, 0, 48);
@@ -997,7 +949,6 @@ namespace GltfMeshImporter {
             return json.substr(pos + 1, end - pos - 1);
             };
 
-        // Parse Root Node Matrix directly from either Matrix array or Rotation Quaternion!
         std::string nodesBlock = ExtractBlock(json, "nodes");
         std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
         for (const auto& node : nodeObjs) {
@@ -1016,7 +967,6 @@ namespace GltfMeshImporter {
                     std::vector<float> s = GetJsonFloatArray(node, "scale");
                     Mat4 rMat = TransformToMat4(t, r, s);
 
-                    // Assign the calculated 4x4 matrix to Fable's 4x3 RootMatrix format
                     outMesh.RootMatrix[0] = rMat.m[0]; outMesh.RootMatrix[1] = rMat.m[1]; outMesh.RootMatrix[2] = rMat.m[2];
                     outMesh.RootMatrix[3] = rMat.m[4]; outMesh.RootMatrix[4] = rMat.m[5]; outMesh.RootMatrix[5] = rMat.m[6];
                     outMesh.RootMatrix[6] = rMat.m[8]; outMesh.RootMatrix[7] = rMat.m[9]; outMesh.RootMatrix[8] = rMat.m[10];
@@ -1073,12 +1023,12 @@ namespace GltfMeshImporter {
             if (primObjs.empty()) continue;
 
             C3DPrimitive outPrim = {};
-            outPrim.InitFlags = 4;           // <--- FIX: Must be 4 to match Fable's particle format
-            outPrim.IsCompressed = false;    // Type 4 uses raw floats regardless of InitFlags
+            outPrim.InitFlags = 4;
+            outPrim.IsCompressed = false;
             outPrim.BufferType = 0;
-            outPrim.VertexStride = 36;       // <--- FIX: 36 bytes (12 Pos + 12 Norm + 8 UV + 4 Pad)
+            outPrim.VertexStride = 36;
             outPrim.MaterialIndex = -1;
-            outPrim.RepeatingMeshReps = 1;   // <--- CRITICAL FIX: Was defaulting to 0, causing the mesh to vanish!
+            outPrim.RepeatingMeshReps = 1;
 
             struct BaseVertex { float p[3], n[3], u[2]; };
             std::vector<BaseVertex> uniqueVerts;
@@ -1130,7 +1080,7 @@ namespace GltfMeshImporter {
                         return 0xFFFFFFFF;
                         };
 
-                    uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) }; // Swap winding
+                    uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) };
 
                     for (int j = 0; j < 3; j++) {
                         uint32_t vIdx = idxs[j];
@@ -1161,14 +1111,12 @@ namespace GltfMeshImporter {
             if (baseVertCount == 0) continue;
             if (baseVertCount > 65535) return "Import Error: Vertex overflow. Fable limit is 65,535.";
 
-            // --- FIX: For uncompressed Particle Meshes, Fable expects Scale = 1 and Offset = 0
             for (int j = 0; j < 4; j++) {
                 outPrim.Compression.Scale[j] = 1.0f;
                 outPrim.Compression.Offset[j] = 0.0f;
             }
 
             outPrim.VertexCount = baseVertCount;
-            // Initialize with 0 to safely zero-out the trailing 4 padding bytes per vertex
             outPrim.VertexBuffer.resize(baseVertCount * outPrim.VertexStride, 0);
             uint8_t* vDest = outPrim.VertexBuffer.data();
 
@@ -1180,7 +1128,6 @@ namespace GltfMeshImporter {
                 memcpy(vDest + 0, pos, 12);
                 memcpy(vDest + 12, norm, 12);
                 memcpy(vDest + 24, uv, 8);
-                // Bytes 32-35 are naturally zeroed by the resize, exactly matching the Fable hex
 
                 vDest += outPrim.VertexStride;
             }
@@ -1223,15 +1170,14 @@ namespace GltfMeshImporter {
 
         outBBM = CBBMParser();
         outBBM.IsParsed = true;
-        outBBM.FileVersion = 100; // <--- SYNCHRONIZED VERSION (0x64)
-        outBBM.FileComment = "Copyright Big Blue Box Studios Ltd."; // <--- SYNCHRONIZED FILE COMMENT
+        outBBM.FileVersion = 100;
+        outBBM.FileComment = "Copyright Big Blue Box Studios Ltd.";
         outBBM.PhysicsMaterialIndex = 0;
 
         bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
         bool hasSceneRoot = json.find("\"name\":\"Scene_Root\"") != std::string::npos || json.find("\"name\": \"Scene_Root\"") != std::string::npos;
         bool applyBlenderFix = isBlender && hasSceneRoot;
 
-        // --- FIX ISSUE 6: Parse BBM Materials ---
         std::string materialsBlock = ExtractBlock(json, "materials");
         std::vector<std::string> matObjs = SplitArray(materialsBlock);
 
@@ -1243,7 +1189,6 @@ namespace GltfMeshImporter {
                 m.Name = ExtractStringClean(matObjs[i], "name");
                 if (m.Name.empty()) m.Name = "Imported_Mat_" + std::to_string(i);
 
-                // --- INJECT FABLE DEFAULTS ---
                 m.Ambient = 0xFFFFFFFF;
                 m.Diffuse = 0xFFFFFFFF;
                 m.Specular = 0xFFFFFFFF;
@@ -1296,7 +1241,7 @@ namespace GltfMeshImporter {
                 for (const auto& pObj : primObjs) {
                     std::string attr = ExtractBlock(pObj, "attributes");
                     int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
-                    int normAccIdx = (int)ExtractFloatClean(attr, "NORMAL", -1); // <--- FIX ISSUE 5
+                    int normAccIdx = (int)ExtractFloatClean(attr, "NORMAL", -1);
                     int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
 
                     if (posAccIdx < 0 || indAccIdx < 0) continue;
@@ -1333,7 +1278,7 @@ namespace GltfMeshImporter {
                             return 0xFFFFFFFF;
                             };
 
-                        uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) }; // Swap winding
+                        uint32_t idxs[3] = { getVIdx(0), getVIdx(2), getVIdx(1) };
 
                         for (int j = 0; j < 3; j++) {
                             uint32_t vIdx = idxs[j];
@@ -1342,7 +1287,6 @@ namespace GltfMeshImporter {
                             CBBMParser::C3DVertex2 v = {};
                             v.Position.x = pData[vIdx * 3]; v.Position.y = pData[vIdx * 3 + 1]; v.Position.z = pData[vIdx * 3 + 2];
 
-                            // --- FIX ISSUE 5: Parse Normals ---
                             if (nData) {
                                 v.Normal.x = nData[vIdx * 3]; v.Normal.y = nData[vIdx * 3 + 1]; v.Normal.z = nData[vIdx * 3 + 2];
                             }
@@ -1350,7 +1294,7 @@ namespace GltfMeshImporter {
                                 v.Normal.x = 0; v.Normal.y = 1; v.Normal.z = 0;
                             }
 
-                            v.UV.u = 0; v.UV.v = 0; // Physics meshes ignore UVs
+                            v.UV.u = 0; v.UV.v = 0;
 
                             outBBM.ParsedIndices.push_back((uint16_t)FindOrAddVertex(v));
                         }
@@ -1359,7 +1303,6 @@ namespace GltfMeshImporter {
             }
         }
 
-        // Steal the JSON logic from Type 1/2 to perfectly recover Navmeshes/Helpers from GLTF nodes
         C3DMeshContent tempMesh;
         ParseNodes(json, tempMesh);
 
@@ -1437,11 +1380,9 @@ namespace GltfMeshImporter {
         outMesh.AnimatedFlag = true;
         outMesh.TotalAnimatedBlocks = 0;
 
-        // --- BLENDER DETECTION ---
         bool isBlender = json.find("Khronos glTF Blender") != std::string::npos;
         bool hasSceneRoot = json.find("\"name\":\"Scene_Root\"") != std::string::npos || json.find("\"name\": \"Scene_Root\"") != std::string::npos;
         bool applyBlenderFix = isBlender && hasSceneRoot;
-        // -------------------------
 
         memset(outMesh.RootMatrix, 0, 48);
         outMesh.RootMatrix[0] = 1.0f; outMesh.RootMatrix[4] = 1.0f; outMesh.RootMatrix[8] = 1.0f;
@@ -1468,7 +1409,6 @@ namespace GltfMeshImporter {
 
         std::map<int, int> nodeParentMap;
 
-        // --- BLENDER SCENE BYPASS PATCH ---
         std::string nodesBlock;
         size_t searchPos = 0;
         while (true) {
@@ -1482,7 +1422,6 @@ namespace GltfMeshImporter {
             }
             searchPos = foundIdx + 7;
         }
-        // ----------------------------------
 
         std::vector<std::string> nodeObjs = SplitArray(nodesBlock);
 
@@ -1504,7 +1443,6 @@ namespace GltfMeshImporter {
             dstMat[8] = srcMat[2]; dstMat[9] = srcMat[6]; dstMat[10] = srcMat[10]; dstMat[11] = srcMat[14];
             dstMat[12] = srcMat[3]; dstMat[13] = srcMat[7]; dstMat[14] = srcMat[11]; dstMat[15] = srcMat[15];
 
-            // --- BLENDER SKELETON IBM ROTATION ---
             if (applyBlenderFix) {
                 for (int r = 0; r < 3; r++) {
                     float c1 = dstMat[r * 4 + 1];
@@ -1513,7 +1451,6 @@ namespace GltfMeshImporter {
                     dstMat[r * 4 + 2] = c1;
                 }
             }
-            // -------------------------------------
         }
 
         for (int i = 0; i < outMesh.BoneCount; i++) {
@@ -1550,7 +1487,6 @@ namespace GltfMeshImporter {
             b.LocalizationMatrix[6] = bt[2];  b.LocalizationMatrix[7] = bt[6];  b.LocalizationMatrix[8] = bt[10];
             b.LocalizationMatrix[9] = bt[3];  b.LocalizationMatrix[10] = bt[7];  b.LocalizationMatrix[11] = bt[11];
 
-            // --- BONE PIVOT ROTATION ---
             float kx = -bt[3], ky = -bt[7], kz = -bt[11];
             if (applyBlenderFix) {
                 float tmp = ky;
@@ -1608,7 +1544,6 @@ namespace GltfMeshImporter {
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
 
-        // --- GLOBAL BOUNDS PRE-PASS TO PREVENT SEAM TEARING ---
         float globalMin[3] = { 1e9f, 1e9f, 1e9f };
         float globalMax[3] = { -1e9f, -1e9f, -1e9f };
         std::vector<std::string> preMeshObjs = SplitArray(ExtractBlock(json, "meshes"));
@@ -1626,13 +1561,11 @@ namespace GltfMeshImporter {
                     float py = pData[v * 3 + 1];
                     float pz = pData[v * 3 + 2];
 
-                    // --- BLENDER X-AXIS ROTATION FIX ---
                     if (applyBlenderFix) {
                         float tmp = py;
                         py = -pz;
                         pz = tmp;
                     }
-                    // -----------------------------------
 
                     if (px < globalMin[0]) globalMin[0] = px;
                     if (px > globalMax[0]) globalMax[0] = px;
@@ -1643,7 +1576,6 @@ namespace GltfMeshImporter {
                 }
             }
         }
-        // ------------------------------------------------------
 
         std::vector<std::string> meshObjs = SplitArray(ExtractBlock(json, "meshes"));
         for (const auto& meshObj : meshObjs) {
@@ -1698,7 +1630,6 @@ namespace GltfMeshImporter {
                     else { rv.n[0] = 0; rv.n[1] = 1; rv.n[2] = 0; }
                     if (uData) { rv.u[0] = uData[v * 2]; rv.u[1] = uData[v * 2 + 1]; }
 
-                    // --- BLENDER ROTATION FIX ---
                     if (applyBlenderFix) {
                         float tmp;
 
@@ -1710,7 +1641,6 @@ namespace GltfMeshImporter {
                         rv.n[1] = -rv.n[2];
                         rv.n[2] = tmp;
                     }
-                    // ----------------------------
 
                     if (wAcc.compType == 5126) {
                         float* wData = (float*)(binData.data() + views[wAcc.view].offset + wAcc.offset);

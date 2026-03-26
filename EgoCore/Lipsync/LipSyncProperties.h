@@ -51,13 +51,12 @@ inline std::string GetSubBankNameForSpeech(const std::string& speechBank) {
     else if (stem == "scriptdialogue") targetSuffix = "_SCRIPT";
     else if (stem == "scriptdialogue2") targetSuffix = "_SCRIPT_2";
 
-    // Check loaded memory to match active language
     if (!targetSuffix.empty() && !g_LipSyncState.SubBanks.empty()) {
         for (const auto& sb : g_LipSyncState.SubBanks) {
             if (sb.Name.find(targetSuffix) != std::string::npos) return sb.Name;
         }
     }
-    return "LIPSYNC_ENGLISH" + targetSuffix; // Safe fallback
+    return "LIPSYNC_ENGLISH" + targetSuffix;
 }
 
 inline bool EnsureLipSyncLoaded() {
@@ -144,15 +143,12 @@ inline void AddLipSyncEntry(const std::string& speechBank, uint32_t newID, float
     if (subName.empty()) return;
     int sbIdx = g_LipSyncState.SubBankMap[subName];
 
-    // Generate Empty Content (4-Byte Info + Sorted Raw)
     auto blob = CLipSyncParser::GenerateEmpty(duration);
 
-    // Prepare Name Prefix
     std::filesystem::path p(speechBank);
     std::string prefix = p.stem().string();
     if (!prefix.empty()) prefix[0] = toupper(prefix[0]);
 
-    // Store
     AddedEntryData ae;
     ae.Type = 1;
     ae.NamePrefix = prefix;
@@ -169,33 +165,26 @@ inline void AddLipSyncEntryFromWav(const std::string& speechBank, uint32_t newID
     if (subName.empty()) return;
     int sbIdx = g_LipSyncState.SubBankMap[subName];
 
-    // 1. Load WAV Data
     std::vector<int16_t> pcm;
     int sampleRate = 0;
     if (!CSpeechAnalyzer::LoadWav(wavPath, pcm, sampleRate)) {
-        // Fallback to empty if load fails
         AddLipSyncEntry(speechBank, newID, 1.0f);
         return;
     }
 
-    // 2. Analyze
     CLipSyncData lsData = CSpeechAnalyzer::AnalyzeWav(pcm, sampleRate);
 
-    // 3. Serialize using Parser (ensures sorting and format)
     CLipSyncParser parser;
     parser.Data = lsData;
     std::vector<uint8_t> newRaw = parser.Recompile();
 
-    // 4. Create Info (4 bytes duration)
     std::vector<uint8_t> newInfo(4);
     memcpy(newInfo.data(), &lsData.Duration, 4);
 
-    // 5. Prepare Prefix
     std::filesystem::path p(speechBank);
     std::string prefix = p.stem().string();
     if (!prefix.empty()) prefix[0] = toupper(prefix[0]);
 
-    // 6. Store
     AddedEntryData ae;
     ae.Type = 1;
     ae.NamePrefix = prefix;

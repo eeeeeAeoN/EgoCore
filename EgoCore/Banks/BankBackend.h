@@ -19,9 +19,20 @@
 
 namespace fs = std::filesystem;
 
-// --- SIMPLE UI STATE ---
 inline bool g_ShowSuccessPopup = false;
 inline std::string g_SuccessMessage = "";
+inline std::vector<LoadedBank> g_OpenBanks;
+inline int g_ActiveBankIndex = -1;
+inline bool g_ForceTabSwitch = false;
+inline std::string g_BankStatus = "Ready";
+inline C3DMeshContent g_ActiveMeshContent;
+inline CBBMParser g_BBMParser;
+inline CTextureParser g_TextureParser;
+inline bool g_MeshUploadNeeded = false;
+inline C3DAnimationInfo g_ActiveAnim;
+inline bool             g_AnimParseSuccess = false;
+inline AnimUIContext g_AnimUIState;
+inline AnimParser g_AnimParser;
 
 enum class EBankType {
     Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio
@@ -37,7 +48,7 @@ struct BankEntry {
     uint32_t CRC = 0;
     uint32_t InfoSize = 0;
     uint32_t SubheaderFileOffset = 0;
-    uint32_t Timestamp = 0; // [NEW] Preserved timestamp/reserved field
+    uint32_t Timestamp = 0;
 
     std::vector<std::string> Dependencies;
 };
@@ -49,25 +60,22 @@ struct InternalBankInfo {
     uint32_t Offset;
     uint32_t Size;
     uint32_t Align;
-    std::vector<uint32_t> HeaderData; // [NEW] Preserves the "statsCount" block
+    std::vector<uint32_t> HeaderData;
 };
 
-// NEW: Filter Modes
 enum class EFilterMode { Name, ID, Speaker };
 
 struct StagedTextureInfo {
     ETextureFormat TargetFormat = ETextureFormat::DXT3;
     CGraphicHeader Header;
-    std::vector<std::vector<uint8_t>> RawFrames; // <--- NOW AN ARRAY!
+    std::vector<std::vector<uint8_t>> RawFrames;
 };
-
 
 struct CLipSyncData;
 
-// Container for any domain object a user modifies
 struct StagedEntry {
-    std::vector<std::shared_ptr<C3DMeshContent>> MeshLODs; // <--- NOW AN ARRAY OF LODS!
-    CMeshEntryMetadata MeshMeta; // Holds the TOC data for the whole mesh
+    std::vector<std::shared_ptr<C3DMeshContent>> MeshLODs;
+    CMeshEntryMetadata MeshMeta;
 
     std::shared_ptr<CBBMParser> Physics;
     std::shared_ptr<C3DAnimationInfo> Anim;
@@ -120,22 +128,6 @@ struct LoadedBank {
     LoadedBank& operator=(LoadedBank&&) = default;
 };
 
-inline std::vector<LoadedBank> g_OpenBanks;
-inline int g_ActiveBankIndex = -1;
-inline bool g_ForceTabSwitch = false;
-inline std::string g_BankStatus = "Ready";
-
-inline C3DMeshContent g_ActiveMeshContent;
-inline CBBMParser g_BBMParser;
-inline CTextureParser g_TextureParser;
-inline bool g_MeshUploadNeeded = false;
-inline C3DAnimationInfo g_ActiveAnim;
-inline bool             g_AnimParseSuccess = false;
-inline AnimUIContext g_AnimUIState;
-inline AnimParser g_AnimParser;
-
-
-// --- UTILS ---
 inline bool StartsWith(const std::string& str, const std::string& prefix) {
     if (str.length() < prefix.length()) return false;
     return str.compare(0, prefix.length(), prefix) == 0;
@@ -182,10 +174,9 @@ inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) 
     return EBankType::Unknown;
 }
 
-// Helper to peek speaker without full parsing overhead
 inline std::string PeekSpeakerFast(LoadedBank& bank, int index) {
     const auto& e = bank.Entries[index];
-    if (e.Type != 0) return ""; // Only Type 0 has Speaker
+    if (e.Type != 0) return "";
 
     if (bank.ModifiedEntryData.count(index)) {
         CTextParser p; p.Parse(bank.ModifiedEntryData[index], 0);
@@ -222,7 +213,6 @@ inline std::string PeekSpeakerFast(LoadedBank& bank, int index) {
     return "";
 }
 
-// Helper to peek Texture format without decompression
 inline ETextureFormat PeekTextureFormatFast(LoadedBank& bank, int index) {
     if (!bank.SubheaderCache.count(index)) return ETextureFormat::Unknown;
     const auto& meta = bank.SubheaderCache[index];
@@ -262,12 +252,9 @@ inline void UpdateFilter(LoadedBank& bank) {
     bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects);
 
     for (size_t i = 0; i < bank.Entries.size(); i++) {
-        // 1. FILTER BY TYPE (Modifier)
         if (bank.FilterTypeMask != -1) {
             if (bank.Entries[i].Type != bank.FilterTypeMask) continue;
         }
-
-        // 2. FILTER BY TEXTURE FORMAT
         if (isTextureBank && bank.FilterTextureFormatMask != -1) {
             ETextureFormat fmt = PeekTextureFormatFast(bank, (int)i);
             int mappedFmt = -1;
@@ -278,8 +265,6 @@ inline void UpdateFilter(LoadedBank& bank) {
 
             if (mappedFmt != bank.FilterTextureFormatMask) continue;
         }
-
-        // 3. FILTER BY TEXT/ID/SPEAKER
         if (filter.empty()) {
             bank.FilteredIndices.push_back((int)i);
             continue;

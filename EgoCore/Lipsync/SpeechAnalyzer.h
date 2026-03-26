@@ -9,7 +9,7 @@
 class CSpeechAnalyzer {
 private:
     static const int SAMPLE_RATE = 22050;
-    static const int FRAME_SIZE = 512; // ~43.06 FPS
+    static const int FRAME_SIZE = 512;
 
     struct FrameAnalysis {
         float RMS = 0.0f;
@@ -27,7 +27,6 @@ private:
         float TargetZCR;
     };
 
-    // --- SIGNAL PROCESSING ---
     static void SimpleRealFFT(const std::vector<float>& timeDomain, std::vector<float>& freqMag) {
         size_t N = timeDomain.size();
         freqMag.resize(N / 2);
@@ -78,9 +77,9 @@ private:
         float eLow = 0, eMid = 0, eHigh = 0;
         for (int i = 0; i < (int)spectrum.size(); i++) {
             float mag = spectrum[i];
-            if (i < 14) eLow += mag;       // 0-600Hz
-            else if (i < 58) eMid += mag;  // 600-2500Hz
-            else eHigh += mag;             // 2500Hz+
+            if (i < 14) eLow += mag; 
+            else if (i < 58) eMid += mag;
+            else eHigh += mag;
         }
 
         float total = eLow + eMid + eHigh;
@@ -94,21 +93,19 @@ private:
     }
 
 public:
-    // --- HELPER: Load WAV to Mono PCM ---
     static bool LoadWav(const std::string& path, std::vector<int16_t>& outPcm, int& outSampleRate) {
         std::ifstream f(path, std::ios::binary);
         if (!f.is_open()) return false;
 
         char chunkID[4]; f.read(chunkID, 4);
         if (strncmp(chunkID, "RIFF", 4) != 0) return false;
-        f.seekg(4, std::ios::cur); // ChunkSize
+        f.seekg(4, std::ios::cur);
         char format[4]; f.read(format, 4);
         if (strncmp(format, "WAVE", 4) != 0) return false;
 
         uint16_t audioFormat = 0;
         uint16_t numChannels = 0;
 
-        // Scan chunks until we find 'fmt ' and 'data'
         bool foundFmt = false;
         bool foundData = false;
 
@@ -123,14 +120,14 @@ public:
                 f.read((char*)&audioFormat, 2);
                 f.read((char*)&numChannels, 2);
                 f.read((char*)&outSampleRate, 4);
-                f.seekg(subChunkSize - 8, std::ios::cur); // Skip rest of fmt
+                f.seekg(subChunkSize - 8, std::ios::cur);
                 foundFmt = true;
             }
             else if (strncmp(subChunkID, "data", 4) == 0) {
-                if (!foundFmt) return false; // Malformed
-                if (audioFormat != 1) return false; // Only PCM supported
+                if (!foundFmt) return false;
+                if (audioFormat != 1) return false;
 
-                int samples = subChunkSize / 2; // 16-bit
+                int samples = subChunkSize / 2;
                 std::vector<int16_t> rawData(samples);
                 f.read((char*)rawData.data(), subChunkSize);
 
@@ -138,7 +135,6 @@ public:
                     outPcm = rawData;
                 }
                 else if (numChannels == 2) {
-                    // Mix Stereo to Mono
                     outPcm.clear();
                     outPcm.reserve(samples / 2);
                     for (size_t i = 0; i < rawData.size(); i += 2) {
@@ -146,7 +142,7 @@ public:
                         outPcm.push_back((int16_t)mixed);
                     }
                 }
-                else return false; // Unsupported channels
+                else return false;
 
                 foundData = true;
             }
@@ -161,8 +157,6 @@ public:
         CLipSyncData result;
         result.IsParsed = true;
 
-        // 1. Setup Signatures
-        // These are heuristic baselines for Fable's basic phoneme set
         std::vector<PhonemeSignature> signatures;
         signatures.push_back({ 0, 0.40f, 0.40f, 0.20f, 0.10f }); // AA
         signatures.push_back({ 1, 0.20f, 0.50f, 0.30f, 0.10f }); // EE
@@ -170,20 +164,17 @@ public:
         signatures.push_back({ 3, 0.60f, 0.30f, 0.10f, 0.05f }); // OH
         signatures.push_back({ 4, 0.10f, 0.20f, 0.70f, 0.45f }); // SZ
 
-        // IMPORTANT: Add to dictionary in Sorted ID order (0..4)
         std::vector<std::string> symbols = { "AA", "EE", "MM", "OH", "SZ" };
         for (uint8_t i = 0; i < symbols.size(); i++) {
             result.Dictionary.push_back({ i, symbols[i] });
         }
 
-        // 2. Setup Timing
         size_t totalSamples = pcmData.size();
         size_t numFrames = totalSamples / FRAME_SIZE;
         result.FPS = (float)SAMPLE_RATE / FRAME_SIZE;
         result.FrameCount = (uint32_t)numFrames;
         result.Duration = (float)totalSamples / SAMPLE_RATE;
 
-        // 3. Process
         size_t cursor = 0;
         for (size_t f = 0; f < numFrames; f++) {
             std::vector<int16_t> framePcm;
@@ -196,7 +187,6 @@ public:
             FrameAnalysis fa = AnalyzeFrame(framePcm);
             CLipSyncFrame lsFrame;
 
-            // Silence Gate
             if (fa.RMS > 0.015f) {
                 struct Score { uint8_t ID; float Val; };
                 std::vector<Score> scores;
@@ -222,7 +212,6 @@ public:
                     }
                 }
 
-                // Sort Descending by Score
                 std::sort(scores.begin(), scores.end(), [](const Score& a, const Score& b) {
                     return a.Val > b.Val;
                     });
@@ -241,7 +230,6 @@ public:
                 }
             }
 
-            // --- FIX: HANDLE SILENCE / EMPTY FRAMES ---
             // The game engine treats 0 keys as uninitialized/invalid, causing the mouth to hang open.
             // We must provide at least some keys (with 0 weight) to indicate "Mouth Closed".
             if (lsFrame.Keys.empty()) {

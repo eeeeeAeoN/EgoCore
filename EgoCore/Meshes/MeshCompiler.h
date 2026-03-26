@@ -1,8 +1,6 @@
-// --- START OF FILE MeshCompiler.h ---
-
 #pragma once
 #include "MeshParser.h"
-#include "Utils.h" // Ensures CompressFableBlock is available
+#include "Utils.h"
 #include <vector>
 #include <string>
 #include <cstring>
@@ -18,7 +16,6 @@ public:
             Write(str.c_str(), str.length() + 1);
             };
 
-        // 1. Write Uncompressed Structural Headers
         WriteString(m.MeshName);
         Write(&m.AnimatedFlag, 1);
         Write(m.BoundingSphereCenter, 12);
@@ -33,7 +30,6 @@ public:
         Write(&m.MeshVolumeCount, 2);
         Write(&m.MeshGeneratorCount, 2);
 
-        // Compress Helper Arrays
         if (m.HelperPointCount > 0) {
             std::vector<uint8_t> hRaw(m.Helpers.size() * 20);
             for (size_t i = 0; i < m.Helpers.size(); i++) {
@@ -44,7 +40,6 @@ public:
             WriteLZOBlock(data, hRaw, disableLZO);
         }
 
-        // Compress Dummy Arrays
         if (m.DummyObjectCount > 0) {
             std::vector<uint8_t> dRaw(m.Dummies.size() * 56);
             for (size_t i = 0; i < m.Dummies.size(); i++) {
@@ -55,14 +50,12 @@ public:
             WriteLZOBlock(data, dRaw, disableLZO);
         }
 
-        // Compress Packed Strings
         if (namesSize > 0) {
             WriteLZOBlock(data, m.PackedNamesRaw, disableLZO);
         }
 
-        // Compress Volumes
         for (const auto& vol : m.Volumes) {
-            uint32_t version = 1; // ASM hardcodes this to 1u
+            uint32_t version = 1;
             Write(&version, 4);
             WriteString(vol.Name);
             uint32_t pCount = (uint32_t)vol.Planes.size();
@@ -74,14 +67,12 @@ public:
             }
         }
 
-        // Uncompressed Generators
         for (const auto& gen : m.Generators) {
             Write(gen.Transform, 48); Write(&gen.BoneIndex, 4); WriteString(gen.ObjectName); Write(&gen.BankIndex, 4); Write(&gen.UseLocalOrigin, 1);
         }
 
         Write(&m.MaterialCount, 4); Write(&m.PrimitiveCount, 4); Write(&m.BoneCount, 4);
 
-        // Compress Bone Names
         std::vector<uint8_t> bNamesBlock;
         for (const auto& s : m.BoneNames) bNamesBlock.insert(bNamesBlock.end(), s.c_str(), s.c_str() + s.length() + 1);
         uint32_t calcBoneNameSize = (uint32_t)bNamesBlock.size();
@@ -89,7 +80,6 @@ public:
 
         Write(&m.ClothFlag, 1); Write(&m.TotalStaticBlocks, 2); Write(&m.TotalAnimatedBlocks, 2);
 
-        // Compress Bone Data
         if (m.BoneCount > 0) {
             Write(m.BoneIndices.data(), 2 * m.BoneCount);
             WriteLZOBlock(data, bNamesBlock, disableLZO);
@@ -104,7 +94,6 @@ public:
 
         Write(m.RootMatrix, 48);
 
-        // Uncompressed Materials
         for (const auto& mat : m.Materials) {
             Write(&mat.ID, 4); WriteString(mat.Name); Write(&mat.DecalID, 4); Write(&mat.DiffuseMapID, 4); Write(&mat.BumpMapID, 4);
             Write(&mat.ReflectionMapID, 4); Write(&mat.IlluminationMapID, 4); Write(&mat.MapFlags, 4); Write(&mat.SelfIllumination, 4);
@@ -136,7 +125,6 @@ public:
             uint32_t stride = prim.VertexStride; Write(&stride, 4);
             uint32_t type = prim.BufferType; Write(&type, 4);
 
-            // 2. COMPRESS PRIMITIVE BUFFERS USING FABLE'S CUSTOM WRAPPER
             WriteLZOBlock(data, prim.VertexBuffer, disableLZO);
 
             std::vector<uint8_t> idxBytes(prim.IndexBuffer.size() * 2);
@@ -156,7 +144,6 @@ public:
         std::vector<uint8_t> data = CompileSingleLOD(m, disableLZO);
 
         if (m.MeshType == 2 || m.MeshType == 5) {
-            // Replicate exactly what the internal Fable compiler does on flush
             C3DMeshContent ghostLOD = m;
             ghostLOD.Materials.clear();
             ghostLOD.MaterialCount = 0;
@@ -179,7 +166,6 @@ public:
         return CompileForExport(m, false);
     }
 
-    // --- NEW: GENERATES THE RAW UNCOMPRESSED BINARY FOR DEBUGGING ---
     static std::vector<uint8_t> CompilePhysicsUncompressed(const CBBMParser& bbm) {
         struct ChunkWriter {
             std::vector<uint8_t> buffer;
@@ -221,24 +207,21 @@ public:
 
         ChunkWriter w;
 
-        // --- 1. FIX FABLE MAGIC HEADER ---
-        w.Write(">>>>", 4); // Replaces the leaked 0x28000040 memory pointer
+        w.Write(">>>>", 4);
         w.Write("3DMF", 4);
-        uint32_t version = 100; // 0x64
+        uint32_t version = 100;
         w.Write(&version, 4);
         w.WriteString("Copyright Big Blue Box Studios Ltd.");
         w.Align();
 
         w.PushChunk("3DRT");
 
-        // --- MATERIALS ---
         w.PushChunk("MTLS");
         if (bbm.ParsedMaterials.empty()) {
             w.PushChunk("MTRL");
             w.WriteString("23 - Default");
             uint32_t idx = 0; w.Write(&idx, 4);
-            uint8_t twoSided = 0; w.Write(&twoSided, 1); // Hex dump uses 00 for TwoSided here
-            // Exact hex dump material floats/colors mapped
+            uint8_t twoSided = 0; w.Write(&twoSided, 1);
             uint32_t colors[6] = { 0xFF96EFF7, 0xFF96EFF7, 0xFFE5E5E5, 0x3DCCCCCC, 0x00000000, 0x3E99999A };
             w.Write(colors, 24);
             w.PopChunk();
@@ -247,7 +230,6 @@ public:
             for (const auto& m : bbm.ParsedMaterials) {
                 w.PushChunk(m.IsEngineMaterial ? "EMTL" : "MTRL");
 
-                // --- 2. FIX EMTL CHUNK STRUCTURE ---
                 if (m.IsEngineMaterial) {
                     uint32_t ver = 4; w.Write(&ver, 4);
                     w.Write(&m.Index, 4);
@@ -289,37 +271,31 @@ public:
                 w.PopChunk();
             }
         }
-        w.PopChunk(); // MTLS
-
-        // --- SUBMESH & PRIMITIVES ---
+        w.PopChunk();
         w.PushChunk("SUBM");
         w.WriteString("collision");
 
-        // CRITICAL STRUCTURAL FIX: 4 Int32 properties explicitly required by C3DMeshFileSubMeshChunk
         uint32_t subMeshIdx = 0; w.Write(&subMeshIdx, 4);
         int32_t parentIdx = -1;  w.Write(&parentIdx, 4);
         int32_t firstChild = -1; w.Write(&firstChild, 4);
         int32_t nextSibling = -1; w.Write(&nextSibling, 4);
 
-        // Provide standard local transform matrix
         w.PushChunk("TRFM");
         float identity[12] = { 1,0,0, 0,1,0, 0,0,1, 0,0,0 };
         w.Write(identity, 48);
-        w.PopChunk(); // TRFM
+        w.PopChunk();
 
         w.PushChunk("PRIM");
 
-        // Primitive Material Index
         int32_t physMatIdx = bbm.PhysicsMaterialIndex >= 0 ? bbm.PhysicsMaterialIndex : 0;
         w.Write(&physMatIdx, 4);
 
-        // --- 3. HEX MATCH: TRIS MUST COME BEFORE VERT ---
         if (!bbm.ParsedIndices.empty()) {
             w.PushChunk("TRIS");
             uint32_t triCount = (uint32_t)bbm.ParsedIndices.size() / 3;
             w.Write(&triCount, 4);
             w.Write(bbm.ParsedIndices.data(), bbm.ParsedIndices.size() * 2);
-            w.PopChunk(); // TRIS
+            w.PopChunk();
         }
 
         if (!bbm.ParsedVertices.empty()) {
@@ -331,12 +307,11 @@ public:
                 w.Write(&v.Normal, 12);
                 w.Write(&v.UV, 8);
             }
-            w.PopChunk(); // VERT
+            w.PopChunk();
         }
-        w.PopChunk(); // PRIM
-        w.PopChunk(); // SUBM
+        w.PopChunk();
+        w.PopChunk();
 
-        // --- HELPERS / DUMMIES / VOLUMES ---
         if (!bbm.Helpers.empty() || !bbm.Dummies.empty() || !bbm.Volumes.empty()) {
             w.PushChunk("HLPR");
             for (const auto& h : bbm.Helpers) {
@@ -361,7 +336,7 @@ public:
             }
             for (const auto& vol : bbm.Volumes) {
                 w.PushChunk("HCVL");
-                uint32_t version = 1; // ASM hardcodes this to 1u
+                uint32_t version = 1;
                 w.Write(&version, 4);
                 w.WriteString(vol.Name);
 
@@ -370,12 +345,11 @@ public:
                 if (pCount > 0) w.Write(vol.Planes.data(), pCount * 16);
                 w.PopChunk();
             }
-            w.PopChunk(); // HLPR
+            w.PopChunk();
         }
 
-        w.PopChunk(); // 3DRT
+        w.PopChunk();
 
-        // CRITICAL STRUCTURAL FIX: 0x00000000 End marker to tell the reader there are no more chunks!
         uint32_t endMarker = 0;
         w.Write(&endMarker, 4);
 
@@ -384,13 +358,12 @@ public:
 
 
     static std::vector<uint8_t> CompilePhysics(const CBBMParser& bbm) {
-        // Build the raw uncompressed bytes exactly as they will be read
         std::vector<uint8_t> uncompressed = CompilePhysicsUncompressed(bbm);
         uint32_t uncompSize = (uint32_t)uncompressed.size();
 
         std::vector<uint8_t> outBytes;
         outBytes.resize(4);
-        memcpy(outBytes.data(), &uncompSize, 4); // Fable Monolithic Uncompressed Size Header
+        memcpy(outBytes.data(), &uncompSize, 4);
 
         std::vector<uint8_t> lzoData = CompressLZORaw(uncompressed.data(), uncompSize);
         if (lzoData.empty()) {

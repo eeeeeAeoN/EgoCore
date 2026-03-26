@@ -183,9 +183,6 @@
     <ClInclude Include="Audio\MetParser.h">
       <Filter>Source Files\Audio</Filter>
     </ClInclude>
-    <ClInclude Include="BigBankCompiler.h">
-      <Filter>Source Files\Banks</Filter>
-    </ClInclude>
     <ClInclude Include="Utilities\stb_image.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
@@ -195,20 +192,11 @@
     <ClInclude Include="Utilities\stb_image_write.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="ImageBackend.h">
-      <Filter>Source Files\Textures</Filter>
-    </ClInclude>
-    <ClInclude Include="TextureBuilder.h">
-      <Filter>Source Files\Textures</Filter>
-    </ClInclude>
     <ClInclude Include="Utilities\stb_dxt.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
     <ClInclude Include="Meshes\MeshRenderer.h">
       <Filter>Source Files\Meshes</Filter>
-    </ClInclude>
-    <ClInclude Include="AnimCompiler.h">
-      <Filter>Source Files\Animations</Filter>
     </ClInclude>
     <ClInclude Include="Utilities\minilzo.h">
       <Filter>Source Files\Utilities</Filter>
@@ -219,14 +207,26 @@
     <ClInclude Include="Utilities\lzodefs.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="GltfAnimImporter.h">
+    <ClInclude Include="Animations\AnimCompiler.h">
       <Filter>Source Files\Animations</Filter>
     </ClInclude>
-    <ClInclude Include="MeshCompiler.h">
+    <ClInclude Include="Animations\GltfAnimImporter.h">
+      <Filter>Source Files\Animations</Filter>
+    </ClInclude>
+    <ClInclude Include="Banks\BigBankCompiler.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\GltfMeshImporter.h">
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>
-    <ClInclude Include="GltfMeshImporter.h">
+    <ClInclude Include="Meshes\MeshCompiler.h">
       <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Textures\ImageBackend.h">
+      <Filter>Source Files\Textures</Filter>
+    </ClInclude>
+    <ClInclude Include="Textures\TextureBuilder.h">
+      <Filter>Source Files\Textures</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

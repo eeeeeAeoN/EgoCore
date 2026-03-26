@@ -17,18 +17,11 @@
 #include <cmath>
 
 inline CTextParser g_TextParser;
-
-// --- PERSISTENT STATE ---
 inline bool g_IsTextDirty = false;
 inline int g_LastEntryID = -1;
 inline void* g_LastBankPtr = nullptr;
-// Moved here so BankEditor can track renames
 inline std::string g_OriginalIdentifier = "";
-
-// --- BACKGROUND AUDIO STATE ---
 inline std::map<std::string, std::shared_ptr<AudioBankParser>> g_BackgroundAudioBanks;
-
-// --- HELPERS ---
 
 inline std::string WStringToString(const std::wstring& wstr) {
     if (wstr.empty()) return std::string();
@@ -53,8 +46,6 @@ inline std::string PeekEntryName(LoadedBank* bank, uint32_t id) {
     }
     return "Unknown ID";
 }
-
-// --- AUDIO LOGIC HELPERS ---
 
 inline std::string EnforceLugExtension(const std::string& bankName) {
     std::string fixed = bankName;
@@ -81,7 +72,6 @@ static std::string FormatAudioTime(float seconds) {
     return std::string(buf);
 }
 
-// Maps "SpeechBank" from text (e.g. "dialogue") to header file
 inline std::string GetHeaderName(const std::string& speechBank) {
     std::string stem = speechBank;
     size_t lastDot = stem.find_last_of('.');
@@ -99,7 +89,6 @@ inline std::string GetHeaderForSubBank(const std::string& subBankName) {
     std::string upper = subBankName;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
-    // ONLY apply audio friendly-names to LipSync banks, NOT Text banks!
     if (upper.find("LIPSYNC_") == 0) {
         if (upper.find("_MAIN_2") != std::string::npos) return "dialoguesnds2.h";
         if (upper.find("_MAIN") != std::string::npos) return "dialoguesnds.h";
@@ -108,7 +97,6 @@ inline std::string GetHeaderForSubBank(const std::string& subBankName) {
     }
     return "";
 }
-
 
 inline int FindHeaderIndex(const std::string& headerName) {
     for (int i = 0; i < (int)g_DefWorkspace.AllEnums.size(); i++) {
@@ -140,7 +128,6 @@ inline int32_t ResolveAudioID(const std::string& speechBank, const std::string& 
     return -1;
 }
 
-// Reverse Lookup: ID -> Name (e.g. 20001 -> "SND_QUEST_START")
 inline std::string ResolveNameFromID(const std::string& headerName, uint32_t id) {
     int enumIdx = FindHeaderIndex(headerName);
     if (enumIdx == -1) return "";
@@ -202,7 +189,6 @@ inline std::shared_ptr<AudioBankParser> GetOrLoadAudioBank(const std::string& ba
 
     if (g_BackgroundAudioBanks.count(searchKey)) return g_BackgroundAudioBanks[searchKey];
 
-    // LOAD FROM DISK (Language Agnostic)
     const char* langs[] = { "English", "French", "Italian", "Chinese", "German", "Korean", "Japanese", "Spanish" };
     for (const char* l : langs) {
         std::string path = g_AppConfig.GameRootPath + "\\Data\\Lang\\" + std::string(l) + "\\" + searchKey;
@@ -249,13 +235,9 @@ inline void UpdateHeaderDefinition(const std::string& speechBank, const std::str
 
     auto& entry = g_DefWorkspace.AllEnums[idx];
 
-    // Regex to find: (SND_ or TEXT_SND_) + oldID + (any spaces) + = + (any spaces) + (ID number)
     std::string patternStr = "(SND_|TEXT_SND_)" + oldID + "(\\s*=\\s*\\d+)";
     std::regex re(patternStr);
-
-    // Replace with: $1 + newID + $2
     std::string replacement = "$1" + newID + "$2";
-
     std::string newContent = std::regex_replace(entry.FullContent, re, replacement);
 
     if (newContent != entry.FullContent) {
@@ -280,7 +262,6 @@ inline void SaveAssociatedHeader(const std::string& speechBank) {
     }
 }
 
-// --- NEW HELPER: Remove Definition ---
 inline void RemoveHeaderDefinition(const std::string& speechBank, const std::string& identifier) {
     if (speechBank.empty() || identifier.empty()) return;
 

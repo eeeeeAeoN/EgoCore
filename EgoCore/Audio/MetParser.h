@@ -28,11 +28,9 @@ public:
         std::sort(lugParser.Scripts.begin(), lugParser.Scripts.end(),
             [](const LugScript& a, const LugScript& b) { return a.Name < b.Name; });
 
-        // 1. VERSION
         uint32_t version = 1;
         out.write((char*)&version, 4);
 
-        // --- RESOURCE MAP ---
         std::map<uint32_t, LugEntryRaw> uniqueResources;
         for (const auto& e : lugParser.Entries) {
             if (uniqueResources.find(e.RawMeta.ResID_B) == uniqueResources.end()) {
@@ -69,7 +67,6 @@ public:
             out.write((char*)&raw.LoopEndByte, 4);
         }
 
-        // --- DRIVER MAP ---
         std::map<uint32_t, const LugParser::ParsedLugEntry*> sortedDrivers;
         for (const auto& e : lugParser.Entries) {
             sortedDrivers[e.RawMeta.ResID_A] = &e;
@@ -79,7 +76,7 @@ public:
         out.write((char*)&driverCount, 4);
 
         for (const auto& pair : sortedDrivers) {
-            uint32_t driverID = pair.first; // ResID_A
+            uint32_t driverID = pair.first;
             const auto& e = *pair.second;
 
             out.write((char*)&driverID, 4);
@@ -113,41 +110,31 @@ public:
             uint16_t flags = 0;
 
             if (e.OriginalIndex != -1) {
-                // 1. Reverb (0x01) and Occlusion (0x02) 
                 if (e.RawMeta.Driver.ControlMask & 0x10) {
                     if (e.RawMeta.Driver.Flags & 1) flags |= 0x01;
                     if (e.RawMeta.Driver.Flags & 2) flags |= 0x02;
                 }
 
-                // 2. The Active Gate (0x04)
-                // Offset 158 * 4 = 632 (FlagCheck2)
                 if (e.RawMeta.Driver.FlagCheck2 != 0) {
                     flags |= 0x04;
                 }
 
-                // 3. The Interruptible Bit (0x08)
-                // Offset 145 * 4 = 580 (ControlMask)
-                // Offset 157 * 4 = 628 (FlagCheck1)
                 if ((e.RawMeta.Driver.ControlMask & 0x400) == 0 || e.RawMeta.Driver.FlagCheck1 != 2) {
                     flags |= 0x08;
                 }
 
-                // 4. Min Dist (0x10)
-                // 0x80 is the little-endian sign bit check from the pseudocode (char < 0)
                 if (e.RawMeta.Driver.ControlMask & 0x80) {
                     flags |= 0x10;
                 }
 
-                // 5. Max Dist (0x20)
                 if (e.RawMeta.Driver.ControlMask & 0x100) {
                     flags |= 0x20;
                 }
             }
             else {
-                // Sane defaults for brand new custom sounds
                 if (e.Flag_Reverb) flags |= 0x01;
                 if (e.Flag_Occlusion) flags |= 0x02;
-                flags |= 0x04; // Assume active gate
+                flags |= 0x04;
                 if (e.Flag_Interrupt) flags |= 0x08;
                 if (e.Flag_UseMinDist) flags |= 0x10;
                 if (e.Flag_UseMaxDist) flags |= 0x20;
@@ -165,7 +152,6 @@ public:
             out.write((char*)&prob, 4);
         }
 
-        // --- TRIGGER MAP ---
         uint32_t trigCount = (uint32_t)lugParser.Scripts.size();
         out.write((char*)&trigCount, 4);
 

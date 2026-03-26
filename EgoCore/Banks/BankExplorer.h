@@ -120,7 +120,6 @@ static void DrawBankExplorer() {
         ImGui::Dummy(ImVec2(0, 10));
 
         if (ImGui::Button("Save & Continue", ImVec2(140, 0))) {
-            // Save Defs
             if (g_DefWorkspace.ShowDefsMode) {
                 if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1)
                     SaveDefEntry(g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType][g_DefWorkspace.SelectedEntryIndex]);
@@ -129,7 +128,6 @@ static void DrawBankExplorer() {
                 if (g_DefWorkspace.SelectedEnumIndex != -1)
                     SaveHeaderEntry(g_DefWorkspace.AllEnums[g_DefWorkspace.SelectedEnumIndex]);
             }
-            // Save Dirty Banks
             for (auto& b : g_OpenBanks) {
                 if (b.Type == EBankType::Audio && b.LugParserPtr && b.LugParserPtr->IsDirty) {
                     SaveAudioBank(&b);

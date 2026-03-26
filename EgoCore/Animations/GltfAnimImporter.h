@@ -182,7 +182,6 @@ namespace GltfAnimImporter {
                     c += maskCount * 4;
                 }
 
-                // --- NEW: Deserialize Helper Tracks ---
                 outAnim.HelperTracks.clear();
                 uint32_t helperCount = 0;
                 if (c + 4 <= meta.size()) { memcpy(&helperCount, meta.data() + c, 4); c += 4; }
@@ -541,7 +540,6 @@ namespace GltfAnimImporter {
                 if (std::abs(pos.z) > maxExtents) maxExtents = std::abs(pos.z);
             }
 
-            // FIX: Restore correct factor divisor
             if (maxExtents > 32700.0f) {
                 t.PositionFactor = maxExtents / 32767.0f;
             }

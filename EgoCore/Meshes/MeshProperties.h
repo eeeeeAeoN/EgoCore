@@ -23,31 +23,22 @@ static bool g_ShowWireframe = false;
 static bool g_ShowHelpers = false;
 static bool g_ShowBounds = false;
 static bool g_ShowRightPanel = true;
-
-// --- DIAGNOSTIC TOGGLES ---
 static bool g_ShowSkeleton = true;
-
-// --- PHYSICS OVERLAY GLOBALS ---
 static MeshRenderer g_PhysicsOverlayRenderer;
 static CBBMParser g_OverlayBBMParser;
 static bool g_ShowPhysicsOverlay = false;
 static int g_LoadedOverlayID = -1;
-
-// --- PHYSICS PICKER GLOBALS ---
 static bool g_TriggerPhysicsPopup = false;
 static bool g_ShowPhysicsSelectPopup = false;
 static char g_PhysicsSearchBuf[128] = "";
 static int g_SelectedPhysicsID = -1;
-
 static std::map<int, ID3D11ShaderResourceView*> g_MeshTextureCache;
-
 static bool g_TriggerTexPopup = false;
 static bool g_ShowTextureSelectPopup = false;
 static int g_EditingMaterialIndex = -1;
 static int g_EditingTextureType = 0;
 static char g_TextureSearchBuf[128] = "";
 static int g_SelectedTextureID = -1;
-
 static bool g_PreviewAnimPlaying = false;
 static float g_PreviewAnimTime = 0.0f;
 static int g_SelectedAnimBankIndex = -1;
@@ -79,12 +70,10 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
             for (int i = 0; i < bank.Entries.size(); ++i) {
                 if (bank.Entries[i].ID == (uint32_t)textureID) {
 
-                    // --- NEW: CHECK IF TEXTURE IS STAGED IN RAM ---
                     if (bank.StagedEntries.count(i) && bank.StagedEntries[i].Texture) {
                         auto& tex = bank.StagedEntries[i].Texture;
                         if (tex->RawFrames.empty()) return nullptr;
 
-                        // Create SRV natively from Uncompressed RGBA (Instant & Flawless)
                         uint32_t w = tex->Header.Width ? tex->Header.Width : tex->Header.FrameWidth;
                         uint32_t h = tex->Header.Height ? tex->Header.Height : tex->Header.FrameHeight;
                         if (w == 0 || h == 0) return nullptr;
@@ -96,7 +85,7 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
                         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
                         D3D11_SUBRESOURCE_DATA subData = {};
-                        subData.pSysMem = tex->RawFrames[0].data(); // Read frame 0 array
+                        subData.pSysMem = tex->RawFrames[0].data();
                         subData.SysMemPitch = w * 4;
 
                         ID3D11Texture2D* d3dTex = nullptr;
@@ -109,7 +98,6 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
                         }
                     }
 
-                    // --- CHECK IF FLUSHED/MODIFIED OR ON DISK ---
                     std::vector<uint8_t> tempData;
                     if (bank.ModifiedEntryData.count(i)) {
                         tempData = bank.ModifiedEntryData[i];
@@ -176,7 +164,6 @@ inline std::string ExtractTextureForGltf(int textureID, const std::string& expor
                     std::string fname = "tex_" + std::to_string(textureID) + ".dds";
                     std::string fullPath = exportDir + fname;
 
-                    // 1. Check if it's currently staged as raw RGBA
                     if (bank.StagedEntries.count(i) && bank.StagedEntries[i].Texture) {
                         auto& texInfo = bank.StagedEntries[i].Texture;
                         if (texInfo->RawFrames.empty()) return "";
@@ -199,7 +186,6 @@ inline std::string ExtractTextureForGltf(int textureID, const std::string& expor
                         if (TextureExporter::ExportDDS(tempParser, fullPath, 0)) return fname;
                     }
 
-                    // 2. Check if it's in the modified binary cache, else read from disk
                     std::vector<uint8_t> tempData;
                     if (bank.ModifiedEntryData.count(i)) {
                         tempData = bank.ModifiedEntryData[i];
@@ -435,7 +421,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         return;
     }
 
-    // --- ANIMATION UPDATE LOOP ---
     if (g_PreviewAnimPlaying && g_PreviewAnimParser.Data.IsParsed) {
         g_PreviewAnimTime += ImGui::GetIO().DeltaTime;
         float duration = g_PreviewAnimParser.Data.Duration > 0 ? g_PreviewAnimParser.Data.Duration : 1.0f;
@@ -455,7 +440,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         UpdateAnimationBones();
     }
 
-    // --- TOP TOOLBAR ---
     if (!g_BBMParser.IsParsed && !hasTextureBank) {
         ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[!] Textures not loaded.");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open 'textures.big' (GBANK_MAIN_PC) in a new tab.");
@@ -548,7 +532,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
             if (g_BBMParser.IsParsed) {
-                // EXPORT RAW PHYSICS CHUNKS
                 std::vector<uint8_t> outData = MeshCompiler::CompilePhysicsUncompressed(g_BBMParser);
                 std::ofstream out(savePath, std::ios::binary);
                 out.write((char*)outData.data(), outData.size());
@@ -557,7 +540,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 g_SuccessMessage = "Physics Binary dumped correctly!";
             }
             else if (g_ActiveMeshContent.IsParsed) {
-                // EXPORT RAW GRAPHICS MESH BLOCKS (LZO BYPASSED)
                 std::vector<uint8_t> outData = MeshCompiler::CompileForExport(g_ActiveMeshContent, true);
                 std::ofstream out(savePath, std::ios::binary);
                 out.write((char*)outData.data(), outData.size());
@@ -590,9 +572,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         viewportWidth = avail.x - rightPanelWidth - splitterWidth;
     }
 
-    // ====================================================
-    // LEFT PANEL: 3D VIEWPORT
-    // ====================================================
     ImGui::BeginChild("MeshViewportChild", ImVec2(viewportWidth, avail.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     g_MeshRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
@@ -608,7 +587,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             for (const auto& v : g_BBMParser.Volumes) {
                 std::vector<CPlane> pCnv;
                 for (const auto& pl : v.Planes) pCnv.push_back({ {pl.Normal[0], pl.Normal[1], pl.Normal[2]}, pl.D });
-                g_MeshRenderer.RenderVolumes(ctx, viewportWidth, avail.y, pCnv, true); // Pass True for physics!
+                g_MeshRenderer.RenderVolumes(ctx, viewportWidth, avail.y, pCnv, true);
             }
         }
         else if (g_ActiveMeshContent.IsParsed) {
@@ -635,7 +614,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
     if (tex) ImGui::Image((void*)tex, ImVec2(viewportWidth, avail.y));
 
-    // Overlays (Helpers / Dummies / SKELETON)
+    // Overlays (Helpers / Dummies / Skeleton ect.)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(pMin, pMax, true);
 
@@ -670,7 +649,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             for (int i = 0; i < g_BBMParser.Helpers.size(); i++) {
                 const auto& h = g_BBMParser.Helpers[i];
                 ImVec2 scrPos;
-                // ADDED `true` to ProjectToScreen!
                 if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Position.x, h.Position.y, h.Position.z), scrPos, viewportWidth, avail.y, true)) {
                     scrPos.x += pMin.x; scrPos.y += pMin.y;
                     dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
@@ -685,7 +663,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             for (int i = 0; i < g_BBMParser.Dummies.size(); i++) {
                 const auto& d = g_BBMParser.Dummies[i];
                 ImVec2 scrPos;
-                // ADDED `true` to ProjectToScreen!
                 if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]), scrPos, viewportWidth, avail.y, true)) {
                     scrPos.x += pMin.x; scrPos.y += pMin.y;
                     dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
@@ -739,9 +716,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     dl->PopClipRect();
     ImGui::EndChild();
 
-    // ====================================================
-    // RIGHT PANEL: TABS & DATA
-    // ====================================================
     if (g_ShowRightPanel) {
         ImGui::SameLine(0, 0);
 
@@ -758,8 +732,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::BeginChild("MeshInfoRightPanel", ImVec2(rightPanelWidth, avail.y), false);
 
         if (ImGui::BeginTabBar("MeshTabs")) {
-
-            // --- 1. OVERVIEW TAB ---
             if (ImGui::BeginTabItem("Overview")) {
                 if (g_BBMParser.IsParsed) {
                     ImGui::Text("Version: %u", g_BBMParser.FileVersion);
@@ -857,7 +829,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 ImGui::EndTabItem();
             }
 
-            // --- 2. ANIMATIONS TAB (Graphics Only) ---
             if (g_ActiveMeshContent.AnimatedFlag && ImGui::BeginTabItem("Animations")) {
                 struct FoundAnim { int BankIdx; int EntryIdx; std::string Name; uint32_t ID; int Type; };
                 std::vector<FoundAnim> anims;
@@ -866,7 +837,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     if (g_OpenBanks[i].Type == EBankType::Graphics) {
                         for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
                             int t = g_OpenBanks[i].Entries[j].Type;
-                            if (t == 6 || t == 7 || t == 9) { // Standard, Delta, Partial
+                            if (t == 6 || t == 7 || t == 9) {
                                 anims.push_back({ i, j, g_OpenBanks[i].Entries[j].FriendlyName, g_OpenBanks[i].Entries[j].ID, t });
                             }
                         }
@@ -948,7 +919,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 ImGui::EndTabItem();
             }
 
-            // --- 3. EXTRAS TAB (Fully Unified) ---
             if (ImGui::BeginTabItem("Extras")) {
                 if (ImGui::CollapsingHeader("Helper Points", ImGuiTreeNodeFlags_DefaultOpen)) {
                     if (ImGui::BeginTable("HelpersTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
@@ -1023,7 +993,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 ImGui::EndTabItem();
             }
 
-            // --- 4. BONES TAB (Graphics Only) ---
             if (!g_BBMParser.IsParsed && ImGui::BeginTabItem("Bones")) {
                 if (ImGui::BeginTable("BoneHier", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
                     ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Parent"); ImGui::TableSetupColumn("Children"); ImGui::TableHeadersRow();
@@ -1039,7 +1008,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 ImGui::EndTabItem();
             }
 
-            // --- 5. MATERIALS TAB ---
             if (ImGui::BeginTabItem("Materials")) {
                 if (g_BBMParser.IsParsed) {
                     auto PackBGRA = [](const ImVec4& c) -> uint32_t {
@@ -1217,9 +1185,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::EndChild();
     }
 
-    // ==========================================
-    // TEXTURE PICKER MODAL (Global Scope)
-    // ==========================================
     if (g_TriggerTexPopup) {
         ImGui::OpenPopup("Select Texture");
         g_ShowTextureSelectPopup = true;
@@ -1322,9 +1287,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::EndPopup();
     }
 
-    // ==========================================
-    // PHYSICS MESH PICKER MODAL (Global Scope)
-    // ==========================================
     if (g_TriggerPhysicsPopup) {
         ImGui::OpenPopup("Select Physics Mesh");
         g_ShowPhysicsSelectPopup = true;
@@ -1343,7 +1305,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         for (auto& bank : g_OpenBanks) {
             if (bank.Type == EBankType::Graphics) {
                 for (const auto& entry : bank.Entries) {
-                    if (entry.Type == 3) { // 3 = Physics Mesh BBM
+                    if (entry.Type == 3) {
                         std::string nameLower = entry.Name;
                         std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
                         std::string idStr = std::to_string(entry.ID);

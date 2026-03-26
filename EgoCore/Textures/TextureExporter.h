@@ -64,7 +64,6 @@ public:
         header.dwSize = sizeof(DDS_HEADER);
         header.dwFlags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE;
 
-        // [FIX] Use Physical Dimensions for DDS Header to match byte stride
         uint32_t physW = parser.Header.Width;
         uint32_t physH = parser.Header.Height;
         if (physW == 0) physW = parser.Header.FrameWidth;
@@ -100,14 +99,14 @@ public:
             switch (parser.DecodedFormat) {
             case ETextureFormat::DXT1:
             case ETextureFormat::NormalMap_DXT1:
-                header.ddspf.dwFourCC = 0x31545844; // "DXT1"
+                header.ddspf.dwFourCC = 0x31545844; 
                 break;
             case ETextureFormat::DXT3:
-                header.ddspf.dwFourCC = 0x33545844; // "DXT3"
+                header.ddspf.dwFourCC = 0x33545844;
                 break;
             case ETextureFormat::DXT5:
             case ETextureFormat::NormalMap_DXT5:
-                header.ddspf.dwFourCC = 0x35545844; // "DXT5"
+                header.ddspf.dwFourCC = 0x35545844; 
                 break;
             default: return false;
             }
@@ -117,14 +116,12 @@ public:
         file.write((const char*)&DDS_MAGIC, sizeof(uint32_t));
         file.write((const char*)&header, sizeof(DDS_HEADER));
 
-        // Export data
         size_t frameOffset = (size_t)parser.TrueFrameStride * frameIndex;
 
         if (frameOffset + parser.TrueFrameStride <= parser.DecodedPixels.size()) {
             file.write((const char*)parser.DecodedPixels.data() + frameOffset, parser.TrueFrameStride);
         }
         else {
-            // Index out of bounds
             return false;
         }
 

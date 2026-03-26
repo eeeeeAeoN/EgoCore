@@ -5,19 +5,15 @@
 #include "LipSyncCompiler.h"
 #include <functional> 
 
-// Forward declaration to break circular dependency with BankEditor.h
 bool LoadDialogueBankInBackground();
 
 static bool g_ShowAddGroupItemPopup = false;
 static char g_GroupSearchBuf[128] = "";
-
-// --- STATE FOR IMPORT POPUP ---
 static bool g_ShowLipSyncAnalysisPopup = false;
 static std::string g_PendingWavPath = "";
 static std::string g_PendingSpeechBank = "";
 static std::string g_PendingIdentifier = "";
 
-// --- PREVIEW CACHE FOR GROUP ITEMS ---
 struct GroupItemPreview {
     std::string Speaker;
     std::string ContentShort;
@@ -25,12 +21,8 @@ struct GroupItemPreview {
 };
 static std::map<uint32_t, GroupItemPreview> g_GroupPreviewCache;
 
-// --- HELPERS ---
-
-// Defined in BankEditor.h
 void DeleteLinkedMedia(const std::string& speechBankName, const std::string& identifier);
 
-// RENAMED to avoid conflicts and ensure bool return type is recognized
 inline bool TextInputField(const char* label, std::string& str, float width = 0.0f) {
     static char buffer[1024];
     strncpy_s(buffer, sizeof(buffer), str.c_str(), _TRUNCATE);
@@ -85,7 +77,6 @@ inline GroupItemPreview GetItemPreview(LoadedBank* bank, uint32_t id) {
     return preview;
 }
 
-// --- TAG EDITOR ---
 enum class TagMode { Custom, Attitude, Animation, Camera };
 
 inline void RenderTagEditor(CTextTag& tag) {
@@ -171,7 +162,6 @@ inline void RenderTagEditor(CTextTag& tag) {
     }
 }
 
-// --- MAIN UI ---
 inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, std::function<void(std::string, uint32_t, std::string)> onJump) {
     if (!g_TextParser.IsParsed) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to parse text entry.");
@@ -189,7 +179,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) { if (onSave) onSave(); }
 
     if (g_TextParser.IsGroup) {
-        // --- TYPE 1: GROUP UI ---
         int itemToRemove = -1;
         int jumpToID = -1;
 
@@ -283,7 +272,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         }
     }
     else if (g_TextParser.IsNarratorList) {
-        // --- TYPE 2: NARRATOR LIST UI ---
 
         int itemToRemove = -1;
 
@@ -298,9 +286,8 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
             ImGui::SameLine();
 
             float avail = ImGui::GetContentRegionAvail().x;
-            float inputWidth = avail - 60; // Just for X button
+            float inputWidth = avail - 60;
 
-            // Replaced Jump button with just Input + Delete
             if (TextInputField("##val", str, inputWidth)) g_IsTextDirty = true;
 
             ImGui::SameLine();
@@ -324,7 +311,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         }
     }
     else {
-        // --- TYPE 0: TEXT ENTRY ---
         CTextEntry& e = g_TextParser.TextData;
 
         ImGui::Text("Identifier");
@@ -434,7 +420,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                             auto& player = audioBank->Player;
                             float progress = player.GetProgress();
 
-                            // ROW 1: Player
                             ImGui::PushItemWidth(300);
                             if (ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "")) { player.Seek(progress); }
                             ImGui::PopItemWidth();
@@ -467,7 +452,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                                 }
                             }
 
-                            // ROW 2: Actions
                             ImGui::Dummy(ImVec2(0, 5));
                             if (ImGui::Button("Phonemes", ImVec2(80, 0))) { if (onJump) onJump("dialogue.big", (uint32_t)soundID, e.SpeechBank); }
                             ImGui::SameLine();
@@ -491,7 +475,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                     else ImGui::TextDisabled("Audio bank not found on disk (.lut missing).");
                 }
                 else {
-                    if (ImGui::Button("Create Linked Media (Import Wav)", ImVec2(300, 30))) { // SMALLER WIDTH
+                    if (ImGui::Button("Create Linked Media (Import Wav)", ImVec2(300, 30))) {
                         std::string loadPath = e.SpeechBank;
                         if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
                         audioBank = GetOrLoadAudioBank(loadPath);
@@ -499,7 +483,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                             uint32_t nextID = GetNextIDFromHeader(e.SpeechBank);
                             std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
                             if (!wavPath.empty()) {
-                                // STORE STATE AND OPEN POPUP
                                 g_PendingWavPath = wavPath;
                                 g_PendingSpeechBank = e.SpeechBank;
                                 g_PendingIdentifier = e.Identifier;
@@ -514,7 +497,6 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         }
     }
 
-    // --- POPUP LOGIC ---
     if (ImGui::BeginPopupModal("Analyze LipSync?", &g_ShowLipSyncAnalysisPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("Do you want to automatically generate lip-sync animation?");
         ImGui::TextDisabled("This uses spectral analysis to guess phonemes.");
@@ -526,12 +508,10 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
             return GetOrLoadAudioBank(bankName);
             };
 
-        // Helper to Sync UI - Finds the Open Bank and pushes new entry
         auto SyncLoadedBank = [&](std::string bankName, uint32_t newID, uint32_t size) {
             if (bankName.find(".lug") != std::string::npos) bankName = bankName.substr(0, bankName.find(".lug")) + ".lut";
             else if (bankName.find(".") == std::string::npos) bankName += ".lut";
 
-            // Convert to lowercase for matching
             std::transform(bankName.begin(), bankName.end(), bankName.begin(), ::tolower);
 
             for (auto& b : g_OpenBanks) {
@@ -539,14 +519,13 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                     std::string bName = b.FileName;
                     std::transform(bName.begin(), bName.end(), bName.begin(), ::tolower);
                     if (bName == bankName) {
-                        // Found it open! Add to visual list
                         BankEntry be;
                         be.ID = newID;
                         be.Name = "Sound ID " + std::to_string(newID);
                         be.FriendlyName = be.Name;
                         be.Size = size;
                         be.Type = 999;
-                        be.Offset = 0; // New entry
+                        be.Offset = 0;
                         b.Entries.push_back(be);
                         UpdateFilter(b);
                         break;
@@ -567,17 +546,13 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
 
             auto audioBank = GetAudioBank(g_PendingSpeechBank);
             if (audioBank && audioBank->AddEntry(nextID, g_PendingWavPath)) {
-                // 1. Get size of added entry for UI sync
                 uint32_t size = 0;
                 if (!audioBank->Entries.empty()) size = audioBank->Entries.back().Length;
 
-                // 2. SYNC UI
                 SyncLoadedBank(g_PendingSpeechBank, nextID, size);
 
-                // 3. CRITICAL: Ensure LipSync State is Ready BEFORE Adding
                 LoadDialogueBankInBackground();
 
-                // 4. Add LipSync
                 AddLipSyncEntryFromWav(g_PendingSpeechBank, nextID, g_PendingWavPath);
                 g_IsTextDirty = true;
             }
@@ -600,17 +575,13 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
 
             auto audioBank = GetAudioBank(g_PendingSpeechBank);
             if (audioBank && audioBank->AddEntry(nextID, g_PendingWavPath)) {
-                // 1. Get size
                 uint32_t size = 0;
                 if (!audioBank->Entries.empty()) size = audioBank->Entries.back().Length;
 
-                // 2. SYNC UI
                 SyncLoadedBank(g_PendingSpeechBank, nextID, size);
 
-                // 3. CRITICAL: Ensure LipSync State is Ready BEFORE Adding
                 LoadDialogueBankInBackground();
 
-                // 4. Add Empty LipSync with Correct Duration
                 std::vector<int16_t> pcm; int rate = 0;
                 if (CSpeechAnalyzer::LoadWav(g_PendingWavPath, pcm, rate) && rate > 0) {
                     float dur = (float)pcm.size() / rate;

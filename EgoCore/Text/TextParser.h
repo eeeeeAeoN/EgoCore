@@ -17,7 +17,7 @@ struct CTextGroupItem {
 };
 
 struct CTextEntry {
-    std::wstring Content; // Content is FIRST
+    std::wstring Content;
     std::string SpeechBank;
     std::string Speaker;
     std::string Identifier;
@@ -33,8 +33,7 @@ public:
     CTextEntry TextData;
     CTextGroup GroupData;
 
-    // Narrator List Data
-    uint32_t NarratorStartID = 0; // The "7B 01 00 00" from the dump
+    uint32_t NarratorStartID = 0;
     std::vector<std::string> NarratorStrings;
 
     std::vector<uint8_t> RawData;
@@ -45,7 +44,6 @@ public:
 
     std::string DebugLog;
 
-    // --- READ HELPERS ---
     std::wstring ReadWString(const uint8_t* data, size_t& offset, size_t max) {
         std::wstring res;
         while (offset + 2 <= max) {
@@ -77,14 +75,13 @@ public:
         return res;
     }
 
-    // --- WRITE HELPERS ---
     void WriteWString(std::vector<uint8_t>& buf, const std::wstring& str) {
         for (wchar_t c : str) {
             uint16_t val = (uint16_t)c;
             buf.push_back(val & 0xFF);
             buf.push_back((val >> 8) & 0xFF);
         }
-        buf.push_back(0); buf.push_back(0); // Wide Null Terminator
+        buf.push_back(0); buf.push_back(0);
     }
 
     void WritePresizedString(std::vector<uint8_t>& buf, const std::string& str) {
@@ -99,8 +96,6 @@ public:
         buf.insert(buf.end(), str.begin(), str.end());
         buf.push_back(0);
     }
-
-    // --- MAIN FUNCTIONS ---
 
     bool Parse(const std::vector<uint8_t>& data, int entryType) {
         IsParsed = false;
@@ -120,7 +115,7 @@ public:
         const uint8_t* ptr = data.data();
 
         try {
-            if (entryType == 1) { // TYPE_GROUP
+            if (entryType == 1) {
                 IsGroup = true;
                 if (cursor + 4 <= size) {
                     uint32_t count = *(uint32_t*)(ptr + cursor);
@@ -138,7 +133,7 @@ public:
                 }
                 IsParsed = true;
             }
-            else if (entryType == 2) { // TYPE_NARRATOR_LIST
+            else if (entryType == 2) {
                 IsNarratorList = true;
                 const uint8_t sig[] = { '[', 'N', 'a', 'r', 'r', 'a', 't', 'o', 'r', 'L', 'i', 's', 't', ']' };
                 size_t sigLen = 14;
@@ -154,17 +149,13 @@ public:
                 if (foundOffset != -1) {
                     cursor = foundOffset + sigLen;
 
-                    // SKIP 8 BYTES PADDING (Confirmed by Hex: 00 00 00 00 00 00 00 00)
                     if (cursor + 8 <= size) cursor += 8;
-
-                    // READ TOTAL DATA SIZE (e.g. 14 15 00 00)
                     uint32_t dataSize = 0;
                     if (cursor + 4 <= size) {
                         dataSize = *(uint32_t*)(ptr + cursor);
                         cursor += 4;
                     }
 
-                    // READ COUNT (Num Entries, e.g. 7B 01 00 00)
                     uint32_t count = 0;
                     if (cursor + 4 <= size) {
                         count = *(uint32_t*)(ptr + cursor);
@@ -181,7 +172,7 @@ public:
                 }
                 IsParsed = true;
             }
-            else { // TYPE_TEXT (Default - Type 0)
+            else {
                 IsGroup = false;
 
                 TextData.Content = ReadWString(ptr, cursor, size);
@@ -212,7 +203,6 @@ public:
         return IsParsed;
     }
 
-    // --- RECOMPILE ---
     std::vector<uint8_t> Recompile() {
         std::vector<uint8_t> buf;
 
@@ -224,28 +214,22 @@ public:
             }
         }
         else if (IsNarratorList) {
-            // Rebuild Signature
             std::string sig = "[NarratorList]";
             buf.insert(buf.end(), sig.begin(), sig.end());
 
-            // 8 bytes padding
             uint64_t pad = 0;
             buf.insert(buf.end(), (uint8_t*)&pad, (uint8_t*)&pad + 8);
 
-            // Calculate Data Size first
             uint32_t dataSize = 0;
             for (const auto& str : NarratorStrings) {
-                dataSize += (uint32_t)str.length() + 1; // +1 for null term
+                dataSize += (uint32_t)str.length() + 1;
             }
 
-            // Write Size
             buf.insert(buf.end(), (uint8_t*)&dataSize, (uint8_t*)&dataSize + 4);
 
-            // Write Count
             uint32_t count = (uint32_t)NarratorStrings.size();
             buf.insert(buf.end(), (uint8_t*)&count, (uint8_t*)&count + 4);
 
-            // Write Strings
             for (const auto& str : NarratorStrings) {
                 WriteNullTermString(buf, str);
             }

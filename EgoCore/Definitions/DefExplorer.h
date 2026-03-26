@@ -11,14 +11,12 @@ static void DrawDefTab() {
     if (leftPaneWidth < 50.0f) leftPaneWidth = 50.0f;
     if (leftPaneWidth > ImGui::GetWindowWidth() - 100.0f) leftPaneWidth = ImGui::GetWindowWidth() - 100.0f;
 
-    // States
     static DefEntry entryToDeleteCopy;
     static bool triggerDeletePopup = false;
     static std::string typeToAddPending = "";
     static bool triggerAddPopup = false;
     static bool triggerCompileSuccess = false;
 
-    // Helpers
     auto RequestLoadDef = [&](const std::string& type, int index) {
         if (g_DefWorkspace.IsDirty() && g_AppConfig.ShowUnsavedChangesWarning) {
             g_DefWorkspace.PendingNav = { DefAction::SwitchToDef, type, index };
@@ -52,10 +50,9 @@ static void DrawDefTab() {
         }
     }
     else {
-        // ... (Compilation UI Code - Unchanged) ...
-        // 1. The Button
+
         if (ImGui::Button("Compile All Defs")) {
-            CompileAllDefs_Stealth(); // Triggers the threaded double-launch
+            CompileAllDefs_Stealth();
         }
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
@@ -84,9 +81,7 @@ static void DrawDefTab() {
 
         if (ImGui::BeginTabBar("DefSubTabs", ImGuiTabBarFlags_None)) {
 
-            // --- TAB 1: DEFINITIONS ---
             if (ImGui::BeginTabItem("Definitions")) {
-                // ... (Definitions UI Code - Unchanged) ...
                 g_DefWorkspace.ShowDefsMode = true;
                 ImGui::BeginChild("DefLeftPane", ImVec2(leftPaneWidth, 0), true);
 
@@ -220,7 +215,6 @@ static void DrawDefTab() {
                 ImGui::SameLine();
 
                 ImGui::BeginChild("DefRightPane", ImVec2(0, 0), true);
-                // ... (Def Right Pane unchanged) ...
                 if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1) {
                     if (g_DefWorkspace.CategorizedDefs.count(g_DefWorkspace.SelectedType) &&
                         g_DefWorkspace.SelectedEntryIndex < g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType].size()) {
@@ -278,7 +272,6 @@ static void DrawDefTab() {
                 ImGui::EndTabItem();
             }
 
-            // --- TAB 2: HEADERS ---
             if (ImGui::BeginTabItem("Headers")) {
                 g_DefWorkspace.ShowDefsMode = false;
                 ImGui::BeginChild("HeadLeftPane", ImVec2(leftPaneWidth, 0), true);
@@ -310,7 +303,6 @@ static void DrawDefTab() {
                             if (nameLo.find(hFilter) == std::string::npos) continue;
                         }
 
-                        // --- FIX: USE UNIQUE LABEL ID FOR DUPLICATE ENUM NAMES ---
                         std::string label = g_DefWorkspace.AllEnums[i].Name + "##" + std::to_string(i);
                         bool isSelected = (g_DefWorkspace.SelectedEnumIndex == i);
 
@@ -329,7 +321,6 @@ static void DrawDefTab() {
                 ImGui::SameLine();
 
                 ImGui::BeginChild("HeadRightPane", ImVec2(0, 0), true);
-                // ... (Header Right Pane unchanged) ...
                 if (g_DefWorkspace.SelectedEnumIndex != -1 && g_DefWorkspace.SelectedEnumIndex < g_DefWorkspace.AllEnums.size()) {
                     EnumEntry& entry = g_DefWorkspace.AllEnums[g_DefWorkspace.SelectedEnumIndex];
                     ImGui::Text("%s", entry.Name.c_str());

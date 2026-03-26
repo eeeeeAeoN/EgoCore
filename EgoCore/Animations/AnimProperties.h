@@ -13,8 +13,6 @@
 extern struct C3DMeshContent g_ActiveMeshContent;
 extern std::string g_BankStatus;
 extern ID3D11Device* g_pd3dDevice;
-
-// --- STANDALONE PREVIEW STATE ---
 static MeshRenderer g_StandaloneRenderer;
 static C3DMeshContent g_StandaloneMesh;
 static bool g_StandaloneUploadNeeded = false;
@@ -146,7 +144,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
 
     ImGui::SameLine();
 
-    // --- STANDALONE 3D PREVIEW TRIGGER ---
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
     if (ImGui::Button("Preview Animation (3D)", ImVec2(150, 0))) g_ShowStandaloneMeshPicker = true;
     ImGui::PopStyleColor();
@@ -162,13 +159,11 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         }
     }
 
-    // --- STANDALONE PREVIEW MODALS ---
     if (g_ShowStandaloneMeshPicker) ImGui::OpenPopup("Select Mesh for Preview");
     if (ImGui::BeginPopupModal("Select Mesh for Preview", &g_ShowStandaloneMeshPicker, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("Select a mesh to preview this animation:");
         ImGui::Separator();
 
-        // NEW: Search Filter
         static char meshFilterBuf[128] = "";
         ImGui::InputTextWithHint("##MeshSearch", "Search animated meshes...", meshFilterBuf, 128);
         ImGui::Separator();
@@ -182,18 +177,16 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
             if (g_OpenBanks[i].Type == EBankType::Graphics) {
                 for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
                     int t = g_OpenBanks[i].Entries[j].Type;
-                    if (t == 5) { // NEW: ONLY Animated Meshes (Type 5)
+                    if (t == 5) {
                         std::string mName = g_OpenBanks[i].Entries[j].Name;
                         std::transform(mName.begin(), mName.end(), mName.begin(), ::tolower);
-
-                        // Apply filter
                         if (!filterStr.empty() && mName.find(filterStr) == std::string::npos) continue;
 
                         bool isMatch = false;
                         std::string aName = anim.ObjectName;
                         std::transform(aName.begin(), aName.end(), aName.begin(), ::tolower);
 
-                        // SMART PREFIX MATCHER: Extracts "Hero" from "Hero_Base" and "Hero_Mesh" to auto-detect compatibility
+                        // SMART PREFIX MATCHER: Extracts "Hero" from "Hero_Base" and "Hero_Mesh" to auto-detect compatibility -- doesn't work for the moment
                         std::string mBase = mName.substr(0, mName.find('_'));
                         std::string aBase = aName.substr(0, aName.find('_'));
                         if (!mBase.empty() && !aBase.empty() && mBase == aBase) isMatch = true;
@@ -224,7 +217,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         ImGui::EndPopup();
     }
 
-    // THE ACTUAL MODAL VIEWER
     static bool s_wasPreviewOpen = false;
     if (g_ShowStandalonePreview) {
         ImGui::OpenPopup("Animation Previewer");
@@ -236,7 +228,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         if (g_StandaloneUploadNeeded) {
             g_StandaloneRenderer.Initialize(g_pd3dDevice);
             g_StandaloneRenderer.UploadMesh(g_pd3dDevice, g_StandaloneMesh);
-            // Pull textures from open banks
             std::vector<ID3D11ShaderResourceView*> textures;
             int maxMat = 0; for (const auto& m : g_StandaloneMesh.Materials) if (m.ID > maxMat) maxMat = m.ID;
             textures.resize(maxMat + 1, nullptr);
@@ -298,13 +289,13 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         int currentFrame = (int)(g_StandaloneTime * fps);
 
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(150); // Narrower slider
+        ImGui::SetNextItemWidth(150);
         if (ImGui::SliderInt("##FrameScrub", &currentFrame, 0, maxFrames, "%d")) {
             g_StandaloneTime = (float)currentFrame / fps;
-            g_StandalonePlaying = false; // Pause while scrubbing
+            g_StandalonePlaying = false;
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("FPS: %.1f", fps); // FPS moved to the end
+        ImGui::TextDisabled("FPS: %.1f", fps);
         ImGui::Separator();
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -317,7 +308,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         ImGui::EndPopup();
     }
 
-    // Clean up resources instantly when modal is closed
     if (s_wasPreviewOpen && !g_ShowStandalonePreview) {
         g_StandaloneMesh = C3DMeshContent();
         g_StandaloneRenderer.Release();
@@ -327,7 +317,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
 
     ImGui::Dummy(ImVec2(0, 5));
 
-    // --- ANIMATION METADATA TAB ---
     if (ImGui::CollapsingHeader("Animation Metadata", ImGuiTreeNodeFlags_DefaultOpen)) {
 
         ImGui::Checkbox("Is Cyclic (Looping Animation)", &anim.IsCyclic);
@@ -346,7 +335,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         DrawPropertyRow("Non-Looping Duration:", "##nl", &anim.NonLoopingDuration);
         DrawPropertyRow("Rotation:", "##rot", &anim.Rotation);
 
-        // --- MVEC UI (HIDDEN FOR DELTAS) ---
         if (entryType != 7) {
             ImGui::Separator();
             ImGui::TextColored(ImVec4(1, 1, 1, 1), "Root Movement Vector (MVEC)");
@@ -355,7 +343,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
             DrawPropertyRow("Y:", "##mvecY", &anim.MovementVector.y);
             DrawPropertyRow("Z:", "##mvecZ", &anim.MovementVector.z);
 
-            //ImGui::SetCursorPosX(120.0f);
             if (ImGui::Button("Auto-Calc from Root", ImVec2(150, 0))) {
                 if (!anim.Tracks.empty() && !anim.Tracks[0].PositionTrack.empty()) {
                     Vec3 startPos = anim.Tracks[0].PositionTrack.front();
@@ -483,7 +470,6 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
 
     ImGui::Dummy(ImVec2(0, 5));
 
-    // --- TRACKS & KEYFRAMES TAB ---
     if (ImGui::CollapsingHeader("Tracks & Keyframes")) {
         if (ImGui::BeginChild("TracksList", ImVec2(0, 0), true)) {
             for (size_t i = 0; i < anim.Tracks.size(); i++) {

@@ -8,7 +8,6 @@
 #include <iostream>
 #include "miniaudio.h"
 
-// --- ENCODING TABLES ---
 static const int16_t StepTable[89] = {
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
     50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
@@ -23,7 +22,6 @@ static const int IndexTable[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
-// --- WAV WRITER ---
 static void WriteWavFile(const std::string& path, const std::vector<int16_t>& pcm, int sampleRate, int channels) {
     std::ofstream f(path, std::ios::binary);
     if (!f.is_open()) return;
@@ -38,7 +36,7 @@ static void WriteWavFile(const std::string& path, const std::vector<int16_t>& pc
     f.write("WAVE", 4);
     f.write("fmt ", 4);
     int subchunk1Size = 16;
-    short audioFormat = 1; // PCM
+    short audioFormat = 1;
     short numChannels = (short)channels;
     int sRate = sampleRate;
     short bAlign = (short)blockAlign;
@@ -58,7 +56,6 @@ static void WriteWavFile(const std::string& path, const std::vector<int16_t>& pc
     f.close();
 }
 
-// --- ADPCM ENCODER ---
 class XboxAdpcmEncoder {
     struct State {
         int16_t sample = 0;
@@ -96,7 +93,6 @@ public:
         if (pcm.empty()) return out;
 
         const int SamplesPerBlock = 65;
-        // Total Frames = Samples / Channels
         size_t totalFrames = pcm.size() / channels;
         size_t numBlocks = (totalFrames + SamplesPerBlock - 1) / SamplesPerBlock;
 
@@ -108,7 +104,6 @@ public:
 
         for (size_t b = 0; b < numBlocks; b++) {
             if (channels == 1) {
-                // MONO ENCODING
                 int16_t headerSample = (cursor < totalFrames) ? pcm[cursor] : 0;
                 stateL.sample = headerSample;
                 if (b == 0) stateL.index = 0;
@@ -116,22 +111,19 @@ public:
                 out.push_back(stateL.sample & 0xFF);
                 out.push_back((stateL.sample >> 8) & 0xFF);
                 out.push_back(stateL.index);
-                out.push_back(0); // Pad
+                out.push_back(0);
 
-                cursor++; // Skip header sample
+                cursor++;
 
-                for (int i = 0; i < 32; i++) { // 64 samples packed into 32 bytes
+                for (int i = 0; i < 32; i++) {
                     int16_t s1 = (cursor < totalFrames) ? pcm[cursor++] : 0;
                     int16_t s2 = (cursor < totalFrames) ? pcm[cursor++] : 0;
                     uint8_t n1 = EncodeNibble(stateL, s1);
                     uint8_t n2 = EncodeNibble(stateL, s2);
-                    out.push_back(n1 | (n2 << 4)); // Low nibble first
+                    out.push_back(n1 | (n2 << 4));
                 }
             }
             else {
-                // STEREO ENCODING (MULTIPLEXED)
-                // Samples are interleaved in PCM: L0, R0, L1, R1...
-                // Header L
                 int16_t headL = (cursor < totalFrames) ? pcm[cursor * 2] : 0;
                 int16_t headR = (cursor < totalFrames) ? pcm[cursor * 2 + 1] : 0;
 
@@ -139,18 +131,15 @@ public:
                 stateR.sample = headR;
                 if (b == 0) { stateL.index = 0; stateR.index = 0; }
 
-                // Write Headers
                 out.push_back(stateL.sample & 0xFF); out.push_back((stateL.sample >> 8) & 0xFF);
                 out.push_back(stateL.index); out.push_back(0);
 
                 out.push_back(stateR.sample & 0xFF); out.push_back((stateR.sample >> 8) & 0xFF);
                 out.push_back(stateR.index); out.push_back(0);
 
-                cursor++; // Skip L0, R0
+                cursor++;
 
-                // Write 8 chunks of (4 bytes L, 4 bytes R)
                 for (int i = 0; i < 8; i++) {
-                    // Buffering approach is cleaner
                     int16_t bufL[8] = { 0 }, bufR[8] = { 0 };
                     for (int k = 0; k < 8; k++) {
                         if (cursor < totalFrames) {
@@ -160,14 +149,12 @@ public:
                         }
                     }
 
-                    // Encode 4 bytes Left
                     for (int k = 0; k < 4; k++) {
                         uint8_t n1 = EncodeNibble(stateL, bufL[k * 2]);
                         uint8_t n2 = EncodeNibble(stateL, bufL[k * 2 + 1]);
                         out.push_back(n1 | (n2 << 4));
                     }
 
-                    // Encode 4 bytes Right
                     for (int k = 0; k < 4; k++) {
                         uint8_t n1 = EncodeNibble(stateR, bufR[k * 2]);
                         uint8_t n2 = EncodeNibble(stateR, bufR[k * 2 + 1]);
@@ -180,7 +167,6 @@ public:
     }
 };
 
-// --- ADPCM DECODER ---
 class XboxAdpcmDecoder {
 private:
     static int16_t DecodeSample(int nibble, int16_t pred, int step) {

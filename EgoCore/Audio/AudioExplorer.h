@@ -44,7 +44,6 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
 
     auto& e = lug->Entries[bank->SelectedEntryIndex];
 
-    // --- PLAYER UI ---
     float currentT = player.GetCurrentTime();
     float totalT = player.GetTotalDuration();
     float progress = player.GetProgress();
@@ -66,7 +65,6 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
     ImGui::SameLine();
     if (ImGui::Button("Stop", ImVec2(50, 0))) player.Stop();
 
-    // Helper to sync UI list
     auto SyncUIList = [&]() {
         bank->Entries.clear();
         bank->FilteredIndices.clear();
@@ -105,7 +103,6 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
 
     ImGui::Separator();
 
-    // --- PROPERTIES ---
     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Sound ID: %d", e.SoundID);
     if (InputString("Name", e.Name)) lug->IsDirty = true;
     if (InputString("Source Path", e.FullPath)) lug->IsDirty = true;

@@ -38,7 +38,6 @@ public:
         std::vector<AnimTrack> safeTracks = anim.Tracks;
         std::vector<AnimTrack> safeHelperTracks = anim.HelperTracks;
 
-        // --- TOPOLOGICAL HIERARCHY SORTER ---
         bool hasGlobalIDs = false;
         for (const auto& t : safeTracks) {
             if (t.BoneIndex != 31450 && t.BoneIndex != 0) { hasGlobalIDs = true; break; }

@@ -14,7 +14,6 @@
 
 namespace fs = std::filesystem;
 
-// --- Enums & Navigation Structures ---
 enum class DefAction {
     None,
     SwitchToDef,
@@ -28,7 +27,6 @@ struct PendingNavigation {
     int TargetIndex = -1;
 };
 
-// --- Data Structures ---
 struct DefEntry {
     std::string Type;
     std::string Name;
@@ -50,7 +48,6 @@ struct DefContext {
     std::string RelativePath;
     std::string AddonFileName;
 
-    // Constructor to satisfy vector initialization
     DefContext(std::string n, std::string r, std::string a)
         : Name(n), RelativePath(r), AddonFileName(a) {
     }
@@ -64,7 +61,6 @@ struct DefWorkspace {
     int ActiveContextIndex = 0;
     std::vector<DefContext> Contexts;
 
-    // --- DEFS STATE ---
     std::map<std::string, std::vector<DefEntry>> CategorizedDefs;
     std::string SelectedType;
     int SelectedEntryIndex = -1;
@@ -110,11 +106,8 @@ struct DefWorkspace {
     }
 };
 
-// --- GLOBALS (Must be inline to be shared) ---
 inline DefWorkspace g_DefWorkspace;
 inline std::vector<std::string> g_AvailableSoundBanks;
-
-// --- FUNCTIONS (Must be inline to avoid multiple definition errors) ---
 
 inline void ScanSoundBanks() {
     g_AvailableSoundBanks.clear();
@@ -470,11 +463,10 @@ inline bool ReplaceAndSaveEnum(const std::string& enumName, const std::string& n
             idx = i; break;
         }
     }
-    if (idx == -1) return false; // Enum not found (Defs probably not loaded)
+    if (idx == -1) return false;
 
     EnumEntry& entry = g_DefWorkspace.AllEnums[idx];
 
-    // Build new full content
     std::string newContent = "enum " + enumName + "\n{\n" + newBody + "};";
 
     std::ifstream inFile(entry.FilePath, std::ios::binary);
