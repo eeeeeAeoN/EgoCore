@@ -224,7 +224,7 @@ public:
 
     void SetMaterialTextures(const std::vector<ID3D11ShaderResourceView*>& textures) { MaterialTextures = textures; }
 
-    void UploadMesh(ID3D11Device* device, const C3DMeshContent& mesh) {
+    void UploadMesh(ID3D11Device* device, const C3DMeshContent& mesh, bool resetCamera = true) {
         if (!mesh.IsParsed) return;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
         std::vector<GPUVertex> vertices; std::vector<uint32_t> indices; uint32_t indexOffset = 0;
@@ -396,10 +396,16 @@ public:
         D3D11_SUBRESOURCE_DATA vData = { vertices.data(), 0, 0 }; device->CreateBuffer(&vDesc, &vData, &VBuffer);
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
-        CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f; CamPan = { 0, 0 }; CamRotX = -XM_PIDIV2; CamRotY = XM_PI;
+
+        if (resetCamera) {
+            CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f;
+            CamPan = { 0, 0 };
+            CamRotX = -XM_PIDIV2;
+            CamRotY = XM_PI;
+        }
     }
 
-    void UploadBBM(ID3D11Device* device, const CBBMParser& bbm) {
+    void UploadBBM(ID3D11Device* device, const CBBMParser& bbm, bool resetCamera = true) {
         if (!bbm.IsParsed || bbm.ParsedVertices.empty()) return;
         if (VBuffer) VBuffer->Release(); VBuffer = nullptr; if (IBuffer) IBuffer->Release(); IBuffer = nullptr;
         Batches.clear();
@@ -416,7 +422,14 @@ public:
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
         RenderBatch batch = { 0, (uint32_t)indices.size(), -1 }; Batches.push_back(batch);
 
-        float radius = sqrtf(maxDistSq); CamDist = (radius > 0) ? radius * 2.5f : 20.0f; if (CamDist < 1.0f) CamDist = 10.0f; CamPan = { 0, 0 }; CamRotX = 0.2f; CamRotY = XM_PI;
+        if (resetCamera) {
+            float radius = sqrtf(maxDistSq);
+            CamDist = (radius > 0) ? radius * 2.5f : 20.0f;
+            if (CamDist < 1.0f) CamDist = 10.0f;
+            CamPan = { 0, 0 };
+            CamRotX = 0.2f;
+            CamRotY = XM_PI;
+        }
     }
 
     void Resize(ID3D11Device* device, float w, float h) {

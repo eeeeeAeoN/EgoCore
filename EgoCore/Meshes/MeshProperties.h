@@ -48,6 +48,21 @@ static AnimParser g_PreviewAnimParser;
 static std::vector<XMMATRIX> g_PreviewBoneTransforms;
 static std::vector<XMMATRIX> g_PreviewGlobalTransforms;
 static char g_AnimSearchBuf[128] = "";
+static bool g_TriggerBonePopup = false;
+static bool g_ShowBoneSelectPopup = false;
+static int g_EditingTargetType = -1;
+static int g_EditingTargetIndex = -1;
+static char g_BoneSearchBuf[128] = "";
+static bool g_PreserveCamera = false;
+
+struct VolumeBoxState {
+    bool IsBoxMode = false;
+    float Center[3] = { 0.0f, 0.0f, 0.0f };
+    float Size[3] = { 2.0f, 2.0f, 2.0f };
+    float Rotation[3] = { 0.0f, 0.0f, 0.0f };
+};
+
+static std::map<std::string, VolumeBoxState> g_VolumeStates;
 
 inline std::string GetTextureNameForMesh(int textureID) {
     if (textureID <= 0) return "";
@@ -221,11 +236,13 @@ inline void CheckMeshUpload(ID3D11Device* device) {
         g_PreviewBoneTransforms.clear();
         g_PreviewGlobalTransforms.clear();
 
+        bool resetCam = !g_PreserveCamera;
+
         if (g_BBMParser.IsParsed) {
-            g_MeshRenderer.UploadBBM(device, g_BBMParser);
+            g_MeshRenderer.UploadBBM(device, g_BBMParser, resetCam);
         }
         else if (g_ActiveMeshContent.IsParsed) {
-            g_MeshRenderer.UploadMesh(device, g_ActiveMeshContent);
+            g_MeshRenderer.UploadMesh(device, g_ActiveMeshContent, resetCam);
 
             std::vector<ID3D11ShaderResourceView*> textures;
             int maxMat = 0;
@@ -241,6 +258,7 @@ inline void CheckMeshUpload(ID3D11Device* device) {
             g_MeshRenderer.SetMaterialTextures(textures);
         }
         g_MeshUploadNeeded = false;
+        g_PreserveCamera = false;
     }
 }
 
@@ -604,7 +622,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         g_PhysicsOverlayRenderer.CamDist = g_MeshRenderer.CamDist;
         g_PhysicsOverlayRenderer.CamPan = g_MeshRenderer.CamPan;
 
-        g_PhysicsOverlayRenderer.Render(ctx, viewportWidth, avail.y, true, true, &g_PreviewBoneTransforms, false, 0.5f, g_MeshRenderer.GetRTV(), g_MeshRenderer.GetDSV());
+        g_PhysicsOverlayRenderer.Render(ctx, viewportWidth, avail.y, true, false, &g_PreviewBoneTransforms, false, 0.5f, g_MeshRenderer.GetRTV(), g_MeshRenderer.GetDSV());
     }
 
     ctx->Release();
@@ -614,7 +632,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
     if (tex) ImGui::Image((void*)tex, ImVec2(viewportWidth, avail.y));
 
-    // Overlays (Helpers / Dummies / Skeleton ect.)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(pMin, pMax, true);
 
@@ -672,6 +689,24 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                         dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
                         ImGui::SetTooltip("%s", d.Name.c_str());
                     }
+                }
+            }
+        }
+
+        for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
+            const auto& gen = g_ActiveMeshContent.Generators[i];
+            XMFLOAT3 pos = XMFLOAT3(gen.Transform[9], gen.Transform[10], gen.Transform[11]);
+
+            ImVec2 scrPos;
+            if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
+                scrPos.x += pMin.x; scrPos.y += pMin.y;
+
+                dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 0, 200));
+
+                float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
+                if (dist < 8.0f) {
+                    dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
+                    ImGui::SetTooltip("%s", gen.ObjectName.c_str());
                 }
             }
         }
@@ -920,77 +955,434 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             }
 
             if (ImGui::BeginTabItem("Extras")) {
+                auto GetGraphString = [&](uint32_t crc) -> std::string {
+                    std::string name = g_ActiveMeshContent.GetNameFromCRC(crc);
+                    if (name.empty() && crc != 0) return "CRC_" + std::to_string(crc);
+                    return name;
+                    };
+                auto SortAndRepackGraphExtras = [&]() {
+                    std::sort(g_ActiveMeshContent.Helpers.begin(), g_ActiveMeshContent.Helpers.end(), [](const CHelperPoint& a, const CHelperPoint& b) { return a.NameCRC < b.NameCRC; });
+                    std::sort(g_ActiveMeshContent.Dummies.begin(), g_ActiveMeshContent.Dummies.end(), [](const CDummyObject& a, const CDummyObject& b) { return a.NameCRC < b.NameCRC; });
+                    std::sort(g_ActiveMeshContent.Generators.begin(), g_ActiveMeshContent.Generators.end(), [](const CMeshGenerator& a, const CMeshGenerator& b) { return CalculateFableCRC(a.ObjectName) < CalculateFableCRC(b.ObjectName); });
+
+                    std::vector<std::string> hNames, dNames;
+                    for (auto& h : g_ActiveMeshContent.Helpers) hNames.push_back(GetGraphString(h.NameCRC));
+                    for (auto& d : g_ActiveMeshContent.Dummies) dNames.push_back(GetGraphString(d.NameCRC));
+
+                    g_ActiveMeshContent.PackNames(hNames, dNames);
+                    g_ActiveMeshContent.UnpackNames();
+                    };
+
                 if (ImGui::CollapsingHeader("Helper Points", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::BeginTable("HelpersTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                        ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
-                        if (g_BBMParser.IsParsed) {
-                            for (int i = 0; i < g_BBMParser.Helpers.size(); i++) {
-                                const auto& h = g_BBMParser.Helpers[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i); ImGui::TableSetColumnIndex(1); ImGui::Text("%s", h.Name.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%d", h.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", h.Position.x, h.Position.y, h.Position.z);
-                            }
+                    if (g_BBMParser.IsParsed) {
+                        if (ImGui::Button("+ Add Helper##BBM")) {
+                            CBBMParser::HelperPoint h = { "NewHelper", {0,0,0}, -1, 0 };
+                            g_BBMParser.Helpers.push_back(h);
+                            if (saveCallback) saveCallback();
                         }
-                        else {
-                            for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
-                                const auto& h = g_ActiveMeshContent.Helpers[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i); ImGui::TableSetColumnIndex(1);
-                                std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
-                                if (!name.empty()) ImGui::Text("%s", name.c_str()); else ImGui::Text("CRC: %08X", h.NameCRC);
-                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", h.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", h.Pos[0], h.Pos[1], h.Pos[2]);
+                        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(Physics Mesh)");
+
+                        for (int i = 0; i < g_BBMParser.Helpers.size(); i++) {
+                            auto& h = g_BBMParser.Helpers[i];
+                            ImGui::PushID(("BBM_H_" + std::to_string(i)).c_str());
+
+                            char nameBuf[128]; strncpy_s(nameBuf, h.Name.c_str(), 127);
+                            ImGui::SetNextItemWidth(150);
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { h.Name = nameBuf; }
+                            if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            if (ImGui::DragFloat3("##Pos", &h.Position.x, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button((h.BoneIndex >= 0 ? "Bone: " + std::to_string(h.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                                g_EditingTargetType = 0; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
                             }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("X")) { g_BBMParser.Helpers.erase(g_BBMParser.Helpers.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            ImGui::PopID();
                         }
-                        ImGui::EndTable();
+                    }
+                    else if (g_ActiveMeshContent.IsParsed) {
+                        if (ImGui::Button("+ Add Helper##Graph")) {
+                            CHelperPoint h = { CalculateFableCRC("NewHelper"), {0,0,0}, -1 };
+                            g_ActiveMeshContent.CRCNameMap[h.NameCRC] = "NewHelper";
+                            g_ActiveMeshContent.Helpers.push_back(h);
+                            g_ActiveMeshContent.HelperPointCount = (uint16_t)g_ActiveMeshContent.Helpers.size();
+                            SortAndRepackGraphExtras();
+                            if (saveCallback) saveCallback();
+                        }
+                        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(Graphics Mesh)");
+
+                        for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
+                            auto& h = g_ActiveMeshContent.Helpers[i];
+                            ImGui::PushID(("Graph_H_" + std::to_string(i)).c_str());
+
+                            std::string sName = GetGraphString(h.NameCRC);
+                            char nameBuf[128]; strncpy_s(nameBuf, sName.c_str(), 127);
+                            ImGui::SetNextItemWidth(150);
+
+                            if (ImGui::InputText("##Name", nameBuf, 128)) {
+                                std::string newStr = nameBuf;
+                                h.NameCRC = CalculateFableCRC(newStr);
+                                g_ActiveMeshContent.CRCNameMap[h.NameCRC] = newStr;
+                            }
+
+                            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                SortAndRepackGraphExtras();
+                                if (saveCallback) saveCallback();
+                            }
+
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            if (ImGui::DragFloat3("##Pos", h.Pos, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button((h.BoneIndex >= 0 ? "Bone: " + std::to_string(h.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                                g_EditingTargetType = 0; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
+                            }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("X")) {
+                                g_ActiveMeshContent.Helpers.erase(g_ActiveMeshContent.Helpers.begin() + i);
+                                g_ActiveMeshContent.HelperPointCount = (uint16_t)g_ActiveMeshContent.Helpers.size();
+                                SortAndRepackGraphExtras();
+                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
+                            }
+                            ImGui::PopID();
+                        }
                     }
                 }
+
                 if (ImGui::CollapsingHeader("Dummy Objects", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::BeginTable("DummiesTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                        ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 40.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
-                        if (g_BBMParser.IsParsed) {
-                            for (int i = 0; i < g_BBMParser.Dummies.size(); i++) {
-                                const auto& d = g_BBMParser.Dummies[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i); ImGui::TableSetColumnIndex(1); ImGui::Text("%s", d.Name.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%d", d.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", d.Transform[9], d.Transform[10], d.Transform[11]);
+                    if (g_BBMParser.IsParsed) {
+                        if (ImGui::Button("+ Add Dummy##BBM")) {
+                            CBBMParser::DummyObject d; d.Name = "NewDummy"; d.BoneIndex = -1; d.SubMeshIndex = 0; d.UseLocalOrigin = false;
+                            d.Position = { 0,0,0 }; d.Direction = { 0,0,1 };
+                            memset(d.Transform, 0, 48); d.Transform[0] = 1; d.Transform[4] = 1; d.Transform[8] = 1;
+                            g_BBMParser.Dummies.push_back(d);
+                            if (saveCallback) saveCallback();
+                        }
+
+                        for (int i = 0; i < g_BBMParser.Dummies.size(); i++) {
+                            auto& d = g_BBMParser.Dummies[i];
+                            ImGui::PushID(("BBM_D_" + std::to_string(i)).c_str());
+
+                            char nameBuf[128]; strncpy_s(nameBuf, d.Name.c_str(), 127);
+                            ImGui::SetNextItemWidth(150);
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { d.Name = nameBuf; }
+                            if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button((d.BoneIndex >= 0 ? "Bone: " + std::to_string(d.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                                g_EditingTargetType = 1; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
+                            }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("X")) { g_BBMParser.Dummies.erase(g_BBMParser.Dummies.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            ImGui::PopID();
+                        }
+                    }
+                    else if (g_ActiveMeshContent.IsParsed) {
+                        if (ImGui::Button("+ Add Dummy##Graph")) {
+                            CDummyObject d; d.NameCRC = CalculateFableCRC("NewDummy"); d.BoneIndex = -1;
+                            memset(d.Transform, 0, 48); d.Transform[0] = 1; d.Transform[4] = 1; d.Transform[8] = 1;
+                            g_ActiveMeshContent.CRCNameMap[d.NameCRC] = "NewDummy";
+                            g_ActiveMeshContent.Dummies.push_back(d);
+                            g_ActiveMeshContent.DummyObjectCount = (uint16_t)g_ActiveMeshContent.Dummies.size();
+                            SortAndRepackGraphExtras();
+                            if (saveCallback) saveCallback();
+                        }
+
+                        for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
+                            auto& d = g_ActiveMeshContent.Dummies[i];
+                            ImGui::PushID(("Graph_D_" + std::to_string(i)).c_str());
+
+                            std::string sName = GetGraphString(d.NameCRC);
+                            char nameBuf[128]; strncpy_s(nameBuf, sName.c_str(), 127);
+                            ImGui::SetNextItemWidth(150);
+                            if (ImGui::InputText("##Name", nameBuf, 128)) {
+                                std::string newStr = nameBuf;
+                                d.NameCRC = CalculateFableCRC(newStr);
+                                g_ActiveMeshContent.CRCNameMap[d.NameCRC] = newStr;
+                            }
+
+                            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                SortAndRepackGraphExtras();
+                                if (saveCallback) saveCallback();
+                            }
+
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button((d.BoneIndex >= 0 ? "Bone: " + std::to_string(d.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                                g_EditingTargetType = 1; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
+                            }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("X")) {
+                                g_ActiveMeshContent.Dummies.erase(g_ActiveMeshContent.Dummies.begin() + i);
+                                g_ActiveMeshContent.DummyObjectCount = (uint16_t)g_ActiveMeshContent.Dummies.size();
+                                SortAndRepackGraphExtras();
+                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
+                            }
+                            ImGui::PopID();
+                        }
+                    }
+                }
+
+                if (!g_BBMParser.IsParsed && g_ActiveMeshContent.IsParsed && ImGui::CollapsingHeader("Generators", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::Button("+ Add Generator")) {
+                        CMeshGenerator g; g.ObjectName = "NewGenerator"; g.BoneIndex = -1; g.BankIndex = 0; g.UseLocalOrigin = false;
+                        memset(g.Transform, 0, 48); g.Transform[0] = 1; g.Transform[4] = 1; g.Transform[8] = 1;
+                        g_ActiveMeshContent.Generators.push_back(g);
+                        g_ActiveMeshContent.MeshGeneratorCount = (uint16_t)g_ActiveMeshContent.Generators.size();
+                        SortAndRepackGraphExtras();
+                        if (saveCallback) saveCallback();
+                    }
+
+                    for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
+                        auto& gen = g_ActiveMeshContent.Generators[i];
+                        ImGui::PushID(("Graph_G_" + std::to_string(i)).c_str());
+
+                        char nameBuf[128]; strncpy_s(nameBuf, gen.ObjectName.c_str(), 127);
+                        ImGui::SetNextItemWidth(120);
+                        if (ImGui::InputText("##Name", nameBuf, 128)) { gen.ObjectName = nameBuf; }
+                        if (ImGui::IsItemDeactivatedAfterEdit()) {
+                            SortAndRepackGraphExtras();
+                            if (saveCallback) saveCallback();
+                        }
+
+                        ImGui::SameLine(); ImGui::SetNextItemWidth(160);
+                        if (ImGui::DragFloat3("##Pos", &gen.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+
+                        ImGui::SameLine(); ImGui::SetNextItemWidth(70);
+                        int tempBank = (int)gen.BankIndex;
+                        if (ImGui::InputInt("##Bank", &tempBank, 0)) {
+                            gen.BankIndex = (uint32_t)(std::max)(0, tempBank);
+                            if (saveCallback) saveCallback();
+                        }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bank Index");
+
+                        ImGui::SameLine();
+                        if (ImGui::Button((gen.BoneIndex >= 0 ? "Bone: " + std::to_string(gen.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                            g_EditingTargetType = 2; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
+                        }
+
+                        ImGui::SameLine();
+                        if (ImGui::Button("X")) {
+                            g_ActiveMeshContent.Generators.erase(g_ActiveMeshContent.Generators.begin() + i);
+                            g_ActiveMeshContent.MeshGeneratorCount = (uint16_t)g_ActiveMeshContent.Generators.size();
+                            SortAndRepackGraphExtras();
+                            i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
+                        }
+                        ImGui::PopID();
+                    }
+                }
+
+
+
+                if (g_BBMParser.IsParsed && ImGui::CollapsingHeader("Physics Volumes (Type 3 Only)", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    auto GenerateBoxPlanes = [](float* center, float* size, float* rot, std::vector<CBBMParser::BBMPlane>& outPlanes) {
+                        XMMATRIX rotMat = XMMatrixRotationRollPitchYaw(XMConvertToRadians(rot[0]), XMConvertToRadians(rot[1]), XMConvertToRadians(rot[2]));
+                        XMVECTOR right = rotMat.r[0];
+                        XMVECTOR up = rotMat.r[1];
+                        XMVECTOR fwd = rotMat.r[2];
+                        XMVECTOR c = XMVectorSet(center[0], center[1], center[2], 0);
+
+                        outPlanes.resize(6);
+                        auto setPlane = [](CBBMParser::BBMPlane& plane, XMVECTOR normal, XMVECTOR point) {
+                            plane.Normal[0] = XMVectorGetX(normal);
+                            plane.Normal[1] = XMVectorGetY(normal);
+                            plane.Normal[2] = XMVectorGetZ(normal);
+                            plane.D = -XMVectorGetX(XMVector3Dot(normal, point));
+                            };
+
+                        setPlane(outPlanes[0], right, c + right * (size[0] * 0.5f));
+                        setPlane(outPlanes[1], -right, c - right * (size[0] * 0.5f));
+                        setPlane(outPlanes[2], up, c + up * (size[1] * 0.5f));
+                        setPlane(outPlanes[3], -up, c - up * (size[1] * 0.5f));
+                        setPlane(outPlanes[4], fwd, c + fwd * (size[2] * 0.5f));
+                        setPlane(outPlanes[5], -fwd, c - fwd * (size[2] * 0.5f));
+                        };
+
+                    auto DrawVolumeItem = [&](CBBMParser::Volume& v, int i, const std::string& prefix) {
+                        std::string vKey = prefix + "_V_" + std::to_string(i);
+                        auto& vState = g_VolumeStates[vKey];
+                        ImGui::PushID(vKey.c_str());
+
+                        char nameBuf[128]; strncpy_s(nameBuf, v.Name.c_str(), 127);
+                        ImGui::SetNextItemWidth(150);
+                        if (ImGui::InputText("##Name", nameBuf, 128)) { v.Name = nameBuf; }
+                        if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
+
+                        ImGui::SameLine(); ImGui::SetNextItemWidth(100);
+                        int tempID = (int)v.ID;
+                        if (ImGui::InputInt("ID", &tempID, 0)) { v.ID = (uint32_t)(std::max)(0, tempID); if (saveCallback) saveCallback(); }
+
+                        ImGui::SameLine();
+                        if (ImGui::Button("X##DelVol")) {
+                            ImGui::PopID();
+                            return true;
+                        }
+
+                        ImGui::Indent(15.0f);
+                        if (ImGui::Checkbox("Edit as Box Mode", &vState.IsBoxMode)) {
+                            if (vState.IsBoxMode && v.Planes.size() >= 6) {
+                                float minX = -1e9f, maxX = 1e9f, minY = -1e9f, maxY = 1e9f, minZ = -1e9f, maxZ = 1e9f;
+                                for (auto& p : v.Planes) {
+                                    if (p.Normal[0] > 0.9f) maxX = -p.D; else if (p.Normal[0] < -0.9f) minX = p.D;
+                                    else if (p.Normal[1] > 0.9f) maxY = -p.D; else if (p.Normal[1] < -0.9f) minY = p.D;
+                                    else if (p.Normal[2] > 0.9f) maxZ = -p.D; else if (p.Normal[2] < -0.9f) minZ = p.D;
+                                }
+                                if (minX != -1e9f && maxX != 1e9f) { vState.Center[0] = (minX + maxX) * 0.5f; vState.Size[0] = maxX - minX; }
+                                if (minY != -1e9f && maxY != 1e9f) { vState.Center[1] = (minY + maxY) * 0.5f; vState.Size[1] = maxY - minY; }
+                                if (minZ != -1e9f && maxZ != 1e9f) { vState.Center[2] = (minZ + maxZ) * 0.5f; vState.Size[2] = maxZ - minZ; }
+                                vState.Rotation[0] = 0; vState.Rotation[1] = 0; vState.Rotation[2] = 0;
+                            }
+                            if (vState.IsBoxMode) {
+                                GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
+                                v.PlaneCount = (uint32_t)v.Planes.size();
+                                if (saveCallback) saveCallback();
+                            }
+                        }
+
+                        if (vState.IsBoxMode) {
+                            bool changed = false;
+                            ImGui::SetNextItemWidth(200); if (ImGui::DragFloat3("Center", vState.Center, 0.05f)) changed = true;
+                            ImGui::SetNextItemWidth(200); if (ImGui::DragFloat3("Size", vState.Size, 0.05f)) {
+                                vState.Size[0] = (std::max)(0.01f, vState.Size[0]);
+                                vState.Size[1] = (std::max)(0.01f, vState.Size[1]);
+                                vState.Size[2] = (std::max)(0.01f, vState.Size[2]);
+                                changed = true;
+                            }
+                            ImGui::SetNextItemWidth(200); if (ImGui::DragFloat3("Rotation", vState.Rotation, 1.0f)) changed = true;
+
+                            if (changed) {
+                                GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
+                                v.PlaneCount = (uint32_t)v.Planes.size();
+                                g_PreserveCamera = true;
+                                if (saveCallback) saveCallback();
                             }
                         }
                         else {
-                            for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
-                                const auto& d = g_ActiveMeshContent.Dummies[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i); ImGui::TableSetColumnIndex(1);
-                                std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
-                                if (!name.empty()) ImGui::Text("%s", name.c_str()); else ImGui::Text("CRC: %08X", d.NameCRC);
-                                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", d.BoneIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", d.Transform[9], d.Transform[10], d.Transform[11]);
+                            if (ImGui::TreeNode(("Raw Planes (" + std::to_string(v.Planes.size()) + ")###PlanesNode").c_str())) {
+                                if (ImGui::Button("+ Add Plane")) {
+                                    CBBMParser::BBMPlane p = { {0,1,0}, 0 };
+                                    v.Planes.push_back(p);
+                                    v.PlaneCount = (uint32_t)v.Planes.size();
+                                    if (saveCallback) saveCallback();
+                                }
+                                for (int pIdx = 0; pIdx < v.Planes.size(); pIdx++) {
+                                    auto& plane = v.Planes[pIdx];
+                                    ImGui::PushID(pIdx);
+                                    ImGui::Text("P%d", pIdx);
+                                    ImGui::SameLine(); ImGui::SetNextItemWidth(150);
+                                    if (ImGui::DragFloat3("Normal", plane.Normal, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                                    ImGui::SameLine(); ImGui::SetNextItemWidth(80);
+                                    if (ImGui::DragFloat("Dist(D)", &plane.D, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                                    ImGui::SameLine();
+                                    if (ImGui::Button("X")) {
+                                        v.Planes.erase(v.Planes.begin() + pIdx); pIdx--;
+                                        v.PlaneCount = (uint32_t)v.Planes.size();
+                                        if (saveCallback) saveCallback();
+                                    }
+                                    ImGui::PopID();
+                                }
+                                ImGui::TreePop();
                             }
                         }
-                        ImGui::EndTable();
+                        ImGui::Unindent(15.0f);
+                        ImGui::Separator();
+                        ImGui::PopID();
+                        return false;
+                        };
+
+                    if (ImGui::Button("+ Add Volume")) {
+                        CBBMParser::Volume v; v.Name = "NewVolume"; v.ID = 0; v.PlaneCount = 0;
+                        g_BBMParser.Volumes.push_back(v);
+                        if (saveCallback) saveCallback();
                     }
-                }
-                if (!g_BBMParser.IsParsed && ImGui::CollapsingHeader("Generators", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::BeginTable("GeneratorsTbl", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                        ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Object Name"); ImGui::TableSetupColumn("Bank ID", ImGuiTableColumnFlags_WidthFixed, 60.0f); ImGui::TableSetupColumn("Position"); ImGui::TableHeadersRow();
-                        for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
-                            const auto& g = g_ActiveMeshContent.Generators[i];
-                            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i); ImGui::TableSetColumnIndex(1); ImGui::Text("%s", g.ObjectName.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%d", g.BankIndex); ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f, %.2f, %.2f", g.Transform[9], g.Transform[10], g.Transform[11]);
+
+                    for (int i = 0; i < g_BBMParser.Volumes.size(); i++) {
+                        if (DrawVolumeItem(g_BBMParser.Volumes[i], i, "BBM")) {
+                            g_BBMParser.Volumes.erase(g_BBMParser.Volumes.begin() + i);
+                            i--;
+                            if (saveCallback) saveCallback();
                         }
-                        ImGui::EndTable();
                     }
                 }
-                if (ImGui::CollapsingHeader("Volumes", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::BeginTable("VolumesTbl", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                        ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 30.0f); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Planes"); ImGui::TableHeadersRow();
-                        if (g_BBMParser.IsParsed) {
-                            for (int i = 0; i < g_BBMParser.Volumes.size(); i++) {
-                                const auto& v = g_BBMParser.Volumes[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i); ImGui::TableSetColumnIndex(1); ImGui::Text("%s", v.Name.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%zu", v.Planes.size());
+            ImGui::EndTabItem();
+            }
+
+            if (g_TriggerBonePopup) {
+                ImGui::OpenPopup("Assign Bone");
+                g_ShowBoneSelectPopup = true;
+                g_BoneSearchBuf[0] = '\0';
+                g_TriggerBonePopup = false;
+            }
+
+            if (ImGui::BeginPopupModal("Assign Bone", &g_ShowBoneSelectPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::InputTextWithHint("##BoneSearch", "Search Bones...", g_BoneSearchBuf, 128);
+                ImGui::Separator();
+
+                ImGui::BeginChild("BoneList", ImVec2(300, 300), true);
+
+                std::string filter = g_BoneSearchBuf;
+                std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+                if (ImGui::Selectable("-1 - Unassign (Root)", false)) {
+                    if (g_BBMParser.IsParsed) {
+                        if (g_EditingTargetType == 0) g_BBMParser.Helpers[g_EditingTargetIndex].BoneIndex = -1;
+                        else if (g_EditingTargetType == 1) g_BBMParser.Dummies[g_EditingTargetIndex].BoneIndex = -1;
+                    }
+                    else {
+                        if (g_EditingTargetType == 0) g_ActiveMeshContent.Helpers[g_EditingTargetIndex].BoneIndex = -1;
+                        else if (g_EditingTargetType == 1) g_ActiveMeshContent.Dummies[g_EditingTargetIndex].BoneIndex = -1;
+                        else if (g_EditingTargetType == 2) g_ActiveMeshContent.Generators[g_EditingTargetIndex].BoneIndex = -1;
+                    }
+                    if (saveCallback) saveCallback();
+                    g_ShowBoneSelectPopup = false; ImGui::CloseCurrentPopup();
+                }
+
+                int boneCount = g_BBMParser.IsParsed ? (int)g_BBMParser.Bones.size() : g_ActiveMeshContent.BoneCount;
+
+                for (int i = 0; i < boneCount; i++) {
+                    std::string boneName = g_BBMParser.IsParsed ? g_BBMParser.Bones[i].Name : (i < g_ActiveMeshContent.BoneNames.size() ? g_ActiveMeshContent.BoneNames[i] : "Unknown");
+                    std::string lowerName = boneName;
+                    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+
+                    if (filter.empty() || lowerName.find(filter) != std::string::npos || std::to_string(i).find(filter) != std::string::npos) {
+                        std::string displayStr = std::to_string(i) + " - " + boneName;
+                        if (ImGui::Selectable(displayStr.c_str(), false)) {
+                            if (g_BBMParser.IsParsed) {
+                                if (g_EditingTargetType == 0) g_BBMParser.Helpers[g_EditingTargetIndex].BoneIndex = i;
+                                else if (g_EditingTargetType == 1) g_BBMParser.Dummies[g_EditingTargetIndex].BoneIndex = i;
                             }
-                        }
-                        else {
-                            for (int i = 0; i < g_ActiveMeshContent.Volumes.size(); i++) {
-                                const auto& v = g_ActiveMeshContent.Volumes[i];
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i); ImGui::TableSetColumnIndex(1); ImGui::Text("%s", v.Name.c_str()); ImGui::TableSetColumnIndex(2); ImGui::Text("%zu", v.Planes.size());
+                            else {
+                                if (g_EditingTargetType == 0) g_ActiveMeshContent.Helpers[g_EditingTargetIndex].BoneIndex = i;
+                                else if (g_EditingTargetType == 1) g_ActiveMeshContent.Dummies[g_EditingTargetIndex].BoneIndex = i;
+                                else if (g_EditingTargetType == 2) g_ActiveMeshContent.Generators[g_EditingTargetIndex].BoneIndex = i;
                             }
+                            g_MeshUploadNeeded = true;
+                            g_PreserveCamera = true;
+                            if (saveCallback) saveCallback();
+                            g_ShowBoneSelectPopup = false; ImGui::CloseCurrentPopup();
                         }
-                        ImGui::EndTable();
                     }
                 }
-                ImGui::EndTabItem();
+                ImGui::EndChild();
+
+                ImGui::Separator();
+                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                    g_ShowBoneSelectPopup = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
 
             if (!g_BBMParser.IsParsed && ImGui::BeginTabItem("Bones")) {

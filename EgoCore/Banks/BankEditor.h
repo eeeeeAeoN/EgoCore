@@ -704,7 +704,7 @@ inline void FlushStagedEntries(LoadedBank* bank) {
 
             for (size_t i = 0; i < staged.MeshLODs.size(); i++) {
                 auto& lod = staged.MeshLODs[i];
-                lod->AutoCalculateBounds();
+                //lod->AutoCalculateBounds();
                 std::vector<uint8_t> lodBytes = MeshCompiler::CompileSingleLOD(*lod);
 
                 // Apply the Ghost Buffer padding trick to BOTH Type 2 (Foliage) and Type 5 (Animated) meshes!
