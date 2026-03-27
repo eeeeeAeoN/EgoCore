@@ -49,6 +49,9 @@
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="ShaderCompiler.h" />
+    <ClInclude Include="ShaderParser.h" />
+    <ClInclude Include="ShaderProperties.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
     <ClInclude Include="Textures\ImageBackend.h" />
     <ClInclude Include="Textures\TextureBuilder.h" />

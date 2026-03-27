@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <set>
 #include <memory>
+#include "ShaderParser.h"
 
 namespace fs = std::filesystem;
 
@@ -73,6 +74,7 @@ struct StagedEntry {
     std::shared_ptr<CTextGroup> TextGroup;
     std::shared_ptr<std::vector<std::string>> NarratorList;
     std::shared_ptr<CLipSyncData> LipSync;
+    std::shared_ptr<std::string> ShaderCode;
 };
 
 struct LoadedBank {
@@ -130,6 +132,7 @@ inline C3DAnimationInfo g_ActiveAnim;
 inline bool             g_AnimParseSuccess = false;
 inline AnimUIContext g_AnimUIState;
 inline AnimParser g_AnimParser;
+inline CShaderParser g_ShaderParser;
 
 inline bool StartsWith(const std::string& str, const std::string& prefix) {
     if (str.length() < prefix.length()) return false;
@@ -172,6 +175,10 @@ inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) 
     for (const auto& folder : folders) {
         if (StartsWith(folder, "TEXT_")) return EBankType::Text;
         if (StartsWith(folder, "LIPSYNC_")) return EBankType::Dialogue;
+
+        std::string upperFolder = folder;
+        std::transform(upperFolder.begin(), upperFolder.end(), upperFolder.begin(), ::toupper);
+        if (upperFolder.find("SHADER") != std::string::npos) return EBankType::Shaders;
     }
     if (folders.count("PARTICLE_MAIN_PC")) return EBankType::Effects;
     return EBankType::Unknown;

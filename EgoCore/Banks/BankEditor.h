@@ -8,6 +8,8 @@
 #include "TextBackend.h" 
 #include <thread>
 #include "MeshCompiler.h"
+#include "ShaderProperties.h"
+#include "ShaderCompiler.h"
 
 extern float g_ImportBumpFactor;
 
@@ -817,6 +819,33 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             e.InfoSize = 4;
         }
 
+        else if (staged.ShaderCode) {
+            // 1. Fetch the original entry data so the compiler can preserve Fable constants
+            std::vector<uint8_t> sourceData;
+            if (bank->ModifiedEntryData.count(idx)) {
+                sourceData = bank->ModifiedEntryData[idx];
+            }
+            else {
+                bank->Stream->clear();
+                bank->Stream->seekg(e.Offset, std::ios::beg);
+                sourceData.resize(e.Size);
+                bank->Stream->read((char*)sourceData.data(), e.Size);
+            }
+
+            // 2. Compile via the new ShaderCompiler
+            std::string compileError;
+            std::vector<uint8_t> compiledBytes = ShaderCompiler::Compile(*staged.ShaderCode, sourceData, compileError);
+
+            if (!compiledBytes.empty()) {
+                newBytes = compiledBytes;
+                e.InfoSize = 0; // Shaders don't use Subheader Info Cache
+            }
+            else {
+                g_BankStatus = "Shader Compile Error: " + compileError;
+                continue; // Abort staging this specific entry so we don't corrupt the bank
+            }
+        }
+
         if (!newBytes.empty()) {
             bank->ModifiedEntryData[idx] = newBytes;
             e.Size = (uint32_t)newBytes.size();
@@ -1115,12 +1144,16 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         staged.LipSync = std::make_shared<CLipSyncData>(g_LipSyncParser.Data);
         g_BankStatus = "LipSync Entry staged for compilation.";
     }
+    else if (bank->Type == EBankType::Shaders) {
+        staged.ShaderCode = std::make_shared<std::string>(g_ShaderTextEditor.GetText());
+        g_BankStatus = "Shader assembly staged for compilation.";
+    }
     else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
         bank->LugParserPtr->IsDirty = true;
         g_BankStatus = "Audio Metadata staged to RAM.";
         return; // Audio uses its own bespoke backend, so no need to put in Staged map
     }
-    if (!staged.MeshLODs.empty() || staged.Anim || staged.Physics || staged.Texture || staged.Text || staged.TextGroup || staged.NarratorList || staged.LipSync) {
+    if (!staged.MeshLODs.empty() || staged.Anim || staged.Physics || staged.Texture || staged.Text || staged.TextGroup || staged.NarratorList || staged.LipSync || staged.ShaderCode) {
         bank->StagedEntries[bank->SelectedEntryIndex] = staged;
     }
 

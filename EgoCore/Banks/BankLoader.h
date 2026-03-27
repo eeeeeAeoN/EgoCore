@@ -98,6 +98,8 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
     g_AnimParser.Data = C3DAnimationInfo();
     g_TextParser.IsParsed = false; g_TextParser.TextData = CTextEntry(); g_TextParser.GroupData = CTextGroup(); g_TextParser.NarratorStrings.clear(); g_TextParser.RawData.clear();
     g_LipSyncParser.Data = CLipSyncData();
+    g_ShaderParser.IsParsed = false;
+    g_ShaderParser.Data = CShaderData();
 
     bank->SelectedEntryIndex = idx; bank->SelectedLOD = 0;
     const auto& e = bank->Entries[idx];
@@ -149,6 +151,19 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
             g_LipSyncParser.Data = *staged.LipSync;
             g_LipSyncParser.IsParsed = true;
         }
+
+        else if (staged.ShaderCode) {
+            if (bank->ModifiedEntryData.count(idx)) bank->CurrentEntryRawData = bank->ModifiedEntryData[idx];
+            else {
+                bank->Stream->clear();
+                bank->Stream->seekg(e.Offset, std::ios::beg);
+                bank->CurrentEntryRawData.resize(e.Size);
+                bank->Stream->read((char*)bank->CurrentEntryRawData.data(), e.Size);
+            }
+            g_ShaderParser.Parse(bank->CurrentEntryRawData);
+            g_ShaderParser.DecompiledText = *staged.ShaderCode;
+        }
+
         return;
     }
 
@@ -185,6 +200,9 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         if (bank->Type == EBankType::Dialogue) g_LipSyncParser.Parse(bank->CurrentEntryRawData, bank->SubheaderCache[idx]);
         g_TextParser.Parse(bank->CurrentEntryRawData, e.Type);
         if (g_TextParser.IsGroup) ResolveGroupMetadata(bank);
+    }
+    else if (bank->Type == EBankType::Shaders) {
+        g_ShaderParser.Parse(bank->CurrentEntryRawData);
     }
     else if (bank->Type != EBankType::Audio) {
         if (e.Type == 3) {
