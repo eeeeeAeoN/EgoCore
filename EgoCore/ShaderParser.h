@@ -40,18 +40,15 @@ public:
         size_t offset = 0;
         size_t maxOffset = rawData.size();
 
-        // 1. Read Bytecode Size
         Data.ByteSize = *(uint32_t*)(&rawData[offset]);
         offset += 4;
 
         if (Data.ByteSize > maxOffset - offset) return;
 
-        // 2. Read Bytecode
         if (Data.ByteSize > 0) {
             Data.Bytecode.resize(Data.ByteSize);
             memcpy(Data.Bytecode.data(), &rawData[offset], Data.ByteSize);
 
-            // Detect Shader Type
             if (Data.ByteSize >= 4) {
                 uint32_t token = *(uint32_t*)(Data.Bytecode.data());
                 if (token == 0xFFFE0101) Data.Type = EShaderType::VertexShader_1_1;
@@ -67,21 +64,18 @@ public:
             return;
         }
 
-        // 3. Read Constant Count
         Data.ConstantCount = *(uint32_t*)(&rawData[offset]);
         offset += 4;
 
-        // 4. Read Constants
         for (uint32_t i = 0; i < Data.ConstantCount; ++i) {
             size_t strStart = offset;
             while (offset < maxOffset && rawData[offset] != '\0') offset++;
             if (offset >= maxOffset) break;
 
             Data.ConstantNames.push_back(std::string((char*)&rawData[strStart], offset - strStart));
-            offset++; // Skip the null terminator
+            offset++;
         }
 
-        // 5. Read VSConstantLayout 
         if (offset < maxOffset) {
             size_t strStart = offset;
             while (offset < maxOffset && rawData[offset] != '\0') offset++;
@@ -91,7 +85,7 @@ public:
         }
 
         IsParsed = true;
-        DecompileBytecode(); // Trigger the Windows SDK to generate HLSL text
+        DecompileBytecode();
     }
 
     void DecompileBytecode() {
@@ -101,7 +95,6 @@ public:
         }
 
         ID3DBlob* pDisassembly = nullptr;
-        // D3D_DISASM_ENABLE_INSTRUCTION_NUMBERing can be passed as the 3rd param if you want line numbers
         HRESULT hr = D3DDisassemble(Data.Bytecode.data(), Data.ByteSize, 0, nullptr, &pDisassembly);
 
         if (SUCCEEDED(hr) && pDisassembly) {

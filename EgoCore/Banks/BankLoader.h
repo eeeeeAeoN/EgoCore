@@ -7,6 +7,7 @@
 #include "TextureProperties.h"
 #include "TextProperties.h"
 #include "LipSyncProperties.h"
+#include "FontProperties.h"
 #include "DefBackend.h" 
 #include <windows.h>
 #include <algorithm>
@@ -203,6 +204,21 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
     }
     else if (bank->Type == EBankType::Shaders) {
         g_ShaderParser.Parse(bank->CurrentEntryRawData);
+    }
+    else if (bank->Type == EBankType::Fonts) {
+        if (bank->ModifiedEntryData.count(idx)) bank->CurrentEntryRawData = bank->ModifiedEntryData[idx];
+        else {
+            bank->Stream->clear();
+            bank->Stream->seekg(e.Offset, std::ios::beg);
+            bank->CurrentEntryRawData.resize(e.Size);
+            bank->Stream->read((char*)bank->CurrentEntryRawData.data(), e.Size);
+        }
+        std::string subBank = "";
+        if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
+            subBank = bank->SubBanks[bank->ActiveSubBankIndex].Name;
+        }
+
+        g_FontParser.Parse(bank->CurrentEntryRawData, subBank);
     }
     else if (bank->Type != EBankType::Audio) {
         if (e.Type == 3) {

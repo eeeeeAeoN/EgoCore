@@ -49,6 +49,9 @@
     <Filter Include="Source Files\Shaders">
       <UniqueIdentifier>{6e08103d-3dfb-4a60-a5f4-413e0f193573}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Fonts">
+      <UniqueIdentifier>{266f62be-01c9-4bd6-b04d-10b76435646f}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -239,6 +242,15 @@
     </ClInclude>
     <ClInclude Include="ShaderCompiler.h">
       <Filter>Source Files\Shaders</Filter>
+    </ClInclude>
+    <ClInclude Include="FontParser.h">
+      <Filter>Source Files\Fonts</Filter>
+    </ClInclude>
+    <ClInclude Include="FontProperties.h">
+      <Filter>Source Files\Fonts</Filter>
+    </ClInclude>
+    <ClInclude Include="FontBuilder.h">
+      <Filter>Source Files\Fonts</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

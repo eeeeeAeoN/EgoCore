@@ -5,6 +5,7 @@
 #include "AnimCompiler.h"
 #include "BankEditor.h" 
 #include "ShaderProperties.h"
+#include "FontProperties.h"
 #include <thread>
 
 static int g_ContextEntryIndex = -1;
@@ -314,7 +315,7 @@ static void DrawBankTab() {
                 }
 
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
-                    if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_Delete) && bank.Type != EBankType::Shaders) {
                         if (g_AppConfig.ShowBankDeleteConfirm) {
                             g_ContextEntryIndex = bank.SelectedEntryIndex;
                             g_ShowDeleteBankEntryPopup = true;
@@ -565,19 +566,24 @@ static void DrawBankTab() {
                             if (isStaged || isModified) ImGui::PopStyleColor();
 
                             if (ImGui::BeginPopupContextItem()) {
-                                if (ImGui::MenuItem("Duplicate Entry")) {
-                                    DuplicateBankEntry(&bank, idx);
-                                    g_ScrollToSelected = true;
+                                if (bank.Type != EBankType::Shaders) {
+                                    if (ImGui::MenuItem("Duplicate Entry")) {
+                                        DuplicateBankEntry(&bank, idx);
+                                        g_ScrollToSelected = true;
+                                    }
+                                    if (ImGui::MenuItem("Delete Entry")) {
+                                        if (g_AppConfig.ShowBankDeleteConfirm) {
+                                            g_ContextEntryIndex = idx;
+                                            g_ShowDeleteBankEntryPopup = true;
+                                            ImGui::OpenPopup("Delete Bank Entry?");
+                                        }
+                                        else {
+                                            DeleteBankEntry(&bank, idx);
+                                        }
+                                    }
                                 }
-                                if (ImGui::MenuItem("Delete Entry")) {
-                                    if (g_AppConfig.ShowBankDeleteConfirm) {
-                                        g_ContextEntryIndex = idx;
-                                        g_ShowDeleteBankEntryPopup = true;
-                                        ImGui::OpenPopup("Delete Bank Entry?");
-                                    }
-                                    else {
-                                        DeleteBankEntry(&bank, idx);
-                                    }
+                                else {
+                                    ImGui::TextDisabled("Locked for Shaders");
                                 }
                                 ImGui::EndPopup();
                             }
@@ -670,20 +676,23 @@ static void DrawBankTab() {
                         SaveEntryChanges(&bank);
                     }
 
-                    ImGui::SameLine();
 
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-                    if (ImGui::Button("Delete", ImVec2(60, 0))) {
-                        if (g_AppConfig.ShowBankDeleteConfirm) {
-                            g_ContextEntryIndex = bank.SelectedEntryIndex;
-                            g_ShowDeleteBankEntryPopup = true;
-                            ImGui::OpenPopup("Delete Bank Entry?");
+
+                    if (bank.Type != EBankType::Shaders) {
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+                        if (ImGui::Button("Delete", ImVec2(60, 0))) {
+                            if (g_AppConfig.ShowBankDeleteConfirm) {
+                                g_ContextEntryIndex = bank.SelectedEntryIndex;
+                                g_ShowDeleteBankEntryPopup = true;
+                                ImGui::OpenPopup("Delete Bank Entry?");
+                            }
+                            else {
+                                DeleteBankEntry(&bank, bank.SelectedEntryIndex);
+                            }
                         }
-                        else {
-                            DeleteBankEntry(&bank, bank.SelectedEntryIndex);
-                        }
+                        ImGui::PopStyleColor();
                     }
-                    ImGui::PopStyleColor();
 
                     ImGui::Separator();
 
@@ -997,7 +1006,8 @@ static void DrawBankTab() {
                     else if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
                     else if (bank.Type == EBankType::Shaders) {DrawShaderProperties(e.ID);}
                     else if (bank.Type == EBankType::Graphics && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);}
-                }
+                    else if (bank.Type == EBankType::Fonts) { DrawFontProperties(e.ID); }
+                    }
                 ImGui::EndChild();
 
                 if (g_ShowType2SettingsPopup) {

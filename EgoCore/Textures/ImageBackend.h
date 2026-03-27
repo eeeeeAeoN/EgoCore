@@ -17,4 +17,7 @@
 #define STB_DXT_IMPLEMENTATION
 #include "stb_dxt.h"
 
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "imstb_truetype.h"
+
 #pragma warning(pop)

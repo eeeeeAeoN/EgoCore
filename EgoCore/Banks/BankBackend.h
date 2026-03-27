@@ -179,6 +179,7 @@ inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) 
         std::string upperFolder = folder;
         std::transform(upperFolder.begin(), upperFolder.end(), upperFolder.begin(), ::toupper);
         if (upperFolder.find("SHADER") != std::string::npos) return EBankType::Shaders;
+        if (upperFolder.find("FONT") != std::string::npos) return EBankType::Fonts;
     }
     if (folders.count("PARTICLE_MAIN_PC")) return EBankType::Effects;
     return EBankType::Unknown;
