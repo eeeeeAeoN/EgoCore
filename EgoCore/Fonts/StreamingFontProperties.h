@@ -22,11 +22,8 @@ inline void RebuildStringTexture(const char* text) {
     size_t len = strlen(text);
     if (len == 0) return;
 
-    // --- PASS 1: Calculate Tight Bounding Box & Overhang ---
-    int cursorX = 2; // 2px left padding
-    int maxPixelX = 2; // Tracks the furthest physical pixel drawn
-    int maxAscent = 0;
-    int maxDescent = 0;
+    int cursorX = 20;
+    int maxPixelX = 20;
 
     for (size_t i = 0; i < len; i++) {
         uint8_t charCode = (uint8_t)text[i];
@@ -41,10 +38,8 @@ inline void RebuildStringTexture(const char* text) {
                     uint32_t globalID = rawID - 1;
                     if (globalID < pixels.DecompressedMetrics.size()) {
                         const auto& m = pixels.DecompressedMetrics[globalID];
-
                         uint32_t adv = m.GetAdvance();
 
-                        // FABLE LOGIC: Space bypasses rendering, only advances cursor
                         if (charCode == 32) {
                             cursorX += (adv > 0 ? adv : meta.FontHeight / 3);
                             if (cursorX > maxPixelX) maxPixelX = cursorX;
@@ -53,13 +48,6 @@ inline void RebuildStringTexture(const char* text) {
 
                         int pitch = m.IsBigChar() ? 64 : 32;
                         int safeW = (std::min)((int)m.Width, pitch);
-                        int safeH = (std::min)((int)m.Height, pitch);
-
-                        int ascent = -m.OffsetY;
-                        if (ascent > maxAscent) maxAscent = ascent;
-
-                        int descent = m.OffsetY + safeH;
-                        if (descent > maxDescent) maxDescent = descent;
 
                         int rightEdge = cursorX + m.OffsetX + safeW;
                         if (rightEdge > maxPixelX) maxPixelX = rightEdge;
@@ -71,18 +59,16 @@ inline void RebuildStringTexture(const char* text) {
         }
     }
 
-    int totalWidth = maxPixelX + 2;
+    int totalWidth = maxPixelX + 20;
     if (totalWidth <= 4 || totalWidth > 4096) return;
 
-    int canvasHeight = maxAscent + maxDescent + 4;
-    int baselineY = maxAscent + 2;
-    if (canvasHeight <= 4) canvasHeight = meta.MaxHeight > 0 ? meta.MaxHeight : 32;
+    int canvasHeight = meta.MaxHeight > 0 ? meta.MaxHeight + 40 : 80;
+    int baselineY = 20;
 
-    // --- PASS 2: Build Draw Commands ---
     struct DrawCommand { int destX, destY, w, h, srcBlock, srcPitch; };
     std::vector<DrawCommand> drawCmds;
 
-    int currentX = 2;
+    int currentX = 20;
 
     for (size_t i = 0; i < len; i++) {
         uint8_t charCode = (uint8_t)text[i];
@@ -97,7 +83,6 @@ inline void RebuildStringTexture(const char* text) {
                     uint32_t globalID = rawID - 1;
                     if (globalID < pixels.DecompressedMetrics.size()) {
                         const auto& m = pixels.DecompressedMetrics[globalID];
-
                         uint32_t adv = m.GetAdvance();
 
                         if (charCode == 32) {
@@ -123,7 +108,6 @@ inline void RebuildStringTexture(const char* text) {
         }
     }
 
-    // --- PASS 3: Render to Texture ---
     std::vector<uint8_t> tgaBuffer(18 + (totalWidth * canvasHeight * 4), 0);
     tgaBuffer[2] = 2;
     tgaBuffer[12] = totalWidth & 0xFF; tgaBuffer[13] = (totalWidth >> 8) & 0xFF;
@@ -141,11 +125,16 @@ inline void RebuildStringTexture(const char* text) {
                 int dx = cmd.destX + x;
                 int dy = cmd.destY + y;
                 if (dx >= 0 && dx < totalWidth && dy >= 0 && dy < canvasHeight) {
-                    int outIdx = 18 + ((dy * totalWidth + dx) * 4);
-                    tgaBuffer[outIdx + 0] = 255;
-                    tgaBuffer[outIdx + 1] = 255;
-                    tgaBuffer[outIdx + 2] = 255;
-                    tgaBuffer[outIdx + 3] = alpha;
+
+                    if (alpha > 0) {
+                        int outIdx = 18 + ((dy * totalWidth + dx) * 4);
+                        tgaBuffer[outIdx + 0] = 255;
+                        tgaBuffer[outIdx + 1] = 255;
+                        tgaBuffer[outIdx + 2] = 255;
+
+                        int existingAlpha = tgaBuffer[outIdx + 3];
+                        tgaBuffer[outIdx + 3] = (alpha > existingAlpha) ? alpha : existingAlpha;
+                    }
                 }
             }
         }
@@ -193,15 +182,15 @@ inline void DrawStreamingFontProperties(LoadedBank* bank, int entryIdx) {
     ImGui::TextDisabled("Source File: %s", g_StreamingFontParser.Metadata.SourceName.c_str());
     ImGui::TextDisabled("Base Height: %u px | Max Height: %u px", g_StreamingFontParser.Metadata.FontHeight, g_StreamingFontParser.Metadata.MaxHeight);
 
-    // EXPLICITLY SHOW WEIGHT & ITALICS FOR THE USER
     ImGui::TextDisabled("Weight: %u | Italics: %s", g_StreamingFontParser.Metadata.FontWeight, g_StreamingFontParser.Metadata.Italics ? "Yes" : "No");
 
     ImGui::Dummy(ImVec2(0, 10));
     if (ImGui::Button("Replace with TTF", ImVec2(150, 30))) {
-        // PRE-FILL THE SLIDERS TO MATCH THE CURRENT FONT!
         g_StreamingFontBakeState.TargetPixelHeight = (float)g_StreamingFontParser.Metadata.FontHeight;
-        g_StreamingFontBakeState.Weight = g_StreamingFontParser.Metadata.FontWeight;
         g_StreamingFontBakeState.Italics = g_StreamingFontParser.Metadata.Italics;
+
+        g_StreamingFontBakeState.LetterSpacing = 0;
+        g_StreamingFontBakeState.BaselineOffset = 0;
 
         g_ShowStreamingFontImporter = true;
     }
@@ -211,7 +200,7 @@ inline void DrawStreamingFontProperties(LoadedBank* bank, int entryIdx) {
     ImGui::Dummy(ImVec2(0, 10));
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Live Font Renderer");
 
-    static char testString[256] = "Project Ego";
+    static char testString[256] = "Fable - The Lost Chapters";
     bool changed = ImGui::InputText("##TestString", testString, 256);
 
     if (changed || g_LastStreamingFontEntryID != e.ID) {

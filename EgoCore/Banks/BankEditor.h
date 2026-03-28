@@ -709,7 +709,7 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 //lod->AutoCalculateBounds();
                 std::vector<uint8_t> lodBytes = MeshCompiler::CompileSingleLOD(*lod);
 
-                // Apply the Ghost Buffer padding trick to BOTH Type 2 (Foliage) and Type 5 (Animated) meshes!
+                // Append the Ghost LOD Buffer
                 if ((e.Type == 2 || e.Type == 5) && i == staged.MeshLODs.size() - 1) {
                     C3DMeshContent ghostLOD = *lod;
 
@@ -840,18 +840,19 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             std::string compileError;
             std::vector<uint8_t> compiledBytes = ShaderCompiler::Compile(*staged.ShaderCode, sourceData, compileError);
 
-            printf("[Shader] Compiled size: %zu\n", compiledBytes.size());
-            if (!compileError.empty()) printf("[Shader] Error: %s\n", compileError.c_str());
-
             if (!compiledBytes.empty()) {
                 newBytes = compiledBytes;
                 e.InfoSize = 0;
             }
             else {
-                g_BankStatus = "Shader Compile Error: " + compileError;
+                // --- TRIGGER THE POPUP HERE ---
+                g_ShaderCompileError = compileError;
+                g_ShowShaderErrorPopup = true;
+
+                g_BankStatus = "Shader Compile Error: Check Popup";
                 continue;
             }
-        }
+}
 
         if (!newBytes.empty()) {
             bank->ModifiedEntryData[idx] = newBytes;
@@ -868,6 +869,8 @@ inline void FlushStagedEntries(LoadedBank* bank) {
 inline void SaveBigBank(LoadedBank* bank) {
 
     FlushStagedEntries(bank);
+
+    if (g_ShowShaderErrorPopup) return;
 
     if (bank->Type == EBankType::Text) {
         if (TextCompiler::CompileTextBank(bank)) {

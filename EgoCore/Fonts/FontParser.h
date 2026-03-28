@@ -6,13 +6,13 @@
 
 #pragma pack(push, 1)
 struct FableGlyph {
-    float Left;       // UV Left
-    float Top;        // UV Top
-    float Right;      // UV Right
-    float Bottom;     // UV Bottom
-    int16_t Offset;   // X-Offset
-    int16_t Width;    // Pixel Width
-    int16_t Advance;  // Cursor Advance
+    float Left;
+    float Top;
+    float Right;
+    float Bottom;
+    int16_t Offset;
+    int16_t Width;
+    int16_t Advance;
 };
 #pragma pack(pop)
 
@@ -35,7 +35,7 @@ struct CFontData {
     uint32_t MaxChar;
 
     std::vector<GlyphBank> GlyphBanks;
-    std::vector<FableGlyph> AllGlyphs; // <--- ADD THIS FLATTENED ARRAY
+    std::vector<FableGlyph> AllGlyphs;
 
     std::vector<uint8_t> RawTGAData;
 };
@@ -83,8 +83,6 @@ public:
         Data.MaxChar = *(uint32_t*)(&rawData[offset]); offset += 4;
 
         uint32_t bankCount = *(uint32_t*)(&rawData[offset]); offset += 4;
-
-        // 3. Read Glyph Arrays
         for (uint32_t i = 0; i < bankCount; ++i) {
             if (offset + 12 > maxOffset) break;
 
@@ -98,7 +96,6 @@ public:
                 bank.Glyphs.resize(bank.GlyphCount);
                 memcpy(bank.Glyphs.data(), &rawData[offset], glyphPayloadSize);
 
-                // Add the chunk to our master array so we don't have to search for it later!
                 Data.AllGlyphs.insert(Data.AllGlyphs.end(), bank.Glyphs.begin(), bank.Glyphs.end());
 
                 offset += glyphPayloadSize;
@@ -107,7 +104,6 @@ public:
         }
 
         if (offset + 4 <= maxOffset) {
-            // Read and skip the 4-byte Payload Size prefix Fable injects
             uint32_t tgaPayloadSize = *(uint32_t*)(&rawData[offset]);
             offset += 4;
 

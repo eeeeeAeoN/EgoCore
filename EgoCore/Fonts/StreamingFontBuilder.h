@@ -3,6 +3,8 @@
 #include "ImageBackend.h" 
 #include "StreamingFontParser.h"
 #include "BankBackend.h"
+#include "BigBankCompiler.h"
+#include "BankLoader.h"
 #include "FileDialogs.h"
 #include <minilzo.h>
 #include <vector>
@@ -13,9 +15,11 @@
 
 struct StreamingFontBakeOptions {
     std::string SourceTTFPath = "";
-    float TargetPixelHeight = 32.0f;
-    int Weight = 400;
+    float TargetPixelHeight = 24.0f;
+    int LetterSpacing = 1;
+    int BaselineOffset = 0;
     bool Italics = false;
+    int Weight = 0;
 };
 
 class CStreamingFontBuilder {
@@ -25,7 +29,6 @@ public:
 
         if (lzo_init() != LZO_E_OK) return false;
 
-        // 1. Read TTF File
         std::ifstream ttfFile(opts.SourceTTFPath, std::ios::binary | std::ios::ate);
         if (!ttfFile.is_open()) return false;
         std::streamsize ttfSize = ttfFile.tellg();
@@ -43,13 +46,11 @@ public:
 
         int baseline = (int)std::round(ascent * scale);
 
-        // --- THE FIX: START FROM THE EXISTING PAYLOAD INSTEAD OF SCRATCH ---
         std::vector<CStreamingGlyphData> globalMetrics = existingPixelData.DecompressedMetrics;
         std::vector<uint8_t> rawPixelBuffer = existingPixelData.BinaryData;
 
         std::vector<uint32_t> charToGlobalID(65536, 0);
 
-        // 2. Rasterize Glyphs and Append Blocks
         for (int cp = 32; cp <= 255; cp++) {
             int w, h, xoff, yoff;
             unsigned char* bitmap = stbtt_GetCodepointBitmap(&font, 0, scale, cp, &w, &h, &xoff, &yoff);
@@ -58,11 +59,16 @@ public:
             stbtt_GetCodepointHMetrics(&font, cp, &advance, &lsb);
             int scaledAdvance = (int)std::round(advance * scale);
 
+            scaledAdvance += opts.LetterSpacing;
+
+            if (scaledAdvance < xoff + w + opts.LetterSpacing) {
+                scaledAdvance = xoff + w + opts.LetterSpacing;
+            }
+
             bool isBigChar = (w >= 32 || h >= 32);
             int blockSize = isBigChar ? 4096 : 1024;
             int blockPitch = isBigChar ? 64 : 32;
 
-            // Calculate memory offset based on the CURRENT size of the appended buffer
             uint32_t memOffsetKB = (uint32_t)(rawPixelBuffer.size() / 1024);
 
             size_t startPx = rawPixelBuffer.size();
@@ -79,7 +85,7 @@ public:
 
             CStreamingGlyphData m;
             m.OffsetX = (int8_t)xoff;
-            m.OffsetY = (int8_t)(baseline + yoff);
+            m.OffsetY = (int8_t)(baseline + yoff + opts.BaselineOffset);
             m.Width = (uint8_t)(std::min)(w, 255);
             m.Height = (uint8_t)(std::min)(h, 255);
 
@@ -87,11 +93,9 @@ public:
             m.MetricB = (memOffsetKB & 0x3FFFFF) | ((advClamped & 0xFF) << 23) | (isBigChar ? 0x80000000 : 0);
 
             globalMetrics.push_back(m);
-            // charToGlobalID maps codepoint to the 1-based index Fable expects
             charToGlobalID[cp] = (uint32_t)globalMetrics.size();
         }
 
-        // 3. Build Type 0 Metadata Payload
         auto write32 = [&](std::vector<uint8_t>& buf, uint32_t v) { uint8_t* p = (uint8_t*)&v; buf.insert(buf.end(), p, p + 4); };
         auto write8 = [&](std::vector<uint8_t>& buf, uint8_t v) { buf.push_back(v); };
 
@@ -147,7 +151,6 @@ public:
         for (uint32_t off : offsetTable) write32(out_Type0, off);
         out_Type0.insert(out_Type0.end(), bankData.begin(), bankData.end());
 
-        // 4. Build Type 2 Pixel Payload (Compressing the COMBINED metrics)
         out_Type2.clear();
         std::vector<uint8_t> compressedMetrics;
         std::vector<uint32_t> chunkIndices;
@@ -170,7 +173,7 @@ public:
         chunkIndices.push_back((uint32_t)compressedMetrics.size());
 
         uint32_t GlyphDataNum = (uint32_t)globalMetrics.size();
-        uint32_t AdjustmentCount = existingPixelData.AdjustmentCount; // KEEP OLD KERNINGS!
+        uint32_t AdjustmentCount = existingPixelData.AdjustmentCount;
         uint32_t CompressedDataSize = (uint32_t)compressedMetrics.size();
         uint32_t ChunkSize = 64;
 
@@ -186,7 +189,6 @@ public:
         out_Type2.insert(out_Type2.end(), compressedMetrics.begin(), compressedMetrics.end());
         for (uint32_t idx : chunkIndices) write32(out_Type2, idx);
 
-        // Write the existing Kerning/Adjustment data back so other fonts don't break
         if (!existingPixelData.Adjustments.empty()) {
             out_Type2.insert(out_Type2.end(), existingPixelData.Adjustments.begin(), existingPixelData.Adjustments.end());
         }
@@ -207,29 +209,64 @@ inline void DrawStreamingFontRebuilderModal(LoadedBank* activeBank) {
 
     if (ImGui::BeginPopupModal("Rebuild Streaming Font", &g_ShowStreamingFontImporter, ImGuiWindowFlags_AlwaysAutoResize)) {
 
-        if (activeBank && activeBank->SelectedEntryIndex != -1) {
-            ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "Warning: This appends your font to the shared Type 2 payload.");
+        static bool s_ShowWarning = false;
+
+        if (!s_ShowWarning) {
+            if (activeBank && activeBank->SelectedEntryIndex != -1) {
+                ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "Warning: This appends your font to the shared Type 2 payload.");
+            }
+            ImGui::Separator();
+
+            std::string displayPath = g_StreamingFontBakeState.SourceTTFPath.empty() ? "None Selected" : std::filesystem::path(g_StreamingFontBakeState.SourceTTFPath).filename().string();
+            ImGui::Text("File: %s", displayPath.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Browse##StreamTTF")) {
+                std::string path = OpenFileDialog("TrueType Fonts\0*.ttf\0All Files\0*.*\0");
+                if (!path.empty()) g_StreamingFontBakeState.SourceTTFPath = path;
+            }
+
+            ImGui::Dummy(ImVec2(0, 10));
+            ImGui::SliderFloat("Pixel Height", &g_StreamingFontBakeState.TargetPixelHeight, 8.0f, 48.0f, "%.0f px");
+
+            if (g_StreamingFontBakeState.TargetPixelHeight > 26.0f) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Warning: Wide letters (W, M) may exceed the 32px PC engine limit and clip.");
+            }
+
+            ImGui::SliderInt("Letter Spacing", &g_StreamingFontBakeState.LetterSpacing, -5, 10, "%d px");
+
+            ImGui::SliderInt("Vertical Offset", &g_StreamingFontBakeState.BaselineOffset, -20, 20, "%d px");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Positive values push the text down; negative values pull it up.");
+
+            ImGui::Checkbox("Is Italic", &g_StreamingFontBakeState.Italics);
+
+            ImGui::Dummy(ImVec2(0, 15));
+            ImGui::Separator();
+
+            if (ImGui::Button("Bake & Replace", ImVec2(120, 0))) {
+                if (!g_StreamingFontBakeState.SourceTTFPath.empty() && activeBank && activeBank->SelectedEntryIndex != -1) {
+                    s_ShowWarning = true;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                g_ShowStreamingFontImporter = false;
+                s_ShowWarning = false;
+                ImGui::CloseCurrentPopup();
+            }
         }
-        ImGui::Separator();
+        else {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "READ BEFORE PROCEEDING");
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::Text("Importing a streaming font uses an 'Append' strategy.");
+            ImGui::Text("- The new font pixels will be appended to the shared Type 2 payload.");
+            ImGui::Text("- The old pixels will become 'dead bytes' in the archive.");
+            ImGui::Text("- This action will INSTANTLY recompile the entire subbank.");
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Please ensure you have backed up 'fonts.big' before continuing!");
+            ImGui::Dummy(ImVec2(0, 15));
 
-        std::string displayPath = g_StreamingFontBakeState.SourceTTFPath.empty() ? "None Selected" : std::filesystem::path(g_StreamingFontBakeState.SourceTTFPath).filename().string();
-        ImGui::Text("File: %s", displayPath.c_str());
-        ImGui::SameLine();
-        if (ImGui::Button("Browse##StreamTTF")) {
-            std::string path = OpenFileDialog("TrueType Fonts\0*.ttf\0All Files\0*.*\0");
-            if (!path.empty()) g_StreamingFontBakeState.SourceTTFPath = path;
-        }
-
-        ImGui::Dummy(ImVec2(0, 10));
-        ImGui::SliderFloat("Pixel Height", &g_StreamingFontBakeState.TargetPixelHeight, 8.0f, 72.0f, "%.0f px");
-        ImGui::SliderInt("Weight", &g_StreamingFontBakeState.Weight, 100, 900);
-        ImGui::Checkbox("Is Italic", &g_StreamingFontBakeState.Italics);
-
-        ImGui::Dummy(ImVec2(0, 15));
-        ImGui::Separator();
-
-        if (ImGui::Button("Bake & Replace", ImVec2(120, 0))) {
-            if (!g_StreamingFontBakeState.SourceTTFPath.empty() && activeBank && activeBank->SelectedEntryIndex != -1) {
+            if (ImGui::Button("I Understand, Proceed", ImVec2(180, 0))) {
 
                 int type0Idx = activeBank->SelectedEntryIndex;
                 int type2Idx = -1;
@@ -242,7 +279,6 @@ inline void DrawStreamingFontRebuilderModal(LoadedBank* activeBank) {
                 }
 
                 if (type0Idx != -1 && type2Idx != -1) {
-                    // WE MUST EXTRACT THE OLD TYPE 2 DATA TO APPEND TO IT
                     std::vector<uint8_t> t2Data;
                     if (activeBank->ModifiedEntryData.count(type2Idx)) t2Data = activeBank->ModifiedEntryData[type2Idx];
                     else {
@@ -260,19 +296,26 @@ inline void DrawStreamingFontRebuilderModal(LoadedBank* activeBank) {
                         std::string fontName = activeBank->Entries[type0Idx].Name;
 
                         if (CStreamingFontBuilder::BakeFont(g_StreamingFontBakeState, fontName, tempParser.PixelData, payload0, payload2)) {
+
                             activeBank->ModifiedEntryData[type0Idx] = payload0;
                             activeBank->ModifiedEntryData[type2Idx] = payload2;
 
-                            g_StreamingFontParser.CachedPixelDataID = -1;
-                            g_StreamingFontParser.IsParsed = false;
+                            if (BigBankCompiler::Compile(activeBank)) {
+                                ReloadBankInPlace(activeBank);
 
-                            extern int g_LastStreamingFontEntryID;
-                            g_LastStreamingFontEntryID = -1;
+                                g_StreamingFontParser.CachedPixelDataID = -1;
+                                g_StreamingFontParser.IsParsed = false;
+                                extern int g_LastStreamingFontEntryID;
+                                g_LastStreamingFontEntryID = -1;
 
-                            UpdateFilter(*activeBank);
-                            SelectEntry(activeBank, type0Idx);
+                                UpdateFilter(*activeBank);
+                                SelectEntry(activeBank, type0Idx);
 
-                            g_BankStatus = "Streaming Font Appended and Rebuilt Successfully!";
+                                g_BankStatus = "Streaming Font Appended, Saved to .BIG, and Reloaded!";
+                            }
+                            else {
+                                g_BankStatus = "Error: Font baked to RAM, but failed to compile the .BIG file.";
+                            }
                         }
                         else {
                             g_BankStatus = "Error: Failed to bake Streaming TTF.";
@@ -285,16 +328,19 @@ inline void DrawStreamingFontRebuilderModal(LoadedBank* activeBank) {
                 else {
                     g_BankStatus = "Error: Could not locate the paired Type 2 entry below this font.";
                 }
+                s_ShowWarning = false;
+                g_ShowStreamingFontImporter = false;
+                ImGui::CloseCurrentPopup();
             }
-            g_ShowStreamingFontImporter = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-            g_ShowStreamingFontImporter = false;
-            ImGui::CloseCurrentPopup();
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                s_ShowWarning = false;
+            }
         }
 
         ImGui::EndPopup();
+    }
+    else {
     }
 }

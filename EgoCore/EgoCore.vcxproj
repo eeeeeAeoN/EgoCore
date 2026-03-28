@@ -38,9 +38,12 @@
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
-    <ClInclude Include="FontBuilder.h" />
-    <ClInclude Include="FontParser.h" />
-    <ClInclude Include="FontProperties.h" />
+    <ClInclude Include="Fonts\FontBuilder.h" />
+    <ClInclude Include="Fonts\FontParser.h" />
+    <ClInclude Include="Fonts\FontProperties.h" />
+    <ClInclude Include="Fonts\StreamingFontBuilder.h" />
+    <ClInclude Include="Fonts\StreamingFontParser.h" />
+    <ClInclude Include="Fonts\StreamingFontProperties.h" />
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
@@ -52,12 +55,9 @@
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="ShaderCompiler.h" />
-    <ClInclude Include="ShaderParser.h" />
-    <ClInclude Include="ShaderProperties.h" />
-    <ClInclude Include="StreamingFontBuilder.h" />
-    <ClInclude Include="StreamingFontParser.h" />
-    <ClInclude Include="StreamingFontProperties.h" />
+    <ClInclude Include="Shaders\ShaderCompiler.h" />
+    <ClInclude Include="Shaders\ShaderParser.h" />
+    <ClInclude Include="Shaders\ShaderProperties.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
     <ClInclude Include="Textures\ImageBackend.h" />
     <ClInclude Include="Textures\TextureBuilder.h" />
@@ -211,6 +211,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

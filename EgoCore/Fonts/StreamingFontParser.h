@@ -25,7 +25,6 @@ struct CStreamingGlyphData {
     uint8_t Height;
     uint32_t MetricB;
 
-    // Fixed: Bit 22 is padding, block index is strictly 22 bits (0-21)
     uint32_t GetMemOffset() const { return MetricB & 0x3FFFFF; }
     uint32_t GetAdvance() const { return (MetricB >> 23) & 0xFF; }
     bool IsBigChar() const { return (MetricB & 0x80000000) != 0; }

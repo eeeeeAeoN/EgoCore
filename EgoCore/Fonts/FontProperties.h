@@ -3,14 +3,13 @@
 #include "BankBackend.h"
 #include "FontParser.h"
 #include "FontBuilder.h"
-#include "ConfigBackend.h" // Fixes g_AppConfig
-#include "ImageBackend.h"  // Fixes stb_image
-#include <d3d11.h>         // Fixes ID3D11ShaderResourceView
+#include "ConfigBackend.h" 
+#include "ImageBackend.h" 
+#include <d3d11.h>        
 #include <fstream>
 
 extern ID3D11Device* g_pd3dDevice;
 
-// Inlined DirectX 11 Texture Loader (No separate TextureLoader.h needed)
 inline bool LoadTextureFromMemory(const std::vector<uint8_t>& rawData, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height) {
     if (rawData.empty()) return false;
 
@@ -61,11 +60,9 @@ inline bool LoadTextureFromMemory(const std::vector<uint8_t>& rawData, ID3D11Sha
     return true;
 }
 
-// Global parser instance
 inline CFontParser g_FontParser;
 inline int g_LastFontEntryID = -1;
 
-// Global state for the active font texture
 inline ID3D11ShaderResourceView* g_FontAtlasSRV = nullptr;
 inline int g_FontAtlasWidth = 0;
 inline int g_FontAtlasHeight = 0;
@@ -76,36 +73,18 @@ inline void DrawFontProperties(int currentEntryID) {
         return;
     }
 
-    // --- THE STREAMING WARNING ---
-    if (g_FontParser.IsStreaming) {
-        ImGui::Dummy(ImVec2(0, 20));
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Streaming Font Detected");
-        ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 5));
-        ImGui::TextWrapped("This font uses Lionhead's proprietary dynamic LZO glyph streaming architecture.");
-        ImGui::TextDisabled("Streaming fonts are currently not supported for editing or viewing.");
-        return;
-    }
-    // -----------------------------
-
     const auto& data = g_FontParser.Data;
 
-    // --- Load the texture ONLY when the user selects a new font ---
     if (g_LastFontEntryID != currentEntryID) {
-        // Clean up the old texture from the GPU
         if (g_FontAtlasSRV) {
             g_FontAtlasSRV->Release();
             g_FontAtlasSRV = nullptr;
         }
-
-        // Upload the new one
         if (!data.RawTGAData.empty()) {
             LoadTextureFromMemory(data.RawTGAData, &g_FontAtlasSRV, &g_FontAtlasWidth, &g_FontAtlasHeight);
         }
         g_LastFontEntryID = currentEntryID;
     }
-    // --------------------------------------------------------------
-
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Font Metadata");
     ImGui::Separator();
 
@@ -121,7 +100,6 @@ inline void DrawFontProperties(int currentEntryID) {
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Glyph Banks (%zu)", data.GlyphBanks.size());
     ImGui::Separator();
 
-    // Render the Glyph Tables
     for (size_t i = 0; i < data.GlyphBanks.size(); ++i) {
         if (ImGui::TreeNode((void*)(intptr_t)i, "Bank %u (Total Glyphs: %u)", data.GlyphBanks[i].BankIndex, data.GlyphBanks[i].GlyphCount)) {
 
@@ -157,7 +135,6 @@ inline void DrawFontProperties(int currentEntryID) {
     ImGui::Separator();
 
     if (g_FontAtlasSRV) {
-        // Draw the texture in ImGui with a dark background rectangle
         ImVec2 pos = ImGui::GetCursorScreenPos();
         ImVec2 size = ImVec2((float)g_FontAtlasWidth, (float)g_FontAtlasHeight);
 
@@ -188,14 +165,9 @@ inline void DrawFontProperties(int currentEntryID) {
         float cursorX = startPos.x + 10.0f;
         float cursorY = startPos.y + 10.0f;
 
-        // Loop through the typed string and draw each character
         for (int i = 0; previewText[i] != '\0'; i++) {
             unsigned char c = previewText[i];
-
-            // Calculate the exact index in our flattened array
             int glyphIndex = c - data.MinChar;
-
-            // Ensure the character is within the font's supported range
             if (glyphIndex >= 0 && glyphIndex < data.AllGlyphs.size()) {
                 const auto& targetGlyph = data.AllGlyphs[glyphIndex];
 
@@ -219,8 +191,6 @@ inline void DrawFontProperties(int currentEntryID) {
     }
 
     ImGui::Dummy(ImVec2(0, 10));
-
-    // Add the "Replace with TTF" button
     ImGui::Dummy(ImVec2(0, 10));
     if (ImGui::Button("Replace with TTF", ImVec2(150, 30))) {
         g_ShowFontImporter = true;
@@ -228,23 +198,6 @@ inline void DrawFontProperties(int currentEntryID) {
 
     ImGui::SameLine();
 
-    // Export TGA Button
-    if (!data.RawTGAData.empty()) {
-        if (ImGui::Button("Export TGA to Disk", ImVec2(150, 30))) {
-            std::string outPath = g_AppConfig.GameRootPath + "\\" + data.FontName + "_atlas.tga";
-            std::ofstream outFile(outPath, std::ios::binary);
-            if (outFile.is_open()) {
-                outFile.write((const char*)data.RawTGAData.data(), data.RawTGAData.size());
-                outFile.close();
-                g_BankStatus = "Exported: " + data.FontName + "_atlas.tga";
-            }
-            else {
-                g_BankStatus = "Error: Could not write TGA file.";
-            }
-        }
-    }
-
-    // Render the actual popup (pass the global active bank)
     LoadedBank* activeBank = nullptr;
     if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
         activeBank = &g_OpenBanks[g_ActiveBankIndex];

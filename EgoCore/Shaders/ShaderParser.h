@@ -9,8 +9,12 @@
 enum class EShaderType {
     Unknown,
     VertexShader_1_1,
+    VertexShader_2_0,
+    VertexShader_3_0,
     PixelShader_1_1,
-    PixelShader_1_4
+    PixelShader_1_4,
+    PixelShader_2_0,
+    PixelShader_3_0
 };
 
 struct CShaderData {
@@ -52,8 +56,12 @@ public:
             if (Data.ByteSize >= 4) {
                 uint32_t token = *(uint32_t*)(Data.Bytecode.data());
                 if (token == 0xFFFE0101) Data.Type = EShaderType::VertexShader_1_1;
+                else if (token == 0xFFFE0200) Data.Type = EShaderType::VertexShader_2_0;
+                else if (token == 0xFFFE0300) Data.Type = EShaderType::VertexShader_3_0;
                 else if (token == 0xFFFF0101) Data.Type = EShaderType::PixelShader_1_1;
                 else if (token == 0xFFFF0104) Data.Type = EShaderType::PixelShader_1_4;
+                else if (token == 0xFFFF0200) Data.Type = EShaderType::PixelShader_2_0;
+                else if (token == 0xFFFF0300) Data.Type = EShaderType::PixelShader_3_0;
             }
         }
         offset += Data.ByteSize;

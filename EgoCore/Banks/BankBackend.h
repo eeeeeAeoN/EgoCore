@@ -23,6 +23,9 @@ namespace fs = std::filesystem;
 inline bool g_ShowSuccessPopup = false;
 inline std::string g_SuccessMessage = "";
 
+inline std::string g_ShaderCompileError;
+inline bool g_ShowShaderErrorPopup = false;
+
 enum class EBankType {
     Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio
 };

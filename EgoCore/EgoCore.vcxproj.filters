@@ -234,31 +234,31 @@
     <ClInclude Include="Textures\TextureBuilder.h">
       <Filter>Source Files\Textures</Filter>
     </ClInclude>
-    <ClInclude Include="ShaderParser.h">
+    <ClInclude Include="Shaders\ShaderCompiler.h">
       <Filter>Source Files\Shaders</Filter>
     </ClInclude>
-    <ClInclude Include="ShaderProperties.h">
+    <ClInclude Include="Shaders\ShaderParser.h">
       <Filter>Source Files\Shaders</Filter>
     </ClInclude>
-    <ClInclude Include="ShaderCompiler.h">
+    <ClInclude Include="Shaders\ShaderProperties.h">
       <Filter>Source Files\Shaders</Filter>
     </ClInclude>
-    <ClInclude Include="FontParser.h">
+    <ClInclude Include="Fonts\FontBuilder.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
-    <ClInclude Include="FontProperties.h">
+    <ClInclude Include="Fonts\FontParser.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
-    <ClInclude Include="FontBuilder.h">
+    <ClInclude Include="Fonts\FontProperties.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
-    <ClInclude Include="StreamingFontParser.h">
+    <ClInclude Include="Fonts\StreamingFontBuilder.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
-    <ClInclude Include="StreamingFontProperties.h">
+    <ClInclude Include="Fonts\StreamingFontParser.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
-    <ClInclude Include="StreamingFontBuilder.h">
+    <ClInclude Include="Fonts\StreamingFontProperties.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
   </ItemGroup>

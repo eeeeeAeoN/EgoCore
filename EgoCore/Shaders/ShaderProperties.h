@@ -17,18 +17,24 @@ inline void DrawShaderProperties(int currentEntryID) {
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Shader Information");
     ImGui::Separator();
 
-    if (data.Type == EShaderType::VertexShader_1_1) {
-        ImGui::Text("Type: "); ImGui::SameLine(); ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Vertex Shader (vs_1_1)");
-    }
-    else if (data.Type == EShaderType::PixelShader_1_1) {
-        ImGui::Text("Type: "); ImGui::SameLine(); ImGui::TextColored(ImVec4(0.2f, 0.6f, 1.0f, 1.0f), "Pixel Shader (ps_1_1)");
-    }
-    else if (data.Type == EShaderType::PixelShader_1_4) {
-        ImGui::Text("Type: "); ImGui::SameLine(); ImGui::TextColored(ImVec4(0.8f, 0.4f, 1.0f, 1.0f), "Pixel Shader (ps_1_4)");
-    }
-    else {
-        ImGui::Text("Type: "); ImGui::SameLine(); ImGui::TextColored(ImVec4(0.8f, 0.2f, 0.2f, 1.0f), "Unknown Bytecode Format");
-    }
+    ImGui::Text("Type: "); ImGui::SameLine();
+
+    if (data.Type == EShaderType::VertexShader_1_1)
+        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Vertex Shader (vs_1_1)");
+    else if (data.Type == EShaderType::VertexShader_2_0)
+        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.0f), "Vertex Shader (vs_2_0)");
+    else if (data.Type == EShaderType::VertexShader_3_0)
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "Vertex Shader (vs_3_0)");
+    else if (data.Type == EShaderType::PixelShader_1_1)
+        ImGui::TextColored(ImVec4(0.2f, 0.6f, 1.0f, 1.0f), "Pixel Shader (ps_1_1)");
+    else if (data.Type == EShaderType::PixelShader_1_4)
+        ImGui::TextColored(ImVec4(0.8f, 0.4f, 1.0f, 1.0f), "Pixel Shader (ps_1_4)");
+    else if (data.Type == EShaderType::PixelShader_2_0)
+        ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "Pixel Shader (ps_2_0)");
+    else if (data.Type == EShaderType::PixelShader_3_0)
+        ImGui::TextColored(ImVec4(1.0f, 0.2f, 1.0f, 1.0f), "Pixel Shader (ps_3_0)");
+    else
+        ImGui::TextColored(ImVec4(0.8f, 0.2f, 0.2f, 1.0f), "Unknown Bytecode Format");
 
     ImGui::Text("Bytecode Size: %u bytes", data.ByteSize);
 
@@ -66,7 +72,6 @@ inline void DrawShaderProperties(int currentEntryID) {
     ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Disassembly");
     ImGui::Separator();
 
-    // Setup the text editor ONLY when the selected shader changes
     if (g_LastShaderEntryID != currentEntryID) {
         g_ShaderTextEditor.SetLanguageDefinition(TextEditor::LanguageDefinition::HLSL());
         g_ShaderTextEditor.SetPalette(TextEditor::GetDarkPalette());
@@ -75,6 +80,5 @@ inline void DrawShaderProperties(int currentEntryID) {
         g_LastShaderEntryID = currentEntryID;
     }
 
-    // Render the editor in the remaining space
     g_ShaderTextEditor.Render("ShaderAssemblyEditor", ImVec2(0, 0), true);
 }

@@ -18,19 +18,18 @@ struct FontBakeOptions {
     bool Italics = false;
 };
 
-// Exact Targa 18-Byte Header Fable expects (Top-Down, 32-bit ARGB)
 #pragma pack(push, 1)
 struct FableTGAHeader {
     uint8_t  IDLength = 0;
     uint8_t  ColorMapType = 0;
-    uint8_t  ImageType = 2; // Uncompressed True-Color
+    uint8_t  ImageType = 2;
     uint8_t  ColorMapSpec[5] = { 0, 0, 0, 0, 0 };
     uint16_t XOrigin = 0;
     uint16_t YOrigin = 0;
     uint16_t Width;
     uint16_t Height;
     uint8_t  PixelDepth = 32;
-    uint8_t  ImageDescriptor = 0x28; // 0x28 = Top-down + 8-bit Alpha
+    uint8_t  ImageDescriptor = 0x28;
 };
 #pragma pack(pop)
 
@@ -39,7 +38,6 @@ public:
     static bool BakeFont(const FontBakeOptions& opts, const std::string& fontName, std::vector<uint8_t>& out_BigPayload) {
         if (opts.SourceTTFPath.empty()) return false;
 
-        // 1. Read TTF File
         std::ifstream ttfFile(opts.SourceTTFPath, std::ios::binary | std::ios::ate);
         if (!ttfFile.is_open()) return false;
         std::streamsize ttfSize = ttfFile.tellg();
@@ -47,7 +45,6 @@ public:
         std::vector<uint8_t> ttfBuffer(ttfSize);
         if (!ttfFile.read((char*)ttfBuffer.data(), ttfSize)) return false;
 
-        // 2. Extract Vertical Metrics
         stbtt_fontinfo font;
         if (!stbtt_InitFont(&font, ttfBuffer.data(), stbtt_GetFontOffsetForIndex(ttfBuffer.data(), 0))) return false;
 
@@ -55,12 +52,10 @@ public:
         int ascent, descent, lineGap;
         stbtt_GetFontVMetrics(&font, &ascent, &descent, &lineGap);
 
-        // Fable strictly maps UVs to the max cell height, so we pad the characters manually
         int baseline = (int)std::round(ascent * scale);
         int cellHeight = (int)std::round((ascent - descent + lineGap) * scale);
         if (cellHeight <= 0) cellHeight = (int)opts.TargetPixelHeight;
 
-        // 3. Extract Bitmaps and Kerning (ASCII 32 to 127 = 96 Chars)
         struct GlyphInfo { int w, h, xoff, yoff, advance; unsigned char* bitmap; };
         std::vector<GlyphInfo> glyphs(96);
         for (int i = 0; i < 96; i++) {
@@ -71,7 +66,6 @@ public:
             g.advance = (int)std::round(adv * scale);
         }
 
-        // 4. Determine Optimal Power-of-Two Atlas Size
         int texSize = 128;
         int cursorX = 0, cursorY = 0;
         while (texSize <= 4096) {
@@ -95,7 +89,6 @@ public:
             return false;
         }
 
-        // 5. Draw the Texture and Calculate UVs
         std::vector<uint8_t> atlas(texSize * texSize, 0);
         cursorX = 0; cursorY = 0;
         std::vector<FableGlyph> fableGlyphs(96);
@@ -127,7 +120,7 @@ public:
             fg.Top = (float)cursorY / (float)texSize;
             fg.Right = (float)(cursorX + padW) / (float)texSize;
             fg.Bottom = (float)(cursorY + cellHeight + 2) / (float)texSize;
-            fg.Offset = (int16_t)g.xoff - 1; // Compensate for our physical 1px padding
+            fg.Offset = (int16_t)g.xoff - 1;
             fg.Width = padW;
             fg.Advance = (int16_t)g.advance;
 
@@ -135,7 +128,6 @@ public:
             cursorX += padW;
         }
 
-        // 6. Convert to 32-bit Targa File
         std::vector<uint8_t> tgaData;
         FableTGAHeader tgaHeader;
         tgaHeader.Width = texSize;
@@ -146,13 +138,12 @@ public:
 
         for (int i = 0; i < texSize * texSize; i++) {
             uint8_t alpha = atlas[i];
-            tgaData.push_back(255);   // Blue
-            tgaData.push_back(255);   // Green
-            tgaData.push_back(255);   // Red
-            tgaData.push_back(alpha); // Alpha
+            tgaData.push_back(255);   
+            tgaData.push_back(255);   
+            tgaData.push_back(255);   
+            tgaData.push_back(alpha); 
         }
 
-        // 7. Assemble Fable .BIG Payload
         auto write32 = [&](uint32_t v) { uint8_t* p = (uint8_t*)&v; out_BigPayload.insert(out_BigPayload.end(), p, p + 4); };
         auto write8 = [&](uint8_t v) { out_BigPayload.push_back(v); };
 
@@ -165,9 +156,9 @@ public:
         write32(cellHeight);
         write32(texSize);
         write32(texSize);
-        write32(32);  // MinChar
-        write32(127); // MaxChar
-        write32(2);   // Fable strictly expects these 96 chars split into exactly 2 Banks
+        write32(32);  
+        write32(127); 
+        write32(2);   
 
         auto writeBank = [&](uint32_t index, uint32_t start, uint32_t count, int offset) {
             write32(index);
@@ -179,11 +170,8 @@ public:
             }
             };
 
-        // --- UPDATE THESE TWO LINES ---
-        writeBank(0, 32, 32, 0);   // Bank 0: ASCII 32 to 63 (32 chars)
-        writeBank(1, 64, 64, 32);  // Bank 1: ASCII 64 to 127 (64 chars)
-        // ------------------------------
-
+        writeBank(0, 32, 32, 0);
+        writeBank(1, 64, 64, 32);
         write32((uint32_t)tgaData.size());
         out_BigPayload.insert(out_BigPayload.end(), tgaData.begin(), tgaData.end());
 
@@ -191,7 +179,6 @@ public:
     }
 };
 
-// ImGui State & Popup
 inline FontBakeOptions g_FontBakeState;
 inline bool g_ShowFontImporter = false;
 
@@ -220,7 +207,6 @@ inline void DrawFontRebuilderModal(LoadedBank* activeBank) {
 
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::SliderFloat("Pixel Height", &g_FontBakeState.TargetPixelHeight, 8.0f, 72.0f, "%.0f px");
-        ImGui::SliderInt("Weight", &g_FontBakeState.Weight, 100, 900);
         ImGui::Checkbox("Is Italic", &g_FontBakeState.Italics);
 
         ImGui::Dummy(ImVec2(0, 15));
@@ -238,10 +224,8 @@ inline void DrawFontRebuilderModal(LoadedBank* activeBank) {
                     UpdateFilter(*activeBank);
                     SelectEntry(activeBank, idx);
 
-                    // --- ADD THIS LINE TO FORCE TEXTURE RELOAD ---
                     extern int g_LastFontEntryID;
                     g_LastFontEntryID = -1;
-                    // ---------------------------------------------
 
                     g_BankStatus = "Font Replaced Successfully!";
                 }

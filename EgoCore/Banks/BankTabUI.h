@@ -316,7 +316,7 @@ static void DrawBankTab() {
                 }
 
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
-                    if (ImGui::IsKeyPressed(ImGuiKey_Delete) && bank.Type != EBankType::Shaders) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_Delete) && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
                         if (g_AppConfig.ShowBankDeleteConfirm) {
                             g_ContextEntryIndex = bank.SelectedEntryIndex;
                             g_ShowDeleteBankEntryPopup = true;
@@ -567,7 +567,11 @@ static void DrawBankTab() {
                             if (isStaged || isModified) ImGui::PopStyleColor();
 
                             if (ImGui::BeginPopupContextItem()) {
-                                if (bank.Type != EBankType::Shaders) {
+                                if (bank.Type == EBankType::Shaders || bank.Type == EBankType::Fonts) {
+                                    ImGui::TextDisabled("Duplicate (Locked for %s)", bank.Type == EBankType::Shaders ? "Shaders" : "Fonts");
+                                    ImGui::TextDisabled("Delete (Locked for %s)", bank.Type == EBankType::Shaders ? "Shaders" : "Fonts");
+                                }
+                                else {
                                     if (ImGui::MenuItem("Duplicate Entry")) {
                                         DuplicateBankEntry(&bank, idx);
                                         g_ScrollToSelected = true;
@@ -582,9 +586,6 @@ static void DrawBankTab() {
                                             DeleteBankEntry(&bank, idx);
                                         }
                                     }
-                                }
-                                else {
-                                    ImGui::TextDisabled("Locked for Shaders");
                                 }
                                 ImGui::EndPopup();
                             }
@@ -679,7 +680,7 @@ static void DrawBankTab() {
 
 
 
-                    if (bank.Type != EBankType::Shaders) {
+                    if (bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
                         ImGui::SameLine();
                         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
                         if (ImGui::Button("Delete", ImVec2(60, 0))) {
@@ -1010,7 +1011,6 @@ static void DrawBankTab() {
                         DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }
                     else if (bank.Type == EBankType::Fonts) {
-                        // --- NEW UI ROUTING LOGIC ---
                         std::string subBank = "";
                         if (bank.ActiveSubBankIndex >= 0 && bank.ActiveSubBankIndex < bank.SubBanks.size()) {
                             subBank = bank.SubBanks[bank.ActiveSubBankIndex].Name;
@@ -1025,10 +1025,36 @@ static void DrawBankTab() {
                         else {
                             DrawFontProperties(e.ID);
                         }
-                        // ----------------------------
                     }
                 }
                 ImGui::EndChild();
+
+                if (g_ShowShaderErrorPopup) {
+                    ImGui::OpenPopup("Shader Compilation Error");
+                    g_ShowShaderErrorPopup = false;
+                }
+
+                if (ImGui::BeginPopupModal("Shader Compilation Error", NULL, ImGuiWindowFlags_None)) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "D3DAssemble Failed:");
+                    ImGui::Separator();
+
+                    ImGui::SetNextWindowSizeConstraints(ImVec2(300, 150), ImVec2(800, 600));
+
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
+                    ImGui::InputTextMultiline("##shader_err",
+                        (char*)g_ShaderCompileError.c_str(),
+                        g_ShaderCompileError.size(),
+                        ImVec2(-FLT_MIN, 250),
+                        ImGuiInputTextFlags_ReadOnly);
+                    ImGui::PopStyleColor();
+
+                    ImGui::Separator();
+                    if (ImGui::Button("OK", ImVec2(120, 0)))
+                        ImGui::CloseCurrentPopup();
+
+                    ImGui::EndPopup();
+                }
+
 
                 if (g_ShowType2SettingsPopup) {
                     ImGui::OpenPopup("Type 2 Import Settings");
