@@ -252,6 +252,15 @@
     <ClInclude Include="FontBuilder.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
+    <ClInclude Include="StreamingFontParser.h">
+      <Filter>Source Files\Fonts</Filter>
+    </ClInclude>
+    <ClInclude Include="StreamingFontProperties.h">
+      <Filter>Source Files\Fonts</Filter>
+    </ClInclude>
+    <ClInclude Include="StreamingFontBuilder.h">
+      <Filter>Source Files\Fonts</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

@@ -55,6 +55,9 @@
     <ClInclude Include="ShaderCompiler.h" />
     <ClInclude Include="ShaderParser.h" />
     <ClInclude Include="ShaderProperties.h" />
+    <ClInclude Include="StreamingFontBuilder.h" />
+    <ClInclude Include="StreamingFontParser.h" />
+    <ClInclude Include="StreamingFontProperties.h" />
     <ClInclude Include="TextEditor\TextEditor.h" />
     <ClInclude Include="Textures\ImageBackend.h" />
     <ClInclude Include="Textures\TextureBuilder.h" />

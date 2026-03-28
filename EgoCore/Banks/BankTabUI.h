@@ -6,6 +6,7 @@
 #include "BankEditor.h" 
 #include "ShaderProperties.h"
 #include "FontProperties.h"
+#include "StreamingFontProperties.h"
 #include <thread>
 
 static int g_ContextEntryIndex = -1;
@@ -1004,10 +1005,29 @@ static void DrawBankTab() {
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
                     else if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
-                    else if (bank.Type == EBankType::Shaders) {DrawShaderProperties(e.ID);}
-                    else if (bank.Type == EBankType::Graphics && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);}
-                    else if (bank.Type == EBankType::Fonts) { DrawFontProperties(e.ID); }
+                    else if (bank.Type == EBankType::Shaders) { DrawShaderProperties(e.ID); }
+                    else if (bank.Type == EBankType::Graphics && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
+                        DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }
+                    else if (bank.Type == EBankType::Fonts) {
+                        // --- NEW UI ROUTING LOGIC ---
+                        std::string subBank = "";
+                        if (bank.ActiveSubBankIndex >= 0 && bank.ActiveSubBankIndex < bank.SubBanks.size()) {
+                            subBank = bank.SubBanks[bank.ActiveSubBankIndex].Name;
+                        }
+                        std::string upperSubBank = subBank;
+                        std::transform(upperSubBank.begin(), upperSubBank.end(), upperSubBank.begin(), ::toupper);
+
+                        if (upperSubBank.find("STREAMING") != std::string::npos) {
+                            g_StreamingFontParser.Parse(bank.CurrentEntryRawData, bank.Entries[bank.SelectedEntryIndex].Type);
+                            DrawStreamingFontProperties(&bank, bank.SelectedEntryIndex);
+                        }
+                        else {
+                            DrawFontProperties(e.ID);
+                        }
+                        // ----------------------------
+                    }
+                }
                 ImGui::EndChild();
 
                 if (g_ShowType2SettingsPopup) {

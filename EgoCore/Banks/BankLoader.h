@@ -8,6 +8,7 @@
 #include "TextProperties.h"
 #include "LipSyncProperties.h"
 #include "FontProperties.h"
+#include "StreamingFontParser.h"
 #include "DefBackend.h" 
 #include <windows.h>
 #include <algorithm>
@@ -101,6 +102,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
     g_LipSyncParser.Data = CLipSyncData();
     g_ShaderParser.IsParsed = false;
     g_ShaderParser.Data = CShaderData();
+    g_StreamingFontParser.IsParsed = false;
 
     bank->SelectedEntryIndex = idx; bank->SelectedLOD = 0;
     const auto& e = bank->Entries[idx];
@@ -217,8 +219,15 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
             subBank = bank->SubBanks[bank->ActiveSubBankIndex].Name;
         }
+        std::string upperSubBank = subBank;
+        std::transform(upperSubBank.begin(), upperSubBank.end(), upperSubBank.begin(), ::toupper);
 
-        g_FontParser.Parse(bank->CurrentEntryRawData, subBank);
+        if (upperSubBank.find("STREAMING") != std::string::npos) {
+            g_StreamingFontParser.Parse(bank->CurrentEntryRawData, e.Type);
+        }
+        else {
+            g_FontParser.Parse(bank->CurrentEntryRawData, subBank);
+        }
     }
     else if (bank->Type != EBankType::Audio) {
         if (e.Type == 3) {

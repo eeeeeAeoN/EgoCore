@@ -820,29 +820,36 @@ inline void FlushStagedEntries(LoadedBank* bank) {
         }
 
         else if (staged.ShaderCode) {
-            // 1. Fetch the original entry data so the compiler can preserve Fable constants
+            printf("[Shader] FlushStagedEntries reached for idx %d\n", idx);
+            printf("[Shader] Code length: %zu\n", staged.ShaderCode->length());
+            printf("[Shader] Code preview: %.50s\n", staged.ShaderCode->c_str());
+
             std::vector<uint8_t> sourceData;
             if (bank->ModifiedEntryData.count(idx)) {
                 sourceData = bank->ModifiedEntryData[idx];
+                printf("[Shader] Source from ModifiedEntryData, size: %zu\n", sourceData.size());
             }
             else {
                 bank->Stream->clear();
                 bank->Stream->seekg(e.Offset, std::ios::beg);
                 sourceData.resize(e.Size);
                 bank->Stream->read((char*)sourceData.data(), e.Size);
+                printf("[Shader] Source from stream, size: %zu\n", sourceData.size());
             }
 
-            // 2. Compile via the new ShaderCompiler
             std::string compileError;
             std::vector<uint8_t> compiledBytes = ShaderCompiler::Compile(*staged.ShaderCode, sourceData, compileError);
 
+            printf("[Shader] Compiled size: %zu\n", compiledBytes.size());
+            if (!compileError.empty()) printf("[Shader] Error: %s\n", compileError.c_str());
+
             if (!compiledBytes.empty()) {
                 newBytes = compiledBytes;
-                e.InfoSize = 0; // Shaders don't use Subheader Info Cache
+                e.InfoSize = 0;
             }
             else {
                 g_BankStatus = "Shader Compile Error: " + compileError;
-                continue; // Abort staging this specific entry so we don't corrupt the bank
+                continue;
             }
         }
 
