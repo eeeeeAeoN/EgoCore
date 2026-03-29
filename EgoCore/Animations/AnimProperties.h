@@ -173,42 +173,58 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         std::string filterStr = meshFilterBuf;
         std::transform(filterStr.begin(), filterStr.end(), filterStr.begin(), ::tolower);
 
-        for (int i = 0; i < g_OpenBanks.size(); i++) {
-            if (g_OpenBanks[i].Type == EBankType::Graphics) {
-                for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
-                    int t = g_OpenBanks[i].Entries[j].Type;
-                    if (t == 5) {
-                        std::string mName = g_OpenBanks[i].Entries[j].Name;
-                        std::transform(mName.begin(), mName.end(), mName.begin(), ::tolower);
-                        if (!filterStr.empty() && mName.find(filterStr) == std::string::npos) continue;
+        bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
 
-                        bool isMatch = false;
-                        std::string aName = anim.ObjectName;
-                        std::transform(aName.begin(), aName.end(), aName.begin(), ::tolower);
+        auto processMeshBank = [&](int bankIdx) {
+            for (int j = 0; j < g_OpenBanks[bankIdx].Entries.size(); j++) {
+                int t = g_OpenBanks[bankIdx].Entries[j].Type;
+                if (t == 5) {
+                    std::string mName = g_OpenBanks[bankIdx].Entries[j].Name;
+                    std::transform(mName.begin(), mName.end(), mName.begin(), ::tolower);
+                    if (!filterStr.empty() && mName.find(filterStr) == std::string::npos) continue;
 
-                        // SMART PREFIX MATCHER: Extracts "Hero" from "Hero_Base" and "Hero_Mesh" to auto-detect compatibility -- doesn't work for the moment
-                        std::string mBase = mName.substr(0, mName.find('_'));
-                        std::string aBase = aName.substr(0, aName.find('_'));
-                        if (!mBase.empty() && !aBase.empty() && mBase == aBase) isMatch = true;
+                    bool isMatch = false;
+                    std::string aName = anim.ObjectName;
+                    std::transform(aName.begin(), aName.end(), aName.begin(), ::tolower);
 
-                        if (isMatch) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 1, 0, 1));
-                        if (ImGui::Selectable((g_OpenBanks[i].Entries[j].FriendlyName + (isMatch ? " (Likely Match)" : "")).c_str())) {
-                            auto& b = g_OpenBanks[i];
-                            std::vector<uint8_t> rawData;
-                            if (b.ModifiedEntryData.count(j)) rawData = b.ModifiedEntryData[j];
-                            else {
-                                b.Stream->clear(); b.Stream->seekg(b.Entries[j].Offset, std::ios::beg);
-                                rawData.resize(b.Entries[j].Size); b.Stream->read((char*)rawData.data(), b.Entries[j].Size);
-                            }
-                            g_StandaloneMesh = C3DMeshContent();
-                            if (b.SubheaderCache.count(j)) g_StandaloneMesh.ParseEntryMetadata(b.SubheaderCache[j]);
-                            g_StandaloneMesh.Parse(rawData);
-                            g_StandaloneUploadNeeded = true;
-                            g_ShowStandalonePreview = true;
-                            g_ShowStandaloneMeshPicker = false;
+                    std::string mBase = mName.substr(0, mName.find('_'));
+                    std::string aBase = aName.substr(0, aName.find('_'));
+                    if (!mBase.empty() && !aBase.empty() && mBase == aBase) isMatch = true;
+
+                    if (isMatch) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 1, 0, 1));
+
+                    std::string displayLabel = g_OpenBanks[bankIdx].Entries[j].FriendlyName + (isMatch ? " (Likely Match)" : "");
+                    if (isXboxActive) displayLabel += " [Xbox]";
+
+                    if (ImGui::Selectable(displayLabel.c_str())) {
+                        auto& b = g_OpenBanks[bankIdx];
+                        std::vector<uint8_t> rawData;
+                        if (b.ModifiedEntryData.count(j)) rawData = b.ModifiedEntryData[j];
+                        else {
+                            b.Stream->clear(); b.Stream->seekg(b.Entries[j].Offset, std::ios::beg);
+                            rawData.resize(b.Entries[j].Size); b.Stream->read((char*)rawData.data(), b.Entries[j].Size);
                         }
-                        if (isMatch) ImGui::PopStyleColor();
+                        g_StandaloneMesh = C3DMeshContent();
+                        if (b.SubheaderCache.count(j)) g_StandaloneMesh.ParseEntryMetadata(b.SubheaderCache[j]);
+                        g_StandaloneMesh.Parse(rawData);
+                        g_StandaloneUploadNeeded = true;
+                        g_ShowStandalonePreview = true;
+                        g_ShowStandaloneMeshPicker = false;
                     }
+                    if (isMatch) ImGui::PopStyleColor();
+                }
+            }
+            };
+
+        if (isXboxActive) {
+            // XBOX: Only scan the local active bank for meshes
+            processMeshBank(g_ActiveBankIndex);
+        }
+        else {
+            // PC: Scan all standard graphics banks
+            for (int i = 0; i < g_OpenBanks.size(); i++) {
+                if (g_OpenBanks[i].Type == EBankType::Graphics) {
+                    processMeshBank(i);
                 }
             }
         }
@@ -236,37 +252,9 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
                 // Carry over the self-illumination for the animation previewer
                 materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
 
+                // Seamlessly use the cache we set up in MeshProperties to handle Xbox/PC transparently!
                 if (m.DiffuseMapID > 0) {
-                    for (auto& b : g_OpenBanks) {
-                        if (b.Type == EBankType::Textures) {
-                            for (int i = 0; i < b.Entries.size(); ++i) {
-                                if (b.Entries[i].ID == m.DiffuseMapID) {
-                                    b.Stream->clear(); b.Stream->seekg(b.Entries[i].Offset, std::ios::beg);
-                                    std::vector<uint8_t> tmp(b.Entries[i].Size + 64); b.Stream->read((char*)tmp.data(), b.Entries[i].Size);
-
-                                    CTextureParser localTexParser;
-                                    localTexParser.Parse(b.SubheaderCache[i], tmp, b.Entries[i].Type);
-
-                                    if (localTexParser.IsParsed && !localTexParser.DecodedPixels.empty()) {
-                                        D3D11_TEXTURE2D_DESC desc = {};
-                                        desc.Width = localTexParser.Header.Width ? localTexParser.Header.Width : localTexParser.Header.FrameWidth;
-                                        desc.Height = localTexParser.Header.Height ? localTexParser.Header.Height : localTexParser.Header.FrameHeight;
-                                        desc.MipLevels = 1; desc.ArraySize = 1; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-                                        desc.Format = (localTexParser.DecodedFormat == ETextureFormat::DXT1) ? DXGI_FORMAT_BC1_UNORM : ((localTexParser.DecodedFormat == ETextureFormat::DXT5) ? DXGI_FORMAT_BC3_UNORM : DXGI_FORMAT_BC2_UNORM);
-                                        D3D11_SUBRESOURCE_DATA subData = {}; subData.pSysMem = localTexParser.DecodedPixels.data();
-                                        subData.SysMemPitch = ((desc.Width + 3) / 4) * ((desc.Format == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
-                                        ID3D11Texture2D* tex = nullptr;
-                                        if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex))) {
-                                            // Assign to the Diffuse channel of our new struct
-                                            g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &materials[m.ID].Diffuse);
-                                            tex->Release();
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    materials[m.ID].Diffuse = LoadTextureForMesh(m.DiffuseMapID);
                 }
             }
             // Use the new method name

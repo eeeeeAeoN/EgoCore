@@ -1048,12 +1048,28 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 struct FoundAnim { int BankIdx; int EntryIdx; std::string Name; uint32_t ID; int Type; };
                 std::vector<FoundAnim> anims;
 
-                for (int i = 0; i < g_OpenBanks.size(); i++) {
-                    if (g_OpenBanks[i].Type == EBankType::Graphics) {
-                        for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
-                            int t = g_OpenBanks[i].Entries[j].Type;
-                            if (t == 6 || t == 7 || t == 9) {
-                                anims.push_back({ i, j, g_OpenBanks[i].Entries[j].FriendlyName, g_OpenBanks[i].Entries[j].ID, t });
+                // --- ISOLATED ANIMATION SCANNER ---
+                bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
+
+                if (isXboxActive) {
+                    // XBOX: Only scan the local active bank
+                    int i = g_ActiveBankIndex;
+                    for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
+                        int t = g_OpenBanks[i].Entries[j].Type;
+                        if (t == 6 || t == 7 || t == 9) {
+                            anims.push_back({ i, j, g_OpenBanks[i].Entries[j].FriendlyName, g_OpenBanks[i].Entries[j].ID, t });
+                        }
+                    }
+                }
+                else {
+                    // PC: Scan all standard graphics banks
+                    for (int i = 0; i < g_OpenBanks.size(); i++) {
+                        if (g_OpenBanks[i].Type == EBankType::Graphics) {
+                            for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
+                                int t = g_OpenBanks[i].Entries[j].Type;
+                                if (t == 6 || t == 7 || t == 9) {
+                                    anims.push_back({ i, j, g_OpenBanks[i].Entries[j].FriendlyName, g_OpenBanks[i].Entries[j].ID, t });
+                                }
                             }
                         }
                     }
@@ -1770,33 +1786,58 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         ImGui::Separator();
 
         ImGui::BeginChild("TexList", ImVec2(350, 300), true);
-        LoadedBank* texBank = nullptr;
-        for (auto& b : g_OpenBanks) {
-            if (b.Type == EBankType::Textures || b.Type == EBankType::Frontend || b.Type == EBankType::Effects) {
-                texBank = &b; break;
-            }
-        }
 
-        if (texBank) {
-            std::string filter = g_TextureSearchBuf;
-            std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+        std::string filter = g_TextureSearchBuf;
+        std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+        bool foundAny = false;
 
-            for (const auto& entry : texBank->Entries) {
-                std::string nameLower = entry.Name;
+        bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
+
+        if (isXboxActive) {
+            // 1. Local Xbox Textures ONLY
+            EnsureXboxTextureCache(g_ActiveBankIndex);
+            for (const auto& [id, meta] : g_XboxTexCache[g_ActiveBankIndex]) {
+                foundAny = true;
+                std::string nameLower = meta.Name;
                 std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                std::string idStr = std::to_string(entry.ID);
+                std::string idStr = std::to_string(id);
 
                 if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
-                    bool isSelected = (g_SelectedTextureID == entry.ID);
-                    if (ImGui::Selectable((idStr + " - " + entry.Name).c_str(), isSelected)) {
-                        g_SelectedTextureID = entry.ID;
+                    bool isSelected = (g_SelectedTextureID == id);
+                    if (ImGui::Selectable((idStr + " - " + meta.Name + " [Xbox]").c_str(), isSelected)) {
+                        g_SelectedTextureID = id;
                     }
                     if (isSelected) ImGui::SetItemDefaultFocus();
                 }
             }
+            if (!foundAny) ImGui::TextDisabled("No textures found in this Xbox bank!");
         }
         else {
-            ImGui::TextDisabled("No Texture Bank open!\nPlease open 'textures.big' in another tab.");
+            // 2. Global PC Textures ONLY
+            for (auto& bank : g_OpenBanks) {
+                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+                    foundAny = true;
+                    for (const auto& entry : bank.Entries) {
+                        std::string nameLower = entry.Name;
+                        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                        std::string idStr = std::to_string(entry.ID);
+
+                        if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
+                            bool isSelected = (g_SelectedTextureID == entry.ID);
+
+                            std::string label = idStr + " - " + entry.Name;
+                            if (bank.Type == EBankType::Frontend) label += " [Frontend]";
+                            else if (bank.Type == EBankType::Effects) label += " [Effects]";
+
+                            if (ImGui::Selectable(label.c_str(), isSelected)) {
+                                g_SelectedTextureID = entry.ID;
+                            }
+                            if (isSelected) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                }
+            }
+            if (!foundAny) ImGui::TextDisabled("No Texture Bank open!\nPlease open 'textures.big' in another tab.");
         }
         ImGui::EndChild();
 
