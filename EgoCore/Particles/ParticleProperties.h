@@ -1,9 +1,34 @@
 #pragma once
 #include "imgui.h"
 #include "ParticleParser.h"
+#include "BinaryParser.h"
+#include "MeshRenderer.h"
+#include "BankBackend.h"
 #include <string>
 #include <cstring>
 
+extern ID3D11Device* g_pd3dDevice;
+// Note: Relies on LoadTextureForMesh() from MeshProperties.h
+
+// --- NEW STATE VARIABLES ---
+static bool g_TriggerParticleTexPopup = false;
+static bool g_ShowParticleTexPopup = false;
+static char g_ParticleTexSearchBuf[128] = "";
+static int32_t* g_ParticleTargetTexIDPtr = nullptr;
+static int32_t g_ParticlePreviewTexID = -1;
+
+static bool g_ShowParticleMeshPicker = false;
+static char g_ParticleMeshSearchBuf[128] = "";
+static int32_t* g_ParticleTargetMeshIDPtr = nullptr;
+static MeshRenderer g_ParticleMeshRenderer;
+static C3DMeshContent g_ParticlePreviewMesh;
+static bool g_ParticleMeshUploadNeeded = false;
+static bool g_ParticleMeshPreviewOpen = false;
+
+static int32_t g_ParticlePreviewMeshID = -1;
+static int32_t g_LoadedParticlePreviewMeshID = -1;
+
+// --- UI HELPERS ---
 inline void DrawString(const char* label, std::string& str) {
     char buf[256];
     strncpy_s(buf, str.c_str(), sizeof(buf));
@@ -29,6 +54,77 @@ inline void DrawColour(const char* label, CRGBColour& col) {
 
 inline void DrawVector3(const char* label, C3DVector& vec) {
     ImGui::DragFloat3(label, &vec.X, 0.05f);
+}
+
+// Custom Helper for dynamic Fable CRC32 Hashing
+inline void DrawHashParam(const char* label, uint32_t& param) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s", label);
+    ImGui::SameLine(240);
+
+    ImGui::SetNextItemWidth(100);
+    ImGui::InputScalar((std::string("##val_") + label).c_str(), ImGuiDataType_U32, &param);
+
+    ImGui::SameLine();
+    char buf[128] = "";
+    ImGui::SetNextItemWidth(150);
+    if (ImGui::InputTextWithHint((std::string("##txt_") + label).c_str(), "String to Hash...", buf, 128)) {
+        if (strlen(buf) > 0) {
+            param = BinaryParser::CalculateCRC32_Fable(buf);
+        }
+    }
+}
+
+inline void DrawParticleTexRow(const char* label, int32_t& bankIndex) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s", label);
+    ImGui::SameLine(240);
+
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputInt((std::string("##id_") + label).c_str(), &bankIndex, 0, 0);
+
+    ImGui::SameLine();
+    if (ImGui::Button((std::string("+##btn_") + label).c_str(), ImVec2(24, 0))) {
+        g_ParticleTargetTexIDPtr = &bankIndex;
+        g_ParticlePreviewTexID = bankIndex; // <-- Pre-loads current texture
+        g_ParticleTexSearchBuf[0] = '\0';
+        g_TriggerParticleTexPopup = true;
+    }
+
+    if (bankIndex > 0) {
+        ImGui::SameLine();
+        ID3D11ShaderResourceView* srv = LoadTextureForMesh(bankIndex);
+        if (srv) {
+            ImGui::Image((void*)srv, ImVec2(24, 24));
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::Image((void*)srv, ImVec2(256, 256));
+                ImGui::PushTextWrapPos(256.0f);
+                ImGui::TextColored(ImVec4(1, 1, 0, 1), "Texture ID: %d", bankIndex);
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
+        }
+    }
+}
+
+// Custom Helper for Mesh Selection
+inline void DrawParticleMeshRow(const char* label, int32_t& bankIndex) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s", label);
+    ImGui::SameLine(240);
+
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputInt((std::string("##id_") + label).c_str(), &bankIndex, 0, 0);
+
+    ImGui::SameLine();
+    if (ImGui::Button((std::string("+##btn_") + label).c_str(), ImVec2(24, 0))) {
+        g_ParticleTargetMeshIDPtr = &bankIndex;
+        g_ParticlePreviewMeshID = bankIndex; // <-- Sets target mesh
+        g_LoadedParticlePreviewMeshID = -1;  // <-- Forces parsing logic to run
+        g_ParticleMeshSearchBuf[0] = '\0';
+        g_ShowParticleMeshPicker = true;
+    }
 }
 
 inline void DrawSplineBase(CPSCSplineBase* spline) {
@@ -82,8 +178,8 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
         ImGui::Separator();
 
         if (auto* rs = dynamic_cast<CPSCRenderSprite*>(comp.get())) {
-            ImGui::InputInt("SpriteBankIndex", &rs->SpriteBankIndex);
-            ImGui::InputInt("TrailBankIndex", &rs->TrailBankIndex);
+            DrawParticleTexRow("SpriteBankIndex", rs->SpriteBankIndex);
+            DrawParticleTexRow("TrailBankIndex", rs->TrailBankIndex);
 
             ImGui::Dummy(ImVec2(0, 5));
             ImGui::TextDisabled("Colours:");
@@ -182,12 +278,12 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             ImGui::TextDisabled("Decals & Params:");
             ImGui::Checkbox("ParticleCreateDecal", &un->ParticleCreateDecal);
             ImGui::Checkbox("ParticleCreateDecalEmitter", &un->ParticleCreateDecalEmitter);
-            DrawU32("AccelerationParam", un->AccelerationParam);
-            DrawU32("OrientFromGameParam", un->OrientFromGameParam);
+            DrawHashParam("AccelerationParam", un->AccelerationParam);
+            DrawHashParam("OrientFromGameParam", un->OrientFromGameParam);
         }
         else if (auto* eg = dynamic_cast<CPSCEmitterGeneric*>(comp.get())) {
-            DrawU32("EmitterPosParam", eg->EmitterPosParam);
-            DrawU32("DirectionParamName", eg->DirectionParamName);
+            DrawHashParam("EmitterPosParam", eg->EmitterPosParam);
+            DrawHashParam("DirectionParamName", eg->DirectionParamName);
             DrawU32("EmitterType", eg->EmitterType);
             DrawU32("NoParticlesToStart", eg->NoParticlesToStart);
             DrawU32("NoParticlesToStartRand", eg->NoParticlesToStartRand);
@@ -239,8 +335,8 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             }
         }
         else if (auto* rm = dynamic_cast<CPSCRenderMesh*>(comp.get())) {
-            ImGui::InputInt("BankIndex", &rm->BankIndex);
-            ImGui::InputInt("TrailBankIndex", &rm->TrailBankIndex);
+            DrawParticleMeshRow("BankIndex", rm->BankIndex);
+            DrawParticleTexRow("TrailBankIndex", rm->TrailBankIndex);
 
             ImGui::Dummy(ImVec2(0, 5));
             ImGui::TextDisabled("Mesh Colours:");
@@ -268,7 +364,8 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             DrawU32("TrailBlendOp", rm->TrailBlendOp);
             DrawVector3("StartRenderSize", rm->StartRenderSize);
             DrawVector3("EndRenderSize", rm->EndRenderSize);
-            DrawU32("RenderSizeParam", rm->RenderSizeParam);
+
+            DrawHashParam("RenderSizeParam", rm->RenderSizeParam);
             ImGui::Checkbox("UseRenderSizeParam", &rm->UseRenderSizeParam);
             ImGui::Checkbox("CentredOnPos", &rm->CentredOnPos);
 
@@ -293,7 +390,7 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             ImGui::DragFloat("TrailWidth", &rm->TrailWidth, 0.1f);
         }
         else if (auto* lgt = dynamic_cast<CPSCLight*>(comp.get())) {
-            DrawU32("LightPositionParam", lgt->LightPositionParam);
+            DrawHashParam("LightPositionParam", lgt->LightPositionParam);
             ImGui::DragFloat("LightLifeSecs", &lgt->LightLifeSecs, 0.1f);
             ImGui::DragFloat("RespawnDelaySecs", &lgt->LightRespawnDelaySecs, 0.1f);
             ImGui::DragFloat("LightStartTime", &lgt->LightStartTime, 0.1f);
@@ -332,7 +429,7 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             DrawSplineBase(sp);
         }
         else if (auto* ss = dynamic_cast<CPSCSingleSprite*>(comp.get())) {
-            ImGui::InputInt("SpriteBankIndex", &ss->SpriteBankIndex);
+            DrawParticleTexRow("SpriteBankIndex", ss->SpriteBankIndex);
             ImGui::DragFloat("AnimTimeSecs", &ss->AnimationTimeSecs, 0.1f);
             DrawColour("StartColour", ss->StartColour);
             DrawColour("MidColour", ss->MidColour);
@@ -360,12 +457,17 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             ImGui::Checkbox("StayWithEmitter", &ss->StayWithEmitter);
             ImGui::Checkbox("UsePosition", &ss->UsePosition);
             ImGui::Checkbox("UseSplinePoints", &ss->UseSplinePoints);
+
+            ImGui::Dummy(ImVec2(0, 5));
+            DrawHashParam("PositionParam", ss->PositionParam);
+            DrawParticleTexRow("TrailBankIndex", ss->TrailBankIndex);
+            ImGui::DragFloat("TrailWidth", &ss->TrailWidth, 0.1f);
         }
         else if (auto* at = dynamic_cast<CPSCAttractor*>(comp.get())) {
             ImGui::Checkbox("AttractorEnabled", &at->AttractorEnabled);
             ImGui::Checkbox("AttractorUseParamPosition", &at->AttractorUseParamPosition);
-            DrawU32("AttractorPositionParam", at->AttractorPositionParam);
-            DrawU32("AttractorPositionParamName", at->AttractorPositionParamName);
+            DrawHashParam("AttractorPositionParam", at->AttractorPositionParam);
+            DrawHashParam("AttractorPositionParamName", at->AttractorPositionParamName);
             ImGui::InputInt("AttractorInfluenceFallOff", &at->AttractorInfluenceFallOff);
             ImGui::DragFloat("AttractorInfluenceRadius", &at->AttractorInfluenceRadius, 0.1f);
             ImGui::DragFloat("AttractorInfluenceForce", &at->AttractorInfluenceForce, 0.1f);
@@ -376,7 +478,7 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             }
         }
         else if (auto* ob = dynamic_cast<CPSCOrbit*>(comp.get())) {
-            DrawU32("CentreParam", ob->CentreParam);
+            DrawHashParam("CentreParam", ob->CentreParam);
             ImGui::Text("Orbits Count: %d", (int)ob->OrbitsData.size());
 
             for (size_t i = 0; i < ob->OrbitsData.size(); i++) {
@@ -399,7 +501,7 @@ inline void DrawParticleComponent(std::shared_ptr<CParticleComponent>& comp, boo
             }
         }
         else if (auto* dr = dynamic_cast<CPSCDecalRenderer*>(comp.get())) {
-            ImGui::InputInt("DecalBankIndex", &dr->DecalBankIndex);
+            DrawParticleTexRow("DecalBankIndex", dr->DecalBankIndex);
             ImGui::DragFloat("DecalLifeSecs", &dr->DecalLifeSecs, 0.1f);
             DrawColour("StartColour", dr->StartColour);
             DrawColour("MidColour", dr->MidColour);
@@ -484,6 +586,11 @@ inline void DrawParticleSystem(CParticleSystem& sys, bool& requestDelete) {
             auto newComp = CreateComponent(compTypes[newCompType]);
             if (newComp) {
                 newComp->ClassName = compTypes[newCompType];
+
+                // GENERATE THE NATIVE CRC32 INSTANCE ID
+                std::string hashSource = sys.Name + "_" + newComp->ClassName + "_" + std::to_string(ImGui::GetTime());
+                newComp->InstanceID = BinaryParser::CalculateCRC32_Fable(hashSource);
+
                 sys.Components.push_back(newComp);
             }
         }
@@ -563,5 +670,203 @@ inline void DrawParticleProperties(CParticleEmitter& emitter) {
         else {
             i++;
         }
+    }
+
+    if (g_TriggerParticleTexPopup) {
+        ImGui::OpenPopup("Select Particle Texture");
+        g_ShowParticleTexPopup = true;
+        g_TriggerParticleTexPopup = false;
+        // Removed the g_ParticlePreviewTexID reset here so the currently assigned texture persists
+    }
+
+    if (ImGui::BeginPopupModal("Select Particle Texture", &g_ShowParticleTexPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputTextWithHint("##SearchTex", "Search Textures by ID or Name...", g_ParticleTexSearchBuf, 128);
+        ImGui::Separator();
+
+        ImGui::BeginChild("TexList", ImVec2(350, 300), true);
+        LoadedBank* texBank = nullptr;
+        for (auto& b : g_OpenBanks) {
+            if (b.Type == EBankType::Textures || b.Type == EBankType::Frontend || b.Type == EBankType::Effects) {
+                texBank = &b; break;
+            }
+        }
+
+        if (texBank) {
+            std::string filter = g_ParticleTexSearchBuf;
+            std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+            for (const auto& entry : texBank->Entries) {
+                std::string nameLower = entry.Name;
+                std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                std::string idStr = std::to_string(entry.ID);
+
+                if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
+                    bool isSelected = (g_ParticlePreviewTexID == entry.ID);
+                    if (ImGui::Selectable((idStr + " - " + entry.Name).c_str(), isSelected)) {
+                        g_ParticlePreviewTexID = entry.ID;
+                    }
+                    if (isSelected) ImGui::SetItemDefaultFocus();
+                }
+            }
+        }
+        else {
+            ImGui::TextDisabled("No Texture Bank open!");
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+        ImGui::BeginChild("TexPreview", ImVec2(256, 300), true);
+        if (g_ParticlePreviewTexID > 0) {
+            ID3D11ShaderResourceView* srv = LoadTextureForMesh(g_ParticlePreviewTexID);
+            if (srv) ImGui::Image((void*)srv, ImVec2(256, 256));
+            else ImGui::TextDisabled("Preview Not Available");
+        }
+        else {
+            ImGui::TextDisabled("No Texture Selected");
+        }
+        ImGui::EndChild();
+
+        ImGui::Separator();
+        if (ImGui::Button("Choose", ImVec2(120, 0))) {
+            if (g_ParticleTargetTexIDPtr && g_ParticlePreviewTexID >= 0) {
+                *g_ParticleTargetTexIDPtr = g_ParticlePreviewTexID;
+            }
+            g_ShowParticleTexPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowParticleTexPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Mesh Picker Modal
+    if (g_ShowParticleMeshPicker) {
+        ImGui::OpenPopup("Select Particle Mesh");
+    }
+
+    if (ImGui::BeginPopupModal("Select Particle Mesh", &g_ShowParticleMeshPicker, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputTextWithHint("##MeshSearch", "Search Type 4 Meshes...", g_ParticleMeshSearchBuf, 128);
+        ImGui::Separator();
+
+        // --- NEW: Auto-Load Mesh Logic ---
+        // If the ID changed (or was just opened), fetch and parse the mesh immediately
+        if (g_ParticlePreviewMeshID > 0 && g_ParticlePreviewMeshID != g_LoadedParticlePreviewMeshID) {
+            g_LoadedParticlePreviewMeshID = g_ParticlePreviewMeshID;
+            bool found = false;
+            for (auto& b : g_OpenBanks) {
+                if (b.Type == EBankType::Graphics) {
+                    for (int j = 0; j < b.Entries.size(); j++) {
+                        if (b.Entries[j].ID == (uint32_t)g_ParticlePreviewMeshID) {
+                            std::vector<uint8_t> rawData;
+                            if (b.ModifiedEntryData.count(j)) rawData = b.ModifiedEntryData[j];
+                            else {
+                                b.Stream->clear(); b.Stream->seekg(b.Entries[j].Offset, std::ios::beg);
+                                rawData.resize(b.Entries[j].Size); b.Stream->read((char*)rawData.data(), b.Entries[j].Size);
+                            }
+                            g_ParticlePreviewMesh = C3DMeshContent();
+                            if (b.SubheaderCache.count(j)) g_ParticlePreviewMesh.ParseEntryMetadata(b.SubheaderCache[j]);
+                            g_ParticlePreviewMesh.Parse(rawData, 4);
+                            g_ParticleMeshUploadNeeded = true;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (found) break;
+            }
+            if (!found) {
+                g_ParticleMeshPreviewOpen = false;
+            }
+        }
+        // ----------------------------------
+
+        ImGui::BeginChild("MeshList", ImVec2(350, 400), true);
+        std::string filterStr = g_ParticleMeshSearchBuf;
+        std::transform(filterStr.begin(), filterStr.end(), filterStr.begin(), ::tolower);
+
+        for (int i = 0; i < g_OpenBanks.size(); i++) {
+            if (g_OpenBanks[i].Type == EBankType::Graphics) {
+                for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
+                    if (g_OpenBanks[i].Entries[j].Type == 4) {
+                        std::string mName = g_OpenBanks[i].Entries[j].Name;
+                        std::transform(mName.begin(), mName.end(), mName.begin(), ::tolower);
+                        std::string idStr = std::to_string(g_OpenBanks[i].Entries[j].ID);
+
+                        if (filterStr.empty() || mName.find(filterStr) != std::string::npos || idStr.find(filterStr) != std::string::npos) {
+                            bool isSelected = (g_ParticlePreviewMeshID == g_OpenBanks[i].Entries[j].ID);
+                            if (ImGui::Selectable((idStr + " - " + g_OpenBanks[i].Entries[j].FriendlyName).c_str(), isSelected)) {
+                                g_ParticlePreviewMeshID = g_OpenBanks[i].Entries[j].ID; // Just update the ID, the block above handles parsing
+                            }
+                            if (isSelected) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                }
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+        ImGui::BeginChild("MeshPreviewView", ImVec2(400, 400), true);
+
+        if (g_ParticleMeshUploadNeeded && g_pd3dDevice) {
+            g_ParticleMeshRenderer.Initialize(g_pd3dDevice);
+            g_ParticleMeshRenderer.UploadMesh(g_pd3dDevice, g_ParticlePreviewMesh);
+
+            std::vector<MeshRenderer::RenderMaterial> materials;
+            int maxMat = 0;
+            for (const auto& m : g_ParticlePreviewMesh.Materials) if (m.ID > maxMat) maxMat = m.ID;
+            materials.resize(maxMat + 1);
+
+            for (const auto& m : g_ParticlePreviewMesh.Materials) {
+                if (m.DiffuseMapID > 0) materials[m.ID].Diffuse = LoadTextureForMesh(m.DiffuseMapID);
+                materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
+            }
+            g_ParticleMeshRenderer.SetMaterials(materials);
+
+            g_ParticleMeshUploadNeeded = false;
+            g_ParticleMeshPreviewOpen = true;
+        }
+
+        if (g_ParticleMeshPreviewOpen && g_ParticlePreviewMesh.IsParsed) {
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            g_ParticleMeshRenderer.Resize(g_pd3dDevice, avail.x, avail.y);
+
+            ID3D11DeviceContext* pCtx;
+            g_pd3dDevice->GetImmediateContext(&pCtx);
+            ID3D11ShaderResourceView* tex = g_ParticleMeshRenderer.Render(pCtx, avail.x, avail.y, false);
+            pCtx->Release();
+
+            if (tex) ImGui::Image((void*)tex, avail);
+        }
+        else {
+            ImGui::TextDisabled("Select a particle mesh to preview.");
+        }
+        ImGui::EndChild();
+
+        ImGui::Separator();
+        if (ImGui::Button("Choose", ImVec2(120, 0))) {
+            if (g_ParticleTargetMeshIDPtr && g_ParticlePreviewMeshID >= 0) {
+                *g_ParticleTargetMeshIDPtr = g_ParticlePreviewMeshID;
+            }
+            g_ShowParticleMeshPicker = false;
+            g_ParticleMeshPreviewOpen = false;
+            g_LoadedParticlePreviewMeshID = -1;       // Reset loader
+            g_ParticlePreviewMesh = C3DMeshContent(); // Cleanup Memory
+            g_ParticleMeshRenderer.Release();         // Cleanup VRAM
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowParticleMeshPicker = false;
+            g_ParticleMeshPreviewOpen = false;
+            g_LoadedParticlePreviewMeshID = -1;       // Reset loader
+            g_ParticlePreviewMesh = C3DMeshContent(); // Cleanup Memory
+            g_ParticleMeshRenderer.Release();         // Cleanup VRAM
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }

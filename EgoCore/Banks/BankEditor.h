@@ -1134,19 +1134,19 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     BankEntry& e = bank->Entries[bank->SelectedEntryIndex];
     StagedEntry staged;
 
-    if (bank->Type == EBankType::Graphics && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
+    if ((bank->Type == EBankType::Graphics || (bank->Type == EBankType::XboxGraphics && IsGraphicsSubBank(bank))) && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
         if (g_AnimParser.Data.IsParsed) {
             staged.Anim = std::make_shared<C3DAnimationInfo>(g_AnimParser.Data);
             g_BankStatus = "Animation staged for compilation.";
         }
     }
-    else if (bank->Type == EBankType::Graphics && e.Type == 3) {
+    else if ((bank->Type == EBankType::Graphics || (bank->Type == EBankType::XboxGraphics && IsGraphicsSubBank(bank))) && e.Type == 3) {
         if (g_BBMParser.IsParsed) {
             staged.Physics = std::make_shared<CBBMParser>(g_BBMParser);
             g_BankStatus = "Physics Mesh staged for compilation.";
         }
     }
-    else if (bank->Type == EBankType::Graphics && IsSupportedMesh(e.Type)) {
+    else if ((bank->Type == EBankType::Graphics || (bank->Type == EBankType::XboxGraphics && IsGraphicsSubBank(bank))) && IsSupportedMesh(e.Type)) {
         if (g_ActiveMeshContent.IsParsed) {
             if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {
                 staged = bank->StagedEntries[bank->SelectedEntryIndex];
@@ -1173,7 +1173,7 @@ inline void SaveEntryChanges(LoadedBank* bank) {
             g_BankStatus = "Mesh LOD staged for compilation.";
         }
     }
-    else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend) {
+    else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || (bank->Type == EBankType::XboxGraphics && IsTextureSubBank(bank))) {
         if (!g_TextureParser.PendingName.empty() && g_TextureParser.PendingName != e.Name) {
             RenameTextureEntry(bank, bank->SelectedEntryIndex, g_TextureParser.PendingName);
         }
@@ -1225,7 +1225,7 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
         bank->LugParserPtr->IsDirty = true;
         g_BankStatus = "Audio Metadata staged to RAM.";
-        return; // Audio uses its own bespoke backend, so no need to put in Staged map
+        return;
     }
     else if (bank->Type == EBankType::Effects) {
         if (g_ActiveParticleEmitter.Magic != 0) {

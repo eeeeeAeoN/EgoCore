@@ -64,8 +64,73 @@ struct VolumeBoxState {
 
 static std::map<std::string, VolumeBoxState> g_VolumeStates;
 
+// --- XBOX TEXTURE CACHING SYSTEM ---
+struct XboxTexMeta {
+    std::string Name;
+    uint32_t Type;
+    uint32_t Offset;
+    uint32_t Size;
+    std::vector<uint8_t> Info;
+};
+static std::map<int, std::map<uint32_t, XboxTexMeta>> g_XboxTexCache;
+
+inline void EnsureXboxTextureCache(int bankIndex) {
+    if (g_XboxTexCache.count(bankIndex)) return;
+    LoadedBank& bank = g_OpenBanks[bankIndex];
+
+    auto pos = bank.Stream->tellg(); // Save current file position
+    for (const auto& sb : bank.SubBanks) {
+        if (StartsWith(sb.Name, "GBANK")) {
+            bank.Stream->clear();
+            bank.Stream->seekg(sb.Offset, std::ios::beg);
+
+            uint32_t statsCount = 0;
+            bank.Stream->read((char*)&statsCount, 4);
+            if (statsCount < 1000) bank.Stream->seekg(statsCount * 8, std::ios::cur);
+            else bank.Stream->seekg(-4, std::ios::cur);
+
+            for (uint32_t i = 0; i < sb.EntryCount; i++) {
+                uint32_t magicE, id, type, size, offset, crc, timestamp, depCount, infoSize;
+                bank.Stream->read((char*)&magicE, 4);
+                bank.Stream->read((char*)&id, 4);
+                bank.Stream->read((char*)&type, 4);
+                bank.Stream->read((char*)&size, 4);
+                bank.Stream->read((char*)&offset, 4);
+                bank.Stream->read((char*)&crc, 4);
+
+                std::string name = ReadBankString(*bank.Stream);
+
+                bank.Stream->read((char*)&timestamp, 4);
+                bank.Stream->read((char*)&depCount, 4);
+                for (uint32_t d = 0; d < depCount; d++) ReadBankString(*bank.Stream);
+
+                bank.Stream->read((char*)&infoSize, 4);
+                std::vector<uint8_t> infoBuf(infoSize);
+                if (infoSize > 0) bank.Stream->read((char*)infoBuf.data(), infoSize);
+
+                if (magicE == 42 || (size > 0 && id > 0)) {
+                    g_XboxTexCache[bankIndex][id] = { name, type, offset, size, infoBuf };
+                }
+            }
+        }
+    }
+    bank.Stream->clear();
+    bank.Stream->seekg(pos, std::ios::beg); // Restore original file position
+}
+// -----------------------------------
+
 inline std::string GetTextureNameForMesh(int textureID) {
     if (textureID <= 0) return "";
+
+    // 1. Check local Xbox bank first
+    if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics) {
+        EnsureXboxTextureCache(g_ActiveBankIndex);
+        if (g_XboxTexCache[g_ActiveBankIndex].count(textureID)) {
+            return g_XboxTexCache[g_ActiveBankIndex][textureID].Name;
+        }
+    }
+
+    // 2. Fallback to global PC texture banks
     for (auto& bank : g_OpenBanks) {
         if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
             for (auto& e : bank.Entries) {
@@ -80,6 +145,63 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
     if (textureID <= 0) return nullptr;
     if (g_MeshTextureCache.count(textureID)) return g_MeshTextureCache[textureID];
 
+    // 1. Process local Xbox bank first
+    if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics) {
+        EnsureXboxTextureCache(g_ActiveBankIndex);
+        auto& cache = g_XboxTexCache[g_ActiveBankIndex];
+
+        if (cache.count(textureID)) {
+            auto& meta = cache[textureID];
+            LoadedBank& bank = g_OpenBanks[g_ActiveBankIndex];
+
+            std::vector<uint8_t> tempData;
+            bank.Stream->clear();
+            bank.Stream->seekg(meta.Offset, std::ios::beg);
+            tempData.resize(meta.Size + 64);
+            bank.Stream->read((char*)tempData.data(), meta.Size);
+
+            g_TextureParser.Parse(meta.Info, tempData, meta.Type);
+
+            if (g_TextureParser.IsParsed && !g_TextureParser.DecodedPixels.empty()) {
+                ID3D11ShaderResourceView* srv = nullptr;
+                DXGI_FORMAT dxFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+                uint32_t blockWidth = 1;
+
+                switch (g_TextureParser.DecodedFormat) {
+                case ETextureFormat::DXT1: case ETextureFormat::NormalMap_DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
+                case ETextureFormat::DXT3: dxFormat = DXGI_FORMAT_BC2_UNORM; blockWidth = 4; break;
+                case ETextureFormat::DXT5: case ETextureFormat::NormalMap_DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
+                case ETextureFormat::ARGB8888: dxFormat = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+                }
+
+                uint32_t w = g_TextureParser.Header.Width ? g_TextureParser.Header.Width : g_TextureParser.Header.FrameWidth;
+                uint32_t h = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
+
+                D3D11_TEXTURE2D_DESC desc = {};
+                desc.Width = w; desc.Height = h; desc.MipLevels = 1; desc.ArraySize = 1;
+                desc.Format = dxFormat; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
+                desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                D3D11_SUBRESOURCE_DATA subData = {};
+                subData.pSysMem = g_TextureParser.DecodedPixels.data();
+                if (blockWidth == 4) subData.SysMemPitch = ((w + 3) / 4) * ((dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
+                else subData.SysMemPitch = w * 4;
+
+                ID3D11Texture2D* tex = nullptr;
+                if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex))) {
+                    g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &srv);
+                    tex->Release();
+                }
+
+                if (srv) {
+                    g_MeshTextureCache[textureID] = srv;
+                    return srv;
+                }
+            }
+        }
+    }
+
+    // 2. Process global PC texture banks
     for (auto& bank : g_OpenBanks) {
         if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
             for (int i = 0; i < bank.Entries.size(); ++i) {
@@ -171,6 +293,37 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
 
 inline std::string ExtractTextureForGltf(int textureID, const std::string& exportDir) {
     if (textureID <= 0) return "";
+
+    // 1. Process local Xbox bank first
+    if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics) {
+        EnsureXboxTextureCache(g_ActiveBankIndex);
+        auto& cache = g_XboxTexCache[g_ActiveBankIndex];
+
+        if (cache.count(textureID)) {
+            auto& meta = cache[textureID];
+            LoadedBank& bank = g_OpenBanks[g_ActiveBankIndex];
+
+            std::string fname = "tex_" + std::to_string(textureID) + ".dds";
+            std::string fullPath = exportDir + fname;
+
+            std::vector<uint8_t> tempData;
+            bank.Stream->clear();
+            bank.Stream->seekg(meta.Offset, std::ios::beg);
+            tempData.resize(meta.Size + 64);
+            bank.Stream->read((char*)tempData.data(), meta.Size);
+
+            CTextureParser parser;
+            parser.Parse(meta.Info, tempData, meta.Type);
+
+            if (parser.IsParsed && !parser.DecodedPixels.empty()) {
+                if (TextureExporter::ExportDDS(parser, fullPath, 0)) {
+                    return fname;
+                }
+            }
+        }
+    }
+
+    // 2. Process global PC texture banks
     for (auto& bank : g_OpenBanks) {
         if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
             for (int i = 0; i < bank.Entries.size(); ++i) {

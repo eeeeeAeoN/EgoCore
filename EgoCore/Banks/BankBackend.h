@@ -28,7 +28,7 @@ inline std::string g_ShaderCompileError;
 inline bool g_ShowShaderErrorPopup = false;
 
 enum class EBankType {
-    Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio
+    Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio, XboxGraphics
 };
 
 struct BankEntry {
@@ -170,10 +170,21 @@ inline bool HasUnsavedBankChanges() {
     return false;
 }
 
+inline bool IsTextureSubBank(LoadedBank* bank) {
+    if (!bank || bank->ActiveSubBankIndex < 0 || bank->ActiveSubBankIndex >= bank->SubBanks.size()) return false;
+    return StartsWith(bank->SubBanks[bank->ActiveSubBankIndex].Name, "GBANK");
+}
+
+inline bool IsGraphicsSubBank(LoadedBank* bank) {
+    if (!bank || bank->ActiveSubBankIndex < 0 || bank->ActiveSubBankIndex >= bank->SubBanks.size()) return false;
+    return StartsWith(bank->SubBanks[bank->ActiveSubBankIndex].Name, "MBANK");
+}
+
 inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) {
     std::set<std::string> folders;
     for (const auto& sb : subBanks) folders.insert(sb.Name);
 
+    if (folders.count("MBANK_ALLMESHES") && (folders.count("GBANK_MAIN") || folders.count("GBANK_GUI"))) return EBankType::XboxGraphics;
     if (folders.count("GBANK_MAIN_PC") || folders.count("GBANK_GUI_PC")) return EBankType::Textures;
     if (folders.count("MBANK_ALLMESHES")) return EBankType::Graphics;
     if (folders.count("GBANK_FRONT_END_PC")) return EBankType::Frontend;
@@ -266,7 +277,7 @@ inline void UpdateFilter(LoadedBank& bank) {
     std::string filter = bank.FilterText;
     std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
 
-    bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects);
+    bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank)));
 
     for (size_t i = 0; i < bank.Entries.size(); i++) {
         if (bank.FilterTypeMask != -1) {

@@ -195,7 +195,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
         }
     }
 
-    if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend) {
+    if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || (bank->Type == EBankType::XboxGraphics && IsTextureSubBank(bank))) {
         if (bank->SubheaderCache.count(idx)) g_TextureParser.Parse(bank->SubheaderCache[idx], bank->CurrentEntryRawData, e.Type);
         g_TextureParser.PendingName = e.Name;
     }
@@ -350,7 +350,7 @@ inline void InitializeBank(LoadedBank& bank) {
         }
         if (tIdx != -1) LoadSubBankEntries(&bank, tIdx);
     }
-    else if (bank.Type == EBankType::Graphics) {
+    else if (bank.Type == EBankType::Graphics || bank.Type == EBankType::XboxGraphics) {
         for (int i = 0; i < bank.SubBanks.size(); i++) if (bank.SubBanks[i].Name == "MBANK_ALLMESHES") { LoadSubBankEntries(&bank, i); break; }
     }
     else if (!bank.SubBanks.empty()) {

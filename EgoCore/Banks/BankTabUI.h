@@ -399,7 +399,7 @@ static void DrawBankTab() {
                     }
 
                     float searchAvail = ImGui::GetContentRegionAvail().x;
-                    bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || bank.Type == EBankType::Graphics);
+                    bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Graphics || bank.Type == EBankType::XboxGraphics);
 
                     if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
                         ImGui::SetNextItemWidth(searchAvail - 35.0f);
@@ -465,7 +465,7 @@ static void DrawBankTab() {
                                 if (ImGui::RadioButton("Groups (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("Narrator Lists (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
                             }
-                            else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+                            if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank))) {
                                 ImGui::TextColored(ImVec4(0, 1, 1, 1), "Texture Type:");
                                 if (ImGui::RadioButton("Show All Types##Tex", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("Graphic Single (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
@@ -483,7 +483,7 @@ static void DrawBankTab() {
                                 if (ImGui::RadioButton("DXT5 / Bump DXT5", bank.FilterTextureFormatMask == 2)) { bank.FilterTextureFormatMask = 2; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("ARGB8888", bank.FilterTextureFormatMask == 3)) { bank.FilterTextureFormatMask = 3; UpdateFilter(bank); }
                             }
-                            else if (bank.Type == EBankType::Graphics) {
+                            else if (bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) {
                                 ImGui::TextColored(ImVec4(0, 1, 0, 1), "Mesh Types:");
                                 if (ImGui::RadioButton("Show All Types##Gfx", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
                                 if (ImGui::RadioButton("Static Mesh", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
@@ -1041,13 +1041,13 @@ static void DrawBankTab() {
 
                     ImGui::Separator();
 
-                    if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) DrawTextureProperties();
-                    else if (bank.Type == EBankType::Effects) {DrawParticleProperties(g_ActiveParticleEmitter);}
+                    if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank))) DrawTextureProperties();
+                    else if (bank.Type == EBankType::Effects) { DrawParticleProperties(g_ActiveParticleEmitter); }
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
-                    else if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
+                    else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
                     else if (bank.Type == EBankType::Shaders) { DrawShaderProperties(e.ID); }
-                    else if (bank.Type == EBankType::Graphics && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
+                    else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
                         DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
                     }
                     else if (bank.Type == EBankType::Fonts) {
