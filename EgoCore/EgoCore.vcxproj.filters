@@ -264,13 +264,16 @@
     <ClInclude Include="Fonts\StreamingFontProperties.h">
       <Filter>Source Files\Fonts</Filter>
     </ClInclude>
-    <ClInclude Include="EventBackend.h">
+    <ClInclude Include="Definitions\EventBackend.h">
       <Filter>Source Files\Definitions</Filter>
     </ClInclude>
-    <ClInclude Include="ParticleParser.h">
+    <ClInclude Include="Particles\ParticleParser.h">
       <Filter>Source Files\Particles</Filter>
     </ClInclude>
-    <ClInclude Include="ParticleProperties.h">
+    <ClInclude Include="Particles\ParticleProperties.h">
+      <Filter>Source Files\Particles</Filter>
+    </ClInclude>
+    <ClInclude Include="Particles\ParticleCompiler.h">
       <Filter>Source Files\Particles</Filter>
     </ClInclude>
   </ItemGroup>

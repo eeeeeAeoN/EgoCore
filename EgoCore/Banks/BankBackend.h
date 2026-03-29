@@ -79,6 +79,7 @@ struct StagedEntry {
     std::shared_ptr<std::vector<std::string>> NarratorList;
     std::shared_ptr<CLipSyncData> LipSync;
     std::shared_ptr<std::string> ShaderCode;
+    std::shared_ptr<CParticleEmitter> Particle;
 };
 
 struct LoadedBank {

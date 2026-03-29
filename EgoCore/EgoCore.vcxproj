@@ -38,7 +38,7 @@
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
-    <ClInclude Include="EventBackend.h" />
+    <ClInclude Include="Definitions\EventBackend.h" />
     <ClInclude Include="Fonts\FontBuilder.h" />
     <ClInclude Include="Fonts\FontParser.h" />
     <ClInclude Include="Fonts\FontProperties.h" />
@@ -55,8 +55,9 @@
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
-    <ClInclude Include="ParticleParser.h" />
-    <ClInclude Include="ParticleProperties.h" />
+    <ClInclude Include="Particles\ParticleCompiler.h" />
+    <ClInclude Include="Particles\ParticleParser.h" />
+    <ClInclude Include="Particles\ParticleProperties.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Shaders\ShaderCompiler.h" />
     <ClInclude Include="Shaders\ShaderParser.h" />
@@ -214,7 +215,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

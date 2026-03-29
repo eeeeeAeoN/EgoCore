@@ -2,6 +2,7 @@
 #include "BankLoader.h"
 #include "TextureBuilder.h"
 #include "BigBankCompiler.h"
+#include "ParticleCompiler.h"
 #include "GltfExporter.h"
 #include "TextCompiler.h"
 #include "LipSyncCompiler.h"
@@ -545,6 +546,50 @@ inline void CreateNewTextEntry(LoadedBank* bank, int type) {
     g_BankStatus = "Added and Staged Text Entry ID " + std::to_string(newEntry.ID);
 }
 
+inline void CreateNewParticleEntry(LoadedBank* bank) {
+    if (!bank) return;
+    uint32_t newID = GetNextFreeID(bank);
+
+    BankEntry be;
+    be.ID = newID;
+    be.Type = 0;
+    be.Name = "New_Particle_" + std::to_string(newID);
+    be.FriendlyName = be.Name;
+    be.Size = 0;
+    be.InfoSize = 0;
+    be.Offset = 0;
+    be.Timestamp = 0;
+
+    CParticleEmitter newEmitter;
+    newEmitter.Name = be.Name;
+    newEmitter.Magic = 0x64;
+
+    CParticleSystem sys;
+    sys.Name = "System 1";
+
+    auto emitterComp = CreateComponent("CPSCEmitterGeneric");
+    if (emitterComp) {
+        emitterComp->ClassName = "CPSCEmitterGeneric";
+        sys.Components.push_back(emitterComp);
+    }
+
+    newEmitter.Systems.push_back(sys);
+
+    bank->Entries.push_back(be);
+    int newIndex = (int)bank->Entries.size() - 1;
+
+    StagedEntry staged;
+    staged.Particle = std::make_shared<CParticleEmitter>(newEmitter);
+    bank->StagedEntries[newIndex] = staged;
+
+    bank->FilterText[0] = '\0';
+    UpdateFilter(*bank);
+    SelectEntry(bank, newIndex);
+
+    g_ActiveParticleEmitter = newEmitter;
+    g_BankStatus = "Added and Staged new Particle Emitter.";
+}
+
 inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
     if (!bank || sourceIndex < 0 || sourceIndex >= bank->Entries.size()) return;
 
@@ -600,6 +645,7 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
     }
 
     newEntry.Offset = 0;
+
     std::vector<uint8_t> sourceData;
     if (bank->ModifiedEntryData.count(sourceIndex)) sourceData = bank->ModifiedEntryData[sourceIndex];
     else {
@@ -609,7 +655,19 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
 
     if (bank->Type == EBankType::Text && newEntry.Type == 0) {
         CTextParser p; p.Parse(sourceData, newEntry.Type);
-        if (p.IsParsed) { p.TextData.Identifier += "_COPY"; newEntry.Name = p.TextData.Identifier; newEntry.FriendlyName = p.TextData.Identifier; sourceData = p.Recompile(); }
+        if (p.IsParsed) {
+            p.TextData.Identifier += "_COPY";
+            newEntry.Name = p.TextData.Identifier;
+            newEntry.FriendlyName = p.TextData.Identifier;
+            sourceData = p.Recompile();
+        }
+    }
+    else if (bank->Type == EBankType::Effects) {
+        CParticleEmitter tempEmitter;
+        CParticleStream pStream(sourceData);
+        tempEmitter.Parse(pStream);
+        tempEmitter.Name = newEntry.Name;
+        sourceData = ParticleCompiler::Compile(tempEmitter);
     }
 
     newEntry.Size = (uint32_t)sourceData.size();
@@ -635,7 +693,8 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
         g_LipSyncState.PendingAdds[sbIdx][newEntry.ID] = ae;
     }
 
-    UpdateFilter(*bank); SelectEntry(bank, newIndex); g_BankStatus = "Duplicated Entry ID " + std::to_string(newEntry.ID);
+    UpdateFilter(*bank); SelectEntry(bank, newIndex);
+    g_BankStatus = "Duplicated Entry ID " + std::to_string(newEntry.ID);
 }
 
 inline void DeleteBankEntry(LoadedBank* bank, int index) {
@@ -819,6 +878,11 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             e.InfoSize = 4;
         }
 
+        else if (staged.Particle) {
+            newBytes = ParticleCompiler::Compile(*staged.Particle);
+            e.InfoSize = 0; // Particles do not use TOC subheader metadata
+        }
+
         else if (staged.ShaderCode) {
             printf("[Shader] FlushStagedEntries reached for idx %d\n", idx);
             printf("[Shader] Code length: %zu\n", staged.ShaderCode->length());
@@ -852,7 +916,7 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 g_BankStatus = "Shader Compile Error: Check Popup";
                 continue;
             }
-}
+        }
 
         if (!newBytes.empty()) {
             bank->ModifiedEntryData[idx] = newBytes;
@@ -1163,7 +1227,13 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         g_BankStatus = "Audio Metadata staged to RAM.";
         return; // Audio uses its own bespoke backend, so no need to put in Staged map
     }
-    if (!staged.MeshLODs.empty() || staged.Anim || staged.Physics || staged.Texture || staged.Text || staged.TextGroup || staged.NarratorList || staged.LipSync || staged.ShaderCode) {
+    else if (bank->Type == EBankType::Effects) {
+        if (g_ActiveParticleEmitter.Magic != 0) {
+            staged.Particle = std::make_shared<CParticleEmitter>(g_ActiveParticleEmitter);
+            g_BankStatus = "Particle Emitter staged for compilation.";
+        }
+    }
+    if (!staged.MeshLODs.empty() || staged.Anim || staged.Physics || staged.Texture || staged.Text || staged.TextGroup || staged.NarratorList || staged.LipSync || staged.ShaderCode || staged.Particle) {
         bank->StagedEntries[bank->SelectedEntryIndex] = staged;
     }
 
