@@ -1,6 +1,7 @@
 #pragma once
 #include "DefBackend.h"
-#include "BankBackend.h" 
+#include "BankBackend.h"
+#include "BinaryParser.h"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <filesystem>
@@ -220,20 +221,9 @@ static void CompileAllDefs_Stealth() {
         return;
     }
 
-    std::string exePath = g_DefWorkspace.RootPath + "\\ego_r.exe";
-    if (!fs::exists(exePath)) {
-        g_CompileStatus = "Error: ego_r.exe not found!";
-        return;
-    }
-
     if (!g_OpenBanks.empty()) {
         g_OpenBanks.clear();
         g_ActiveBankIndex = -1;
-    }
-
-    if (!PatchIniFile(g_DefWorkspace.RootPath)) {
-        g_CompileStatus = "Error: Failed to patch INI file.";
-        return;
     }
 
     g_IsCompiling = true;
@@ -241,7 +231,29 @@ static void CompileAllDefs_Stealth() {
 
     std::thread watchdog(ErrorWatchdogThread);
 
-    std::thread([exePath, watchdog = std::move(watchdog)]() mutable {
+    std::thread([watchdog = std::move(watchdog)]() mutable {
+
+        g_CompileStatus = "Compiling Sound Binaries...";
+        std::string log;
+        std::string defsPath = g_DefWorkspace.RootPath + "\\Data\\Defs";
+        BinaryParser::CompileSoundBinaries(defsPath, log);
+
+        std::string exePath = g_DefWorkspace.RootPath + "\\ego_r.exe";
+        if (!fs::exists(exePath)) {
+            g_CompileStatus = "Sound Binaries compiled, but ego_r.exe not found! Game defs skipped.";
+            g_StopWatchdog = true;
+            if (watchdog.joinable()) watchdog.join();
+            g_IsCompiling = false;
+            return;
+        }
+
+        if (!PatchIniFile(g_DefWorkspace.RootPath)) {
+            g_CompileStatus = "Sound Binaries compiled, but INI patch failed! Game defs skipped.";
+            g_StopWatchdog = true;
+            if (watchdog.joinable()) watchdog.join();
+            g_IsCompiling = false;
+            return;
+        }
 
         g_CompileStatus = "Compiling Frontend (1/2)...";
         RunHiddenFable(exePath, false);
@@ -254,7 +266,7 @@ static void CompileAllDefs_Stealth() {
 
         RestoreIniFile();
 
-        g_CompileStatus = "Success! Definitions Compiled.";
+        g_CompileStatus = "Success! Definitions & Binaries Compiled.";
         g_IsCompiling = false;
         }).detach();
 }

@@ -47,15 +47,6 @@ static void DrawBankExplorer() {
                 if (!path.empty()) LoadBank(path);
             }
 
-            if (ImGui::MenuItem("Open Binary Definition (.bin)")) {
-                std::string path = OpenFileDialog("Binary Files\0*.bin;*.h\0All Files\0*.*\0");
-                if (!path.empty()) {
-                    BinaryParser parser;
-                    parser.Parse(path);
-                    if (parser.Data.IsParsed) g_LoadedBinaries.push_back(std::move(parser));
-                }
-            }
-
             if (ImGui::MenuItem("Change Game Folder")) {
                 std::string root = OpenFolderDialog();
                 if (!root.empty()) {
@@ -79,12 +70,7 @@ static void DrawBankExplorer() {
         }
         ImGui::SameLine();
 
-        if (!g_LoadedBinaries.empty()) {
-            ImGui::TextDisabled("| Loaded %zu Binaries", g_LoadedBinaries.size());
-        }
-        else {
-            ImGui::TextDisabled("| %s", g_BankStatus.c_str());
-        }
+        ImGui::TextDisabled("| %s", g_BankStatus.c_str());
 
         ImGui::EndMainMenuBar();
     }
@@ -96,10 +82,6 @@ static void DrawBankExplorer() {
         }
         if (ImGui::BeginTabItem("Game Definitions")) {
             DrawDefTab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Binary Definitions")) {
-            DrawBinaryTab();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

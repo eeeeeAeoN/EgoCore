@@ -1109,7 +1109,7 @@ inline void SaveEntryChanges(LoadedBank* bank) {
             g_BankStatus = "Mesh LOD staged for compilation.";
         }
     }
-    else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || bank->Type == EBankType::Effects) {
+    else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend) {
         if (!g_TextureParser.PendingName.empty() && g_TextureParser.PendingName != e.Name) {
             RenameTextureEntry(bank, bank->SelectedEntryIndex, g_TextureParser.PendingName);
         }

@@ -52,6 +52,9 @@
     <Filter Include="Source Files\Fonts">
       <UniqueIdentifier>{266f62be-01c9-4bd6-b04d-10b76435646f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Particles">
+      <UniqueIdentifier>{f14aad6a-8dc7-462e-b94f-cc8409602885}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -260,6 +263,15 @@
     </ClInclude>
     <ClInclude Include="Fonts\StreamingFontProperties.h">
       <Filter>Source Files\Fonts</Filter>
+    </ClInclude>
+    <ClInclude Include="EventBackend.h">
+      <Filter>Source Files\Definitions</Filter>
+    </ClInclude>
+    <ClInclude Include="ParticleParser.h">
+      <Filter>Source Files\Particles</Filter>
+    </ClInclude>
+    <ClInclude Include="ParticleProperties.h">
+      <Filter>Source Files\Particles</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

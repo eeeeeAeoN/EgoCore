@@ -6,6 +6,7 @@
 #include "BankEditor.h" 
 #include "ShaderProperties.h"
 #include "FontProperties.h"
+#include "ParticleProperties.h"
 #include "StreamingFontProperties.h"
 #include <thread>
 
@@ -1002,7 +1003,8 @@ static void DrawBankTab() {
 
                     ImGui::Separator();
 
-                    if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) DrawTextureProperties();
+                    if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) DrawTextureProperties();
+                    else if (bank.Type == EBankType::Effects) {DrawParticleProperties(g_ActiveParticleEmitter);}
                     else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, [&]() { SaveEntryChanges(&bank); }, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
                     else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, [&]() { SaveEntryChanges(&bank); }, nullptr);
                     else if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) DrawMeshProperties([&]() { SaveEntryChanges(&bank); });
@@ -1162,7 +1164,7 @@ static void DrawBankTab() {
 
         g_ForceTabSwitch = false;
 
-        if (ImGui::TabItemButton("+ Load Bank (.BIG / .LUT / .LUG)", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+        if (ImGui::TabItemButton("+ Load Bank", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
             std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut;*.lug\0All Files\0*.*\0");
             if (!path.empty()) LoadBank(path);
         }

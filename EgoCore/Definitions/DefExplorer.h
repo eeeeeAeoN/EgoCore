@@ -5,6 +5,7 @@
 #include "BankExplorer.h"
 #include "ConfigBackend.h" 
 #include "CompilerBackend.h"
+#include "EventBackend.h"
 
 static void DrawDefTab() {
     static float leftPaneWidth = 350.0f;
@@ -56,7 +57,7 @@ static void DrawDefTab() {
         }
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles definitions for BOTH Frontend and Game.\n(Generates frontend.bin and game.bin)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles game definitions, sound headers and the star_chart.tga into their respective binaries.\n(Game definition binaries and star.dat will only be compiled if debug Ego_r executable is present in the Fable directory.)");
 
         if (g_IsCompiling) { ImGui::OpenPopup("Compiling..."); }
 
@@ -289,11 +290,10 @@ static void DrawDefTab() {
                     }
                 }
 
-                ImGui::Text("Header Filter");
-                ImGui::InputText("##hFilter", g_DefWorkspace.HeaderFilter, 128);
-                ImGui::Separator();
+                ImGui::InputText("Filter", g_DefWorkspace.HeaderFilter, 128);
                 std::string hFilter = g_DefWorkspace.HeaderFilter;
                 std::transform(hFilter.begin(), hFilter.end(), hFilter.begin(), ::tolower);
+                ImGui::Separator();
 
                 if (ImGui::BeginListBox("##headerList", ImVec2(-FLT_MIN, -FLT_MIN))) {
                     for (int i = 0; i < g_DefWorkspace.AllEnums.size(); i++) {
@@ -372,6 +372,201 @@ static void DrawDefTab() {
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
+
+            if (ImGui::BeginTabItem("Events")) {
+                if (!g_EventWorkspace.SoundEvents.IsLoaded && g_DefWorkspace.IsLoaded) {
+                    g_EventWorkspace.LoadAll(g_DefWorkspace.RootPath);
+                }
+
+                ImGui::BeginChild("EvtLeftPane", ImVec2(leftPaneWidth, 0), true);
+
+                const char* fileTypes[] = { "Sound Animation Events", "Game Animation Events" };
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo("##evtcontext", fileTypes[g_EventWorkspace.SelectedFileType])) {
+                    for (int i = 0; i < 2; i++) {
+                        bool isSelected = (g_EventWorkspace.SelectedFileType == i);
+                        if (ImGui::Selectable(fileTypes[i], isSelected)) {
+                            if (g_EventWorkspace.SelectedFileType != i) {
+                                g_EventWorkspace.SelectedFileType = i;
+                                g_EventWorkspace.SelectedEventIndex = -1;
+                                g_EventWorkspace.Editor.SetText("");
+                            }
+                        }
+                        if (isSelected) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::Separator();
+
+                EventFile* activeFile = g_EventWorkspace.GetActiveFile();
+
+                if (ImGui::Button("+", ImVec2(24, 0))) {
+                    EventEntry newEvent;
+                    newEvent.AnimName = "NEW_ANIMATION_EVENT";
+                    newEvent.Content = "";
+                    activeFile->Events.push_back(newEvent);
+                    g_EventWorkspace.SelectedEventIndex = (int)activeFile->Events.size() - 1;
+                    g_EventWorkspace.Editor.SetText("");
+                    g_EventWorkspace.OriginalContent = "";
+                    activeFile->Save();
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Event");
+
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 45.0f);
+                ImGui::InputText("Filter", g_EventWorkspace.FilterText, 128);
+
+                std::string filterLower = g_EventWorkspace.FilterText;
+                std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
+                ImGui::Separator();
+
+                static int eventToDeleteIndex = -1;
+                static bool triggerEventDeletePopup = false;
+
+                ImGui::BeginChild("EvtList");
+                if (activeFile->IsLoaded) {
+                    for (int i = 0; i < (int)activeFile->Events.size(); i++) {
+                        auto& ev = activeFile->Events[i];
+                        if (!filterLower.empty()) {
+                            std::string n = ev.AnimName;
+                            std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                            if (n.find(filterLower) == std::string::npos) continue;
+                        }
+
+                        ImGui::PushID(i);
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+
+                        if (ImGui::SmallButton("-")) {
+                            if (g_AppConfig.ShowDeleteConfirm) {
+                                eventToDeleteIndex = i;
+                                triggerEventDeletePopup = true;
+                            }
+                            else {
+                                activeFile->Events.erase(activeFile->Events.begin() + i);
+                                if (g_EventWorkspace.SelectedEventIndex == i) {
+                                    g_EventWorkspace.SelectedEventIndex = -1;
+                                    g_EventWorkspace.Editor.SetText("");
+                                }
+                                else if (g_EventWorkspace.SelectedEventIndex > i) {
+                                    g_EventWorkspace.SelectedEventIndex--;
+                                }
+                                activeFile->Save();
+                                ImGui::PopStyleColor(3);
+                                ImGui::PopID();
+                                continue;
+                            }
+                        }
+                        ImGui::PopStyleColor(3);
+                        ImGui::PopID();
+
+                        ImGui::SameLine();
+
+                        std::string prefix = g_EventWorkspace.SelectedFileType == 0 ? "SoundEvent" : "GameEvent";
+                        std::string label = prefix + std::to_string(i + 1) + ": " + ev.AnimName + "##" + std::to_string(i);
+
+                        bool isSelected = (g_EventWorkspace.SelectedEventIndex == i);
+                        if (ImGui::Selectable(label.c_str(), isSelected)) {
+                            if (g_EventWorkspace.SelectedEventIndex != -1 && g_EventWorkspace.IsDirty()) {
+                                activeFile->Events[g_EventWorkspace.SelectedEventIndex].Content = g_EventWorkspace.Editor.GetText();
+                            }
+                            g_EventWorkspace.SelectedEventIndex = i;
+                            g_EventWorkspace.Editor.SetText(ev.Content);
+                            g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                        }
+                    }
+                }
+                else {
+                    ImGui::TextDisabled("File not found or loaded.");
+                }
+                ImGui::EndChild(); // End EvtList
+
+                if (triggerEventDeletePopup) { ImGui::OpenPopup("DeleteEventConfirmation"); triggerEventDeletePopup = false; }
+                if (ImGui::BeginPopupModal("DeleteEventConfirmation", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::Text("Do you want to delete '%s'?", activeFile->Events[eventToDeleteIndex].AnimName.c_str());
+                    ImGui::Separator();
+                    static bool dontShowDelete = false; ImGui::Checkbox("Don't show again", &dontShowDelete);
+                    if (ImGui::Button("Yes", ImVec2(100, 0))) {
+                        if (dontShowDelete) { g_AppConfig.ShowDeleteConfirm = false; SaveConfig(); }
+
+                        activeFile->Events.erase(activeFile->Events.begin() + eventToDeleteIndex);
+                        if (g_EventWorkspace.SelectedEventIndex == eventToDeleteIndex) {
+                            g_EventWorkspace.SelectedEventIndex = -1;
+                            g_EventWorkspace.Editor.SetText("");
+                        }
+                        else if (g_EventWorkspace.SelectedEventIndex > eventToDeleteIndex) {
+                            g_EventWorkspace.SelectedEventIndex--;
+                        }
+                        activeFile->Save();
+
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(100, 0))) ImGui::CloseCurrentPopup();
+                    ImGui::EndPopup();
+                }
+
+                ImGui::EndChild(); // End EvtLeftPane
+
+                ImGui::SameLine();
+                ImGui::InvisibleButton("vsplitterEvt", ImVec2(4.0f, -1.0f));
+                if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                if (ImGui::IsItemActive()) leftPaneWidth += ImGui::GetIO().MouseDelta.x;
+                ImGui::SameLine();
+
+                ImGui::BeginChild("EvtRightPane", ImVec2(0, 0), true);
+                if (g_EventWorkspace.SelectedEventIndex != -1 && g_EventWorkspace.SelectedEventIndex < activeFile->Events.size()) {
+                    auto& ev = activeFile->Events[g_EventWorkspace.SelectedEventIndex];
+
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("Animation:");
+                    ImGui::SameLine();
+
+                    static char animNameBuf[256];
+                    static int lastEvtIdx = -1;
+                    static int lastEvtType = -1;
+                    if (lastEvtIdx != g_EventWorkspace.SelectedEventIndex || lastEvtType != g_EventWorkspace.SelectedFileType) {
+                        strncpy_s(animNameBuf, sizeof(animNameBuf), ev.AnimName.c_str(), _TRUNCATE);
+                        lastEvtIdx = g_EventWorkspace.SelectedEventIndex;
+                        lastEvtType = g_EventWorkspace.SelectedFileType;
+                    }
+
+                    ImGui::SetNextItemWidth(300);
+                    if (ImGui::InputText("##animNameEdit", animNameBuf, 256)) {
+                        ev.AnimName = animNameBuf;
+                    }
+
+                    ImGui::SameLine();
+                    if (g_EventWorkspace.IsDirty() || std::string(animNameBuf) != ev.AnimName) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
+                        if (ImGui::Button("SAVE CHANGES")) {
+                            ev.Content = g_EventWorkspace.Editor.GetText();
+                            g_EventWorkspace.OriginalContent = ev.Content;
+                            activeFile->Save();
+                        }
+                        ImGui::PopStyleColor();
+                    }
+                    else {
+                        if (ImGui::Button("SAVE FILE")) {
+                            ev.Content = g_EventWorkspace.Editor.GetText();
+                            activeFile->Save();
+                        }
+                    }
+
+                    ImGui::Separator();
+                    g_EventWorkspace.Editor.Render("EventEditor");
+
+                    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+                        ev.Content = g_EventWorkspace.Editor.GetText();
+                        g_EventWorkspace.OriginalContent = ev.Content;
+                        activeFile->Save();
+                    }
+                }
+                ImGui::EndChild();
+
+                ImGui::EndTabItem();
+            }
+
             ImGui::EndTabBar();
         }
     }

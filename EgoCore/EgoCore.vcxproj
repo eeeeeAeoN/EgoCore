@@ -38,6 +38,7 @@
     <ClInclude Include="Definitions\CompilerBackend.h" />
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
+    <ClInclude Include="EventBackend.h" />
     <ClInclude Include="Fonts\FontBuilder.h" />
     <ClInclude Include="Fonts\FontParser.h" />
     <ClInclude Include="Fonts\FontProperties.h" />
@@ -54,6 +55,8 @@
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
+    <ClInclude Include="ParticleParser.h" />
+    <ClInclude Include="ParticleProperties.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Shaders\ShaderCompiler.h" />
     <ClInclude Include="Shaders\ShaderParser.h" />

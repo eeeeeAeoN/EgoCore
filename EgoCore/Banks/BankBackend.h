@@ -4,6 +4,7 @@
 #include "BBMParser.h"
 #include "AnimParser.h"
 #include "TextureParser.h"
+#include "ParticleParser.h"
 #include "AudioBackend.h" 
 #include "TextParser.h" 
 #include "LugParser.h"
@@ -130,6 +131,7 @@ inline std::string g_BankStatus = "Ready";
 inline C3DMeshContent g_ActiveMeshContent;
 inline CBBMParser g_BBMParser;
 inline CTextureParser g_TextureParser;
+inline CParticleEmitter g_ActiveParticleEmitter;
 inline bool g_MeshUploadNeeded = false;
 inline C3DAnimationInfo g_ActiveAnim;
 inline bool             g_AnimParseSuccess = false;
