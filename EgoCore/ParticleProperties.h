@@ -53,46 +53,78 @@ inline void DrawParticleComponent(const std::shared_ptr<CParticleComponent>& com
             DrawColour("StartColour", rs->StartColour);
             DrawColour("MidColour", rs->MidColour);
             DrawColour("EndColour", rs->EndColour);
-            ImGui::Text("FaceMe2D: %d | FaceMe3D: %d | CrossedSprites: %d", rs->FaceMe2D, rs->FaceMe3D, rs->CrossedSprites);
-            ImGui::Text("AlphaFadeEnable: %d | SizeFadeEnable: %d", rs->AlphaFadeEnable, rs->SizeFadeEnable);
-            ImGui::TextDisabled("... plus 19 packed config ULONGs");
+
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::TextDisabled("Render Settings:");
+            ImGui::Text("Render Size: Start %.3f | End %.3f", rs->StartRenderSize, rs->EndRenderSize);
+            ImGui::Text("Alpha Fade Min: %.3f | Size Fade Min: %.3f", rs->AlphaFadeMinimum, rs->SizeFadeMinimum);
+            ImGui::Text("Flicker Speed: %.3f | Flicker Bias: %.3f", rs->FlickerSpeed, rs->FlickerBias);
+            ImGui::Text("Anim Time Secs: %.3f", rs->AnimationTimeSecs);
+            ImGui::Text("Trail Width: %.3f | Trail Length: %u", rs->TrailWidth, rs->TrailLengthInteger);
+
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::TextDisabled("Flags & Modes:");
+            ImGui::Text("BlendMode: %u | TrailBlendMode: %u", rs->BlendMode, rs->TrailBlendMode);
+            ImGui::Text("UseColours: Start[%d] Mid[%d] End[%d]", rs->FlagUseStartCol, rs->FlagUseMidCol, rs->FlagUseEndCol);
+            ImGui::Text("Fades: Alpha[%d] Size[%d] Flicker[%d] ForceAnim[%d]", rs->FlagAlphaFade, rs->FlagSizeFade, rs->FlagFlicker, rs->FlagForceAnimTime);
         }
         else if (auto* un = dynamic_cast<CPSCUpdateNormal*>(comp.get())) {
             ImGui::Text("DecalEmitterName: \"%s\"", un->DecalEmitterName.c_str());
             ImGui::Text("SystemLifeSecs: %.3f | ParticleLifeSecs: %.3f", un->SystemLifeSecs, un->ParticleLifeSecs);
             ImGui::Text("WindFactor: %.3f | GravityFactor: %.3f | AirResistance: %.3f", un->WindFactor, un->GravityFactor, un->AirResistance);
+            ImGui::Text("ParticleBounce: %.3f | AccelScale: %.3f", un->ParticleBounce, un->ParticleAccelerationScale);
             DrawVector3("ParticleSystemOffset", un->ParticleSystemOffset);
             DrawVector3("ParticleAcceleration", un->ParticleAcceleration);
             DrawVector3("RotationAxis", un->RotationAxis);
             ImGui::Text("RotationSpeed: Min %.3f | Max %.3f", un->RotationMinAngleSpeed, un->RotationMaxAngleSpeed);
+            DrawVector3("RandomisePosSpeed", un->RandomisePosSpeed);
+            DrawVector3("RandomisePosScale", un->RandomisePosScale);
+            ImGui::TextDisabled("(Plus 18 state flags)");
         }
         else if (auto* eg = dynamic_cast<CPSCEmitterGeneric*>(comp.get())) {
             ImGui::Text("EmitterPosParam: %u | DirectionParamName: %u", eg->EmitterPosParam, eg->DirectionParamName);
-            ImGui::Text("Fixed-Point Speeds (Min/Max/Rate): %u, %u, %u", eg->UnkD, eg->UnkE, eg->UnkF);
-            ImGui::Text("HasSpline: %s", eg->HasSpline ? "TRUE" : "FALSE");
+            ImGui::Text("Emitter Type: %u | Particles To Start (Base/Rand): %u / %u", eg->EmitterType, eg->NoParticlesToStart, eg->NoParticlesToStartRand);
+
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::TextDisabled("Fixed-Point Decoded Values:");
+            ImGui::Text("Particles Per Sec: %.3f", eg->ParticlesPerSecond);
+            ImGui::Text("Speed: Min %.3f | Max %.3f", eg->MinSpeed, eg->MaxSpeed);
+            ImGui::Text("Emitter Size: %.3f | Radial Bias: %.3f", eg->EmitterSize, eg->RadialBias);
+            ImGui::Text("Life Secs: %.3f | Start Time: %.3f | Timeline Secs: %.3f", eg->EmitterLifeSecs, eg->EmitterStartTime, eg->EmitterTimelineSecs);
+            ImGui::Text("Angular Perturbation Int: %u", eg->AngularPerturbationInteger);
+
+            ImGui::Dummy(ImVec2(0, 5));
+            DrawVector3("Custom Direction", eg->CustomDirection);
+            DrawVector3("Non-Uniform Scaling", eg->NonUniformScaling);
+
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::TextDisabled("Flags:");
+            ImGui::Text("Solid: %d | OppositeDir: %d", eg->Solid, eg->OppositeDirection);
+            ImGui::Text("Orientation: XY[%d] XZ[%d] YZ[%d]", eg->OrientationXY, eg->OrientationXZ, eg->OrientationYZ);
+            ImGui::Text("Direction Rules: Custom[%d] Outward[%d] Forward[%d] Rand2D[%d] Rand3D[%d] Param[%d]",
+                eg->UseCustomDirection, eg->UseOutwardDirection, eg->UseForwardDirection, eg->UseRandom2DDirection, eg->UseRandom3DDirection, eg->UseParamDirection);
+
             if (eg->HasSpline) {
-                ImGui::Text("  SplineTension: %.3f", eg->SplineTension);
-                ImGui::Text("  Control Points: %d", (int)eg->SplineControlPoints.size());
+                ImGui::Separator();
+                ImGui::Text("SplineTension: %.3f", eg->SplineTension);
+                ImGui::Text("Control Points: %d", (int)eg->SplineControlPoints.size());
             }
         }
         else if (auto* rm = dynamic_cast<CPSCRenderMesh*>(comp.get())) {
             ImGui::Text("BankIndex: %d | TrailBankIndex: %d", rm->BankIndex, rm->TrailBankIndex);
             DrawColour("StartColour", rm->StartColour);
-            DrawColour("TrailStartColour", rm->TrailStartColour);
+            DrawColour("MidColour", rm->MidColour);
+            DrawColour("EndColour", rm->EndColour);
+            DrawColour("TrailStartCol", rm->TrailStartColour);
             ImGui::Text("RenderSizeParam: %u", rm->RenderSizeParam);
-        }
-        else if (auto* dr = dynamic_cast<CPSCDecalRenderer*>(comp.get())) {
-            ImGui::Text("DecalBankIndex: %d | LifeSecs: %.3f", dr->DecalBankIndex, dr->DecalLifeSecs);
-            DrawColour("StartColour", dr->StartColour);
-            DrawColour("MidColour", dr->MidColour);
-            DrawColour("EndColour", dr->EndColour);
-            ImGui::Text("MaxPoolSize: %.3f | MaxPoolLife: %.3f", dr->MaxPoolSize, dr->MaxPoolLife);
-            ImGui::Text("PoolFrameIncrease: %.3f | StencilWidth: %.3f", dr->PoolFrameIncreaseRate, dr->StencilCubeWidth);
+            ImGui::TextDisabled("(Plus 95 bytes of packed config fields)");
         }
         else if (auto* lgt = dynamic_cast<CPSCLight*>(comp.get())) {
             ImGui::Text("LightLifeSecs: %.3f | RespawnDelay: %.3f", lgt->LightLifeSecs, lgt->LightRespawnDelaySecs);
             ImGui::Text("RenderWorldRadius: Start %.3f | End %.3f", lgt->LightStartRenderWorldRadius, lgt->LightEndRenderWorldRadius);
             DrawColour("LightStartColour", lgt->LightStartColour);
+            DrawColour("LightMidColour", lgt->LightMidColour);
+            DrawColour("LightEndColour", lgt->LightEndColour);
         }
         else if (auto* sp = dynamic_cast<CPSCSpline*>(comp.get())) {
             ImGui::Text("SplineBounce: %d | ScaleSplineSpeed: %d", sp->SplineBounce, sp->ScaleSplineSpeed);
@@ -113,6 +145,14 @@ inline void DrawParticleComponent(const std::shared_ptr<CParticleComponent>& com
         else if (auto* ob = dynamic_cast<CPSCOrbit*>(comp.get())) {
             ImGui::Text("CentreParam: %u", ob->CentreParam);
             ImGui::Text("Orbit Floats Extracted: %d", (int)ob->OrbitsData.size());
+        }
+        else if (auto* dr = dynamic_cast<CPSCDecalRenderer*>(comp.get())) {
+            ImGui::Text("DecalBankIndex: %d | LifeSecs: %.3f", dr->DecalBankIndex, dr->DecalLifeSecs);
+            DrawColour("StartColour", dr->StartColour);
+            DrawColour("MidColour", dr->MidColour);
+            DrawColour("EndColour", dr->EndColour);
+            ImGui::Text("MaxPoolSize: %.3f | MaxPoolLife: %.3f", dr->MaxPoolSize, dr->MaxPoolLife);
+            ImGui::Text("PoolFrameIncrease: %.3f | StencilWidth: %.3f", dr->PoolFrameIncreaseRate, dr->StencilCubeWidth);
         }
         else {
             ImGui::TextDisabled("Diagnostic view not implemented for this component type yet.");

@@ -7,7 +7,7 @@
 
 // --- HELPER STRUCTURES ---
 struct C3DVector { float X, Y, Z; };
-struct CRGBColour { uint8_t B, G, R, A; }; // BGRA
+struct CRGBColour { uint8_t B, G, R, A; }; // BGRA in memory
 
 // --- BINARY STREAM READER ---
 class CParticleStream {
@@ -127,35 +127,137 @@ struct CPSCRenderSprite : public CParticleComponent {
     CRGBColour StartColour, MidColour, EndColour;
 
     uint32_t BlendMode, TrailBlendMode, BlendOp, TrailBlendOp;
-    uint32_t ParamE, ParamF, ParamG, ParamH, ParamI, ParamJ, ParamK;
-    uint32_t ParamL, ParamM, ParamN, ParamO, ParamP, ParamQ, ParamR, ParamS;
+    uint32_t SpriteAlignment, NoCrossedSprites;
+    uint32_t FadeInEndInteger, FadeOutBeginInteger;
+    uint32_t FlickerMinAlphaInteger, FlickerMinSizeInteger;
 
-    bool FaceMe2D, FaceMe3D, CrossedSprites;
-    bool FlagD, FlagE;
-    bool AlphaFadeEnable, SizeFadeEnable;
+    float StartRenderSize;
+    float EndRenderSize;
+    float AlphaFadeMinimum;
+    float SizeFadeMinimum;
+    float FlickerSpeed;
+    float FlickerBias;
+
+    uint32_t TrailLengthInteger;
+    float TrailWidth;
+    float AnimationTimeSecs;
+
+    bool FlagUseStartCol, FlagUseMidCol, FlagUseEndCol;
+    bool FlagAlphaFade, FlagSizeFade, FlagFlicker, FlagForceAnimTime;
 
     void Parse(CParticleStream& stream) override {
         SpriteBankIndex = stream.ReadSLONG();
         TrailBankIndex = stream.ReadSLONG();
-        StartColour = stream.ReadColour(); MidColour = stream.ReadColour(); EndColour = stream.ReadColour();
+        StartColour = stream.ReadColour();
+        MidColour = stream.ReadColour();
+        EndColour = stream.ReadColour();
 
         BlendMode = stream.ReadULONG(); TrailBlendMode = stream.ReadULONG();
         BlendOp = stream.ReadULONG(); TrailBlendOp = stream.ReadULONG();
-        ParamE = stream.ReadULONG(); ParamF = stream.ReadULONG(); ParamG = stream.ReadULONG();
-        ParamH = stream.ReadULONG(); ParamI = stream.ReadULONG(); ParamJ = stream.ReadULONG();
-        ParamK = stream.ReadULONG(); ParamL = stream.ReadULONG(); ParamM = stream.ReadULONG();
-        ParamN = stream.ReadULONG(); ParamO = stream.ReadULONG(); ParamP = stream.ReadULONG();
-        ParamQ = stream.ReadULONG(); ParamR = stream.ReadULONG(); ParamS = stream.ReadULONG();
+        SpriteAlignment = stream.ReadULONG(); NoCrossedSprites = stream.ReadULONG();
+        FadeInEndInteger = stream.ReadULONG(); FadeOutBeginInteger = stream.ReadULONG();
+        FlickerMinAlphaInteger = stream.ReadULONG(); FlickerMinSizeInteger = stream.ReadULONG();
 
-        FaceMe2D = stream.ReadEBOOL(); FaceMe3D = stream.ReadEBOOL(); CrossedSprites = stream.ReadEBOOL();
-        FlagD = stream.ReadEBOOL(); FlagE = stream.ReadEBOOL();
-        AlphaFadeEnable = stream.ReadEBOOL(); SizeFadeEnable = stream.ReadEBOOL();
+        StartRenderSize = stream.ReadULONG() / 100.0f;
+        EndRenderSize = stream.ReadULONG() / 100.0f;
+        AlphaFadeMinimum = stream.ReadULONG() / 100.0f;
+        SizeFadeMinimum = stream.ReadULONG() / 100.0f;
+        FlickerSpeed = (float)stream.ReadULONG();
+        FlickerBias = stream.ReadULONG() / 100.0f;
+
+        TrailLengthInteger = stream.ReadULONG();
+        TrailWidth = stream.ReadULONG() / 100.0f;
+        AnimationTimeSecs = stream.ReadULONG() / 10.0f;
+
+        FlagUseStartCol = stream.ReadEBOOL(); FlagUseMidCol = stream.ReadEBOOL();
+        FlagUseEndCol = stream.ReadEBOOL(); FlagAlphaFade = stream.ReadEBOOL();
+        FlagSizeFade = stream.ReadEBOOL(); FlagFlicker = stream.ReadEBOOL();
+        FlagForceAnimTime = stream.ReadEBOOL();
+    }
+};
+
+struct CPSCEmitterGeneric : public CParticleComponent {
+    uint32_t EmitterPosParam, DirectionParamName;
+    uint32_t NoParticlesToStart, NoParticlesToStartRand, EmitterType;
+
+    bool Solid, UseEmitterLifeSecs, UseEmitterTimelineSecs;
+    bool OrientationXY, OrientationXZ, OrientationYZ;
+    bool UseCustomDirection, UseOutwardDirection, UseForwardDirection, UseRandom2DDirection;
+
+    uint32_t AngularPerturbationInteger;
+    C3DVector CustomDirection;
+    float ParticlesPerSecond, EmitterSize, RadialBias, MinSpeed;
+
+    bool UseRandom3DDirection, UseParamDirection;
+    float EmitterTimelineSecs;
+    bool OppositeDirection;
+
+    float EmitterLifeSecs, EmitterStartTime, MaxSpeed;
+    C3DVector NonUniformScaling;
+
+    bool HasSpline;
+    float SplineTension;
+    std::vector<C3DVector> SplineControlPoints;
+
+    void Parse(CParticleStream& stream) override {
+        EmitterPosParam = stream.ReadULONG();
+        DirectionParamName = stream.ReadULONG();
+
+        NoParticlesToStart = stream.ReadULONG();
+        NoParticlesToStartRand = stream.ReadULONG();
+        EmitterType = stream.ReadULONG();
+
+        Solid = stream.ReadEBOOL();
+        UseEmitterLifeSecs = stream.ReadEBOOL();
+        UseEmitterTimelineSecs = stream.ReadEBOOL();
+        OrientationXY = stream.ReadEBOOL();
+        OrientationXZ = stream.ReadEBOOL();
+        OrientationYZ = stream.ReadEBOOL();
+        UseCustomDirection = stream.ReadEBOOL();
+        UseOutwardDirection = stream.ReadEBOOL();
+        UseForwardDirection = stream.ReadEBOOL();
+        UseRandom2DDirection = stream.ReadEBOOL();
+
+        AngularPerturbationInteger = stream.ReadULONG();
+
+        // Fixed-Point Linear Quantization Decoding
+        CustomDirection.X = stream.ReadULONG() / 255.0f * 2.0f - 1.0f;
+        ParticlesPerSecond = stream.ReadULONG() / 16383.0f * 100.0f;
+        EmitterSize = stream.ReadULONG() / 1023.0f * 10.0f;
+        RadialBias = stream.ReadULONG() / 1023.0f * 10.0f - 5.0f;
+        MinSpeed = stream.ReadULONG() / 1023.0f * 10.0f;
+
+        UseRandom3DDirection = stream.ReadEBOOL();
+        UseParamDirection = stream.ReadEBOOL();
+
+        CustomDirection.Y = stream.ReadULONG() / 255.0f * 2.0f - 1.0f;
+        CustomDirection.Z = stream.ReadULONG() / 255.0f * 2.0f - 1.0f;
+
+        EmitterTimelineSecs = stream.ReadULONG() / 32767.0f * 30.0f;
+        OppositeDirection = stream.ReadEBOOL();
+
+        EmitterLifeSecs = stream.ReadULONG() / 32767.0f * 300.0f;
+        EmitterStartTime = stream.ReadULONG() / 32767.0f * 300.0f;
+        MaxSpeed = stream.ReadULONG() / 1023.0f * 10.0f;
+
+        NonUniformScaling.X = stream.ReadULONG() / 2047.0f * 20.0f - 10.0f;
+        NonUniformScaling.Y = stream.ReadULONG() / 2047.0f * 20.0f - 10.0f;
+        NonUniformScaling.Z = stream.ReadULONG() / 2047.0f * 20.0f - 10.0f;
+
+        HasSpline = stream.ReadEBOOL();
+        if (HasSpline) {
+            SplineTension = stream.ReadFloat();
+            uint32_t count = stream.ReadULONG();
+            for (uint32_t i = 0; i < count; i++) {
+                SplineControlPoints.push_back(stream.Read3DVector());
+            }
+        }
     }
 };
 
 struct CPSCUpdateNormal : public CParticleComponent {
     uint32_t ParamA, ParamB;
-    bool Flags[18]; // Exactly 18 bools to prevent stream desync
+    bool Flags[18];
     std::string DecalEmitterName;
     float SystemLifeSecs, ParticleLifeSecs, WindFactor, GravityFactor, AirResistance, ParticleAccelerationScale;
     float InitialRotationX, InitialRotationY, InitialRotationZ;
@@ -169,6 +271,7 @@ struct CPSCUpdateNormal : public CParticleComponent {
         for (int i = 0; i < 18; i++) Flags[i] = stream.ReadEBOOL();
 
         DecalEmitterName = stream.ReadString();
+
         SystemLifeSecs = stream.ReadFloat(); ParticleLifeSecs = stream.ReadFloat();
         WindFactor = stream.ReadFloat(); GravityFactor = stream.ReadFloat(); AirResistance = stream.ReadFloat();
         ParticleAccelerationScale = stream.ReadFloat();
@@ -183,44 +286,38 @@ struct CPSCUpdateNormal : public CParticleComponent {
     }
 };
 
-struct CPSCEmitterGeneric : public CParticleComponent {
-    uint32_t EmitterPosParam, DirectionParamName;
-    uint32_t UnkA, UnkB, UnkC;
-    bool Flags1[10];
-    uint32_t UnkD, UnkE, UnkF, UnkG, UnkH, UnkI; // MinSpeed, MaxSpeed, ParticlesPerSecond packed here
-    bool Flags2[2];
-    uint32_t Byte1, Byte2;
-    uint32_t UnkJ; bool Flag3;
-    uint32_t UnkK, UnkL, UnkM, UnkN, UnkO, UnkP;
+struct CPSCDecalRenderer : public CParticleComponent {
+    float DecalLifeSecs;
+    int32_t DecalBankIndex;
+    CRGBColour StartColour, MidColour, EndColour;
 
-    bool HasSpline;
-    float SplineTension;
-    std::vector<C3DVector> SplineControlPoints;
+    uint32_t U1[10];
+    bool B1[6];
+    uint32_t U2[4];
+    bool B2[5];
+
+    float MaxPoolSize, MaxPoolAlpha, MaxPoolLife;
+    bool Flag53;
+    float PoolFrameIncreaseRate, StencilCubeWidth;
 
     void Parse(CParticleStream& stream) override {
-        EmitterPosParam = stream.ReadULONG(); DirectionParamName = stream.ReadULONG();
-        UnkA = stream.ReadULONG(); UnkB = stream.ReadULONG(); UnkC = stream.ReadULONG();
+        DecalLifeSecs = stream.ReadFloat();
+        DecalBankIndex = stream.ReadSLONG();
+        StartColour = stream.ReadColour();
+        MidColour = stream.ReadColour();
+        EndColour = stream.ReadColour();
 
-        for (int i = 0; i < 10; i++) Flags1[i] = stream.ReadEBOOL();
+        for (int i = 0; i < 10; i++) U1[i] = stream.ReadULONG();
+        for (int i = 0; i < 6; i++) B1[i] = stream.ReadEBOOL();
+        for (int i = 0; i < 4; i++) U2[i] = stream.ReadULONG();
+        for (int i = 0; i < 5; i++) B2[i] = stream.ReadEBOOL();
 
-        UnkD = stream.ReadULONG(); UnkE = stream.ReadULONG(); UnkF = stream.ReadULONG();
-        UnkG = stream.ReadULONG(); UnkH = stream.ReadULONG(); UnkI = stream.ReadULONG();
-
-        Flags2[0] = stream.ReadEBOOL(); Flags2[1] = stream.ReadEBOOL();
-
-        Byte1 = stream.ReadULONG(); Byte2 = stream.ReadULONG();
-        UnkJ = stream.ReadULONG(); Flag3 = stream.ReadEBOOL();
-        UnkK = stream.ReadULONG(); UnkL = stream.ReadULONG(); UnkM = stream.ReadULONG();
-        UnkN = stream.ReadULONG(); UnkO = stream.ReadULONG(); UnkP = stream.ReadULONG();
-
-        HasSpline = stream.ReadEBOOL();
-        if (HasSpline) {
-            SplineTension = stream.ReadFloat();
-            uint32_t count = stream.ReadULONG();
-            for (uint32_t i = 0; i < count; i++) {
-                SplineControlPoints.push_back(stream.Read3DVector());
-            }
-        }
+        MaxPoolSize = stream.ReadFloat();
+        MaxPoolAlpha = stream.ReadFloat();
+        MaxPoolLife = stream.ReadFloat();
+        Flag53 = stream.ReadEBOOL();
+        PoolFrameIncreaseRate = stream.ReadFloat();
+        StencilCubeWidth = stream.ReadFloat();
     }
 };
 
@@ -342,16 +439,13 @@ struct CPSCRenderMesh : public CParticleComponent {
     CRGBColour TrailStartColour, TrailMidColour, TrailEndColour;
     CRGBColour StartColour, MidColour, EndColour;
 
-    uint32_t U1[12]; // Fixed: 12 instead of 13
+    uint32_t U1[12];
     bool B1, B2;
     uint32_t U2[3];
-    bool B3[6];      // Fixed: 6 instead of 3
-    uint32_t U3[3];  // Fixed: 3 instead of 2
+    bool B3[6];
+    uint32_t U3[3];
     bool B4;
-    uint32_t U4;
-    bool B5;
-    uint32_t U5;
-    bool B6;
+    uint32_t U4; bool B5; uint32_t U5; bool B6;
     uint32_t RenderSizeParam;
 
     void Parse(CParticleStream& stream) override {
@@ -368,41 +462,6 @@ struct CPSCRenderMesh : public CParticleComponent {
         U4 = stream.ReadULONG(); B5 = stream.ReadEBOOL();
         U5 = stream.ReadULONG(); B6 = stream.ReadEBOOL();
         RenderSizeParam = stream.ReadULONG();
-    }
-};
-
-struct CPSCDecalRenderer : public CParticleComponent {
-    float DecalLifeSecs;
-    int32_t DecalBankIndex;
-    CRGBColour StartColour, MidColour, EndColour;
-
-    uint32_t U1[10];
-    bool B1[6];
-    uint32_t U2[4];
-    bool B2[5];
-
-    float MaxPoolSize, MaxPoolAlpha, MaxPoolLife;
-    bool Flag53;
-    float PoolFrameIncreaseRate, StencilCubeWidth;
-
-    void Parse(CParticleStream& stream) override {
-        DecalLifeSecs = stream.ReadFloat();
-        DecalBankIndex = stream.ReadSLONG();
-        StartColour = stream.ReadColour();
-        MidColour = stream.ReadColour();
-        EndColour = stream.ReadColour();
-
-        for (int i = 0; i < 10; i++) U1[i] = stream.ReadULONG();
-        for (int i = 0; i < 6; i++) B1[i] = stream.ReadEBOOL();
-        for (int i = 0; i < 4; i++) U2[i] = stream.ReadULONG();
-        for (int i = 0; i < 5; i++) B2[i] = stream.ReadEBOOL();
-
-        MaxPoolSize = stream.ReadFloat();
-        MaxPoolAlpha = stream.ReadFloat();
-        MaxPoolLife = stream.ReadFloat();
-        Flag53 = stream.ReadEBOOL();
-        PoolFrameIncreaseRate = stream.ReadFloat();
-        StencilCubeWidth = stream.ReadFloat();
     }
 };
 
