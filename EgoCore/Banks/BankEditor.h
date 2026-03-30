@@ -103,6 +103,41 @@ inline void SyncBankEnums(LoadedBank* bank) {
             }
         }
     }
+    else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
+        std::string fname = bank->FileName;
+        std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
+
+        if (fname.find("ingame.lug") != std::string::npos) {
+            std::vector<LugParser::ParsedLugEntry> sortedEntries = bank->LugParserPtr->Entries;
+            std::sort(sortedEntries.begin(), sortedEntries.end(), [](const LugParser::ParsedLugEntry& a, const LugParser::ParsedLugEntry& b) {
+                return a.SoundID < b.SoundID;
+                });
+
+            std::string body;
+            for (size_t i = 0; i < sortedEntries.size(); i++) {
+                std::string s = sortedEntries[i].Name;
+
+                size_t dot = s.find_last_of('.');
+                if (dot != std::string::npos) s = s.substr(0, dot);
+                std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+                std::string formattedName = "SND_";
+                for (size_t j = 0; j < s.length(); j++) {
+                    if (std::isdigit((unsigned char)s[j]) && j > 0 && std::isalpha((unsigned char)s[j - 1])) {
+                        formattedName += '_';
+                    }
+                }
+                body += "\t" + formattedName + " = " + std::to_string(sortedEntries[i].SoundID) + ",\n";
+            }
+            body += "\tSND_LAST\n";
+
+            ReplaceAndSaveEnum("SND", body);
+        }
+    }
+    else if (bank->Type == EBankType::Effects) {
+        if (bank->ActiveSubBankIndex >= 0) {
+            RebuildEnum("EParticleEmitter", bank->Entries, [](const BankEntry& e) { return true; });
+        }
+    }
 }
 
 inline void WriteBankString(std::ofstream& out, const std::string& s) {

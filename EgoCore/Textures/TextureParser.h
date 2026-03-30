@@ -118,7 +118,13 @@ public:
         Color32* output = (Color32*)rgba.data();
 
         if (fmt == ETextureFormat::ARGB8888) {
-            memcpy(rgba.data(), rawData, rgba.size());
+            // Convert Fable's native BGRA to staging RGBA
+            for (uint32_t i = 0; i < width * height; i++) {
+                rgba[i * 4 + 0] = rawData[i * 4 + 2]; // R <- B
+                rgba[i * 4 + 1] = rawData[i * 4 + 1]; // G <- G
+                rgba[i * 4 + 2] = rawData[i * 4 + 0]; // B <- R
+                rgba[i * 4 + 3] = rawData[i * 4 + 3]; // A <- A
+            }
             return rgba;
         }
 

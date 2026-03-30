@@ -3,8 +3,10 @@
 #include "FileDialogs.h"
 #include "DefExplorer.h"
 #include "BankTabUI.h" 
+#include "InputManager.h"
 
 static bool g_HasInitialized = false;
+static bool g_TriggerKeybindPopup = false;
 
 static void DrawBankExplorer() {
     if (!g_HasInitialized) {
@@ -40,51 +42,288 @@ static void DrawBankExplorer() {
         return;
     }
 
-    if (ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Open Bank File (.BIG / .LUT)")) {
-                std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut\0All Files\0*.*\0");
-                if (!path.empty()) LoadBank(path);
-            }
+    // --- GLOBAL SHORTCUT LISTENER ---
+    if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
 
-            if (ImGui::MenuItem("Change Game Folder")) {
-                std::string root = OpenFolderDialog();
-                if (!root.empty()) {
-                    InitializeSetup(root);
-                    LoadSystemBinaries(root);
+        if (g_Keybinds.SwitchBankMode.IsPressed()) g_CurrentMode = EAppMode::Banks;
+        if (g_Keybinds.SwitchDefMode.IsPressed())  g_CurrentMode = EAppMode::Defs;
+
+        // BACK NAVIGATION (Esc)
+        if (g_Keybinds.NavigateBack.IsPressed()) {
+            g_IsNavigating = true;
+            if (g_CurrentMode == EAppMode::Banks && !g_BankHistory.empty()) {
+                if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
+                    g_BankForwardHistory.push_back({ g_ActiveBankIndex, g_OpenBanks[g_ActiveBankIndex].ActiveSubBankIndex, g_OpenBanks[g_ActiveBankIndex].SelectedEntryIndex });
+                }
+
+                auto node = g_BankHistory.back();
+                g_BankHistory.pop_back();
+
+                if (node.BankIndex >= 0 && node.BankIndex < g_OpenBanks.size()) {
+                    g_ActiveBankIndex = node.BankIndex;
+                    auto& bank = g_OpenBanks[g_ActiveBankIndex];
+
+                    // Crucial: Load the SubBank before selecting the entry!
+                    if (bank.ActiveSubBankIndex != node.SubBankIndex && node.SubBankIndex >= 0) {
+                        LoadSubBankEntries(&bank, node.SubBankIndex);
+                    }
+
+                    if (node.EntryIndex >= 0 && node.EntryIndex < bank.Entries.size()) {
+                        SelectEntry(&bank, node.EntryIndex);
+                        g_ScrollToSelected = true;
+                    }
+                    else {
+                        bank.SelectedEntryIndex = -1;
+                    }
                 }
             }
+            else if (g_CurrentMode == EAppMode::Defs && !g_DefHistory.empty()) {
+                if (g_CurrentDefView == EDefViewType::Defs) g_DefForwardHistory.push_back({ g_CurrentDefView, g_DefWorkspace.ActiveContextIndex, g_DefWorkspace.SelectedType, g_DefWorkspace.SelectedEntryIndex });
+                else if (g_CurrentDefView == EDefViewType::Headers) g_DefForwardHistory.push_back({ g_CurrentDefView, 0, "", g_DefWorkspace.SelectedEnumIndex });
+                else if (g_CurrentDefView == EDefViewType::Events) g_DefForwardHistory.push_back({ g_CurrentDefView, g_EventWorkspace.SelectedFileType, "", g_EventWorkspace.SelectedEventIndex });
 
+                auto node = g_DefHistory.back();
+                g_DefHistory.pop_back();
+                g_CurrentDefView = node.View;
+
+                if (node.View == EDefViewType::Defs) {
+                    if (g_DefWorkspace.ActiveContextIndex != node.ContextIndex) {
+                        g_DefWorkspace.ActiveContextIndex = node.ContextIndex;
+                        LoadDefsFromFolder(g_DefWorkspace.RootPath);
+                    }
+                    g_DefWorkspace.SelectedType = node.Category;
+                    g_DefWorkspace.SelectedEntryIndex = node.Index;
+                    if (g_DefWorkspace.CategorizedDefs.count(node.Category) && node.Index >= 0 && node.Index < (int)g_DefWorkspace.CategorizedDefs[node.Category].size()) {
+                        LoadDefContent(g_DefWorkspace.CategorizedDefs[node.Category][node.Index]);
+                    }
+                    else {
+                        g_DefWorkspace.SelectedEntryIndex = -1;
+                        g_DefWorkspace.Editor.SetText("");
+                    }
+                }
+                else if (node.View == EDefViewType::Headers) {
+                    g_DefWorkspace.SelectedEnumIndex = node.Index;
+                    if (node.Index >= 0 && node.Index < (int)g_DefWorkspace.AllEnums.size()) LoadHeaderContent(g_DefWorkspace.AllEnums[node.Index]);
+                }
+                else if (node.View == EDefViewType::Events) {
+                    g_EventWorkspace.SelectedFileType = node.ContextIndex;
+                    g_EventWorkspace.SelectedEventIndex = node.Index;
+                    EventFile* activeFile = g_EventWorkspace.GetActiveFile();
+                    if (!activeFile->IsLoaded) {
+                        g_EventWorkspace.LoadAll(g_DefWorkspace.RootPath);
+                        activeFile = g_EventWorkspace.GetActiveFile();
+                    }
+                    if (node.Index >= 0 && node.Index < (int)activeFile->Events.size()) {
+                        g_EventWorkspace.Editor.SetText(activeFile->Events[node.Index].Content);
+                        g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                    }
+                }
+            }
+            g_IsNavigating = false;
+        }
+
+        // FORWARD NAVIGATION (F1)
+        if (g_Keybinds.NavigateForward.IsPressed()) {
+            g_IsNavigating = true;
+            if (g_CurrentMode == EAppMode::Banks && !g_BankForwardHistory.empty()) {
+                if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
+                    g_BankHistory.push_back({ g_ActiveBankIndex, g_OpenBanks[g_ActiveBankIndex].ActiveSubBankIndex, g_OpenBanks[g_ActiveBankIndex].SelectedEntryIndex });
+                }
+
+                auto node = g_BankForwardHistory.back();
+                g_BankForwardHistory.pop_back();
+
+                if (node.BankIndex >= 0 && node.BankIndex < g_OpenBanks.size()) {
+                    g_ActiveBankIndex = node.BankIndex;
+                    auto& bank = g_OpenBanks[g_ActiveBankIndex];
+
+                    if (bank.ActiveSubBankIndex != node.SubBankIndex && node.SubBankIndex >= 0) {
+                        LoadSubBankEntries(&bank, node.SubBankIndex);
+                    }
+
+                    if (node.EntryIndex >= 0 && node.EntryIndex < bank.Entries.size()) {
+                        SelectEntry(&bank, node.EntryIndex);
+                        g_ScrollToSelected = true;
+                    }
+                    else {
+                        bank.SelectedEntryIndex = -1;
+                    }
+                }
+            }
+            else if (g_CurrentMode == EAppMode::Defs && !g_DefForwardHistory.empty()) {
+                if (g_CurrentDefView == EDefViewType::Defs) g_DefHistory.push_back({ g_CurrentDefView, g_DefWorkspace.ActiveContextIndex, g_DefWorkspace.SelectedType, g_DefWorkspace.SelectedEntryIndex });
+                else if (g_CurrentDefView == EDefViewType::Headers) g_DefHistory.push_back({ g_CurrentDefView, 0, "", g_DefWorkspace.SelectedEnumIndex });
+                else if (g_CurrentDefView == EDefViewType::Events) g_DefHistory.push_back({ g_CurrentDefView, g_EventWorkspace.SelectedFileType, "", g_EventWorkspace.SelectedEventIndex });
+
+                auto node = g_DefForwardHistory.back();
+                g_DefForwardHistory.pop_back();
+                g_CurrentDefView = node.View;
+
+                if (node.View == EDefViewType::Defs) {
+                    if (g_DefWorkspace.ActiveContextIndex != node.ContextIndex) {
+                        g_DefWorkspace.ActiveContextIndex = node.ContextIndex;
+                        LoadDefsFromFolder(g_DefWorkspace.RootPath);
+                    }
+                    g_DefWorkspace.SelectedType = node.Category;
+                    g_DefWorkspace.SelectedEntryIndex = node.Index;
+                    if (g_DefWorkspace.CategorizedDefs.count(node.Category) && node.Index >= 0 && node.Index < (int)g_DefWorkspace.CategorizedDefs[node.Category].size()) {
+                        LoadDefContent(g_DefWorkspace.CategorizedDefs[node.Category][node.Index]);
+                    }
+                    else {
+                        g_DefWorkspace.SelectedEntryIndex = -1;
+                        g_DefWorkspace.Editor.SetText("");
+                    }
+                }
+                else if (node.View == EDefViewType::Headers) {
+                    g_DefWorkspace.SelectedEnumIndex = node.Index;
+                    if (node.Index >= 0 && node.Index < (int)g_DefWorkspace.AllEnums.size()) LoadHeaderContent(g_DefWorkspace.AllEnums[node.Index]);
+                }
+                else if (node.View == EDefViewType::Events) {
+                    g_EventWorkspace.SelectedFileType = node.ContextIndex;
+                    g_EventWorkspace.SelectedEventIndex = node.Index;
+                    EventFile* activeFile = g_EventWorkspace.GetActiveFile();
+                    if (!activeFile->IsLoaded) {
+                        g_EventWorkspace.LoadAll(g_DefWorkspace.RootPath);
+                        activeFile = g_EventWorkspace.GetActiveFile();
+                    }
+                    if (node.Index >= 0 && node.Index < (int)activeFile->Events.size()) {
+                        g_EventWorkspace.Editor.SetText(activeFile->Events[node.Index].Content);
+                        g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                    }
+                }
+            }
+            g_IsNavigating = false;
+        }
+    }
+
+    // --- LAYER 1: LOCAL APP MENU BAR ---
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+    ImGui::BeginChild("LocalMenuBarChild", ImVec2(0, ImGui::GetFrameHeight()), false, ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar);
+
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Load Bank (.BIG / .LUT / .LUG)")) {
+                std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut;*.lug\0All Files\0*.*\0");
+                if (!path.empty()) LoadBank(path);
+            }
+            if (ImGui::MenuItem("Run Fable")) g_BankStatus = "Run Fable clicked (Placeholder)";
+            if (ImGui::MenuItem("Change Game Folder")) {
+                std::string root = OpenFolderDialog();
+                if (!root.empty()) { InitializeSetup(root); LoadSystemBinaries(root); }
+            }
             ImGui::Separator();
-
             if (ImGui::MenuItem("Exit")) {
                 if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
                     g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
                     g_DefWorkspace.TriggerUnsavedPopup = true;
                 }
-                else {
-                    exit(0);
-                }
+                else exit(0);
             }
             ImGui::EndMenu();
         }
+
+        if (ImGui::BeginMenu("Settings")) {
+            // SET FLAG TO TRIGGER OUTSIDE THE MENU
+            if (ImGui::MenuItem("Keybindings")) {
+                g_TriggerKeybindPopup = true;
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("View")) { ImGui::TextDisabled("Coming soon..."); ImGui::EndMenu(); }
+        if (ImGui::BeginMenu("About")) { ImGui::TextDisabled("EgoCore"); ImGui::EndMenu(); }
+
+        float rightAlign = ImGui::GetWindowWidth() - 140.0f;
+        if (rightAlign > 0) ImGui::SameLine(rightAlign);
+
+        if (g_CurrentMode == EAppMode::Banks) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1.0f));
+        if (ImGui::Button("Banks", ImVec2(60, 0))) g_CurrentMode = EAppMode::Banks;
+        if (g_CurrentMode == EAppMode::Banks) ImGui::PopStyleColor();
+
         ImGui::SameLine();
+        if (g_CurrentMode == EAppMode::Defs) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1.0f));
+        if (ImGui::Button("Defs", ImVec2(60, 0))) g_CurrentMode = EAppMode::Defs;
+        if (g_CurrentMode == EAppMode::Defs) ImGui::PopStyleColor();
 
-        ImGui::TextDisabled("| %s", g_BankStatus.c_str());
+        ImGui::EndMenuBar();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    // --- END LAYER 1 ---
 
-        ImGui::EndMainMenuBar();
+
+    // --- KEYBINDINGS MODAL (Safely Rendered Outside) ---
+    if (g_TriggerKeybindPopup) {
+        ImGui::OpenPopup("KeybindingsConfig");
+        g_TriggerKeybindPopup = false;
     }
 
-    if (ImGui::BeginTabBar("ModeTabs", ImGuiTabBarFlags_None)) {
-        if (ImGui::BeginTabItem("Bank Archives")) {
-            DrawBankTab();
-            ImGui::EndTabItem();
+    static ShortcutKey* g_ListeningForRebind = nullptr;
+    if (ImGui::BeginPopupModal("KeybindingsConfig", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Configure Shortcuts");
+        ImGui::Separator();
+
+        auto DrawBindRow = [](const char* label, ShortcutKey& shortcut) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%s", label);
+            ImGui::SameLine(150);
+            std::string btnLabel = shortcut.ToString() + "##" + label;
+            if (g_ListeningForRebind == &shortcut) btnLabel = "[ Press any key... ]";
+
+            if (ImGui::Button(btnLabel.c_str(), ImVec2(180, 0))) {
+                g_ListeningForRebind = &shortcut;
+            }
+            };
+
+        DrawBindRow("Switch to Banks", g_Keybinds.SwitchBankMode);
+        DrawBindRow("Switch to Defs", g_Keybinds.SwitchDefMode);
+        DrawBindRow("Save Entry", g_Keybinds.SaveEntry);
+        DrawBindRow("Compile Active", g_Keybinds.Compile);
+        DrawBindRow("Navigate Back", g_Keybinds.NavigateBack);
+        DrawBindRow("Navigate Forward", g_Keybinds.NavigateForward);
+
+        // Rebind Listener Logic
+        if (g_ListeningForRebind) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Press desired key combination. Press ESC to cancel.");
+            ImGuiIO& io = ImGui::GetIO();
+            for (int i = ImGuiKey_NamedKey_BEGIN; i < ImGuiKey_NamedKey_END; i++) {
+                ImGuiKey key = (ImGuiKey)i;
+                bool isModifier = (key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl ||
+                    key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift ||
+                    key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt ||
+                    key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper);
+
+                if (ImGui::IsKeyPressed(key) && !isModifier) {
+                    if (key == ImGuiKey_Escape) {
+                        g_ListeningForRebind = nullptr; // Cancel
+                    }
+                    else {
+                        g_ListeningForRebind->Key = key;
+                        g_ListeningForRebind->Ctrl = io.KeyCtrl;
+                        g_ListeningForRebind->Shift = io.KeyShift;
+                        g_ListeningForRebind->Alt = io.KeyAlt;
+                        g_ListeningForRebind = nullptr;
+                    }
+                    break;
+                }
+            }
         }
-        if (ImGui::BeginTabItem("Game Definitions")) {
-            DrawDefTab();
-            ImGui::EndTabItem();
+
+        ImGui::Separator();
+        if (ImGui::Button("Close", ImVec2(120, 0))) {
+            g_ListeningForRebind = nullptr;
+            ImGui::CloseCurrentPopup();
         }
-        ImGui::EndTabBar();
+        ImGui::EndPopup();
+    }
+
+
+    // ROUTING
+    if (g_CurrentMode == EAppMode::Banks) {
+        DrawBankTab();
+    }
+    else {
+        DrawDefTab();
     }
 
     if (g_DefWorkspace.TriggerUnsavedPopup) {

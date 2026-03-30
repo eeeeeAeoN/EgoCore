@@ -266,10 +266,6 @@ inline void DrawTextureProperties() {
         if (logH > 0) { g_TextureParser.Header.FrameHeight = (uint16_t)logH; dimChanged = true; }
     }
 
-    if (dimChanged && bank.SubheaderCache.count(bank.SelectedEntryIndex)) {
-        memcpy(bank.SubheaderCache[bank.SelectedEntryIndex].data(), &g_TextureParser.Header, sizeof(CGraphicHeader));
-    }
-
     ImGui::SetNextItemWidth(100.0f);
     const char* viewModes[] = { "RGB", "Alpha", "Red", "Green", "Blue" };
     ImGui::Combo("##channel", &g_ViewChannel, viewModes, IM_ARRAYSIZE(viewModes));
@@ -399,7 +395,12 @@ inline void DrawTextureProperties() {
                 if (frameOffset + stride <= g_TextureParser.DecodedPixels.size()) {
                     const uint8_t* raw = g_TextureParser.DecodedPixels.data() + frameOffset;
                     if (g_TextureParser.DecodedFormat == ETextureFormat::ARGB8888) {
-                        memcpy(rgba.data(), raw, physW * physH * 4);
+                        for (int i = 0; i < physW * physH; i++) {
+                            rgba[i].r = raw[i * 4 + 2];
+                            rgba[i].g = raw[i * 4 + 1];
+                            rgba[i].b = raw[i * 4 + 0];
+                            rgba[i].a = raw[i * 4 + 3];
+                        }
                     }
                     else {
                         int blocksX = (physW + 3) / 4;

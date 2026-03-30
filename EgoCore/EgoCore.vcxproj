@@ -45,6 +45,7 @@
     <ClInclude Include="Fonts\StreamingFontBuilder.h" />
     <ClInclude Include="Fonts\StreamingFontParser.h" />
     <ClInclude Include="Fonts\StreamingFontProperties.h" />
+    <ClInclude Include="InputManager.h" />
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />

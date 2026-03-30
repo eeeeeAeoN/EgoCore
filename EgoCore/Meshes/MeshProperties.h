@@ -667,27 +667,43 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             if (g_ShowPhysicsOverlay && g_LoadedOverlayID != g_ActiveMeshContent.EntryMeta.PhysicsIndex) {
                 g_LoadedOverlayID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
                 bool loaded = false;
-                for (auto& bank : g_OpenBanks) {
-                    if (bank.Type == EBankType::Graphics) {
-                        for (int i = 0; i < bank.Entries.size(); ++i) {
-                            if (bank.Entries[i].ID == g_LoadedOverlayID) {
-                                std::vector<uint8_t> rawData;
-                                if (bank.ModifiedEntryData.count(i)) rawData = bank.ModifiedEntryData[i];
-                                else {
-                                    bank.Stream->clear();
-                                    bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
-                                    rawData.resize(bank.Entries[i].Size);
-                                    bank.Stream->read((char*)rawData.data(), bank.Entries[i].Size);
-                                }
-                                g_OverlayBBMParser.Parse(rawData);
-                                g_PhysicsOverlayRenderer.Initialize(g_pd3dDevice);
-                                g_PhysicsOverlayRenderer.UploadBBM(g_pd3dDevice, g_OverlayBBMParser);
-                                loaded = true; break;
+
+                bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
+
+                auto LoadOverlayFromBank = [&](LoadedBank& bank) {
+                    for (int i = 0; i < bank.Entries.size(); ++i) {
+                        if (bank.Entries[i].ID == g_LoadedOverlayID) {
+                            std::vector<uint8_t> rawData;
+                            if (bank.ModifiedEntryData.count(i)) rawData = bank.ModifiedEntryData[i];
+                            else {
+                                bank.Stream->clear();
+                                bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
+                                rawData.resize(bank.Entries[i].Size);
+                                bank.Stream->read((char*)rawData.data(), bank.Entries[i].Size);
+                            }
+                            g_OverlayBBMParser.Parse(rawData);
+                            g_PhysicsOverlayRenderer.Initialize(g_pd3dDevice);
+                            g_PhysicsOverlayRenderer.UploadBBM(g_pd3dDevice, g_OverlayBBMParser);
+                            return true;
+                        }
+                    }
+                    return false;
+                    };
+
+                if (isXboxActive) {
+                    loaded = LoadOverlayFromBank(g_OpenBanks[g_ActiveBankIndex]);
+                }
+                else {
+                    for (auto& bank : g_OpenBanks) {
+                        if (bank.Type == EBankType::Graphics) {
+                            if (LoadOverlayFromBank(bank)) {
+                                loaded = true;
+                                break;
                             }
                         }
                     }
-                    if (loaded) break;
                 }
+
                 if (!loaded) g_ShowPhysicsOverlay = false;
             }
         }

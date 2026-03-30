@@ -276,6 +276,9 @@
     <ClInclude Include="Particles\ParticleCompiler.h">
       <Filter>Source Files\Particles</Filter>
     </ClInclude>
+    <ClInclude Include="InputManager.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

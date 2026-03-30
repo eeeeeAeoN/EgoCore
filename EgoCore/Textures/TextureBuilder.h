@@ -183,8 +183,13 @@ public:
 
         for (int m = 0; m < mips; m++) {
             if (opts.Format == ETextureFormat::ARGB8888) {
-                pixelBlob.insert(pixelBlob.end(), currentMip.begin(), currentMip.end());
-                if (m == 0) mip0Size = (uint32_t)currentMip.size();
+                // Convert staging/stbi RGBA back to Fable's native BGRA
+                std::vector<uint8_t> bgraMip = currentMip;
+                for (size_t i = 0; i < bgraMip.size() / 4; i++) {
+                    std::swap(bgraMip[i * 4 + 0], bgraMip[i * 4 + 2]);
+                }
+                pixelBlob.insert(pixelBlob.end(), bgraMip.begin(), bgraMip.end());
+                if (m == 0) mip0Size = (uint32_t)bgraMip.size();
             }
             else {
                 std::vector<uint8_t> compData = CompressDXT(currentMip, curW, curH, opts.Format);
@@ -262,8 +267,13 @@ public:
 
         for (int m = 0; m < mips; m++) {
             if (opts.Format == ETextureFormat::ARGB8888) {
-                pixelBlob.insert(pixelBlob.end(), currentMip.begin(), currentMip.end());
-                if (m == 0) mip0Size = (uint32_t)currentMip.size();
+                // Convert staging/stbi RGBA back to Fable's native BGRA
+                std::vector<uint8_t> bgraMip = currentMip;
+                for (size_t i = 0; i < bgraMip.size() / 4; i++) {
+                    std::swap(bgraMip[i * 4 + 0], bgraMip[i * 4 + 2]);
+                }
+                pixelBlob.insert(pixelBlob.end(), bgraMip.begin(), bgraMip.end());
+                if (m == 0) mip0Size = (uint32_t)bgraMip.size();
             }
             else {
                 std::vector<uint8_t> compData = CompressDXT(currentMip, curW, curH, opts.Format);

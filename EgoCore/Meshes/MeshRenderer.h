@@ -423,7 +423,9 @@ public:
                 vertices.push_back(gpuV);
             }
 
-            auto ProcessIndices = [&](uint32_t start, uint32_t count, bool isStrip) {
+            auto ProcessIndices = [&](uint32_t start, uint32_t count, bool isStrip, int32_t matIdx) {
+                uint32_t blockBatchStart = (uint32_t)indices.size();
+
                 if (isStrip) {
                     int parity = 0;
                     for (uint32_t k = 0; k < count; k++) {
@@ -454,16 +456,22 @@ public:
                         }
                     }
                 }
+
+                // Emit the batch for this specific block!
+                uint32_t blockIndexCount = (uint32_t)indices.size() - blockBatchStart;
+                if (blockIndexCount > 0) {
+                    Batches.push_back({ blockBatchStart, blockIndexCount, matIdx });
+                }
                 };
 
             if (reps > 1) {
-                ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false);
+                ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false, prim.MaterialIndex);
             }
             else {
                 bool processed = false;
-                for (const auto& b : prim.StaticBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip); processed = true; }
-                for (const auto& b : prim.AnimatedBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip); processed = true; }
-                if (!processed && !prim.IndexBuffer.empty()) { ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false); }
+                for (const auto& b : prim.StaticBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip, b.MaterialIndex); processed = true; }
+                for (const auto& b : prim.AnimatedBlocks) { ProcessIndices(b.StartIndex, b.PrimitiveCount, b.IsStrip, prim.MaterialIndex); processed = true; }
+                if (!processed && !prim.IndexBuffer.empty()) { ProcessIndices(0, (uint32_t)prim.IndexBuffer.size() / 3, false, prim.MaterialIndex); }
             }
             indexOffset += totalVerts;
 

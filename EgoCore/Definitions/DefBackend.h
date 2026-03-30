@@ -47,6 +47,8 @@ struct DefContext {
     std::string Name;
     std::string RelativePath;
     std::string AddonFileName;
+    std::map<std::string, std::vector<DefEntry>> CategorizedDefs; // Cache
+    bool IsLoaded = false;
 
     DefContext(std::string n, std::string r, std::string a)
         : Name(n), RelativePath(r), AddonFileName(a) {
@@ -246,12 +248,25 @@ inline void ScanFileForDefs(const fs::path& filePath) {
     }
 }
 
-inline void LoadDefsFromFolder(const std::string& rootPath) {
+inline void LoadDefsFromFolder(const std::string& rootPath, bool forceScan = false) {
     g_DefWorkspace.IsLoaded = false;
-    g_DefWorkspace.CategorizedDefs.clear();
     g_DefWorkspace.RootPath = rootPath;
     if (g_DefWorkspace.ActiveContextIndex < 0 || g_DefWorkspace.ActiveContextIndex >= g_DefWorkspace.Contexts.size()) g_DefWorkspace.ActiveContextIndex = 0;
+
     DefContext& ctx = g_DefWorkspace.Contexts[g_DefWorkspace.ActiveContextIndex];
+
+    // FAST PATH: Pull from Cache
+    if (!forceScan && ctx.IsLoaded) {
+        g_DefWorkspace.CategorizedDefs = ctx.CategorizedDefs;
+        g_DefWorkspace.SelectedType = ""; g_DefWorkspace.SelectedEntryIndex = -1; g_DefWorkspace.Editor.SetText("");
+        g_DefWorkspace.IsLoaded = true;
+        LoadHeadersFromDir(rootPath);
+        ScanSoundBanks();
+        return;
+    }
+
+    // SLOW PATH: Hard Drive Scan
+    g_DefWorkspace.CategorizedDefs.clear();
     std::string searchPath = rootPath + "\\Data\\" + ctx.RelativePath;
     std::vector<std::string> visitedPaths;
     if (fs::exists(searchPath)) {
@@ -274,6 +289,11 @@ inline void LoadDefsFromFolder(const std::string& rootPath) {
             }
         }
     }
+
+    // Save to Cache
+    ctx.CategorizedDefs = g_DefWorkspace.CategorizedDefs;
+    ctx.IsLoaded = true;
+
     LoadHeadersFromDir(rootPath);
     ScanSoundBanks();
     g_DefWorkspace.SelectedType = ""; g_DefWorkspace.SelectedEntryIndex = -1; g_DefWorkspace.Editor.SetText("");
@@ -303,7 +323,7 @@ inline void CreateNewDef(const std::string& type) {
         file << "// Contents\n\n";
         file << "#end_definition\n";
         file.close();
-        LoadDefsFromFolder(g_DefWorkspace.RootPath);
+        LoadDefsFromFolder(g_DefWorkspace.RootPath, true);
     }
 }
 
@@ -349,7 +369,7 @@ inline void DeleteDefEntry(const DefEntry& entry) {
     std::ofstream outFile(entry.SourceFile, std::ios::binary);
     outFile << pre << post;
     outFile.close();
-    LoadDefsFromFolder(g_DefWorkspace.RootPath);
+    LoadDefsFromFolder(g_DefWorkspace.RootPath, true);
     g_DefWorkspace.SelectedEntryIndex = -1; g_DefWorkspace.SelectedType = ""; g_DefWorkspace.Editor.SetText("");
 }
 
