@@ -76,6 +76,9 @@ private:
     uint32_t DebugBoxIndexCount = 0;
     uint32_t DebugCircleIndexCount = 0;
     uint32_t DebugCircleStartIndex = 0;
+    ID3D11Buffer* ClothVBuffer = nullptr;
+    ID3D11Buffer* ClothIBuffer = nullptr;
+    uint32_t ClothIndexCount = 0;
 
     void CreateDefaultTexture(ID3D11Device* device) {
         if (DefaultWhiteSRV) return;
@@ -163,6 +166,8 @@ public:
         if (BlendState) BlendState->Release(); BlendState = nullptr;
         if (DebugVBuffer) DebugVBuffer->Release(); DebugVBuffer = nullptr;
         if (DebugIBuffer) DebugIBuffer->Release(); DebugIBuffer = nullptr;
+        if (ClothVBuffer) ClothVBuffer->Release(); ClothVBuffer = nullptr;
+        if (ClothIBuffer) ClothIBuffer->Release(); ClothIBuffer = nullptr;
         ReleaseResizedResources();
     }
     void ReleaseResizedResources() {
@@ -484,6 +489,61 @@ public:
         D3D11_BUFFER_DESC iDesc = {}; iDesc.ByteWidth = sizeof(uint32_t) * (UINT)indices.size(); iDesc.Usage = D3D11_USAGE_DEFAULT; iDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA iData = { indices.data(), 0, 0 }; device->CreateBuffer(&iDesc, &iData, &IBuffer);
 
+        if (ClothVBuffer) ClothVBuffer->Release(); ClothVBuffer = nullptr;
+        if (ClothIBuffer) ClothIBuffer->Release(); ClothIBuffer = nullptr;
+        ClothIndexCount = 0;
+
+        std::vector<GPUVertex> clothVerts;
+        std::vector<uint32_t> clothInds;
+
+        for (const auto& prim : mesh.Primitives) {
+            for (const auto& cp : prim.ClothPrimitives) {
+                if (!cp.Program.IsParsed) continue;
+
+                uint32_t baseVertex = (uint32_t)clothVerts.size();
+                const auto& sim = cp.Program.InitialSimulation;
+
+                // 1. Create a vertex for every particle position
+                for (uint32_t i = 0; i < sim.Size; ++i) {
+                    GPUVertex v = {};
+                    v.Pos = XMFLOAT3(sim.Positions[i * 3], sim.Positions[i * 3 + 1], sim.Positions[i * 3 + 2]);
+                    v.Norm = XMFLOAT3(0, 1, 0); // Not used for lines
+                    v.UV = XMFLOAT2(0, 0);
+                    v.Joints = 0; v.Weights = XMFLOAT4(0, 0, 0, 0);
+                    clothVerts.push_back(v);
+                }
+
+                // 2. Read the bytecode to draw lines between constrained particles
+                for (const auto& inst : cp.Program.ParsedInstructions) {
+                    if (inst.Opcode == 2) { // Distance Constraint
+                        for (uint32_t c = 0; c < inst.Count; ++c) {
+                            uint32_t offset = c * inst.PayloadSize;
+                            if (offset + 8 <= inst.Payload.size()) {
+                                // Extract Particle A and Particle B from the 16-byte payload
+                                uint32_t pA = *(uint32_t*)(inst.Payload.data() + offset);
+                                uint32_t pB = *(uint32_t*)(inst.Payload.data() + offset + 4);
+
+                                if (pA < sim.Size && pB < sim.Size) {
+                                    clothInds.push_back(baseVertex + pA);
+                                    clothInds.push_back(baseVertex + pB);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!clothVerts.empty() && !clothInds.empty()) {
+            D3D11_BUFFER_DESC cvDesc = {}; cvDesc.ByteWidth = sizeof(GPUVertex) * (UINT)clothVerts.size(); cvDesc.Usage = D3D11_USAGE_DEFAULT; cvDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA cvData = { clothVerts.data(), 0, 0 }; device->CreateBuffer(&cvDesc, &cvData, &ClothVBuffer);
+
+            D3D11_BUFFER_DESC ciDesc = {}; ciDesc.ByteWidth = sizeof(uint32_t) * (UINT)clothInds.size(); ciDesc.Usage = D3D11_USAGE_DEFAULT; ciDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA ciData = { clothInds.data(), 0, 0 }; device->CreateBuffer(&ciDesc, &ciData, &ClothIBuffer);
+
+            ClothIndexCount = (uint32_t)clothInds.size();
+        }
+
         if (resetCamera) {
             CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f;
             CamPan = { 0, 0 };
@@ -528,12 +588,28 @@ public:
         device->CreateTexture2D(&dDesc, nullptr, &DepthTex); device->CreateDepthStencilView(DepthTex, nullptr, &DSV);
     }
 
-    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false, const std::vector<XMMATRIX>* animatedBones = nullptr, bool clearTarget = true, float alpha = 1.0f, ID3D11RenderTargetView* overrideRTV = nullptr, ID3D11DepthStencilView* overrideDSV = nullptr) {
+    ID3D11ShaderResourceView* Render(ID3D11DeviceContext* ctx, float w, float h, bool showWireframe, bool isPhysics = false, const std::vector<XMMATRIX>* animatedBones = nullptr, bool clearTarget = true, float alpha = 1.0f, ID3D11RenderTargetView* overrideRTV = nullptr, ID3D11DepthStencilView* overrideDSV = nullptr, bool showCloth = false) {
         if (!VS || !VBuffer) return nullptr;
+
         if (ImGui::IsWindowHovered()) {
-            if (ImGui::IsMouseDragging(1)) { CamRotY += ImGui::GetIO().MouseDelta.x * 0.01f; CamRotX += ImGui::GetIO().MouseDelta.y * 0.01f; }
-            if (ImGui::IsMouseDragging(2)) { CamPan.x += ImGui::GetIO().MouseDelta.x * (CamDist * 0.002f); CamPan.y -= ImGui::GetIO().MouseDelta.y * (CamDist * 0.002f); }
-            CamDist -= ImGui::GetIO().MouseWheel * CamDist * 0.1f; if (CamDist < 0.1f) CamDist = 0.1f;
+            ImGuiIO& io = ImGui::GetIO();
+
+            if (ImGui::IsMouseDragging(1)) { CamRotY += io.MouseDelta.x * 0.01f; CamRotX += io.MouseDelta.y * 0.01f; }
+            if (ImGui::IsMouseDragging(2)) { CamPan.x += io.MouseDelta.x * (CamDist * 0.002f); CamPan.y -= io.MouseDelta.y * (CamDist * 0.002f); }
+            CamDist -= io.MouseWheel * CamDist * 0.1f; if (CamDist < 0.1f) CamDist = 0.1f;
+
+            float rotSpeed = 2.5f * io.DeltaTime;
+            float panSpeed = CamDist * 1.5f * io.DeltaTime;
+
+            if (ImGui::IsKeyDown(ImGuiKey_LeftArrow))  CamRotY -= rotSpeed;
+            if (ImGui::IsKeyDown(ImGuiKey_RightArrow)) CamRotY += rotSpeed;
+            if (ImGui::IsKeyDown(ImGuiKey_UpArrow))    CamRotX -= rotSpeed;
+            if (ImGui::IsKeyDown(ImGuiKey_DownArrow))  CamRotX += rotSpeed;
+
+            if (ImGui::IsKeyDown(ImGuiKey_W)) CamPan.y -= panSpeed;
+            if (ImGui::IsKeyDown(ImGuiKey_S)) CamPan.y += panSpeed;
+            if (ImGui::IsKeyDown(ImGuiKey_A)) CamPan.x += panSpeed;
+            if (ImGui::IsKeyDown(ImGuiKey_D)) CamPan.x -= panSpeed;
         }
 
         ID3D11RenderTargetView* activeRTV = overrideRTV ? overrideRTV : RTV;
@@ -628,6 +704,25 @@ public:
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             for (const auto& batch : Batches) ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
         }
+
+        if (showCloth && ClothVBuffer && ClothIndexCount > 0) {
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+            ctx->PSSetShader(PS_Solid, nullptr, 0);
+            ctx->RSSetState(RastStateSolid);
+
+            UINT stride = sizeof(GPUVertex); UINT offset = 0;
+            ctx->IASetVertexBuffers(0, 1, &ClothVBuffer, &stride, &offset);
+            ctx->IASetIndexBuffer(ClothIBuffer, DXGI_FORMAT_R32_UINT, 0);
+
+            cb.HasAnimation = 0;
+            cb.Color = XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f);
+            cb.SelfIllum = 0.0f;
+            ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+
+            ctx->DrawIndexed(ClothIndexCount, 0, 0);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        }
+
         return SRV;
     }
 

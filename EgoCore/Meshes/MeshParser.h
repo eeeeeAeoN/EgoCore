@@ -69,7 +69,223 @@ struct CAnimatedBlock {
     uint32_t VertexCount; uint16_t BonesPerVertex; bool PalettedFlag; std::vector<uint8_t> Groups;
 };
 
-struct CClothPrimitive { uint32_t PrimitiveIndex; uint32_t MaterialIndex; std::vector<uint8_t> ParticleProgramData; };
+struct CParticleSimulation {
+    float Timestep;
+    uint32_t TimestepChanged;
+    float TimestepMultiplier;
+    uint32_t Size;
+    std::vector<float> Positions; // Size * 3 (Stored as 12-byte C3DVector)
+    std::vector<float> SimulationAlphas;
+    float GravityStrength;
+    float WindStrength;
+    uint8_t DraggingEnable;
+    uint8_t DraggingRotational;
+    float DraggingStrength;
+    uint8_t AccelerationEnable;
+    float GlobalDamping;
+};
+
+struct C3DTriangle2 { uint16_t Indices[3]; };
+struct C3DQuad2 { uint16_t Indices[4]; };
+struct C3DClothRenderVertex { uint32_t Data; };
+struct C2DVector { float u, v; };
+struct CExportParticle { std::string Name; uint32_t Value; };
+
+struct C3DVertexBlend2 { uint32_t VertexIndex; float Weight; };
+struct C3DGroup2 {
+    uint32_t BoneIndex;
+    std::vector<C3DVertexBlend2> VertexBlends;
+};
+
+struct CConstraintInstruction {
+    uint32_t Opcode;
+    uint32_t Count;
+    uint32_t PayloadSize;
+    std::vector<uint8_t> Payload;
+};
+
+struct CParticleProgram {
+    uint32_t Version;
+    std::vector<uint8_t> Constraints; // The raw bytecode
+    std::vector<CConstraintInstruction> ParsedInstructions;
+    CParticleSimulation InitialSimulation;
+    std::vector<C3DTriangle2> RenderTris;
+    std::vector<C3DQuad2> RenderQuads;
+    std::vector<C3DClothRenderVertex> RenderVertices;
+    uint32_t NonSimCount;
+    std::vector<float> NonSimPositions; // NonSimCount * 3
+    std::vector<C2DVector> IndexedTextureCoords;
+    std::vector<uint32_t> ParticleIndices;
+    std::vector<uint32_t> VertexIndices;
+    float AveragePatchSize;
+    uint8_t BezierEnable;
+    std::vector<CExportParticle> ExportParticles;
+    std::vector<C3DGroup2> SimGroups;
+    std::vector<C3DGroup2> NonSimGroups;
+
+    bool IsParsed = false;
+
+    bool Parse(const std::vector<uint8_t>& data) {
+        if (data.empty()) return false;
+        size_t cursor = 0;
+        const uint8_t* b = data.data();
+        size_t sz = data.size();
+
+        auto ReadBytes = [&](void* dest, size_t size) -> bool {
+            if (cursor + size > sz) return false;
+            memcpy(dest, b + cursor, size);
+            cursor += size;
+            return true;
+            };
+        auto ReadU32 = [&](uint32_t& val) -> bool { return ReadBytes(&val, 4); };
+        auto ReadF32 = [&](float& val) -> bool { return ReadBytes(&val, 4); };
+        auto ReadU8 = [&](uint8_t& val) -> bool { return ReadBytes(&val, 1); };
+        auto ReadString = [&]() -> std::string {
+            std::string s;
+            while (cursor < sz && b[cursor] != 0) { s += (char)b[cursor++]; }
+            if (cursor < sz) cursor++; // skip null terminator
+            return s;
+            };
+
+        if (!ReadU32(Version)) return false;
+
+        uint32_t constraintsLen = 0;
+        if (!ReadU32(constraintsLen)) return false;
+        if (constraintsLen > 0) {
+            Constraints.resize(constraintsLen);
+            if (!ReadBytes(Constraints.data(), constraintsLen)) return false;
+
+            // --- EGOCORE BYTECODE INTERPRETER ---
+            size_t cCursor = 0;
+            while (cCursor + 12 <= Constraints.size()) {
+                CConstraintInstruction inst;
+                memcpy(&inst.Opcode, Constraints.data() + cCursor, 4);
+                memcpy(&inst.Count, Constraints.data() + cCursor + 4, 4);
+                memcpy(&inst.PayloadSize, Constraints.data() + cCursor + 8, 4);
+                cCursor += 12;
+
+                size_t totalPayloadBytes = inst.Count * inst.PayloadSize;
+                if (totalPayloadBytes > 0 && cCursor + totalPayloadBytes <= Constraints.size()) {
+                    inst.Payload.resize(totalPayloadBytes);
+                    memcpy(inst.Payload.data(), Constraints.data() + cCursor, totalPayloadBytes);
+                    cCursor += totalPayloadBytes;
+                }
+                ParsedInstructions.push_back(inst);
+            }
+        }
+
+        if (!ReadF32(InitialSimulation.Timestep)) return false;
+        if (!ReadU32(InitialSimulation.TimestepChanged)) return false;
+        if (!ReadF32(InitialSimulation.TimestepMultiplier)) return false;
+        if (!ReadU32(InitialSimulation.Size)) return false;
+
+        if (InitialSimulation.Size > 0) {
+            InitialSimulation.Positions.resize(InitialSimulation.Size * 3);
+            if (!ReadBytes(InitialSimulation.Positions.data(), InitialSimulation.Size * 12)) return false;
+
+            InitialSimulation.SimulationAlphas.resize(InitialSimulation.Size);
+            if (!ReadBytes(InitialSimulation.SimulationAlphas.data(), InitialSimulation.Size * 4)) return false;
+        }
+
+        if (!ReadF32(InitialSimulation.GravityStrength)) return false;
+        if (!ReadF32(InitialSimulation.WindStrength)) return false;
+        if (!ReadU8(InitialSimulation.DraggingEnable)) return false;
+        if (!ReadU8(InitialSimulation.DraggingRotational)) return false;
+        if (!ReadF32(InitialSimulation.DraggingStrength)) return false;
+        if (!ReadU8(InitialSimulation.AccelerationEnable)) return false;
+        if (!ReadF32(InitialSimulation.GlobalDamping)) return false;
+
+        uint32_t renderTrisCount = 0;
+        if (!ReadU32(renderTrisCount)) return false;
+        if (renderTrisCount > 0) {
+            RenderTris.resize(renderTrisCount);
+            if (!ReadBytes(RenderTris.data(), renderTrisCount * 6)) return false;
+        }
+
+        uint32_t renderQuadsCount = 0;
+        if (!ReadU32(renderQuadsCount)) return false;
+        if (renderQuadsCount > 0) {
+            RenderQuads.resize(renderQuadsCount);
+            if (!ReadBytes(RenderQuads.data(), renderQuadsCount * 8)) return false;
+        }
+
+        uint32_t renderVertsCount = 0;
+        if (!ReadU32(renderVertsCount)) return false;
+        if (renderVertsCount > 0) {
+            RenderVertices.resize(renderVertsCount);
+            if (!ReadBytes(RenderVertices.data(), renderVertsCount * 4)) return false;
+        }
+
+        if (!ReadU32(NonSimCount)) return false;
+        if (NonSimCount > 0) {
+            NonSimPositions.resize(NonSimCount * 3);
+            if (!ReadBytes(NonSimPositions.data(), NonSimCount * 12)) return false;
+        }
+
+        uint32_t uvCount = 0;
+        if (!ReadU32(uvCount)) return false;
+        if (uvCount > 0) {
+            IndexedTextureCoords.resize(uvCount);
+            if (!ReadBytes(IndexedTextureCoords.data(), uvCount * 8)) return false;
+        }
+
+        uint32_t pIdxCount = 0;
+        if (!ReadU32(pIdxCount)) return false;
+        if (pIdxCount > 0) {
+            ParticleIndices.resize(pIdxCount);
+            if (!ReadBytes(ParticleIndices.data(), pIdxCount * 4)) return false;
+        }
+
+        uint32_t vIdxCount = 0;
+        if (!ReadU32(vIdxCount)) return false;
+        if (vIdxCount > 0) {
+            VertexIndices.resize(vIdxCount);
+            if (!ReadBytes(VertexIndices.data(), vIdxCount * 4)) return false;
+        }
+
+        if (!ReadF32(AveragePatchSize)) return false;
+        if (!ReadU8(BezierEnable)) return false;
+
+        uint32_t exportCount = 0;
+        if (!ReadU32(exportCount)) return false;
+        for (uint32_t i = 0; i < exportCount; i++) {
+            CExportParticle ep;
+            ep.Name = ReadString();
+            if (!ReadU32(ep.Value)) return false;
+            ExportParticles.push_back(ep);
+        }
+
+        auto ReadGroups = [&](std::vector<C3DGroup2>& groupsOut) -> bool {
+            uint32_t groupCount = 0;
+            if (!ReadU32(groupCount)) return false;
+            for (uint32_t i = 0; i < groupCount; i++) {
+                C3DGroup2 g;
+                if (!ReadU32(g.BoneIndex)) return false;
+                uint32_t blendCount = 0;
+                if (!ReadU32(blendCount)) return false;
+                if (blendCount > 0) {
+                    g.VertexBlends.resize(blendCount);
+                    if (!ReadBytes(g.VertexBlends.data(), blendCount * 8)) return false;
+                }
+                groupsOut.push_back(g);
+            }
+            return true;
+            };
+
+        if (!ReadGroups(SimGroups)) return false;
+        if (!ReadGroups(NonSimGroups)) return false;
+
+        IsParsed = true;
+        return true;
+    }
+};
+
+struct CClothPrimitive {
+    uint32_t PrimitiveIndex;
+    uint32_t MaterialIndex;
+    std::vector<uint8_t> ParticleProgramData;
+    CParticleProgram Program;
+};
 
 struct C3DPrimitive {
     int32_t MaterialIndex; int32_t RepeatingMeshReps; float SphereCenter[3]; float SphereRadius; float AvgTextureStretch;
@@ -446,7 +662,10 @@ struct C3DMeshContent {
                 for (uint32_t c = 0; c < clothPrimCount; c++) {
                     CClothPrimitive cp; Read(b, cursor, sz, cp.PrimitiveIndex); Read(b, cursor, sz, cp.MaterialIndex);
                     uint32_t progLen = 0; Read(b, cursor, sz, progLen);
-                    if (progLen > 0) { cp.ParticleProgramData = DecompressLZO(b, cursor, sz, progLen); }
+                    if (progLen > 0) {
+                        cp.ParticleProgramData = DecompressLZO(b, cursor, sz, progLen);
+                        cp.Program.Parse(cp.ParticleProgramData);
+                    }
                     prim.ClothPrimitives.push_back(cp);
                 }
             }

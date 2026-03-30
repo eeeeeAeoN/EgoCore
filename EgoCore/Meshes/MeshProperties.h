@@ -54,6 +54,7 @@ static int g_EditingTargetType = -1;
 static int g_EditingTargetIndex = -1;
 static char g_BoneSearchBuf[128] = "";
 static bool g_PreserveCamera = false;
+static bool g_ShowCloth = false;
 
 struct VolumeBoxState {
     bool IsBoxMode = false;
@@ -650,6 +651,11 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     ImGui::SameLine();
     ImGui::Checkbox("Bounds", &g_ShowBounds);
 
+    if (g_ActiveMeshContent.ClothFlag) {
+        ImGui::SameLine();
+        ImGui::Checkbox("Cloth Web", &g_ShowCloth);
+    }
+
     if (g_ActiveMeshContent.BoneCount > 0) {
         ImGui::SameLine();
         ImGui::Checkbox("Draw Skeleton", &g_ShowSkeleton);
@@ -794,7 +800,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     ID3D11DeviceContext* ctx;
     g_pd3dDevice->GetImmediateContext(&ctx);
 
-    ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, viewportWidth, avail.y, g_ShowWireframe, g_BBMParser.IsParsed, &g_PreviewBoneTransforms, true, 1.0f);
+    ID3D11ShaderResourceView* tex = g_MeshRenderer.Render(ctx, viewportWidth, avail.y, g_ShowWireframe, g_BBMParser.IsParsed, &g_PreviewBoneTransforms, true, 1.0f, nullptr, nullptr, g_ShowCloth);
 
     if (g_ShowBounds) {
         if (g_BBMParser.IsParsed) {
@@ -818,7 +824,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         g_PhysicsOverlayRenderer.CamDist = g_MeshRenderer.CamDist;
         g_PhysicsOverlayRenderer.CamPan = g_MeshRenderer.CamPan;
 
-        g_PhysicsOverlayRenderer.Render(ctx, viewportWidth, avail.y, true, false, &g_PreviewBoneTransforms, false, 0.5f, g_MeshRenderer.GetRTV(), g_MeshRenderer.GetDSV());
+        g_PhysicsOverlayRenderer.Render(ctx, viewportWidth, avail.y, true, false, &g_PreviewBoneTransforms, false, 0.5f, g_MeshRenderer.GetRTV(), g_MeshRenderer.GetDSV(), false);
     }
 
     ctx->Release();
@@ -975,6 +981,37 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     ImGui::Text("Materials: %d", g_ActiveMeshContent.MaterialCount);
                     ImGui::Text("Primitives: %d", g_ActiveMeshContent.PrimitiveCount);
                     ImGui::Text("Bones: %d", g_ActiveMeshContent.BoneCount);
+
+                    ImGui::Dummy(ImVec2(0, 5));
+                    if (g_ActiveMeshContent.ClothFlag) {
+                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.8f, 1.0f), "Cloth: YES");
+                        ImGui::SameLine();
+                        if (ImGui::Button("Export Raw Cloth Data")) {
+                            std::string savePath = SaveFileDialog("Binary Data\0*.bin\0All Files\0*.*\0");
+                            if (!savePath.empty()) {
+                                std::ofstream out(savePath, std::ios::binary);
+                                for (const auto& p : g_ActiveMeshContent.Primitives) {
+                                    for (const auto& cp : p.ClothPrimitives) {
+                                        // Write a tiny header for the hex editor: PrimID, MatID, Size
+                                        uint32_t pIdx = cp.PrimitiveIndex;
+                                        uint32_t mIdx = cp.MaterialIndex;
+                                        uint32_t sz = (uint32_t)cp.ParticleProgramData.size();
+                                        out.write((char*)&pIdx, 4);
+                                        out.write((char*)&mIdx, 4);
+                                        out.write((char*)&sz, 4);
+                                        if (sz > 0) {
+                                            out.write((char*)cp.ParticleProgramData.data(), sz);
+                                        }
+                                    }
+                                }
+                                g_BankStatus = "Exported raw cloth data!";
+                            }
+                        }
+                    }
+                    else {
+                        ImGui::TextDisabled("Cloth: NO");
+                    }
+                    ImGui::Dummy(ImVec2(0, 5));
 
                     ImGui::Dummy(ImVec2(0, 5));
                     if (ImGui::BeginTable("PrimTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
