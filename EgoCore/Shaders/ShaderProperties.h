@@ -5,6 +5,7 @@
 
 inline TextEditor g_ShaderTextEditor;
 inline int g_LastShaderEntryID = -1;
+inline float g_ShaderEditorFontScale = 1.0f;
 
 inline void DrawShaderProperties(int currentEntryID) {
     if (!g_ShaderParser.IsParsed) {
@@ -80,5 +81,20 @@ inline void DrawShaderProperties(int currentEntryID) {
         g_LastShaderEntryID = currentEntryID;
     }
 
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyCtrl && io.MouseWheel != 0.0f && ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
+        float step = (io.MouseWheel > 0) ? 0.2f : -0.2f;
+        g_ShaderEditorFontScale = std::clamp(g_ShaderEditorFontScale + step, 0.5f, 3.0f);
+    }
+
+    extern ImFont* g_EditorFont;
+    ImFont* fontToUse = g_EditorFont ? g_EditorFont : ImGui::GetFont();
+    float oldScale = fontToUse->Scale;
+    fontToUse->Scale = g_ShaderEditorFontScale;
+
+    ImGui::PushFont(fontToUse);
     g_ShaderTextEditor.Render("ShaderAssemblyEditor", ImVec2(0, 0), true);
+    ImGui::PopFont();
+
+    fontToUse->Scale = oldScale;
 }

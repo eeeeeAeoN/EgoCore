@@ -7,6 +7,17 @@
 
 static bool g_HasInitialized = false;
 static bool g_TriggerKeybindPopup = false;
+inline bool g_TriggerScalingPopup = false;
+inline float g_UIScale = 1.0f;
+
+static void UpdateUIScale(float scale) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = scale;
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = ImGuiStyle();
+    style.ScaleAllSizes(scale);
+}
 
 static void DrawBankExplorer() {
     if (!g_HasInitialized) {
@@ -223,27 +234,37 @@ static void DrawBankExplorer() {
         }
 
         if (ImGui::BeginMenu("Settings")) {
-            // SET FLAG TO TRIGGER OUTSIDE THE MENU
             if (ImGui::MenuItem("Keybindings")) {
                 g_TriggerKeybindPopup = true;
             }
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("View")) { ImGui::TextDisabled("Coming soon..."); ImGui::EndMenu(); }
+        if (ImGui::BeginMenu("View")) {
+            if (ImGui::MenuItem("Scaling")) {
+                g_TriggerScalingPopup = true;
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("About")) { ImGui::TextDisabled("EgoCore"); ImGui::EndMenu(); }
 
         float rightAlign = ImGui::GetWindowWidth() - 140.0f;
         if (rightAlign > 0) ImGui::SameLine(rightAlign);
 
-        if (g_CurrentMode == EAppMode::Banks) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1.0f));
+        // --- FIXED BANKS BUTTON ---
+        bool isBanks = (g_CurrentMode == EAppMode::Banks);
+        if (isBanks) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.43f, 0.34f, 0.17f, 1.0f));
         if (ImGui::Button("Banks", ImVec2(60, 0))) g_CurrentMode = EAppMode::Banks;
-        if (g_CurrentMode == EAppMode::Banks) ImGui::PopStyleColor();
+        if (isBanks) ImGui::PopStyleColor();
 
         ImGui::SameLine();
-        if (g_CurrentMode == EAppMode::Defs) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1.0f));
+
+        // --- FIXED DEFS BUTTON ---
+        bool isDefs = (g_CurrentMode == EAppMode::Defs);
+        if (isDefs) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.14f, 0.24f, 1.0f));
         if (ImGui::Button("Defs", ImVec2(60, 0))) g_CurrentMode = EAppMode::Defs;
-        if (g_CurrentMode == EAppMode::Defs) ImGui::PopStyleColor();
+        if (isDefs) ImGui::PopStyleColor();
 
         ImGui::EndMenuBar();
     }
@@ -317,6 +338,34 @@ static void DrawBankExplorer() {
         ImGui::EndPopup();
     }
 
+    if (g_TriggerScalingPopup) {
+        ImGui::OpenPopup("ScalingConfig");
+        g_TriggerScalingPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("ScalingConfig", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Interface Scaling");
+        ImGui::Separator();
+
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("Global Scale");
+        ImGui::SameLine(150);
+
+        ImGui::SetNextItemWidth(180);
+        if (ImGui::SliderFloat("##UIScaleSlider", &g_UIScale, 0.5f, 1.5f, "%.1f")) {
+            UpdateUIScale(g_UIScale);
+        }
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Adjusts font size and UI padding. Default is 1.00.");
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Close", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     // ROUTING
     if (g_CurrentMode == EAppMode::Banks) {

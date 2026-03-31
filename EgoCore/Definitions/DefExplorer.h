@@ -146,9 +146,9 @@ static void DrawDefTab() {
     // 3. Right-Aligned Compile Button
     float compileBtnWidth = 160.0f;
     ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.4f, 0.8f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.3f, 0.3f, 1.0f));
 
-    if (ImGui::Button("COMPILE ALL DEFS", ImVec2(compileBtnWidth, 0))) {
+    if (ImGui::Button("COMPILE ALL", ImVec2(compileBtnWidth, 0))) {
         CompileAllDefs_Stealth();
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles game definitions, sound headers and the star_chart.tga into their respective binaries.\n(Requires ego_r.exe in the Fable directory.)");

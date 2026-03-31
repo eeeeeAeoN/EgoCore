@@ -23,7 +23,7 @@ static bool g_ShowWireframe = false;
 static bool g_ShowHelpers = false;
 static bool g_ShowBounds = false;
 static bool g_ShowRightPanel = true;
-static bool g_ShowSkeleton = true;
+static bool g_ShowSkeleton = false;
 static MeshRenderer g_PhysicsOverlayRenderer;
 static CBBMParser g_OverlayBBMParser;
 static bool g_ShowPhysicsOverlay = false;
@@ -653,12 +653,12 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
     if (g_ActiveMeshContent.ClothFlag) {
         ImGui::SameLine();
-        ImGui::Checkbox("Cloth Web", &g_ShowCloth);
+        ImGui::Checkbox("Cloth", &g_ShowCloth);
     }
 
     if (g_ActiveMeshContent.BoneCount > 0) {
         ImGui::SameLine();
-        ImGui::Checkbox("Draw Skeleton", &g_ShowSkeleton);
+        ImGui::Checkbox("Skeleton", &g_ShowSkeleton);
     }
 
     if (g_ActiveMeshContent.IsParsed) {
@@ -668,7 +668,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         }
         else {
             ImGui::SameLine();
-            ImGui::Checkbox("Show Physics Mesh", &g_ShowPhysicsOverlay);
+            ImGui::Checkbox("Physics", &g_ShowPhysicsOverlay);
 
             if (g_ShowPhysicsOverlay && g_LoadedOverlayID != g_ActiveMeshContent.EntryMeta.PhysicsIndex) {
                 g_LoadedOverlayID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
@@ -1040,11 +1040,11 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             g_TriggerPhysicsPopup = true;
                         }
 
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::Text("Safe Radius");
-                        ImGui::SameLine(130);
-                        ImGui::SetNextItemWidth(80);
-                        if (ImGui::InputFloat("##safe_rad", &g_ActiveMeshContent.EntryMeta.SafeBoundingRadius, 0.0f, 0.0f, "%.3f")) tocChanged = true;
+                        //ImGui::AlignTextToFramePadding();
+                        //ImGui::Text("Safe Radius");
+                        //ImGui::SameLine(130);
+                        //ImGui::SetNextItemWidth(80);
+                        //if (ImGui::InputFloat("##safe_rad", &g_ActiveMeshContent.EntryMeta.SafeBoundingRadius, 0.0f, 0.0f, "%.3f")) tocChanged = true;
 
                         if (g_ActiveMeshContent.EntryMeta.LODCount > 0) {
                             ImGui::Dummy(ImVec2(0, 5));
@@ -1200,6 +1200,91 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     }
                 }
                 ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+
+            // --- CLOTH PHYSICS TAB ---
+            if (g_ActiveMeshContent.ClothFlag && ImGui::BeginTabItem("Cloth Physics")) {
+                int cGlobalIdx = 0;
+                for (size_t pIdx = 0; pIdx < g_ActiveMeshContent.Primitives.size(); pIdx++) {
+                    auto& prim = g_ActiveMeshContent.Primitives[pIdx];
+                    for (size_t cIdx = 0; cIdx < prim.ClothPrimitives.size(); cIdx++) {
+                        auto& cp = prim.ClothPrimitives[cIdx];
+                        if (!cp.Program.IsParsed) continue;
+
+                        auto& sim = cp.Program.InitialSimulation;
+                        auto& prog = cp.Program;
+
+                        int springCount = 0;
+                        for (const auto& inst : cp.Program.ParsedInstructions) {
+                            if (inst.Opcode == 2) springCount += inst.Count;
+                        }
+
+                        std::string headerName = "Cloth Block " + std::to_string(cGlobalIdx) + " (Primitive " + std::to_string(pIdx) + ")";
+                        if (ImGui::CollapsingHeader(headerName.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                            ImGui::PushID(cGlobalIdx);
+
+                            ImGui::TextDisabled("Particles: %d | Springs: %d", sim.Size, springCount);
+                            ImGui::Dummy(ImVec2(0, 5));
+
+                            bool changed = false;
+
+                            // --- SECTION: CORE SIMULATION ---
+                            if (ImGui::TreeNodeEx("Simulation Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
+                                ImGui::SetNextItemWidth(150);
+                                if (ImGui::DragFloat("Timestep", &sim.Timestep, 0.0001f, 0.0f, 1.0f, "%.4f")) changed = true;
+
+                                ImGui::SetNextItemWidth(150);
+                                if (ImGui::DragFloat("Timestep Multiplier", &sim.TimestepMultiplier, 0.01f, 0.0f, 10.0f)) changed = true;
+
+                                ImGui::SetNextItemWidth(150);
+                                if (ImGui::DragFloat("Gravity Strength", &sim.GravityStrength, 0.01f)) changed = true;
+
+                                ImGui::SetNextItemWidth(150);
+                                if (ImGui::DragFloat("Wind Strength", &sim.WindStrength, 0.01f)) changed = true;
+
+                                ImGui::SetNextItemWidth(150);
+                                if (ImGui::DragFloat("Global Damping", &sim.GlobalDamping, 0.001f, 0.0f, 1.0f)) changed = true;
+
+                                ImGui::TreePop();
+                            }
+
+                            // --- SECTION: DRAG & ACCELERATION ---
+                            if (ImGui::TreeNodeEx("Drag & Interaction", ImGuiTreeNodeFlags_DefaultOpen)) {
+                                bool dragEn = sim.DraggingEnable != 0;
+                                if (ImGui::Checkbox("Enable Drag", &dragEn)) { sim.DraggingEnable = dragEn ? 1 : 0; changed = true; }
+
+                                ImGui::SameLine();
+                                bool dragRot = sim.DraggingRotational != 0;
+                                if (ImGui::Checkbox("Rotational Drag", &dragRot)) { sim.DraggingRotational = dragRot ? 1 : 0; changed = true; }
+
+                                ImGui::SetNextItemWidth(150);
+                                if (ImGui::DragFloat("Drag Strength", &sim.DraggingStrength, 0.01f)) changed = true;
+
+                                bool accelEn = sim.AccelerationEnable != 0;
+                                if (ImGui::Checkbox("Enable Acceleration", &accelEn)) { sim.AccelerationEnable = accelEn ? 1 : 0; changed = true; }
+
+                                ImGui::TreePop();
+                            }
+
+                            // --- SECTION: RENDERING ---
+                            if (ImGui::TreeNodeEx("Rendering Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+                                ImGui::SetNextItemWidth(150);
+                                if (ImGui::DragFloat("Avg Patch Size", &prog.AveragePatchSize, 0.01f)) changed = true;
+
+                                bool bezierEn = prog.BezierEnable != 0;
+                                if (ImGui::Checkbox("Enable Bezier (Curved Cloth)", &bezierEn)) { prog.BezierEnable = bezierEn ? 1 : 0; changed = true; }
+
+                                ImGui::TreePop();
+                            }
+
+                            if (changed && saveCallback) saveCallback();
+
+                            ImGui::PopID();
+                        }
+                        cGlobalIdx++;
+                    }
+                }
                 ImGui::EndTabItem();
             }
 

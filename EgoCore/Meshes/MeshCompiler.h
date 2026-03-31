@@ -134,7 +134,13 @@ public:
             uint32_t cpCount = (uint32_t)prim.ClothPrimitives.size(); Write(&cpCount, 4);
             for (const auto& cp : prim.ClothPrimitives) {
                 Write(&cp.PrimitiveIndex, 4); Write(&cp.MaterialIndex, 4);
-                WriteLZOBlock(data, cp.ParticleProgramData, disableLZO);
+                std::vector<uint8_t> progData = cp.Program.IsParsed ? cp.Program.Serialize() : cp.ParticleProgramData;
+
+                // FIX: Write the uncompressed length of the program data before the LZO block!
+                uint32_t progLen = (uint32_t)progData.size();
+                Write(&progLen, 4);
+
+                WriteLZOBlock(data, progData, disableLZO);
             }
         }
         return data;

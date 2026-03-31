@@ -441,6 +441,229 @@ namespace GltfMeshImporter {
         }
     }
 
+    template <typename T_BV, typename T_Acc>
+    static void CompileFableClothFromGLTF(
+        const std::string& meshExtras, const std::string& pObj,
+        const std::vector<uint8_t>& binData, const std::vector<T_BV>& views, const std::vector<T_Acc>& accessors,
+        C3DMeshContent& outMesh, int targetPrim, bool applyBlenderFix)
+    {
+        CClothPrimitive cp = {};
+        cp.PrimitiveIndex = targetPrim;
+        cp.MaterialIndex = outMesh.Primitives[targetPrim].MaterialIndex;
+
+        CParticleProgram prog;
+        prog.IsParsed = true;
+        prog.Version = 1;
+        prog.AveragePatchSize = ExtractFloatClean(meshExtras, "Fable_PatchSize", 1.0f);
+        prog.BezierEnable = (int)ExtractFloatClean(meshExtras, "Fable_Bezier", 0);
+
+        auto& sim = prog.InitialSimulation;
+        sim.GravityStrength = ExtractFloatClean(meshExtras, "Fable_Gravity", 9.8f);
+        sim.WindStrength = ExtractFloatClean(meshExtras, "Fable_Wind", 0.0f);
+        sim.GlobalDamping = ExtractFloatClean(meshExtras, "Fable_Damping", 0.1f);
+        sim.Timestep = ExtractFloatClean(meshExtras, "Fable_Timestep", 0.016f);
+        sim.TimestepMultiplier = ExtractFloatClean(meshExtras, "Fable_TimeMult", 1.0f);
+        sim.DraggingEnable = (int)ExtractFloatClean(meshExtras, "Fable_DragEnable", 0);
+        sim.DraggingStrength = ExtractFloatClean(meshExtras, "Fable_DragStrength", 0.0f);
+        sim.AccelerationEnable = (int)ExtractFloatClean(meshExtras, "Fable_AccelEnable", 0);
+
+        float structStiffness = ExtractFloatClean(meshExtras, "Fable_StructStiff", 0.8f);
+        float flexStiffness = ExtractFloatClean(meshExtras, "Fable_FlexStiff", 0.15f);
+
+        std::string attr = ExtractBlock(pObj, "attributes");
+        int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
+        int uvAccIdx = (int)ExtractFloatClean(attr, "TEXCOORD_0", -1);
+        int colAccIdx = (int)ExtractFloatClean(attr, "COLOR_0", -1);
+        int jntAccIdx = (int)ExtractFloatClean(attr, "JOINTS_0", -1);
+        int wgtAccIdx = (int)ExtractFloatClean(attr, "WEIGHTS_0", -1);
+        int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
+
+        if (posAccIdx < 0 || indAccIdx < 0) return;
+
+        // USE T_ACC HERE
+        T_Acc pAcc = accessors[posAccIdx];
+        const float* pData = (const float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
+        const float* uData = uvAccIdx >= 0 ? (const float*)(binData.data() + views[accessors[uvAccIdx].view].offset + accessors[uvAccIdx].offset) : nullptr;
+        const float* cData = colAccIdx >= 0 ? (const float*)(binData.data() + views[accessors[colAccIdx].view].offset + accessors[colAccIdx].offset) : nullptr;
+
+        std::vector<uint32_t> unifiedParticleIndex(pAcc.count, 0xFFFFFFFF);
+        std::vector<int> vType(pAcc.count, 0);
+
+        std::vector<float> tempNonSimPos;
+        std::vector<float> tempSimPos;
+        std::vector<float> tempSimAlphas;
+
+        for (int i = 0; i < pAcc.count; i++) {
+            float r = cData ? cData[i * 4] : 1.0f;
+            float g = cData ? cData[i * 4 + 1] : 0.0f;
+            float px = pData[i * 3], py = pData[i * 3 + 1], pz = pData[i * 3 + 2];
+            if (applyBlenderFix) { float tmp = py; py = -pz; pz = tmp; }
+
+            if (g > 0.01f) {
+                vType[i] = 2;
+                unifiedParticleIndex[i] = (uint32_t)(tempSimPos.size() / 3);
+                tempSimPos.push_back(px); tempSimPos.push_back(py); tempSimPos.push_back(pz);
+                tempSimAlphas.push_back(g);
+            }
+            else if (r > 0.5f) {
+                vType[i] = 1;
+                unifiedParticleIndex[i] = (uint32_t)(tempNonSimPos.size() / 3);
+                tempNonSimPos.push_back(px); tempNonSimPos.push_back(py); tempNonSimPos.push_back(pz);
+            }
+        }
+
+        prog.NonSimCount = (uint32_t)(tempNonSimPos.size() / 3);
+        prog.NonSimPositions = tempNonSimPos;
+        sim.Size = (uint32_t)(tempSimPos.size() / 3);
+        sim.Positions = tempSimPos;
+        sim.SimulationAlphas = tempSimAlphas;
+
+        for (int i = 0; i < pAcc.count; i++) {
+            if (vType[i] == 2) unifiedParticleIndex[i] += prog.NonSimCount;
+        }
+
+        for (int i = 0; i < pAcc.count; i++) {
+            if (vType[i] == 0) continue;
+            C2DVector uv = { 0.0f, 0.0f };
+            if (uData) { uv.u = uData[i * 2]; uv.v = uData[i * 2 + 1]; }
+            prog.IndexedTextureCoords.push_back(uv);
+            C3DClothRenderVertex rv;
+            rv.PositionIndex = (uint16_t)unifiedParticleIndex[i];
+            rv.TexCoordIndex = (uint16_t)(prog.IndexedTextureCoords.size() - 1);
+            prog.RenderVertices.push_back(rv);
+        }
+
+        // USE T_ACC HERE
+        T_Acc iAcc = accessors[indAccIdx];
+        const uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
+
+        std::vector<uint16_t> rigidIndexBuffer;
+        std::set<std::pair<uint32_t, uint32_t>> uniqueEdges;
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> edgeToTris;
+
+        for (int i = 0; i < iAcc.count; i += 3) {
+            auto getVIdx = [&](int offset) -> uint32_t {
+                if (iAcc.compType == 5121) return iData[i + offset];
+                if (iAcc.compType == 5123) return ((const uint16_t*)iData)[i + offset];
+                if (iAcc.compType == 5125) return ((const uint32_t*)iData)[i + offset];
+                return 0;
+            };
+            uint32_t gA = getVIdx(0), gB = getVIdx(1), gC = getVIdx(2);
+            
+            if (vType[gA] == 2 || vType[gB] == 2 || vType[gC] == 2) {
+                // Cloth Physics Mesh: Build the RenderTris and Constraints using the unified physics indices
+                C3DTriangle2 tri;
+                tri.Indices[0] = (uint16_t)unifiedParticleIndex[gA];
+                tri.Indices[1] = (uint16_t)unifiedParticleIndex[gB];
+                tri.Indices[2] = (uint16_t)unifiedParticleIndex[gC];
+                prog.RenderTris.push_back(tri);
+                
+                auto addEdge = [&](uint32_t p1, uint32_t p2, uint32_t opposite) {
+                    uint32_t minP = (std::min)(p1, p2), maxP = (std::max)(p1, p2);
+                    std::pair<uint32_t, uint32_t> edge = { minP, maxP };
+                    uniqueEdges.insert(edge);
+                    edgeToTris[edge].push_back(opposite);
+                };
+                
+                addEdge(tri.Indices[0], tri.Indices[1], tri.Indices[2]);
+                addEdge(tri.Indices[1], tri.Indices[2], tri.Indices[0]);
+                addEdge(tri.Indices[2], tri.Indices[0], tri.Indices[1]);
+            }
+            else {
+                // THE FIX: Rigid Mesh
+                // Pull the mapped Fable indices from the pre-compiled buffer, NOT the raw glTF indices.
+                // This ensures we point to the deduplicated/blocked vertices in the Fable vertex buffer.
+                rigidIndexBuffer.push_back(outMesh.Primitives[targetPrim].IndexBuffer[i]);
+                rigidIndexBuffer.push_back(outMesh.Primitives[targetPrim].IndexBuffer[i + 1]);
+                rigidIndexBuffer.push_back(outMesh.Primitives[targetPrim].IndexBuffer[i + 2]);
+            }
+        }
+
+        outMesh.Primitives[targetPrim].IndexBuffer = rigidIndexBuffer;
+        outMesh.Primitives[targetPrim].TriangleCount = (uint32_t)(rigidIndexBuffer.size() / 3);
+
+        auto getUnifiedPos = [&](uint32_t idx, float& x, float& y, float& z) {
+            if (idx < prog.NonSimCount) {
+                x = prog.NonSimPositions[idx * 3]; y = prog.NonSimPositions[idx * 3 + 1]; z = prog.NonSimPositions[idx * 3 + 2];
+            }
+            else {
+                uint32_t sIdx = idx - prog.NonSimCount;
+                x = sim.Positions[sIdx * 3]; y = sim.Positions[sIdx * 3 + 1]; z = sim.Positions[sIdx * 3 + 2];
+            }
+            };
+
+        for (const auto& edge : uniqueEdges) {
+            uint32_t p1 = edge.first; uint32_t p2 = edge.second;
+            float x1, y1, z1, x2, y2, z2;
+            getUnifiedPos(p1, x1, y1, z1); getUnifiedPos(p2, x2, y2, z2);
+            float dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
+            float restLength = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+            CConstraintInstruction distConst;
+            distConst.Opcode = 2; distConst.Count = 1; distConst.PayloadSize = 16; distConst.Payload.resize(16);
+            memcpy(distConst.Payload.data() + 0, &p1, 4); memcpy(distConst.Payload.data() + 4, &p2, 4);
+            memcpy(distConst.Payload.data() + 8, &restLength, 4); memcpy(distConst.Payload.data() + 12, &structStiffness, 4);
+            prog.ParsedInstructions.push_back(distConst);
+
+            const auto& adjacentVerts = edgeToTris[edge];
+            if (adjacentVerts.size() == 2) {
+                uint32_t p3 = adjacentVerts[0]; uint32_t p4 = adjacentVerts[1];
+                CConstraintInstruction unbendConst;
+                unbendConst.Opcode = 4; unbendConst.Count = 1; unbendConst.PayloadSize = 16; unbendConst.Payload.resize(16);
+                memcpy(unbendConst.Payload.data() + 0, &p3, 4); memcpy(unbendConst.Payload.data() + 4, &p1, 4);
+                memcpy(unbendConst.Payload.data() + 8, &p4, 4); memcpy(unbendConst.Payload.data() + 12, &flexStiffness, 4);
+                prog.ParsedInstructions.push_back(unbendConst);
+            }
+        }
+
+        if (jntAccIdx >= 0 && wgtAccIdx >= 0) {
+            // USE T_ACC HERE
+            T_Acc jAcc = accessors[jntAccIdx];
+            T_Acc wAcc = accessors[wgtAccIdx];
+            const uint16_t* jData16 = (jAcc.compType == 5123) ? (const uint16_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
+            const uint8_t* jData8 = (jAcc.compType == 5121) ? (const uint8_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
+            const float* wData = (const float*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
+
+            std::map<uint32_t, std::vector<C3DVertexBlend2>> simBoneMap;
+            std::map<uint32_t, std::vector<C3DVertexBlend2>> nonSimBoneMap;
+
+            for (int i = 0; i < pAcc.count; i++) {
+                if (vType[i] == 0) continue;
+                uint32_t unifiedIdx = unifiedParticleIndex[i];
+                bool isSimulated = (vType[i] == 2);
+                uint32_t localGroupIdx = isSimulated ? (unifiedIdx - prog.NonSimCount) : unifiedIdx;
+
+                for (int k = 0; k < 4; k++) {
+                    float w = wData[i * 4 + k];
+                    if (w > 0.001f) {
+                        uint32_t bone = jData16 ? jData16[i * 4 + k] : (jData8 ? jData8[i * 4 + k] : 0);
+                        uint32_t fableBoneId = bone < outMesh.BoneIndices.size() ? outMesh.BoneIndices[bone] : bone;
+                        if (isSimulated) simBoneMap[fableBoneId].push_back({ localGroupIdx, w });
+                        else nonSimBoneMap[fableBoneId].push_back({ localGroupIdx, w });
+                    }
+                }
+            }
+
+            // EXPLICIT CASTS FOR NARROWING FIX
+            for (auto& kv : nonSimBoneMap) {
+                C3DGroup2 group;
+                group.BoneIndex = (uint32_t)kv.first;
+                group.VertexBlends = kv.second;
+                prog.NonSimGroups.push_back(group);
+            }
+            for (auto& kv : simBoneMap) {
+                C3DGroup2 group;
+                group.BoneIndex = (uint32_t)kv.first;
+                group.VertexBlends = kv.second;
+                prog.SimGroups.push_back(group);
+            }
+        }
+
+        cp.Program = prog;
+        outMesh.Primitives[targetPrim].ClothPrimitives.push_back(cp);
+        outMesh.ClothFlag = true;
+    }
+
     static std::string ImportType1(const std::string& gltfPath, const std::string& originalName, C3DMeshContent& outMesh, bool forceRecalculate = false) {
         std::ifstream file(gltfPath);
         if (!file.is_open()) return "Could not open glTF file.";
@@ -557,6 +780,7 @@ namespace GltfMeshImporter {
             if (primObjs.empty()) continue;
 
             std::string meshExtras = ExtractBlock(meshObj, "extras");
+            //if (ExtractBool(meshExtras, "FableCloth", false)) continue; // Processed later!
 
             C3DPrimitive outPrim = {};
             outPrim.InitFlags = 4;
@@ -682,6 +906,13 @@ namespace GltfMeshImporter {
             outPrim.StaticBlockCount_2 = outPrim.StaticBlockCount;
 
             outMesh.Primitives.push_back(outPrim);
+
+            if (ExtractBool(meshExtras, "FableCloth", false)) {
+                int targetPrim = (int)outMesh.Primitives.size() - 1;
+                // Type 1 usually doesn't need the axis fix, so we pass 'false'
+                CompileFableClothFromGLTF(meshExtras, primObjs[0], binData, views, accessors, outMesh, targetPrim, false);
+            }
+
         }
 
         std::sort(outMesh.Primitives.begin(), outMesh.Primitives.end(), [&](const C3DPrimitive& a, const C3DPrimitive& b) {
@@ -1583,6 +1814,7 @@ namespace GltfMeshImporter {
             if (primObjs.empty()) continue;
 
             std::string meshExtras = ExtractBlock(meshObj, "extras");
+            //if (ExtractBool(meshExtras, "FableCloth", false)) continue; // Processed later!
 
             C3DPrimitive outPrim = {};
             outPrim.RepeatingMeshReps = 0;
@@ -1836,6 +2068,13 @@ namespace GltfMeshImporter {
 
             outMesh.TotalAnimatedBlocks += outPrim.AnimatedBlockCount;
             outMesh.Primitives.push_back(outPrim);
+
+            if (ExtractBool(meshExtras, "FableCloth", false)) {
+                int targetPrim = (int)outMesh.Primitives.size() - 1;
+                // Type 5 (characters) needs the Blender axis fix
+                CompileFableClothFromGLTF(meshExtras, primObjs[0], binData, views, accessors, outMesh, targetPrim, applyBlenderFix);
+            }
+
         }
 
         std::sort(outMesh.Primitives.begin(), outMesh.Primitives.end(), [&](const C3DPrimitive& a, const C3DPrimitive& b) {

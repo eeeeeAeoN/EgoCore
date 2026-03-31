@@ -22,7 +22,6 @@ struct GPUVertex {
     XMFLOAT4 Weights;
 };
 
-// Ensure this is 16-byte aligned!
 struct CBMatrix {
     XMMATRIX WorldViewProj;
     XMMATRIX World;
@@ -31,8 +30,8 @@ struct CBMatrix {
     XMMATRIX BoneTransforms[256];
     int HasAnimation;
     float SelfIllum;
-    int HasBump;    // NEW
-    int HasSpec;    // NEW
+    int HasBump;
+    int HasSpec;
     XMFLOAT3 CamPos;
     float Pad2;
 };
@@ -83,7 +82,6 @@ private:
     void CreateDefaultTexture(ID3D11Device* device) {
         if (DefaultWhiteSRV) return;
 
-        // 1. Default White (Diffuse)
         uint32_t white = 0xFFFFFFFF;
         D3D11_TEXTURE2D_DESC desc = {};
         desc.Width = 1; desc.Height = 1; desc.MipLevels = 1; desc.ArraySize = 1;
@@ -98,7 +96,6 @@ private:
             tex->Release();
         }
 
-        // 2. Default Normal Map (Flat Normal: R=128, G=128, B=255)
         uint32_t flatNormal = 0xFFFF8080;
         D3D11_SUBRESOURCE_DATA normData = { &flatNormal, 4, 0 };
         if (SUCCEEDED(device->CreateTexture2D(&desc, &normData, &tex))) {
@@ -106,7 +103,6 @@ private:
             tex->Release();
         }
 
-        // 3. Default Specular Map (Black/No reflection)
         uint32_t black = 0xFF000000;
         D3D11_SUBRESOURCE_DATA specData = { &black, 4, 0 };
         if (SUCCEEDED(device->CreateTexture2D(&desc, &specData, &tex))) {
@@ -144,6 +140,7 @@ private:
 
 public:
     float CamRotX = 0.0f; float CamRotY = 0.0f; float CamDist = 10.0f; XMFLOAT2 CamPan = { 0, 0 };
+    XMFLOAT3 CenterOffset = { 0, 0, 0 };
 
     ID3D11RenderTargetView* GetRTV() const { return RTV; }
     ID3D11DepthStencilView* GetDSV() const { return DSV; }
@@ -462,7 +459,6 @@ public:
                     }
                 }
 
-                // Emit the batch for this specific block!
                 uint32_t blockIndexCount = (uint32_t)indices.size() - blockBatchStart;
                 if (blockIndexCount > 0) {
                     Batches.push_back({ blockBatchStart, blockIndexCount, matIdx });
@@ -503,23 +499,20 @@ public:
                 uint32_t baseVertex = (uint32_t)clothVerts.size();
                 const auto& sim = cp.Program.InitialSimulation;
 
-                // 1. Create a vertex for every particle position
                 for (uint32_t i = 0; i < sim.Size; ++i) {
                     GPUVertex v = {};
                     v.Pos = XMFLOAT3(sim.Positions[i * 3], sim.Positions[i * 3 + 1], sim.Positions[i * 3 + 2]);
-                    v.Norm = XMFLOAT3(0, 1, 0); // Not used for lines
+                    v.Norm = XMFLOAT3(0, 1, 0);
                     v.UV = XMFLOAT2(0, 0);
                     v.Joints = 0; v.Weights = XMFLOAT4(0, 0, 0, 0);
                     clothVerts.push_back(v);
                 }
 
-                // 2. Read the bytecode to draw lines between constrained particles
                 for (const auto& inst : cp.Program.ParsedInstructions) {
                     if (inst.Opcode == 2) { // Distance Constraint
                         for (uint32_t c = 0; c < inst.Count; ++c) {
                             uint32_t offset = c * inst.PayloadSize;
                             if (offset + 8 <= inst.Payload.size()) {
-                                // Extract Particle A and Particle B from the 16-byte payload
                                 uint32_t pA = *(uint32_t*)(inst.Payload.data() + offset);
                                 uint32_t pB = *(uint32_t*)(inst.Payload.data() + offset + 4);
 
@@ -545,7 +538,9 @@ public:
         }
 
         if (resetCamera) {
-            CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.0f : 10.0f;
+            CenterOffset = XMFLOAT3(-mesh.BoundingSphereCenter[0], -mesh.BoundingSphereCenter[1], -mesh.BoundingSphereCenter[2]);
+            CamDist = (mesh.BoundingSphereRadius > 0) ? mesh.BoundingSphereRadius * 2.5f : 10.0f;
+
             CamPan = { 0, 0 };
             CamRotX = -XM_PIDIV2;
             CamRotY = XM_PI;
@@ -627,7 +622,7 @@ public:
 
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
-        XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+        XMMATRIX worldCam = XMMatrixTranslation(CenterOffset.x, CenterOffset.y, CenterOffset.z) * XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
 
         if (isPhysics) {
             worldCam = XMMatrixRotationX(-XM_PIDIV2) * worldCam;
@@ -677,11 +672,11 @@ public:
                 }
                 if (Materials[batch.MaterialIndex].Bump) {
                     srvs[1] = Materials[batch.MaterialIndex].Bump;
-                    cb.HasBump = 1; // Flag On!
+                    cb.HasBump = 1;
                 }
                 if (Materials[batch.MaterialIndex].Specular) {
                     srvs[2] = Materials[batch.MaterialIndex].Specular;
-                    cb.HasSpec = 1; // Flag On!
+                    cb.HasSpec = 1;
                 }
                 matIllum = Materials[batch.MaterialIndex].SelfIllumination;
             }
@@ -739,7 +734,7 @@ public:
 
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
-        XMMATRIX worldCam = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+        XMMATRIX worldCam = XMMatrixTranslation(CenterOffset.x, CenterOffset.y, CenterOffset.z) * XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
 
         CBMatrix cb;
         cb.HasAnimation = 0;
@@ -876,7 +871,7 @@ public:
     bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH, bool isPhysics = false) {
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), screenW / screenH, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
-        XMMATRIX world = XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+        XMMATRIX world = XMMatrixTranslation(CenterOffset.x, CenterOffset.y, CenterOffset.z) * XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
 
         if (isPhysics) {
             world = XMMatrixRotationX(-XM_PIDIV2) * world;

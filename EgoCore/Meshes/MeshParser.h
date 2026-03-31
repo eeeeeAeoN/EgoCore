@@ -87,7 +87,12 @@ struct CParticleSimulation {
 
 struct C3DTriangle2 { uint16_t Indices[3]; };
 struct C3DQuad2 { uint16_t Indices[4]; };
-struct C3DClothRenderVertex { uint32_t Data; };
+struct C3DClothRenderVertex {
+    union {
+        uint32_t Data;
+        struct { uint16_t PositionIndex; uint16_t TexCoordIndex; };
+    };
+};
 struct C2DVector { float u, v; };
 struct CExportParticle { std::string Name; uint32_t Value; };
 
@@ -164,7 +169,7 @@ struct CParticleProgram {
                 memcpy(&inst.PayloadSize, Constraints.data() + cCursor + 8, 4);
                 cCursor += 12;
 
-                size_t totalPayloadBytes = inst.Count * inst.PayloadSize;
+                size_t totalPayloadBytes = inst.PayloadSize;
                 if (totalPayloadBytes > 0 && cCursor + totalPayloadBytes <= Constraints.size()) {
                     inst.Payload.resize(totalPayloadBytes);
                     memcpy(inst.Payload.data(), Constraints.data() + cCursor, totalPayloadBytes);
@@ -277,6 +282,90 @@ struct CParticleProgram {
 
         IsParsed = true;
         return true;
+    }
+
+    std::vector<uint8_t> Serialize() const {
+        std::vector<uint8_t> out;
+        auto Write = [&](const void* data, size_t size) {
+            size_t old = out.size(); out.resize(old + size); memcpy(out.data() + old, data, size);
+            };
+        auto WriteU32 = [&](uint32_t val) { Write(&val, 4); };
+        auto WriteF32 = [&](float val) { Write(&val, 4); };
+        auto WriteU8 = [&](uint8_t val) { Write(&val, 1); };
+        auto WriteString = [&](const std::string& str) { Write(str.c_str(), str.length() + 1); };
+
+        WriteU32(Version);
+
+        // Rebuild Constraints array from the ParsedInstructions
+        std::vector<uint8_t> rebuiltConstraints;
+        for (const auto& inst : ParsedInstructions) {
+            uint32_t op = inst.Opcode;
+            uint32_t cnt = inst.Count;
+            // FIX: Force the payload size to be the actual byte size of the vector
+            uint32_t psz = (uint32_t)inst.Payload.size();
+
+            size_t old = rebuiltConstraints.size();
+            rebuiltConstraints.resize(old + 12 + inst.Payload.size());
+            memcpy(rebuiltConstraints.data() + old, &op, 4);
+            memcpy(rebuiltConstraints.data() + old + 4, &cnt, 4);
+            memcpy(rebuiltConstraints.data() + old + 8, &psz, 4);
+            if (!inst.Payload.empty()) {
+                memcpy(rebuiltConstraints.data() + old + 12, inst.Payload.data(), inst.Payload.size());
+            }
+        }
+        WriteU32((uint32_t)rebuiltConstraints.size());
+        if (!rebuiltConstraints.empty()) Write(rebuiltConstraints.data(), rebuiltConstraints.size());
+
+        // Simulation Header
+        WriteF32(InitialSimulation.Timestep);
+        WriteU32(InitialSimulation.TimestepChanged);
+        WriteF32(InitialSimulation.TimestepMultiplier);
+        WriteU32(InitialSimulation.Size);
+        if (InitialSimulation.Size > 0) {
+            Write(InitialSimulation.Positions.data(), InitialSimulation.Size * 12);
+            Write(InitialSimulation.SimulationAlphas.data(), InitialSimulation.Size * 4);
+        }
+        WriteF32(InitialSimulation.GravityStrength);
+        WriteF32(InitialSimulation.WindStrength);
+        WriteU8(InitialSimulation.DraggingEnable);
+        WriteU8(InitialSimulation.DraggingRotational);
+        WriteF32(InitialSimulation.DraggingStrength);
+        WriteU8(InitialSimulation.AccelerationEnable);
+        WriteF32(InitialSimulation.GlobalDamping);
+
+        // Rendering Data
+        WriteU32((uint32_t)RenderTris.size()); if (!RenderTris.empty()) Write(RenderTris.data(), RenderTris.size() * 6);
+        WriteU32((uint32_t)RenderQuads.size()); if (!RenderQuads.empty()) Write(RenderQuads.data(), RenderQuads.size() * 8);
+        WriteU32((uint32_t)RenderVertices.size()); if (!RenderVertices.empty()) Write(RenderVertices.data(), RenderVertices.size() * 4);
+
+        // NonSim
+        WriteU32(NonSimCount); if (NonSimCount > 0) Write(NonSimPositions.data(), NonSimCount * 12);
+
+        // UVs and Indices
+        WriteU32((uint32_t)IndexedTextureCoords.size()); if (!IndexedTextureCoords.empty()) Write(IndexedTextureCoords.data(), IndexedTextureCoords.size() * 8);
+        WriteU32((uint32_t)ParticleIndices.size()); if (!ParticleIndices.empty()) Write(ParticleIndices.data(), ParticleIndices.size() * 4);
+        WriteU32((uint32_t)VertexIndices.size()); if (!VertexIndices.empty()) Write(VertexIndices.data(), VertexIndices.size() * 4);
+
+        WriteF32(AveragePatchSize);
+        WriteU8(BezierEnable);
+
+        // Export Particles
+        WriteU32((uint32_t)ExportParticles.size());
+        for (const auto& ep : ExportParticles) { WriteString(ep.Name); WriteU32(ep.Value); }
+
+        // Groups
+        auto WriteGroups = [&](const std::vector<C3DGroup2>& groups) {
+            WriteU32((uint32_t)groups.size());
+            for (const auto& g : groups) {
+                WriteU32(g.BoneIndex);
+                WriteU32((uint32_t)g.VertexBlends.size());
+                if (!g.VertexBlends.empty()) Write(g.VertexBlends.data(), g.VertexBlends.size() * 8);
+            }
+            };
+        WriteGroups(SimGroups);
+        WriteGroups(NonSimGroups);
+
+        return out;
     }
 };
 
@@ -845,8 +934,9 @@ struct C3DMeshContent {
             uint32_t cpCount = (uint32_t)prim.ClothPrimitives.size(); Write(&cpCount, 4);
             for (const auto& cp : prim.ClothPrimitives) {
                 Write(&cp.PrimitiveIndex, 4); Write(&cp.MaterialIndex, 4);
-                uint32_t progLen = (uint32_t)cp.ParticleProgramData.size(); Write(&progLen, 4);
-                if (progLen > 0) Write(cp.ParticleProgramData.data(), progLen);
+                std::vector<uint8_t> progData = cp.Program.IsParsed ? cp.Program.Serialize() : cp.ParticleProgramData;
+                uint32_t progLen = (uint32_t)progData.size(); Write(&progLen, 4);
+                if (progLen > 0) Write(progData.data(), progLen);
             }
         }
         return data;
