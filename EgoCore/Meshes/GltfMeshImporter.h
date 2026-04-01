@@ -8,6 +8,7 @@
 #include <map>
 #include <algorithm>
 #include <filesystem>
+#include <queue>
 
 namespace GltfMeshImporter {
 
@@ -453,7 +454,7 @@ namespace GltfMeshImporter {
 
         CParticleProgram prog;
         prog.IsParsed = true;
-        prog.Version = 1;
+        prog.Version = 0x14D; // Must be 333 (0x14D)
         prog.AveragePatchSize = ExtractFloatClean(meshExtras, "Fable_PatchSize", 1.0f);
         prog.BezierEnable = (int)ExtractFloatClean(meshExtras, "Fable_Bezier", 0);
 
@@ -461,14 +462,15 @@ namespace GltfMeshImporter {
         sim.GravityStrength = ExtractFloatClean(meshExtras, "Fable_Gravity", 9.8f);
         sim.WindStrength = ExtractFloatClean(meshExtras, "Fable_Wind", 0.0f);
         sim.GlobalDamping = ExtractFloatClean(meshExtras, "Fable_Damping", 0.1f);
-        sim.Timestep = ExtractFloatClean(meshExtras, "Fable_Timestep", 0.016f);
+        sim.Timestep = ExtractFloatClean(meshExtras, "Fable_Timestep", 0.0666f); // 15Hz Fable default
+        sim.TimestepChanged = 0;
         sim.TimestepMultiplier = ExtractFloatClean(meshExtras, "Fable_TimeMult", 1.0f);
         sim.DraggingEnable = (int)ExtractFloatClean(meshExtras, "Fable_DragEnable", 0);
+        sim.DraggingRotational = (int)ExtractFloatClean(meshExtras, "Fable_DragRotational", 0);
         sim.DraggingStrength = ExtractFloatClean(meshExtras, "Fable_DragStrength", 0.0f);
         sim.AccelerationEnable = (int)ExtractFloatClean(meshExtras, "Fable_AccelEnable", 0);
 
         float structStiffness = ExtractFloatClean(meshExtras, "Fable_StructStiff", 0.8f);
-        float flexStiffness = ExtractFloatClean(meshExtras, "Fable_FlexStiff", 0.15f);
 
         std::string attr = ExtractBlock(pObj, "attributes");
         int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
@@ -480,183 +482,300 @@ namespace GltfMeshImporter {
 
         if (posAccIdx < 0 || indAccIdx < 0) return;
 
-        // USE T_ACC HERE
         T_Acc pAcc = accessors[posAccIdx];
         const float* pData = (const float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
         const float* uData = uvAccIdx >= 0 ? (const float*)(binData.data() + views[accessors[uvAccIdx].view].offset + accessors[uvAccIdx].offset) : nullptr;
         const float* cData = colAccIdx >= 0 ? (const float*)(binData.data() + views[accessors[colAccIdx].view].offset + accessors[colAccIdx].offset) : nullptr;
 
-        std::vector<uint32_t> unifiedParticleIndex(pAcc.count, 0xFFFFFFFF);
-        std::vector<int> vType(pAcc.count, 0);
+        T_Acc iAcc = accessors[indAccIdx];
+        const uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
+        auto getVIdx = [&](int offset, int i) -> uint32_t {
+            if (iAcc.compType == 5121) return iData[i + offset];
+            if (iAcc.compType == 5123) return ((const uint16_t*)iData)[i + offset];
+            if (iAcc.compType == 5125) return ((const uint32_t*)iData)[i + offset];
+            return 0;
+            };
 
-        std::vector<float> tempNonSimPos;
-        std::vector<float> tempSimPos;
-        std::vector<float> tempSimAlphas;
+        auto& prim = outMesh.Primitives[targetPrim];
+
+        // ====================================================================
+        // 0. ENGINE REQUIREMENT: DECOMPRESS VERTEX BUFFER (BASE VERTS ONLY)
+        // ====================================================================
+        if ((prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0) {
+            std::vector<uint8_t> newVB;
+            int newStride = prim.VertexStride + 8; // Shift from 20 bytes to 28 bytes
+            newVB.resize(prim.VertexCount * newStride);
+
+            for (uint32_t v = 0; v < prim.VertexCount; v++) {
+                uint8_t* oldVert = prim.VertexBuffer.data() + v * prim.VertexStride;
+                uint8_t* newVert = newVB.data() + v * newStride;
+
+                float px, py, pz;
+                UnpackPOSPACKED3(*(uint32_t*)oldVert, prim.Compression.Scale, prim.Compression.Offset, px, py, pz);
+
+                memcpy(newVert, &px, 4);
+                memcpy(newVert + 4, &py, 4);
+                memcpy(newVert + 8, &pz, 4);
+
+                memcpy(newVert + 12, oldVert + 4, prim.VertexStride - 4);
+            }
+
+            prim.VertexBuffer = newVB;
+            prim.VertexStride = newStride;
+            prim.InitFlags |= 0x10;
+            prim.IsCompressed = false;
+
+            for (int i = 0; i < 4; i++) { prim.Compression.Scale[i] = 1.0f; prim.Compression.Offset[i] = 0.0f; }
+        }
+
+        // ====================================================================
+        // 1. CLASSIFY GLTF VERTICES (0 = Rigid, 1 = Anchor, 2 = Sim)
+        // ====================================================================
+        std::vector<int> gltfType(pAcc.count, 0);
+        std::vector<float> gltfAlpha(pAcc.count, 0.0f);
 
         for (int i = 0; i < pAcc.count; i++) {
-            float r = cData ? cData[i * 4] : 1.0f;
             float g = cData ? cData[i * 4 + 1] : 0.0f;
+            if (g > 0.01f) { gltfType[i] = 2; gltfAlpha[i] = g; }
+        }
+
+        for (int i = 0; i < iAcc.count; i += 3) {
+            uint32_t i0 = getVIdx(0, i), i1 = getVIdx(1, i), i2 = getVIdx(2, i);
+            bool hasSim = (gltfType[i0] == 2) || (gltfType[i1] == 2) || (gltfType[i2] == 2);
+            if (hasSim) {
+                if (gltfType[i0] == 0) gltfType[i0] = 1;
+                if (gltfType[i1] == 0) gltfType[i1] = 1;
+                if (gltfType[i2] == 0) gltfType[i2] = 1;
+            }
+        }
+
+        // ====================================================================
+        // 2. BUILD UNIQUE TOPOLOGICAL POINTS & DUPLICATE ANCHORS
+        // ====================================================================
+        struct UPoint { float p[3]; int type; float alpha; uint32_t fableIdx; uint32_t physLocalIdx; };
+        std::vector<UPoint> pts;
+        std::vector<uint32_t> gltfToUPoint(pAcc.count, 0xFFFFFFFF);
+
+        for (int i = 0; i < pAcc.count; i++) {
             float px = pData[i * 3], py = pData[i * 3 + 1], pz = pData[i * 3 + 2];
             if (applyBlenderFix) { float tmp = py; py = -pz; pz = tmp; }
 
-            if (g > 0.01f) {
-                vType[i] = 2;
-                unifiedParticleIndex[i] = (uint32_t)(tempSimPos.size() / 3);
-                tempSimPos.push_back(px); tempSimPos.push_back(py); tempSimPos.push_back(pz);
-                tempSimAlphas.push_back(g);
+            int found = -1;
+            for (int k = 0; k < pts.size(); k++) {
+                if (std::abs(pts[k].p[0] - px) < 0.001f && std::abs(pts[k].p[1] - py) < 0.001f && std::abs(pts[k].p[2] - pz) < 0.001f) {
+                    found = k; break;
+                }
             }
-            else if (r > 0.5f) {
-                vType[i] = 1;
-                unifiedParticleIndex[i] = (uint32_t)(tempNonSimPos.size() / 3);
-                tempNonSimPos.push_back(px); tempNonSimPos.push_back(py); tempNonSimPos.push_back(pz);
+            if (found == -1) {
+                pts.push_back({ {px,py,pz}, gltfType[i], gltfAlpha[i], 0, 0 });
+                found = (int)pts.size() - 1;
+            }
+            else {
+                if ((pts[found].type == 0 && gltfType[i] == 2) || (pts[found].type == 2 && gltfType[i] == 0)) {
+                    pts[found].type = 1;
+                }
+                else if (gltfType[i] == 1) {
+                    pts[found].type = 1;
+                }
+                else if (gltfType[i] == 2 && pts[found].type != 1) {
+                    pts[found].type = 2;
+                }
+
+                if (pts[found].type == 1) pts[found].alpha = 0.0f;
+                else if (pts[found].type == 2) pts[found].alpha = (std::max)(pts[found].alpha, gltfAlpha[i]);
+            }
+            gltfToUPoint[i] = found;
+        }
+
+        prog.NonSimCount = 0;
+        sim.Size = 0;
+
+        for (auto& pt : pts) {
+            if (pt.type == 0 || pt.type == 1) {
+                pt.fableIdx = prog.NonSimCount++;
+                prog.NonSimPositions.push_back(pt.p[0]); prog.NonSimPositions.push_back(pt.p[1]); prog.NonSimPositions.push_back(pt.p[2]);
+            }
+        }
+        uint32_t nonSimTotal = prog.NonSimCount;
+
+        for (auto& pt : pts) {
+            if (pt.type == 1) {
+                pt.physLocalIdx = sim.Size++;
+                sim.Positions.push_back(pt.p[0]); sim.Positions.push_back(pt.p[1]); sim.Positions.push_back(pt.p[2]);
+                sim.SimulationAlphas.push_back(0.0f);
+            }
+        }
+        for (auto& pt : pts) {
+            if (pt.type == 2) {
+                pt.fableIdx = nonSimTotal + sim.Size;
+                pt.physLocalIdx = sim.Size++;
+                sim.Positions.push_back(pt.p[0]); sim.Positions.push_back(pt.p[1]); sim.Positions.push_back(pt.p[2]);
+                sim.SimulationAlphas.push_back(pt.alpha);
             }
         }
 
-        prog.NonSimCount = (uint32_t)(tempNonSimPos.size() / 3);
-        prog.NonSimPositions = tempNonSimPos;
-        sim.Size = (uint32_t)(tempSimPos.size() / 3);
-        sim.Positions = tempSimPos;
-        sim.SimulationAlphas = tempSimAlphas;
-
-        for (int i = 0; i < pAcc.count; i++) {
-            if (vType[i] == 2) unifiedParticleIndex[i] += prog.NonSimCount;
-        }
-
-        for (int i = 0; i < pAcc.count; i++) {
-            if (vType[i] == 0) continue;
-            C2DVector uv = { 0.0f, 0.0f };
-            if (uData) { uv.u = uData[i * 2]; uv.v = uData[i * 2 + 1]; }
-            prog.IndexedTextureCoords.push_back(uv);
+        // ====================================================================
+        // 3. GENERATE RENDER MAPPINGS
+        // ====================================================================
+        for (uint32_t i = 0; i < pts.size(); i++) {
             C3DClothRenderVertex rv;
-            rv.PositionIndex = (uint16_t)unifiedParticleIndex[i];
-            rv.TexCoordIndex = (uint16_t)(prog.IndexedTextureCoords.size() - 1);
+            rv.PositionIndex = pts[i].fableIdx;
+            rv.TexCoordIndex = pts[i].fableIdx;
             prog.RenderVertices.push_back(rv);
         }
 
-        // USE T_ACC HERE
-        T_Acc iAcc = accessors[indAccIdx];
-        const uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
-
-        std::vector<uint16_t> rigidIndexBuffer;
         std::set<std::pair<uint32_t, uint32_t>> uniqueEdges;
-        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> edgeToTris;
 
         for (int i = 0; i < iAcc.count; i += 3) {
-            auto getVIdx = [&](int offset) -> uint32_t {
-                if (iAcc.compType == 5121) return iData[i + offset];
-                if (iAcc.compType == 5123) return ((const uint16_t*)iData)[i + offset];
-                if (iAcc.compType == 5125) return ((const uint32_t*)iData)[i + offset];
-                return 0;
-            };
-            uint32_t gA = getVIdx(0), gB = getVIdx(1), gC = getVIdx(2);
-            
-            if (vType[gA] == 2 || vType[gB] == 2 || vType[gC] == 2) {
-                // Cloth Physics Mesh: Build the RenderTris and Constraints using the unified physics indices
+            uint32_t u0 = gltfToUPoint[getVIdx(0, i)];
+            uint32_t u1 = gltfToUPoint[getVIdx(1, i)];
+            uint32_t u2 = gltfToUPoint[getVIdx(2, i)];
+
+            if (pts[u0].type == 2 || pts[u1].type == 2 || pts[u2].type == 2) {
                 C3DTriangle2 tri;
-                tri.Indices[0] = (uint16_t)unifiedParticleIndex[gA];
-                tri.Indices[1] = (uint16_t)unifiedParticleIndex[gB];
-                tri.Indices[2] = (uint16_t)unifiedParticleIndex[gC];
+                tri.Indices[0] = u0;
+                tri.Indices[1] = u1;
+                tri.Indices[2] = u2;
                 prog.RenderTris.push_back(tri);
-                
-                auto addEdge = [&](uint32_t p1, uint32_t p2, uint32_t opposite) {
-                    uint32_t minP = (std::min)(p1, p2), maxP = (std::max)(p1, p2);
-                    std::pair<uint32_t, uint32_t> edge = { minP, maxP };
-                    uniqueEdges.insert(edge);
-                    edgeToTris[edge].push_back(opposite);
-                };
-                
-                addEdge(tri.Indices[0], tri.Indices[1], tri.Indices[2]);
-                addEdge(tri.Indices[1], tri.Indices[2], tri.Indices[0]);
-                addEdge(tri.Indices[2], tri.Indices[0], tri.Indices[1]);
-            }
-            else {
-                // THE FIX: Rigid Mesh
-                // Pull the mapped Fable indices from the pre-compiled buffer, NOT the raw glTF indices.
-                // This ensures we point to the deduplicated/blocked vertices in the Fable vertex buffer.
-                rigidIndexBuffer.push_back(outMesh.Primitives[targetPrim].IndexBuffer[i]);
-                rigidIndexBuffer.push_back(outMesh.Primitives[targetPrim].IndexBuffer[i + 1]);
-                rigidIndexBuffer.push_back(outMesh.Primitives[targetPrim].IndexBuffer[i + 2]);
+
+                auto addEdge = [&](uint32_t pA, uint32_t pB) {
+                    if (pts[pA].type != 2 && pts[pB].type != 2) return;
+                    uniqueEdges.insert({ (std::min)(pA, pB), (std::max)(pA, pB) });
+                    };
+                addEdge(u0, u1); addEdge(u1, u2); addEdge(u2, u0);
             }
         }
 
-        outMesh.Primitives[targetPrim].IndexBuffer = rigidIndexBuffer;
-        outMesh.Primitives[targetPrim].TriangleCount = (uint32_t)(rigidIndexBuffer.size() / 3);
-
-        auto getUnifiedPos = [&](uint32_t idx, float& x, float& y, float& z) {
-            if (idx < prog.NonSimCount) {
-                x = prog.NonSimPositions[idx * 3]; y = prog.NonSimPositions[idx * 3 + 1]; z = prog.NonSimPositions[idx * 3 + 2];
-            }
-            else {
-                uint32_t sIdx = idx - prog.NonSimCount;
-                x = sim.Positions[sIdx * 3]; y = sim.Positions[sIdx * 3 + 1]; z = sim.Positions[sIdx * 3 + 2];
-            }
-            };
-
+        // ====================================================================
+        // 4. TOPOLOGICAL BFS SORT (SPRING GENERATION)
+        // ====================================================================
+        std::vector<std::vector<uint32_t>> adj(sim.Size);
+        std::vector<std::pair<uint32_t, uint32_t>> edgeList;
         for (const auto& edge : uniqueEdges) {
-            uint32_t p1 = edge.first; uint32_t p2 = edge.second;
-            float x1, y1, z1, x2, y2, z2;
-            getUnifiedPos(p1, x1, y1, z1); getUnifiedPos(p2, x2, y2, z2);
-            float dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
-            float restLength = std::sqrt(dx * dx + dy * dy + dz * dz);
+            uint32_t phys1 = pts[edge.first].physLocalIdx;
+            uint32_t phys2 = pts[edge.second].physLocalIdx;
+            adj[phys1].push_back(phys2); adj[phys2].push_back(phys1);
+            edgeList.push_back({ phys1, phys2 });
+        }
 
+        std::vector<int> distances(sim.Size, -1);
+        std::queue<uint32_t> bfsQueue;
+
+        for (uint32_t i = 0; i < sim.Size; ++i) {
+            if (sim.SimulationAlphas[i] < 0.0001f) { distances[i] = 0; bfsQueue.push(i); }
+        }
+
+        while (!bfsQueue.empty()) {
+            uint32_t curr = bfsQueue.front(); bfsQueue.pop();
+            for (uint32_t neighbor : adj[curr]) {
+                if (distances[neighbor] == -1) { distances[neighbor] = distances[curr] + 1; bfsQueue.push(neighbor); }
+            }
+        }
+
+        struct SortedEdge { uint32_t p1, p2; int sortKey; float restLength; };
+        std::vector<SortedEdge> sortedEdges;
+
+        for (const auto& edge : edgeList) {
+            int d1 = distances[edge.first] == -1 ? 9999 : distances[edge.first];
+            int d2 = distances[edge.second] == -1 ? 9999 : distances[edge.second];
+            float x1 = sim.Positions[edge.first * 3], y1 = sim.Positions[edge.first * 3 + 1], z1 = sim.Positions[edge.first * 3 + 2];
+            float x2 = sim.Positions[edge.second * 3], y2 = sim.Positions[edge.second * 3 + 1], z2 = sim.Positions[edge.second * 3 + 2];
+            float restLength = std::sqrt(std::pow(x1 - x2, 2) + std::pow(y1 - y2, 2) + std::pow(z1 - z2, 2));
+            sortedEdges.push_back({ edge.first, edge.second, d1 + d2, restLength });
+        }
+
+        std::sort(sortedEdges.begin(), sortedEdges.end(), [](const SortedEdge& a, const SortedEdge& b) { return a.sortKey < b.sortKey; });
+
+        prog.ParsedInstructions.clear();
+        for (const auto& edge : sortedEdges) {
             CConstraintInstruction distConst;
-            distConst.Opcode = 2; distConst.Count = 1; distConst.PayloadSize = 16; distConst.Payload.resize(16);
-            memcpy(distConst.Payload.data() + 0, &p1, 4); memcpy(distConst.Payload.data() + 4, &p2, 4);
-            memcpy(distConst.Payload.data() + 8, &restLength, 4); memcpy(distConst.Payload.data() + 12, &structStiffness, 4);
+            distConst.Opcode = 2; distConst.Count = 1; distConst.PayloadSize = 16;
+            distConst.Payload.resize(16);
+            memcpy(distConst.Payload.data(), &edge.p1, 4);
+            memcpy(distConst.Payload.data() + 4, &edge.p2, 4);
+            memcpy(distConst.Payload.data() + 8, &edge.restLength, 4);
+            memcpy(distConst.Payload.data() + 12, &structStiffness, 4);
             prog.ParsedInstructions.push_back(distConst);
+        }
 
-            const auto& adjacentVerts = edgeToTris[edge];
-            if (adjacentVerts.size() == 2) {
-                uint32_t p3 = adjacentVerts[0]; uint32_t p4 = adjacentVerts[1];
-                CConstraintInstruction unbendConst;
-                unbendConst.Opcode = 4; unbendConst.Count = 1; unbendConst.PayloadSize = 16; unbendConst.Payload.resize(16);
-                memcpy(unbendConst.Payload.data() + 0, &p3, 4); memcpy(unbendConst.Payload.data() + 4, &p1, 4);
-                memcpy(unbendConst.Payload.data() + 8, &p4, 4); memcpy(unbendConst.Payload.data() + 12, &flexStiffness, 4);
-                prog.ParsedInstructions.push_back(unbendConst);
+        // ====================================================================
+        // 5. BIND FABLE MEMORY ARRAYS
+        // ====================================================================
+        uint32_t fableTotalMemorySize = prog.NonSimCount + sim.Size;
+        prog.IndexedTextureCoords.resize(fableTotalMemorySize, { 0.0f, 0.0f });
+
+        for (int i = 0; i < pAcc.count; i++) {
+            UPoint& pt = pts[gltfToUPoint[i]];
+            if (uData && prog.IndexedTextureCoords[pt.fableIdx].u == 0.0f) {
+                prog.IndexedTextureCoords[pt.fableIdx].u = uData[i * 2];
+                prog.IndexedTextureCoords[pt.fableIdx].v = uData[i * 2 + 1];
+                if (pt.type == 1) {
+                    prog.IndexedTextureCoords[nonSimTotal + pt.physLocalIdx].u = uData[i * 2];
+                    prog.IndexedTextureCoords[nonSimTotal + pt.physLocalIdx].v = uData[i * 2 + 1];
+                }
+            }
+        }
+
+        prog.ParticleIndices.resize(prim.VertexCount, 0xFFFFFFFF);
+        prog.VertexIndices.resize(fableTotalMemorySize, 0xFFFFFFFF);
+
+        // MAP ONLY BASE VERTICES
+        for (uint32_t v = 0; v < prim.VertexCount; v++) {
+            size_t off = v * prim.VertexStride;
+            float* fp = (float*)(prim.VertexBuffer.data() + off);
+            float px = fp[0], py = fp[1], pz = fp[2];
+
+            uint32_t bestGltf = 0xFFFFFFFF; float bestDist = 1e9f;
+            for (int i = 0; i < pAcc.count; i++) {
+                float gx = pData[i * 3], gy = pData[i * 3 + 1], gz = pData[i * 3 + 2];
+                if (applyBlenderFix) { float tmp = gy; gy = -gz; gz = tmp; }
+                float d = std::pow(px - gx, 2) + std::pow(py - gy, 2) + std::pow(pz - gz, 2);
+                if (d < bestDist) { bestDist = d; bestGltf = i; }
+            }
+            if (bestGltf != 0xFFFFFFFF && bestDist < 0.05f) {
+                UPoint& pt = pts[gltfToUPoint[bestGltf]];
+                prog.ParticleIndices[v] = pt.fableIdx;
+
+                prog.VertexIndices[pt.fableIdx] = v;
+                if (pt.type == 1 || pt.type == 2) {
+                    prog.VertexIndices[nonSimTotal + pt.physLocalIdx] = v;
+                }
             }
         }
 
         if (jntAccIdx >= 0 && wgtAccIdx >= 0) {
-            // USE T_ACC HERE
-            T_Acc jAcc = accessors[jntAccIdx];
-            T_Acc wAcc = accessors[wgtAccIdx];
+            T_Acc jAcc = accessors[jntAccIdx], wAcc = accessors[wgtAccIdx];
             const uint16_t* jData16 = (jAcc.compType == 5123) ? (const uint16_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
             const uint8_t* jData8 = (jAcc.compType == 5121) ? (const uint8_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
             const float* wData = (const float*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
 
-            std::map<uint32_t, std::vector<C3DVertexBlend2>> simBoneMap;
-            std::map<uint32_t, std::vector<C3DVertexBlend2>> nonSimBoneMap;
+            std::map<uint32_t, std::vector<C3DVertexBlend2>> simBoneMap, nonSimBoneMap;
+            std::vector<bool> processedBones(fableTotalMemorySize, false);
 
             for (int i = 0; i < pAcc.count; i++) {
-                if (vType[i] == 0) continue;
-                uint32_t unifiedIdx = unifiedParticleIndex[i];
-                bool isSimulated = (vType[i] == 2);
-                uint32_t localGroupIdx = isSimulated ? (unifiedIdx - prog.NonSimCount) : unifiedIdx;
+                UPoint& pt = pts[gltfToUPoint[i]];
 
-                for (int k = 0; k < 4; k++) {
-                    float w = wData[i * 4 + k];
-                    if (w > 0.001f) {
-                        uint32_t bone = jData16 ? jData16[i * 4 + k] : (jData8 ? jData8[i * 4 + k] : 0);
-                        uint32_t fableBoneId = bone < outMesh.BoneIndices.size() ? outMesh.BoneIndices[bone] : bone;
-                        if (isSimulated) simBoneMap[fableBoneId].push_back({ localGroupIdx, w });
-                        else nonSimBoneMap[fableBoneId].push_back({ localGroupIdx, w });
+                for (int pass = 0; pass < 2; pass++) {
+                    if (pass == 1 && pt.type != 1) continue;
+
+                    uint32_t fIdx = (pass == 0) ? pt.fableIdx : (nonSimTotal + pt.physLocalIdx);
+                    if (processedBones[fIdx]) continue;
+                    processedBones[fIdx] = true;
+
+                    for (int k = 0; k < 4; k++) {
+                        float w = wData[i * 4 + k];
+                        if (w > 0.001f) {
+                            uint32_t bone = jData16 ? jData16[i * 4 + k] : (jData8 ? jData8[i * 4 + k] : 0);
+                            uint32_t fBoneId = bone < outMesh.BoneIndices.size() ? outMesh.BoneIndices[bone] : bone;
+
+                            if (pt.type == 2 || pass == 1) simBoneMap[fBoneId].push_back({ pt.physLocalIdx, w });
+                            else nonSimBoneMap[fBoneId].push_back({ pt.fableIdx, w });
+                        }
                     }
                 }
             }
-
-            // EXPLICIT CASTS FOR NARROWING FIX
-            for (auto& kv : nonSimBoneMap) {
-                C3DGroup2 group;
-                group.BoneIndex = (uint32_t)kv.first;
-                group.VertexBlends = kv.second;
-                prog.NonSimGroups.push_back(group);
-            }
-            for (auto& kv : simBoneMap) {
-                C3DGroup2 group;
-                group.BoneIndex = (uint32_t)kv.first;
-                group.VertexBlends = kv.second;
-                prog.SimGroups.push_back(group);
-            }
+            for (auto& kv : nonSimBoneMap) { C3DGroup2 g; g.BoneIndex = kv.first; g.VertexBlends = kv.second; prog.NonSimGroups.push_back(g); }
+            for (auto& kv : simBoneMap) { C3DGroup2 g; g.BoneIndex = kv.first; g.VertexBlends = kv.second; prog.SimGroups.push_back(g); }
         }
 
         cp.Program = prog;
