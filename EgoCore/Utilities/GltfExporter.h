@@ -410,11 +410,12 @@ namespace GltfExporter {
                     }
                 }
                 else {
+                    // Fix the Triangle List winding
                     for (uint32_t k = 0; k < c * 3; k += 3) {
                         if (s + k + 2 < prim.IndexBuffer.size()) {
                             bIdx.push_back(prim.IndexBuffer[s + k]);
-                            bIdx.push_back(prim.IndexBuffer[s + k + 1]);
-                            bIdx.push_back(prim.IndexBuffer[s + k + 2]);
+                            bIdx.push_back(prim.IndexBuffer[s + k + 2]); // Restore the swap
+                            bIdx.push_back(prim.IndexBuffer[s + k + 1]); // Restore the swap
                         }
                     }
                 }

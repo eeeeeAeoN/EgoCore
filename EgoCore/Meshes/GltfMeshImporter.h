@@ -2209,6 +2209,7 @@ namespace GltfMeshImporter {
             return aTrans < bTrans;
             });
 
+
         ParseNodes(json, outMesh);
 
         outMesh.PrimitiveCount = (int32_t)outMesh.Primitives.size();
