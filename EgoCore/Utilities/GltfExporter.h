@@ -202,11 +202,10 @@ namespace GltfExporter {
             std::vector<float> posData, normData, uvData, weightData, colData;
             std::vector<uint16_t> jointData;
 
-            // Initialize Colors: Red for rigid bodies
             colData.resize(exportVerts * 4, 1.0f);
             for (int i = 0; i < exportVerts; i++) {
-                colData[i * 4 + 1] = 0.0f; // G
-                colData[i * 4 + 2] = 0.0f; // B
+                colData[i * 4 + 1] = 0.0f;
+                colData[i * 4 + 2] = 0.0f;
             }
 
             float min[3] = { 1e9,1e9,1e9 }, max[3] = { -1e9,-1e9,-1e9 };
@@ -285,9 +284,6 @@ namespace GltfExporter {
                 }
             }
 
-            // ====================================================================
-            // UNIFIED CLOTH METADATA & VERTEX COLOR OVERRIDE (SPATIAL FIX)
-            // ====================================================================
             std::stringstream clothExtras;
             clothExtras.imbue(std::locale("C"));
 
@@ -295,7 +291,6 @@ namespace GltfExporter {
                 if (!cp.Program.IsParsed) continue;
                 const auto& sim = cp.Program.InitialSimulation;
 
-                // Spatially paint all vertices
                 for (int v = 0; v < exportVerts; v++) {
                     float vx = posData[v * 3];
                     float vy = posData[v * 3 + 1];
@@ -305,7 +300,6 @@ namespace GltfExporter {
                     bool isSim = false;
                     float simAlpha = 1.0f;
 
-                    // 1. Check Pinned Particles
                     for (size_t i = 0; i < cp.Program.NonSimCount; i++) {
                         float cx = cp.Program.NonSimPositions[i * 3];
                         float cy = cp.Program.NonSimPositions[i * 3 + 1];
@@ -316,7 +310,6 @@ namespace GltfExporter {
                         }
                     }
 
-                    // 2. Check Simulated Particles
                     if (!isPinned) {
                         for (size_t i = 0; i < sim.Size; i++) {
                             float cx = sim.Positions[i * 3];
@@ -330,20 +323,18 @@ namespace GltfExporter {
                         }
                     }
 
-                    // 3. Apply explicit paint
                     if (isPinned) {
-                        colData[v * 4] = 1.0f; // Red
+                        colData[v * 4] = 1.0f;
                         colData[v * 4 + 1] = 0.0f;
                         colData[v * 4 + 2] = 0.0f;
                     }
                     else if (isSim) {
                         colData[v * 4] = 0.0f;
-                        colData[v * 4 + 1] = simAlpha; // Green
+                        colData[v * 4 + 1] = simAlpha;
                         colData[v * 4 + 2] = 0.0f;
                     }
                 }
 
-                // Inject global physics properties
                 clothExtras << ",\"FableCloth\":true,\"TargetPrimitive\":" << pIdx
                     << ",\"Fable_Gravity\":" << sim.GravityStrength
                     << ",\"Fable_Wind\":" << sim.WindStrength
@@ -355,10 +346,9 @@ namespace GltfExporter {
                     << ",\"Fable_AccelEnable\":" << (sim.AccelerationEnable ? 1 : 0)
                     << ",\"Fable_PatchSize\":" << cp.Program.AveragePatchSize
                     << ",\"Fable_Bezier\":" << (cp.Program.BezierEnable ? 1 : 0);
-                break; // Assume 1 program per primitive
+                break;
             }
 
-            // Write Accessors
             bufferViews.push_back({ bin.Write(posData.data(), posData.size() * 4), (int)posData.size() * 4, 34962 });
             accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC3", min, max, true));
             int posAcc = accessors.size() - 1;
@@ -389,9 +379,6 @@ namespace GltfExporter {
             attrJson << "\"POSITION\":" << posAcc << ",\"NORMAL\":" << normAcc << ",\"TEXCOORD_0\":" << uvAcc << ",\"COLOR_0\":" << colAcc;
             if (hasBones) { attrJson << ",\"JOINTS_0\":" << jointAcc << ",\"WEIGHTS_0\":" << weightAcc; }
 
-            // ====================================================================
-            // NATIVE MESH EXPORT (No subtraction filter, dump everything!)
-            // ====================================================================
             auto WriteGltfPrim = [&](uint32_t c, uint32_t s, bool str, int matIdx) {
                 std::vector<uint16_t> bIdx;
                 if (str) {
@@ -410,12 +397,11 @@ namespace GltfExporter {
                     }
                 }
                 else {
-                    // Fix the Triangle List winding
                     for (uint32_t k = 0; k < c * 3; k += 3) {
                         if (s + k + 2 < prim.IndexBuffer.size()) {
                             bIdx.push_back(prim.IndexBuffer[s + k]);
-                            bIdx.push_back(prim.IndexBuffer[s + k + 2]); // Restore the swap
-                            bIdx.push_back(prim.IndexBuffer[s + k + 1]); // Restore the swap
+                            bIdx.push_back(prim.IndexBuffer[s + k + 2]);
+                            bIdx.push_back(prim.IndexBuffer[s + k + 1]);
                         }
                     }
                 }
@@ -437,7 +423,6 @@ namespace GltfExporter {
                 if (!blocksWritten && !prim.IndexBuffer.empty()) { WriteGltfPrim(prim.IndexBuffer.size() / 3, 0, false, prim.MaterialIndex); }
             }
 
-            // Save the primitive + metadata 
             std::stringstream extras;
             extras.imbue(std::locale("C"));
             extras << "\"AvgTextureStretch\":" << prim.AvgTextureStretch
@@ -447,17 +432,12 @@ namespace GltfExporter {
                 extras << ",\"compScale\":[" << prim.Compression.Scale[0] << "," << prim.Compression.Scale[1] << "," << prim.Compression.Scale[2] << "]"
                     << ",\"compOffset\":[" << prim.Compression.Offset[0] << "," << prim.Compression.Offset[1] << "," << prim.Compression.Offset[2] << "]";
             }
-
-            // Inject the cloth extras
             extras << clothExtras.str();
 
             meshJsonStrings.push_back("{\"name\":" + Esc(mesh.MeshName + "_P" + std::to_string(pIdx)) +
                 ",\"extras\":{" + extras.str() + "},\"primitives\":[" + primitivesJson.str() + "]}");
         }
 
-        // ====================================================================
-        // ANIMATION & HIERARCHY EXPORT (Remains the same)
-        // ====================================================================
         int ibmAcc = -1;
         if (mesh.BoneCount > 0) {
             std::vector<float> ibm;

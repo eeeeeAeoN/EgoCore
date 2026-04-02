@@ -9,6 +9,8 @@
 #include "FontProperties.h"
 #include "ParticleProperties.h"
 #include "StreamingFontProperties.h"
+#include "ModPackageCompiler.h"
+#include "ModPackageTracker.h"
 #include <thread>
 
 static int g_ContextEntryIndex = -1;
@@ -390,7 +392,7 @@ static void DrawBankTab() {
     ImGui::PopStyleColor();
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete) && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
+        if (g_Keybinds.DeleteEntry.IsPressed() && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
             if (g_AppConfig.ShowBankDeleteConfirm) {
                 g_ContextEntryIndex = bank.SelectedEntryIndex;
                 g_ShowDeleteBankEntryPopup = true;
@@ -579,16 +581,20 @@ static void DrawBankTab() {
 
             for (int idx : bank.FilteredIndices) {
                 const auto& e = bank.Entries[idx];
-
                 ImGui::PushID(idx);
 
                 bool isStaged = bank.StagedEntries.count(idx) > 0;
                 bool isModified = bank.ModifiedEntryData.count(idx) > 0;
+                bool isMarked = ModPackageTracker::IsMarked(bank.FileName, e.Name);
+
                 std::string displayLabel = e.FriendlyName;
                 if (isStaged) displayLabel += " *";
                 else if (isModified) displayLabel += " (Mod)";
 
-                if (isStaged) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+                if (isMarked) displayLabel += " [M]";
+
+                if (isMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
+                else if (isStaged) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
                 else if (isModified) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 1.0f, 0.5f, 1.0f));
 
                 if (ImGui::Selectable(displayLabel.c_str(), bank.SelectedEntryIndex == idx)) {
@@ -596,9 +602,33 @@ static void DrawBankTab() {
                     SelectEntry(&bank, idx);
                 }
 
-                if (isStaged || isModified) ImGui::PopStyleColor();
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    int payloadData[2] = { g_ActiveBankIndex, idx };
+                    ImGui::SetDragDropPayload("BANK_ENTRY_PAYLOAD", &payloadData, sizeof(int) * 2);
+
+                    ImGui::Text("Add to Mod Package:\n%s (ID: %d)", e.Name.c_str(), e.ID);
+                    ImGui::EndDragDropSource();
+                }
+
+                if (isMarked || isStaged || isModified) ImGui::PopStyleColor();
 
                 if (ImGui::BeginPopupContextItem()) {
+
+                    if (ImGui::MenuItem(isMarked ? "Unmark for Packaging" : "Mark for Packaging (Tracker)")) {
+                        StagedModPackageEntry staged;
+                        staged.EntryID = e.ID;
+                        staged.EntryName = e.Name;
+                        staged.EntryType = e.Type;
+                        staged.BankType = bank.Type;
+                        staged.TypeName = GetEntryTypeName(bank.Type, e.Type, bank.FileName);
+                        staged.BankName = bank.FileName;
+                        staged.SourceFullPath = bank.FullPath;
+                        staged.SubBankName = (bank.ActiveSubBankIndex >= 0 && bank.ActiveSubBankIndex < bank.SubBanks.size()) ? bank.SubBanks[bank.ActiveSubBankIndex].Name : "N/A";
+
+                        ModPackageTracker::ToggleMark(staged);
+                    }
+                    ImGui::Separator();
+
                     if (bank.Type == EBankType::Shaders || bank.Type == EBankType::Fonts) {
                         ImGui::TextDisabled("Duplicate (Locked for %s)", bank.Type == EBankType::Shaders ? "Shaders" : "Fonts");
                         ImGui::TextDisabled("Delete (Locked for %s)", bank.Type == EBankType::Shaders ? "Shaders" : "Fonts");
@@ -629,12 +659,11 @@ static void DrawBankTab() {
                         g_ScrollToSelected = false;
                     }
                 }
-
                 ImGui::PopID();
             }
             ImGui::EndChild();
         }
-        ImGui::EndChild(); // End LeftPane
+        ImGui::EndChild();
 
         ImGui::SameLine();
         ImGui::InvisibleButton("vsplitter", ImVec2(4.0f, -1.0f));
@@ -651,13 +680,11 @@ static void DrawBankTab() {
             if (bank.Type == EBankType::Audio) SaveAudioBank(&bank);
             else SaveBigBank(&bank);
         }
-    }
 
-    if (ImGui::Button(g_ShowLeftPanel ? "<<##LeftToggle" : ">>##LeftToggle", ImVec2(28, 24))) {
-        g_ShowLeftPanel = !g_ShowLeftPanel;
+        if (g_Keybinds.ToggleLeftPanel.IsPressed()) {
+            g_ShowLeftPanel = !g_ShowLeftPanel;
+        }
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowLeftPanel ? "Collapse Entry List" : "Expand Entry List");
-    ImGui::SameLine();
 
     if (bank.SelectedEntryIndex != -1) {
         const auto& e = bank.Entries[bank.SelectedEntryIndex];

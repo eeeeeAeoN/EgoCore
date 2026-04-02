@@ -56,6 +56,9 @@
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
+    <ClInclude Include="ModPackageCompiler.h" />
+    <ClInclude Include="ModPackageTracker.h" />
+    <ClInclude Include="ModPackageUI.h" />
     <ClInclude Include="Particles\ParticleCompiler.h" />
     <ClInclude Include="Particles\ParticleParser.h" />
     <ClInclude Include="Particles\ParticleProperties.h" />
@@ -216,7 +219,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

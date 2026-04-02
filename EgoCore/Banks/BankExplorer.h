@@ -4,11 +4,22 @@
 #include "DefExplorer.h"
 #include "BankTabUI.h" 
 #include "InputManager.h"
+#include "ModPackageUI.h"
+#include "ModPackageCompiler.h"
+#include "ModPackageTracker.h"
 
 static bool g_HasInitialized = false;
 static bool g_TriggerKeybindPopup = false;
 inline bool g_TriggerScalingPopup = false;
 inline float g_UIScale = 1.0f;
+
+enum class EAppState {
+    Setup,
+    Frontend,
+    ModCreator
+};
+
+inline EAppState g_CurrentAppState = EAppState::Setup;
 
 static void UpdateUIScale(float scale) {
     ImGuiIO& io = ImGui::GetIO();
@@ -19,17 +30,76 @@ static void UpdateUIScale(float scale) {
     style.ScaleAllSizes(scale);
 }
 
+static void DrawFrontendHub() {
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(400, 450));
+
+    if (ImGui::Begin("EgoCore Hub", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+
+        ImGui::SetWindowFontScale(1.5f);
+        ImGui::Text("Ego Core");
+        ImGui::SetWindowFontScale(1.0f);
+        //ImGui::TextDisabled("Fable Modding Suite");
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 10));
+
+        if (ImGui::Button("Launch Fable", ImVec2(-1, 50))) {
+            g_BankStatus = "Launching Fable...";
+        }
+        ImGui::Dummy(ImVec2(0, 5));
+
+        if (ImGui::Button("Mods Manager", ImVec2(-1, 50))) {
+        }
+        ImGui::Dummy(ImVec2(0, 5));
+
+        if (ImGui::Button("Mod Creator", ImVec2(-1, 50))) {
+            g_CurrentAppState = EAppState::ModCreator;
+            PerformAutoLoad();
+        }
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 10));
+
+        if (ImGui::Checkbox("Skip this menu on startup", &g_AppConfig.SkipFrontend)) {
+            SaveConfig();
+        }
+
+        ImGui::Dummy(ImVec2(0, 10));
+
+        if (ImGui::Button("About", ImVec2(185, 40))) {
+        }
+        ImGui::SameLine(ImGui::GetWindowWidth() - 185.0f - ImGui::GetStyle().WindowPadding.x);
+        if (ImGui::Button("Exit", ImVec2(185, 40))) {
+            exit(0);
+        }
+    }
+    ImGui::End();
+}
+
 static void DrawBankExplorer() {
     if (!g_HasInitialized) {
         LoadConfig();
+
+        ModPackageTracker::LoadMarkedState();
+
         if (g_AppConfig.IsConfigured) {
-            PerformAutoLoad();
             LoadSystemBinaries(g_AppConfig.GameRootPath);
+
+            if (g_AppConfig.SkipFrontend) {
+                g_CurrentAppState = EAppState::ModCreator;
+                PerformAutoLoad();
+            }
+            else {
+                g_CurrentAppState = EAppState::Frontend;
+            }
+        }
+        else {
+            g_CurrentAppState = EAppState::Setup;
         }
         g_HasInitialized = true;
     }
 
-    if (!g_AppConfig.IsConfigured) {
+    if (g_CurrentAppState == EAppState::Setup) {
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(400, 200));
         ImGui::SetNextWindowFocus();
@@ -46,10 +116,16 @@ static void DrawBankExplorer() {
                 if (!root.empty()) {
                     InitializeSetup(root);
                     LoadSystemBinaries(root);
+                    g_CurrentAppState = EAppState::Frontend;
                 }
             }
         }
         ImGui::End();
+        return;
+    }
+
+    if (g_CurrentAppState == EAppState::Frontend) {
+        DrawFrontendHub();
         return;
     }
 
@@ -59,7 +135,6 @@ static void DrawBankExplorer() {
         if (g_Keybinds.SwitchBankMode.IsPressed()) g_CurrentMode = EAppMode::Banks;
         if (g_Keybinds.SwitchDefMode.IsPressed())  g_CurrentMode = EAppMode::Defs;
 
-        // BACK NAVIGATION (Esc)
         if (g_Keybinds.NavigateBack.IsPressed()) {
             g_IsNavigating = true;
             if (g_CurrentMode == EAppMode::Banks && !g_BankHistory.empty()) {
@@ -74,7 +149,6 @@ static void DrawBankExplorer() {
                     g_ActiveBankIndex = node.BankIndex;
                     auto& bank = g_OpenBanks[g_ActiveBankIndex];
 
-                    // Crucial: Load the SubBank before selecting the entry!
                     if (bank.ActiveSubBankIndex != node.SubBankIndex && node.SubBankIndex >= 0) {
                         LoadSubBankEntries(&bank, node.SubBankIndex);
                     }
@@ -133,7 +207,6 @@ static void DrawBankExplorer() {
             g_IsNavigating = false;
         }
 
-        // FORWARD NAVIGATION (F1)
         if (g_Keybinds.NavigateForward.IsPressed()) {
             g_IsNavigating = true;
             if (g_CurrentMode == EAppMode::Banks && !g_BankForwardHistory.empty()) {
@@ -207,15 +280,21 @@ static void DrawBankExplorer() {
         }
     }
 
-    // --- LAYER 1: LOCAL APP MENU BAR ---
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
     ImGui::BeginChild("LocalMenuBarChild", ImVec2(0, ImGui::GetFrameHeight()), false, ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar);
 
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Return to Main Menu")) {
+                g_CurrentAppState = EAppState::Frontend;
+            }
             if (ImGui::MenuItem("Load Bank (.BIG / .LUT / .LUG)")) {
                 std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut;*.lug\0All Files\0*.*\0");
                 if (!path.empty()) LoadBank(path);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Create Mod Package")) {
+                g_ShowModPackageWindow = true;
             }
             if (ImGui::MenuItem("Run Fable")) g_BankStatus = "Run Fable clicked (Placeholder)";
             if (ImGui::MenuItem("Change Game Folder")) {
@@ -252,7 +331,6 @@ static void DrawBankExplorer() {
         float rightAlign = ImGui::GetWindowWidth() - 140.0f;
         if (rightAlign > 0) ImGui::SameLine(rightAlign);
 
-        // --- FIXED BANKS BUTTON ---
         bool isBanks = (g_CurrentMode == EAppMode::Banks);
         if (isBanks) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.43f, 0.34f, 0.17f, 1.0f));
         if (ImGui::Button("Banks", ImVec2(60, 0))) g_CurrentMode = EAppMode::Banks;
@@ -260,7 +338,6 @@ static void DrawBankExplorer() {
 
         ImGui::SameLine();
 
-        // --- FIXED DEFS BUTTON ---
         bool isDefs = (g_CurrentMode == EAppMode::Defs);
         if (isDefs) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.14f, 0.24f, 1.0f));
         if (ImGui::Button("Defs", ImVec2(60, 0))) g_CurrentMode = EAppMode::Defs;
@@ -270,10 +347,7 @@ static void DrawBankExplorer() {
     }
     ImGui::EndChild();
     ImGui::PopStyleColor();
-    // --- END LAYER 1 ---
 
-
-    // --- KEYBINDINGS MODAL (Safely Rendered Outside) ---
     if (g_TriggerKeybindPopup) {
         ImGui::OpenPopup("KeybindingsConfig");
         g_TriggerKeybindPopup = false;
@@ -302,8 +376,9 @@ static void DrawBankExplorer() {
         DrawBindRow("Compile Active", g_Keybinds.Compile);
         DrawBindRow("Navigate Back", g_Keybinds.NavigateBack);
         DrawBindRow("Navigate Forward", g_Keybinds.NavigateForward);
+        DrawBindRow("Delete Entry", g_Keybinds.DeleteEntry);
+        DrawBindRow("Toggle Left Panel", g_Keybinds.ToggleLeftPanel);
 
-        // Rebind Listener Logic
         if (g_ListeningForRebind) {
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "Press desired key combination. Press ESC to cancel.");
             ImGuiIO& io = ImGui::GetIO();
@@ -316,7 +391,7 @@ static void DrawBankExplorer() {
 
                 if (ImGui::IsKeyPressed(key) && !isModifier) {
                     if (key == ImGuiKey_Escape) {
-                        g_ListeningForRebind = nullptr; // Cancel
+                        g_ListeningForRebind = nullptr;
                     }
                     else {
                         g_ListeningForRebind->Key = key;
@@ -367,7 +442,6 @@ static void DrawBankExplorer() {
         ImGui::EndPopup();
     }
 
-    // ROUTING
     if (g_CurrentMode == EAppMode::Banks) {
         DrawBankTab();
     }
@@ -430,5 +504,8 @@ static void DrawBankExplorer() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
+    }
+    if (g_CurrentAppState == EAppState::ModCreator) {
+        DrawModPackageWindow();
     }
 }

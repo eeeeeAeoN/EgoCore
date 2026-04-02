@@ -3,14 +3,12 @@
 #include <vector>
 #include <string>
 
-// --- CORE APP STATE ---
 enum class EAppMode { Banks, Defs };
 inline EAppMode g_CurrentMode = EAppMode::Banks;
 
 enum class EDefViewType { Defs, Headers, Events };
 inline EDefViewType g_CurrentDefView = EDefViewType::Defs;
 
-// --- KEYBINDING SYSTEM ---
 struct ShortcutKey {
     ImGuiKey Key;
     bool Ctrl;
@@ -37,20 +35,20 @@ struct ShortcutKey {
 };
 
 struct AppKeybindings {
-    ShortcutKey SwitchBankMode = { ImGuiKey_B, true, false, false }; // Ctrl + B
-    ShortcutKey SwitchDefMode = { ImGuiKey_D, true, false, false }; // Ctrl + D
-    ShortcutKey SaveEntry = { ImGuiKey_S, true, false, false }; // Ctrl + S
-    ShortcutKey Compile = { ImGuiKey_M, true, false, false }; // Ctrl + M
-    ShortcutKey NavigateBack = { ImGuiKey_Escape, false, false, false }; // Esc
-    ShortcutKey NavigateForward = { ImGuiKey_F1, false, false, false }; // F1
+    ShortcutKey SwitchBankMode = { ImGuiKey_B, true, false, false };
+    ShortcutKey SwitchDefMode = { ImGuiKey_D, true, false, false };
+    ShortcutKey SaveEntry = { ImGuiKey_S, true, false, false };
+    ShortcutKey Compile = { ImGuiKey_M, true, false, false };
+    ShortcutKey NavigateBack = { ImGuiKey_Escape, false, false, false };
+    ShortcutKey NavigateForward = { ImGuiKey_F1, false, false, false };
+    ShortcutKey DeleteEntry = { ImGuiKey_Delete, false, false, false };
+    ShortcutKey ToggleLeftPanel = { ImGuiKey_L, true, false, false };
 };
 inline AppKeybindings g_Keybinds;
 
-
-// --- NAVIGATION HISTORY SYSTEM ---
 struct BankHistoryNode {
     int BankIndex;
-    int SubBankIndex; // Added for precise subbank restoration
+    int SubBankIndex;
     int EntryIndex;
 };
 

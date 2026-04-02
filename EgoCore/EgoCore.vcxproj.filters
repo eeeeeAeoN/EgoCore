@@ -55,6 +55,9 @@
     <Filter Include="Source Files\Particles">
       <UniqueIdentifier>{f14aad6a-8dc7-462e-b94f-cc8409602885}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Mods">
+      <UniqueIdentifier>{ec2e6cc1-ac9c-4fc7-b279-4c436cfd893a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -278,6 +281,15 @@
     </ClInclude>
     <ClInclude Include="InputManager.h">
       <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="ModPackageUI.h">
+      <Filter>Source Files\Mods</Filter>
+    </ClInclude>
+    <ClInclude Include="ModPackageCompiler.h">
+      <Filter>Source Files\Mods</Filter>
+    </ClInclude>
+    <ClInclude Include="ModPackageTracker.h">
+      <Filter>Source Files\Mods</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

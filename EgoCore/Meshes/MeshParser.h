@@ -75,7 +75,7 @@ struct CParticleSimulation {
     float TimestepMultiplier;
     uint32_t Size;
     std::vector<float> Positions; // Size * 3 (Stored as 12-byte C3DVector)
-    std::vector<float> SimulationAlphas;
+    std::vector<uint32_t> SimulationAlphas;
     float GravityStrength;
     float WindStrength;
     uint8_t DraggingEnable;

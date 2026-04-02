@@ -331,3 +331,6 @@ inline void UpdateFilter(LoadedBank& bank) {
 // -- I know a project of all headers isn't even remotely how one should program. I don't care, bite me! --
 inline void FlushStagedEntries(LoadedBank* bank);
 inline void SaveEntryChanges(LoadedBank* bank);
+
+inline void SaveBigBank(LoadedBank* bank);
+inline void SaveAudioBank(LoadedBank* bank);

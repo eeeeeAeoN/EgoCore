@@ -564,6 +564,8 @@ static void PerformAutoLoad() {
 }
 
 static void InitializeSetup(const std::string& selectedPath) {
-    g_AppConfig.GameRootPath = selectedPath; g_AppConfig.AutoLoadBanks = DEFAULT_BANKS;
-    g_AppConfig.IsConfigured = true; SaveConfig(); PerformAutoLoad();
+    g_AppConfig.GameRootPath = selectedPath;
+    g_AppConfig.AutoLoadBanks = GetDefaultBanks(selectedPath);
+    g_AppConfig.IsConfigured = true;
+    SaveConfig();
 }

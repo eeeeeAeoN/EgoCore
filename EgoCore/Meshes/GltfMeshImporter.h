@@ -617,28 +617,49 @@ namespace GltfMeshImporter {
         // ====================================================================
         // 3. GENERATE RENDER MAPPINGS
         // ====================================================================
-        for (uint32_t i = 0; i < pts.size(); i++) {
+        prog.RenderVertices.clear();
+        prog.IndexedTextureCoords.resize(pAcc.count, { 0.0f, 0.0f });
+
+        for (int i = 0; i < pAcc.count; i++) {
             C3DClothRenderVertex rv;
-            rv.PositionIndex = pts[i].fableIdx;
-            rv.TexCoordIndex = pts[i].fableIdx;
+
+            // CRITICAL FIX: Bypass the C++ struct layout by writing to the 32-bit union directly.
+            // Fable strictly expects PositionIndex in the lower 16 bits, and TexCoordIndex in the upper.
+            uint32_t physIdx = pts[gltfToUPoint[i]].fableIdx;
+            uint32_t texIdx = i;
+            rv.Data = (texIdx << 16) | (physIdx & 0xFFFF);
+
             prog.RenderVertices.push_back(rv);
+
+            if (uData) {
+                prog.IndexedTextureCoords[i].u = uData[i * 2];
+                prog.IndexedTextureCoords[i].v = uData[i * 2 + 1];
+            }
         }
 
         std::set<std::pair<uint32_t, uint32_t>> uniqueEdges;
 
         for (int i = 0; i < iAcc.count; i += 3) {
-            uint32_t u0 = gltfToUPoint[getVIdx(0, i)];
-            uint32_t u1 = gltfToUPoint[getVIdx(1, i)];
-            uint32_t u2 = gltfToUPoint[getVIdx(2, i)];
+            uint32_t v0 = getVIdx(0, i);
+            uint32_t v1 = getVIdx(1, i);
+            uint32_t v2 = getVIdx(2, i);
 
+            uint32_t u0 = gltfToUPoint[v0];
+            uint32_t u1 = gltfToUPoint[v1];
+            uint32_t u2 = gltfToUPoint[v2];
+
+            // 1. ALWAYS add the triangle so the engine knows to render it.
+            // FLIP winding order (v2 then v1) to match Fable's expected culling
+            C3DTriangle2 tri;
+            tri.Indices[0] = v0;
+            tri.Indices[1] = v2;
+            tri.Indices[2] = v1;
+            prog.RenderTris.push_back(tri);
+
+            // 2. ONLY generate physics springs if the triangle touches the simulation.
             if (pts[u0].type == 2 || pts[u1].type == 2 || pts[u2].type == 2) {
-                C3DTriangle2 tri;
-                tri.Indices[0] = u0;
-                tri.Indices[1] = u1;
-                tri.Indices[2] = u2;
-                prog.RenderTris.push_back(tri);
-
                 auto addEdge = [&](uint32_t pA, uint32_t pB) {
+                    // The inner check ensures we don't build springs between two rigid anchors
                     if (pts[pA].type != 2 && pts[pB].type != 2) return;
                     uniqueEdges.insert({ (std::min)(pA, pB), (std::max)(pA, pB) });
                     };
@@ -702,24 +723,12 @@ namespace GltfMeshImporter {
         // 5. BIND FABLE MEMORY ARRAYS
         // ====================================================================
         uint32_t fableTotalMemorySize = prog.NonSimCount + sim.Size;
-        prog.IndexedTextureCoords.resize(fableTotalMemorySize, { 0.0f, 0.0f });
 
-        for (int i = 0; i < pAcc.count; i++) {
-            UPoint& pt = pts[gltfToUPoint[i]];
-            if (uData && prog.IndexedTextureCoords[pt.fableIdx].u == 0.0f) {
-                prog.IndexedTextureCoords[pt.fableIdx].u = uData[i * 2];
-                prog.IndexedTextureCoords[pt.fableIdx].v = uData[i * 2 + 1];
-                if (pt.type == 1) {
-                    prog.IndexedTextureCoords[nonSimTotal + pt.physLocalIdx].u = uData[i * 2];
-                    prog.IndexedTextureCoords[nonSimTotal + pt.physLocalIdx].v = uData[i * 2 + 1];
-                }
-            }
-        }
+        // Initialize arrays with 0 to prevent Fable Out-Of-Bounds reads
+        prog.ParticleIndices.assign(prim.VertexCount, 0);
+        prog.VertexIndices.assign(fableTotalMemorySize, 0);
 
-        prog.ParticleIndices.resize(prim.VertexCount, 0xFFFFFFFF);
-        prog.VertexIndices.resize(fableTotalMemorySize, 0xFFFFFFFF);
-
-        // MAP ONLY BASE VERTICES
+        // MAP BASE VERTICES TO PHYSICS PARTICLES
         for (uint32_t v = 0; v < prim.VertexCount; v++) {
             size_t off = v * prim.VertexStride;
             float* fp = (float*)(prim.VertexBuffer.data() + off);
@@ -732,17 +741,20 @@ namespace GltfMeshImporter {
                 float d = std::pow(px - gx, 2) + std::pow(py - gy, 2) + std::pow(pz - gz, 2);
                 if (d < bestDist) { bestDist = d; bestGltf = i; }
             }
+
             if (bestGltf != 0xFFFFFFFF && bestDist < 0.05f) {
                 UPoint& pt = pts[gltfToUPoint[bestGltf]];
-                prog.ParticleIndices[v] = pt.fableIdx;
 
+                prog.ParticleIndices[v] = pt.fableIdx;
                 prog.VertexIndices[pt.fableIdx] = v;
+
                 if (pt.type == 1 || pt.type == 2) {
                     prog.VertexIndices[nonSimTotal + pt.physLocalIdx] = v;
                 }
             }
         }
 
+        // BONE SKINNING LOGIC
         if (jntAccIdx >= 0 && wgtAccIdx >= 0) {
             T_Acc jAcc = accessors[jntAccIdx], wAcc = accessors[wgtAccIdx];
             const uint16_t* jData16 = (jAcc.compType == 5123) ? (const uint16_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
@@ -759,6 +771,8 @@ namespace GltfMeshImporter {
                     if (pass == 1 && pt.type != 1) continue;
 
                     uint32_t fIdx = (pass == 0) ? pt.fableIdx : (nonSimTotal + pt.physLocalIdx);
+
+                    if (fIdx >= processedBones.size()) continue;
                     if (processedBones[fIdx]) continue;
                     processedBones[fIdx] = true;
 
@@ -766,10 +780,8 @@ namespace GltfMeshImporter {
                         float w = wData[i * 4 + k];
                         if (w > 0.001f) {
                             uint32_t bone = jData16 ? jData16[i * 4 + k] : (jData8 ? jData8[i * 4 + k] : 0);
-                            uint32_t fBoneId = bone < outMesh.BoneIndices.size() ? outMesh.BoneIndices[bone] : bone;
-
-                            if (pt.type == 2 || pass == 1) simBoneMap[fBoneId].push_back({ pt.physLocalIdx, w });
-                            else nonSimBoneMap[fBoneId].push_back({ pt.fableIdx, w });
+                            if (pt.type == 2 || pass == 1) simBoneMap[bone].push_back({ pt.physLocalIdx, w });
+                            else nonSimBoneMap[bone].push_back({ pt.fableIdx, w });
                         }
                     }
                 }
@@ -1040,6 +1052,13 @@ namespace GltfMeshImporter {
             if (b.MaterialIndex >= 0 && b.MaterialIndex < outMesh.MaterialCount) bT = outMesh.Materials[b.MaterialIndex].IsTransparent || outMesh.Materials[b.MaterialIndex].BooleanAlpha;
             return aT < bT;
             });
+
+        // FIX: Update cloth primitive indices after sorting!
+        for (int i = 0; i < outMesh.Primitives.size(); i++) {
+            for (auto& cp : outMesh.Primitives[i].ClothPrimitives) {
+                cp.PrimitiveIndex = i;
+            }
+        }
 
         outMesh.TotalStaticBlocks = 0;
         for (const auto& prim : outMesh.Primitives)
@@ -2209,6 +2228,11 @@ namespace GltfMeshImporter {
             return aTrans < bTrans;
             });
 
+        for (int i = 0; i < outMesh.Primitives.size(); i++) {
+            for (auto& cp : outMesh.Primitives[i].ClothPrimitives) {
+                cp.PrimitiveIndex = i;
+            }
+        }
 
         ParseNodes(json, outMesh);
 

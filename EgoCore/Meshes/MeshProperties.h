@@ -823,6 +823,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         g_PhysicsOverlayRenderer.CamRotY = g_MeshRenderer.CamRotY;
         g_PhysicsOverlayRenderer.CamDist = g_MeshRenderer.CamDist;
         g_PhysicsOverlayRenderer.CamPan = g_MeshRenderer.CamPan;
+        g_PhysicsOverlayRenderer.CenterOffset = g_MeshRenderer.CenterOffset;
 
         g_PhysicsOverlayRenderer.Render(ctx, viewportWidth, avail.y, true, false, &g_PreviewBoneTransforms, false, 0.5f, g_MeshRenderer.GetRTV(), g_MeshRenderer.GetDSV(), false);
     }
@@ -1905,6 +1906,47 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     }
                     ImGui::EndChild();
                 }
+                ImGui::EndTabItem();
+            }
+
+            if (g_ActiveMeshContent.IsParsed && ImGui::BeginTabItem("Debug")) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Primitive Hardware & Memory Stats");
+                ImGui::Separator();
+                
+                ImGui::BeginChild("DebugPrimList", ImVec2(0, 0), true);
+                for (size_t i = 0; i < g_ActiveMeshContent.Primitives.size(); i++) {
+                    auto& prim = g_ActiveMeshContent.Primitives[i];
+                    std::string headerName = "Primitive " + std::to_string(i);
+                    
+                    if (prim.ClothPrimitives.size() > 0) {
+                        headerName += " [CLOTH]";
+                    }
+
+                    if (ImGui::CollapsingHeader(headerName.c_str())) {
+                        ImGui::Indent(15.0f);
+                        
+                        ImGui::Text("InitFlags:         0x%08X", prim.InitFlags);
+                        ImGui::Text("RepeatingMeshReps: %d", prim.RepeatingMeshReps);
+                        ImGui::Text("Vertex Stride:     %d bytes", prim.VertexStride);
+                        ImGui::Text("Buffer Type:       %u", prim.BufferType);
+                        ImGui::Text("Is Compressed:     %s", prim.IsCompressed ? "True" : "False");
+                        
+                        ImGui::Dummy(ImVec2(0, 5));
+                        ImGui::Text("Vertex Count:      %u", prim.VertexCount);
+                        ImGui::Text("Index Count:       %u", prim.IndexCount);
+                        ImGui::Text("Triangle Count:    %u", prim.TriangleCount);
+                        
+                        ImGui::Dummy(ImVec2(0, 5));
+                        ImGui::Text("Static Blocks:     %u", prim.StaticBlockCount);
+                        ImGui::Text("Animated Blocks:   %u", prim.AnimatedBlockCount);
+                        ImGui::Text("Cloth Primitives:  %zu", prim.ClothPrimitives.size());
+                        
+                        ImGui::Unindent(15.0f);
+                        ImGui::Separator();
+                    }
+                }
+                ImGui::EndChild();
+                
                 ImGui::EndTabItem();
             }
 
