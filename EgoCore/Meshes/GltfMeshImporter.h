@@ -914,10 +914,25 @@ namespace GltfMeshImporter {
             //if (ExtractBool(meshExtras, "FableCloth", false)) continue; // Processed later!
 
             C3DPrimitive outPrim = {};
-            outPrim.InitFlags = 4;
-            outPrim.IsCompressed = true;
+            outPrim.RepeatingMeshReps = 0;
+
+            // --- NEW INIT FLAGS LOGIC ---
+            int savedFlags = (int)ExtractFloatClean(meshExtras, "Fable_InitFlags", -1);
+            if (savedFlags != -1) {
+                outPrim.InitFlags = savedFlags;
+            }
+            else {
+                outPrim.InitFlags = outMesh.AnimatedFlag ? 0x14 : 0x04; // Fallback for new custom meshes
+            }
+
+            outPrim.IsCompressed = (outPrim.InitFlags & 4) != 0 && (outPrim.InitFlags & 0x10) == 0;
+            // ----------------------------
+
             outPrim.BufferType = 0;
-            outPrim.VertexStride = 12;
+
+            // Let the engine calculate the exact stride using the flags (handles Bump Maps automatically)
+            outPrim.VertexStride = outMesh.CalculateVertexStride(outPrim.InitFlags, outMesh.AnimatedFlag);
+
             outPrim.MaterialIndex = -1;
 
             outPrim.AvgTextureStretch = ExtractFloatClean(meshExtras, "AvgTextureStretch", 0.1f);
@@ -1013,18 +1028,32 @@ namespace GltfMeshImporter {
             }
             outPrim.Compression.Scale[3] = 1.0f;
             outPrim.Compression.Offset[3] = 0.0f;
+
             outPrim.VertexCount = (uint32_t)uniqueVerts.size();
-            outPrim.VertexBuffer.resize(outPrim.VertexCount * outPrim.VertexStride, 0);
+            outPrim.VertexBuffer.resize(outPrim.VertexCount* outPrim.VertexStride, 0);
             uint8_t* vDest = outPrim.VertexBuffer.data();
 
             for (uint32_t v = 0; v < outPrim.VertexCount; v++) {
-                uint32_t pP = PackPOSPACKED3(uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2], outPrim.Compression.Scale, outPrim.Compression.Offset);
                 uint32_t pN = PackNormal(uniqueVerts[v].n[0], uniqueVerts[v].n[1], uniqueVerts[v].n[2]);
                 int16_t cU = CompressUV(uniqueVerts[v].u[0]), cV = CompressUV(uniqueVerts[v].u[1]);
 
-                memcpy(vDest + 0, &pP, 4); memcpy(vDest + 4, &pN, 4);
-                memcpy(vDest + 8, &cU, 2); memcpy(vDest + 10, &cV, 2);
-                vDest += outPrim.VertexStride;
+                if (outPrim.IsCompressed) {
+                    // Standard 4-byte packed positions
+                    uint32_t pP = PackPOSPACKED3(uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2], outPrim.Compression.Scale, outPrim.Compression.Offset);
+                    memcpy(vDest + 0, &pP, 4);
+                    memcpy(vDest + 4, &pN, 4);
+                    memcpy(vDest + 8, &cU, 2);
+                    memcpy(vDest + 10, &cV, 2);
+                }
+                else {
+                    // Uncompressed interior/cloth meshes expect 12 bytes of raw floats
+                    memcpy(vDest + 0, &uniqueVerts[v].p[0], 12);
+                    memcpy(vDest + 12, &pN, 4);
+                    memcpy(vDest + 16, &cU, 2);
+                    memcpy(vDest + 18, &cV, 2);
+                }
+
+                vDest += outPrim.VertexStride; // Safely skips tangents/binormals which stay zero-initialized
             }
 
             outPrim.IndexCount = (uint32_t)mergedBaseIndices.size();
@@ -1956,10 +1985,23 @@ namespace GltfMeshImporter {
 
             C3DPrimitive outPrim = {};
             outPrim.RepeatingMeshReps = 0;
-            outPrim.InitFlags = 4;
-            outPrim.IsCompressed = true;
+
+            // --- NEW INIT FLAGS LOGIC ---
+            int savedFlags = (int)ExtractFloatClean(meshExtras, "Fable_InitFlags", -1);
+            if (savedFlags != -1) {
+                outPrim.InitFlags = savedFlags;
+            }
+            else {
+                // Fallback for brand new custom meshes
+                outPrim.InitFlags = outMesh.AnimatedFlag ? 0x14 : 0x04;
+            }
+
+            outPrim.IsCompressed = (outPrim.InitFlags & 4) != 0 && (outPrim.InitFlags & 0x10) == 0;
             outPrim.BufferType = 0;
-            outPrim.VertexStride = 20;
+
+            // Let the engine accurately calculate the stride based on ALL flags (including 0x02 Bump Maps)
+            outPrim.VertexStride = outMesh.CalculateVertexStride(outPrim.InitFlags, outMesh.AnimatedFlag);
+
             outPrim.MaterialIndex = -1;
 
             outPrim.AvgTextureStretch = ExtractFloatClean(meshExtras, "AvgTextureStretch", 0.1f);
@@ -2185,13 +2227,25 @@ namespace GltfMeshImporter {
                         }
                     }
 
-                    memcpy(dest + 0, &pP, 4);
-                    memcpy(dest + 4, fj, 4);
-                    memcpy(dest + 8, fw, 4);
-                    memcpy(dest + 12, &pN, 4);
-                    memcpy(dest + 16, &cU, 2);
-                    memcpy(dest + 18, &cV, 2);
-                    dest += 20;
+                    if (outPrim.IsCompressed) {
+                        memcpy(dest + 0, &pP, 4);
+                        memcpy(dest + 4, fj, 4);
+                        memcpy(dest + 8, fw, 4);
+                        memcpy(dest + 12, &pN, 4);
+                        memcpy(dest + 16, &cU, 2);
+                        memcpy(dest + 18, &cV, 2);
+                    }
+                    else {
+                        // Uncompressed expects 12 bytes of raw floats for position
+                        memcpy(dest + 0, &v.p[0], 12);
+                        memcpy(dest + 12, fj, 4);
+                        memcpy(dest + 16, fw, 4);
+                        memcpy(dest + 20, &pN, 4);
+                        memcpy(dest + 24, &cU, 2);
+                        memcpy(dest + 26, &cV, 2);
+                    }
+
+                    dest += outPrim.VertexStride; // Use dynamic stride!
                 }
 
                 currentGlobalVertexOffset += fBlock.VertexCount;

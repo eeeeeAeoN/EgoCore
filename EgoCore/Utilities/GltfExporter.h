@@ -426,7 +426,8 @@ namespace GltfExporter {
             std::stringstream extras;
             extras.imbue(std::locale("C"));
             extras << "\"AvgTextureStretch\":" << prim.AvgTextureStretch
-                << ",\"SphereRadius\":" << prim.SphereRadius;
+                << ",\"SphereRadius\":" << prim.SphereRadius
+                << ",\"Fable_InitFlags\":" << prim.InitFlags;
 
             if (isPosComp) {
                 extras << ",\"compScale\":[" << prim.Compression.Scale[0] << "," << prim.Compression.Scale[1] << "," << prim.Compression.Scale[2] << "]"
