@@ -454,7 +454,7 @@ namespace GltfMeshImporter {
 
         CParticleProgram prog;
         prog.IsParsed = true;
-        prog.Version = 0x14D; // Must be 333 (0x14D)
+        prog.Version = 0x14D;
         prog.AveragePatchSize = ExtractFloatClean(meshExtras, "Fable_PatchSize", 1.0f);
         prog.BezierEnable = (int)ExtractFloatClean(meshExtras, "Fable_Bezier", 0);
 
@@ -462,7 +462,7 @@ namespace GltfMeshImporter {
         sim.GravityStrength = ExtractFloatClean(meshExtras, "Fable_Gravity", 9.8f);
         sim.WindStrength = ExtractFloatClean(meshExtras, "Fable_Wind", 0.0f);
         sim.GlobalDamping = ExtractFloatClean(meshExtras, "Fable_Damping", 0.1f);
-        sim.Timestep = ExtractFloatClean(meshExtras, "Fable_Timestep", 0.0666f); // 15Hz Fable default
+        sim.Timestep = ExtractFloatClean(meshExtras, "Fable_Timestep", 0.0666f);
         sim.TimestepChanged = 0;
         sim.TimestepMultiplier = ExtractFloatClean(meshExtras, "Fable_TimeMult", 1.0f);
         sim.DraggingEnable = (int)ExtractFloatClean(meshExtras, "Fable_DragEnable", 0);
@@ -471,39 +471,12 @@ namespace GltfMeshImporter {
         sim.AccelerationEnable = (int)ExtractFloatClean(meshExtras, "Fable_AccelEnable", 0);
 
         float structStiffness = ExtractFloatClean(meshExtras, "Fable_StructStiff", 0.8f);
-
-        std::string attr = ExtractBlock(pObj, "attributes");
-        int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
-        int uvAccIdx = (int)ExtractFloatClean(attr, "TEXCOORD_0", -1);
-        int colAccIdx = (int)ExtractFloatClean(attr, "COLOR_0", -1);
-        int jntAccIdx = (int)ExtractFloatClean(attr, "JOINTS_0", -1);
-        int wgtAccIdx = (int)ExtractFloatClean(attr, "WEIGHTS_0", -1);
-        int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
-
-        if (posAccIdx < 0 || indAccIdx < 0) return;
-
-        T_Acc pAcc = accessors[posAccIdx];
-        const float* pData = (const float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
-        const float* uData = uvAccIdx >= 0 ? (const float*)(binData.data() + views[accessors[uvAccIdx].view].offset + accessors[uvAccIdx].offset) : nullptr;
-        const float* cData = colAccIdx >= 0 ? (const float*)(binData.data() + views[accessors[colAccIdx].view].offset + accessors[colAccIdx].offset) : nullptr;
-
-        T_Acc iAcc = accessors[indAccIdx];
-        const uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
-        auto getVIdx = [&](int offset, int i) -> uint32_t {
-            if (iAcc.compType == 5121) return iData[i + offset];
-            if (iAcc.compType == 5123) return ((const uint16_t*)iData)[i + offset];
-            if (iAcc.compType == 5125) return ((const uint32_t*)iData)[i + offset];
-            return 0;
-            };
-
         auto& prim = outMesh.Primitives[targetPrim];
 
-        // ====================================================================
-        // 0. ENGINE REQUIREMENT: DECOMPRESS VERTEX BUFFER (BASE VERTS ONLY)
-        // ====================================================================
+        // 0. ENGINE REQUIREMENT: DECOMPRESS VERTEX BUFFER
         if ((prim.InitFlags & 4) != 0 && (prim.InitFlags & 0x10) == 0) {
             std::vector<uint8_t> newVB;
-            int newStride = prim.VertexStride + 8; // Shift from 20 bytes to 28 bytes
+            int newStride = prim.VertexStride + 8;
             newVB.resize(prim.VertexCount * newStride);
 
             for (uint32_t v = 0; v < prim.VertexCount; v++) {
@@ -516,7 +489,6 @@ namespace GltfMeshImporter {
                 memcpy(newVert, &px, 4);
                 memcpy(newVert + 4, &py, 4);
                 memcpy(newVert + 8, &pz, 4);
-
                 memcpy(newVert + 12, oldVert + 4, prim.VertexStride - 4);
             }
 
@@ -528,19 +500,51 @@ namespace GltfMeshImporter {
             for (int i = 0; i < 4; i++) { prim.Compression.Scale[i] = 1.0f; prim.Compression.Offset[i] = 0.0f; }
         }
 
-        // ====================================================================
-        // 1. CLASSIFY GLTF VERTICES (0 = Rigid, 1 = Anchor, 2 = Sim)
-        // ====================================================================
+        // 1. SETUP RAW POINTERS & EXTRACT
+        std::string attr = ExtractBlock(pObj, "attributes");
+        int posAccIdx = (int)ExtractFloatClean(attr, "POSITION", -1);
+        int uvAccIdx = (int)ExtractFloatClean(attr, "TEXCOORD_0", -1);
+        int colAccIdx = (int)ExtractFloatClean(attr, "COLOR_0", -1);
+        int jntAccIdx = (int)ExtractFloatClean(attr, "JOINTS_0", -1);
+        int wgtAccIdx = (int)ExtractFloatClean(attr, "WEIGHTS_0", -1);
+        int indAccIdx = (int)ExtractFloatClean(pObj, "indices", -1);
+
+        if (posAccIdx < 0 || indAccIdx < 0) return;
+
+        T_Acc pAcc = accessors[posAccIdx];
+        const float* pData = (const float*)(binData.data() + views[pAcc.view].offset + pAcc.offset);
+
+        T_Acc uAcc = uvAccIdx >= 0 ? accessors[uvAccIdx] : T_Acc{};
+        const uint8_t* uDataRaw = uvAccIdx >= 0 ? (binData.data() + views[uAcc.view].offset + uAcc.offset) : nullptr;
+
+        T_Acc cAcc = colAccIdx >= 0 ? accessors[colAccIdx] : T_Acc{};
+        const uint8_t* cDataRaw = colAccIdx >= 0 ? (binData.data() + views[cAcc.view].offset + cAcc.offset) : nullptr;
+        int cStride = (cAcc.type == "VEC3") ? 3 : 4;
+
         std::vector<int> gltfType(pAcc.count, 0);
         std::vector<float> gltfAlpha(pAcc.count, 0.0f);
 
         for (int i = 0; i < pAcc.count; i++) {
-            float g = cData ? cData[i * 4 + 1] : 0.0f;
+            float g = 0.0f;
+            if (cDataRaw) {
+                if (cAcc.compType == 5126) g = ((const float*)cDataRaw)[i * cStride + 1];
+                else if (cAcc.compType == 5123) g = ((const uint16_t*)cDataRaw)[i * cStride + 1] / 65535.0f;
+                else if (cAcc.compType == 5121) g = ((const uint8_t*)cDataRaw)[i * cStride + 1] / 255.0f;
+            }
             if (g > 0.01f) { gltfType[i] = 2; gltfAlpha[i] = g; }
         }
 
+        T_Acc iAcc = accessors[indAccIdx];
+        const uint8_t* iData = binData.data() + views[iAcc.view].offset + iAcc.offset;
+
         for (int i = 0; i < iAcc.count; i += 3) {
-            uint32_t i0 = getVIdx(0, i), i1 = getVIdx(1, i), i2 = getVIdx(2, i);
+            auto getVIdx = [&](int off) -> uint32_t {
+                if (iAcc.compType == 5121) return iData[i + off];
+                if (iAcc.compType == 5123) return ((const uint16_t*)iData)[i + off];
+                if (iAcc.compType == 5125) return ((const uint32_t*)iData)[i + off];
+                return 0;
+                };
+            uint32_t i0 = getVIdx(0), i1 = getVIdx(1), i2 = getVIdx(2);
             bool hasSim = (gltfType[i0] == 2) || (gltfType[i1] == 2) || (gltfType[i2] == 2);
             if (hasSim) {
                 if (gltfType[i0] == 0) gltfType[i0] = 1;
@@ -549,9 +553,7 @@ namespace GltfMeshImporter {
             }
         }
 
-        // ====================================================================
         // 2. BUILD UNIQUE TOPOLOGICAL POINTS & DUPLICATE ANCHORS
-        // ====================================================================
         struct UPoint { float p[3]; int type; float alpha; uint32_t fableIdx; uint32_t physLocalIdx; };
         std::vector<UPoint> pts;
         std::vector<uint32_t> gltfToUPoint(pAcc.count, 0xFFFFFFFF);
@@ -571,15 +573,9 @@ namespace GltfMeshImporter {
                 found = (int)pts.size() - 1;
             }
             else {
-                if ((pts[found].type == 0 && gltfType[i] == 2) || (pts[found].type == 2 && gltfType[i] == 0)) {
-                    pts[found].type = 1;
-                }
-                else if (gltfType[i] == 1) {
-                    pts[found].type = 1;
-                }
-                else if (gltfType[i] == 2 && pts[found].type != 1) {
-                    pts[found].type = 2;
-                }
+                if ((pts[found].type == 0 && gltfType[i] == 2) || (pts[found].type == 2 && gltfType[i] == 0)) { pts[found].type = 1; }
+                else if (gltfType[i] == 1) { pts[found].type = 1; }
+                else if (gltfType[i] == 2 && pts[found].type != 1) { pts[found].type = 2; }
 
                 if (pts[found].type == 1) pts[found].alpha = 0.0f;
                 else if (pts[found].type == 2) pts[found].alpha = (std::max)(pts[found].alpha, gltfAlpha[i]);
@@ -602,7 +598,9 @@ namespace GltfMeshImporter {
             if (pt.type == 1) {
                 pt.physLocalIdx = sim.Size++;
                 sim.Positions.push_back(pt.p[0]); sim.Positions.push_back(pt.p[1]); sim.Positions.push_back(pt.p[2]);
-                sim.SimulationAlphas.push_back(0.0f);
+
+                // Explicit 0 bits (perfectly represents float 0.0f for Fable)
+                sim.SimulationAlphas.push_back(0);
             }
         }
         for (auto& pt : pts) {
@@ -610,66 +608,67 @@ namespace GltfMeshImporter {
                 pt.fableIdx = nonSimTotal + sim.Size;
                 pt.physLocalIdx = sim.Size++;
                 sim.Positions.push_back(pt.p[0]); sim.Positions.push_back(pt.p[1]); sim.Positions.push_back(pt.p[2]);
-                sim.SimulationAlphas.push_back(pt.alpha);
+
+                uint32_t finalAlphaBits;
+                if (pt.alpha > 1.01f) {
+                    // Backwards compatibility: Original EgoCore floats (1065353216.0f)
+                    finalAlphaBits = (uint32_t)std::round(pt.alpha);
+                }
+                else {
+                    // Blender fix: Clamped 1.0f float bit-cast to Fable's required IEEE bits
+                    memcpy(&finalAlphaBits, &pt.alpha, 4);
+                }
+                sim.SimulationAlphas.push_back(finalAlphaBits);
             }
         }
 
-        // ====================================================================
         // 3. GENERATE RENDER MAPPINGS
-        // ====================================================================
         prog.RenderVertices.clear();
         prog.IndexedTextureCoords.resize(pAcc.count, { 0.0f, 0.0f });
 
         for (int i = 0; i < pAcc.count; i++) {
             C3DClothRenderVertex rv;
-
-            // CRITICAL FIX: Bypass the C++ struct layout by writing to the 32-bit union directly.
-            // Fable strictly expects PositionIndex in the lower 16 bits, and TexCoordIndex in the upper.
             uint32_t physIdx = pts[gltfToUPoint[i]].fableIdx;
             uint32_t texIdx = i;
             rv.Data = (texIdx << 16) | (physIdx & 0xFFFF);
-
             prog.RenderVertices.push_back(rv);
 
-            if (uData) {
-                prog.IndexedTextureCoords[i].u = uData[i * 2];
-                prog.IndexedTextureCoords[i].v = uData[i * 2 + 1];
+            if (uDataRaw) {
+                float u = 0.0f, v = 0.0f;
+                if (uAcc.compType == 5126) { u = ((const float*)uDataRaw)[i * 2]; v = ((const float*)uDataRaw)[i * 2 + 1]; }
+                else if (uAcc.compType == 5123) { u = ((const uint16_t*)uDataRaw)[i * 2] / 65535.0f; v = ((const uint16_t*)uDataRaw)[i * 2 + 1] / 65535.0f; }
+                else if (uAcc.compType == 5121) { u = ((const uint8_t*)uDataRaw)[i * 2] / 255.0f; v = ((const uint8_t*)uDataRaw)[i * 2 + 1] / 255.0f; }
+                prog.IndexedTextureCoords[i].u = u;
+                prog.IndexedTextureCoords[i].v = v;
             }
         }
 
         std::set<std::pair<uint32_t, uint32_t>> uniqueEdges;
-
         for (int i = 0; i < iAcc.count; i += 3) {
-            uint32_t v0 = getVIdx(0, i);
-            uint32_t v1 = getVIdx(1, i);
-            uint32_t v2 = getVIdx(2, i);
+            auto getVIdx = [&](int off) -> uint32_t {
+                if (iAcc.compType == 5121) return iData[i + off];
+                if (iAcc.compType == 5123) return ((const uint16_t*)iData)[i + off];
+                if (iAcc.compType == 5125) return ((const uint32_t*)iData)[i + off];
+                return 0;
+                };
+            uint32_t u0 = gltfToUPoint[getVIdx(0)];
+            uint32_t u1 = gltfToUPoint[getVIdx(1)];
+            uint32_t u2 = gltfToUPoint[getVIdx(2)];
 
-            uint32_t u0 = gltfToUPoint[v0];
-            uint32_t u1 = gltfToUPoint[v1];
-            uint32_t u2 = gltfToUPoint[v2];
-
-            // 1. ALWAYS add the triangle so the engine knows to render it.
-            // FLIP winding order (v2 then v1) to match Fable's expected culling
             C3DTriangle2 tri;
-            tri.Indices[0] = v0;
-            tri.Indices[1] = v2;
-            tri.Indices[2] = v1;
+            tri.Indices[0] = getVIdx(0); tri.Indices[1] = getVIdx(2); tri.Indices[2] = getVIdx(1);
             prog.RenderTris.push_back(tri);
 
-            // 2. ONLY generate physics springs if the triangle touches the simulation.
             if (pts[u0].type == 2 || pts[u1].type == 2 || pts[u2].type == 2) {
                 auto addEdge = [&](uint32_t pA, uint32_t pB) {
-                    // The inner check ensures we don't build springs between two rigid anchors
                     if (pts[pA].type != 2 && pts[pB].type != 2) return;
-                    uniqueEdges.insert({ (std::min)(pA, pB), (std::max)(pA, pB) });
+                    if (pA != pB) uniqueEdges.insert({ (std::min)(pA, pB), (std::max)(pA, pB) });
                     };
                 addEdge(u0, u1); addEdge(u1, u2); addEdge(u2, u0);
             }
         }
 
-        // ====================================================================
-        // 4. TOPOLOGICAL BFS SORT (SPRING GENERATION)
-        // ====================================================================
+        // 4. TOPOLOGICAL BFS SORT
         std::vector<std::vector<uint32_t>> adj(sim.Size);
         std::vector<std::pair<uint32_t, uint32_t>> edgeList;
         for (const auto& edge : uniqueEdges) {
@@ -719,16 +718,11 @@ namespace GltfMeshImporter {
             prog.ParsedInstructions.push_back(distConst);
         }
 
-        // ====================================================================
         // 5. BIND FABLE MEMORY ARRAYS
-        // ====================================================================
         uint32_t fableTotalMemorySize = prog.NonSimCount + sim.Size;
-
-        // Initialize arrays with 0 to prevent Fable Out-Of-Bounds reads
         prog.ParticleIndices.assign(prim.VertexCount, 0);
         prog.VertexIndices.assign(fableTotalMemorySize, 0);
 
-        // MAP BASE VERTICES TO PHYSICS PARTICLES
         for (uint32_t v = 0; v < prim.VertexCount; v++) {
             size_t off = v * prim.VertexStride;
             float* fp = (float*)(prim.VertexBuffer.data() + off);
@@ -744,23 +738,19 @@ namespace GltfMeshImporter {
 
             if (bestGltf != 0xFFFFFFFF && bestDist < 0.05f) {
                 UPoint& pt = pts[gltfToUPoint[bestGltf]];
-
                 prog.ParticleIndices[v] = pt.fableIdx;
                 prog.VertexIndices[pt.fableIdx] = v;
-
-                if (pt.type == 1 || pt.type == 2) {
-                    prog.VertexIndices[nonSimTotal + pt.physLocalIdx] = v;
-                }
+                if (pt.type == 1 || pt.type == 2) prog.VertexIndices[nonSimTotal + pt.physLocalIdx] = v;
             }
         }
 
-        // BONE SKINNING LOGIC
-        if (jntAccIdx >= 0 && wgtAccIdx >= 0) {
-            T_Acc jAcc = accessors[jntAccIdx], wAcc = accessors[wgtAccIdx];
-            const uint16_t* jData16 = (jAcc.compType == 5123) ? (const uint16_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
-            const uint8_t* jData8 = (jAcc.compType == 5121) ? (const uint8_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
-            const float* wData = (const float*)(binData.data() + views[wAcc.view].offset + wAcc.offset);
+        T_Acc jAcc = jntAccIdx >= 0 ? accessors[jntAccIdx] : T_Acc{};
+        const uint16_t* jData16 = (jntAccIdx >= 0 && jAcc.compType == 5123) ? (const uint16_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
+        const uint8_t* jData8 = (jntAccIdx >= 0 && jAcc.compType == 5121) ? (const uint8_t*)(binData.data() + views[jAcc.view].offset + jAcc.offset) : nullptr;
+        T_Acc wAcc = wgtAccIdx >= 0 ? accessors[wgtAccIdx] : T_Acc{};
+        const uint8_t* wDataRaw = wgtAccIdx >= 0 ? (binData.data() + views[wAcc.view].offset + wAcc.offset) : nullptr;
 
+        if (jntAccIdx >= 0 && wgtAccIdx >= 0) {
             std::map<uint32_t, std::vector<C3DVertexBlend2>> simBoneMap, nonSimBoneMap;
             std::vector<bool> processedBones(fableTotalMemorySize, false);
 
@@ -771,13 +761,15 @@ namespace GltfMeshImporter {
                     if (pass == 1 && pt.type != 1) continue;
 
                     uint32_t fIdx = (pass == 0) ? pt.fableIdx : (nonSimTotal + pt.physLocalIdx);
-
-                    if (fIdx >= processedBones.size()) continue;
-                    if (processedBones[fIdx]) continue;
+                    if (fIdx >= processedBones.size() || processedBones[fIdx]) continue;
                     processedBones[fIdx] = true;
 
                     for (int k = 0; k < 4; k++) {
-                        float w = wData[i * 4 + k];
+                        float w = 0.0f;
+                        if (wAcc.compType == 5126) w = ((const float*)wDataRaw)[i * 4 + k];
+                        else if (wAcc.compType == 5123) w = ((const uint16_t*)wDataRaw)[i * 4 + k] / 65535.0f;
+                        else if (wAcc.compType == 5121) w = ((const uint8_t*)wDataRaw)[i * 4 + k] / 255.0f;
+
                         if (w > 0.001f) {
                             uint32_t bone = jData16 ? jData16[i * 4 + k] : (jData8 ? jData8[i * 4 + k] : 0);
                             if (pt.type == 2 || pass == 1) simBoneMap[bone].push_back({ pt.physLocalIdx, w });
@@ -849,8 +841,18 @@ namespace GltfMeshImporter {
         for (const auto& v : viewObjs) views.push_back({ (int)ExtractFloatClean(v, "byteOffset", 0), (int)ExtractFloatClean(v, "byteLength", 0) });
 
         std::vector<std::string> accObjs = SplitArray(ExtractBlock(json, "accessors"));
-        struct Acc { int view, offset, count, compType; }; std::vector<Acc> accessors;
-        for (const auto& a : accObjs) accessors.push_back({ (int)ExtractFloatClean(a, "bufferView", 0), (int)ExtractFloatClean(a, "byteOffset", 0), (int)ExtractFloatClean(a, "count", 0), (int)ExtractFloatClean(a, "componentType", 0) });
+        struct Acc { int view, offset, count, compType; std::string type; };
+        std::vector<Acc> accessors;
+
+        for (const auto& a : accObjs) {
+            accessors.push_back({
+                (int)ExtractFloatClean(a, "bufferView", 0),
+                (int)ExtractFloatClean(a, "byteOffset", 0),
+                (int)ExtractFloatClean(a, "count", 0),
+                (int)ExtractFloatClean(a, "componentType", 0),
+                ExtractStringClean(a, "type") // <--- NEW: Extract the VEC3/VEC4 type string
+                });
+        }
 
         std::string materialsBlock = ExtractBlock(json, "materials");
         std::vector<std::string> matObjs = SplitArray(materialsBlock);
@@ -1030,7 +1032,7 @@ namespace GltfMeshImporter {
             outPrim.Compression.Offset[3] = 0.0f;
 
             outPrim.VertexCount = (uint32_t)uniqueVerts.size();
-            outPrim.VertexBuffer.resize(outPrim.VertexCount* outPrim.VertexStride, 0);
+            outPrim.VertexBuffer.resize(outPrim.VertexCount * outPrim.VertexStride, 0);
             uint8_t* vDest = outPrim.VertexBuffer.data();
 
             for (uint32_t v = 0; v < outPrim.VertexCount; v++) {
@@ -1379,8 +1381,18 @@ namespace GltfMeshImporter {
         for (const auto& v : viewObjs) views.push_back({ (int)ExtractFloatClean(v, "byteOffset", 0), (int)ExtractFloatClean(v, "byteLength", 0) });
 
         std::vector<std::string> accObjs = SplitArray(ExtractBlock(json, "accessors"));
-        struct Acc { int view, offset, count, compType; }; std::vector<Acc> accessors;
-        for (const auto& a : accObjs) accessors.push_back({ (int)ExtractFloatClean(a, "bufferView", 0), (int)ExtractFloatClean(a, "byteOffset", 0), (int)ExtractFloatClean(a, "count", 0), (int)ExtractFloatClean(a, "componentType", 0) });
+        struct Acc { int view, offset, count, compType; std::string type; };
+        std::vector<Acc> accessors;
+
+        for (const auto& a : accObjs) {
+            accessors.push_back({
+                (int)ExtractFloatClean(a, "bufferView", 0),
+                (int)ExtractFloatClean(a, "byteOffset", 0),
+                (int)ExtractFloatClean(a, "count", 0),
+                (int)ExtractFloatClean(a, "componentType", 0),
+                ExtractStringClean(a, "type") // <--- NEW: Extract the VEC3/VEC4 type string
+                });
+        }
 
         std::string materialsBlock = ExtractBlock(json, "materials");
         std::vector<std::string> matObjs = SplitArray(materialsBlock);
@@ -1790,8 +1802,18 @@ namespace GltfMeshImporter {
         for (const auto& v : viewObjs) views.push_back({ (int)ExtractFloatClean(v, "byteOffset", 0), (int)ExtractFloatClean(v, "byteLength", 0) });
 
         std::vector<std::string> accObjs = SplitArray(ExtractBlock(json, "accessors"));
-        struct Acc { int view, offset, count, compType; }; std::vector<Acc> accessors;
-        for (const auto& a : accObjs) accessors.push_back({ (int)ExtractFloatClean(a, "bufferView", 0), (int)ExtractFloatClean(a, "byteOffset", 0), (int)ExtractFloatClean(a, "count", 0), (int)ExtractFloatClean(a, "componentType", 0) });
+        struct Acc { int view, offset, count, compType; std::string type; };
+        std::vector<Acc> accessors;
+
+        for (const auto& a : accObjs) {
+            accessors.push_back({
+                (int)ExtractFloatClean(a, "bufferView", 0),
+                (int)ExtractFloatClean(a, "byteOffset", 0),
+                (int)ExtractFloatClean(a, "count", 0),
+                (int)ExtractFloatClean(a, "componentType", 0),
+                ExtractStringClean(a, "type") // <--- NEW: Extract the VEC3/VEC4 type string
+                });
+        }
 
         std::string skinsBlock = ExtractBlock(json, "skins");
         std::vector<std::string> skinObjs = SplitArray(skinsBlock);

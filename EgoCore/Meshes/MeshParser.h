@@ -765,15 +765,17 @@ struct C3DMeshContent {
 
     void AutoCalculateBounds() {
         if (!IsParsed || Primitives.empty()) return;
-        float min[3] = { 1e9, 1e9, 1e9 };
-        float max[3] = { -1e9, -1e9, -1e9 };
+        float min[3] = { 1e9f, 1e9f, 1e9f };
+        float max[3] = { -1e9f, -1e9f, -1e9f };
 
         for (const auto& p : Primitives) {
             int reps = (p.RepeatingMeshReps > 1) ? p.RepeatingMeshReps : 1;
             int totalVertsToRead = p.VertexCount * reps;
 
-            // Type 2 and Type 4 meshes store raw floats regardless of the InitFlags
-            bool isPosComp = p.IsCompressed;
+            // 1. Your fix: precise bitmask for position compression (Stride 20 vs 28/36)
+            bool isPosComp = (p.InitFlags & 4) != 0 && (p.InitFlags & 0x10) == 0;
+
+            // 2. Untouched original logic: Type 2 and Type 4 meshes store raw floats regardless
             if (MeshType == 4 || (p.VertexStride == 36 && p.AnimatedBlockCount == 0)) isPosComp = false;
             if (reps > 1) isPosComp = false;
 
@@ -796,7 +798,9 @@ struct C3DMeshContent {
             }
         }
 
-        memcpy(BoundingBoxMin, min, 12); memcpy(BoundingBoxMax, max, 12);
+        memcpy(BoundingBoxMin, min, 12);
+        memcpy(BoundingBoxMax, max, 12);
+
         BoundingSphereCenter[0] = (min[0] + max[0]) * 0.5f;
         BoundingSphereCenter[1] = (min[1] + max[1]) * 0.5f;
         BoundingSphereCenter[2] = (min[2] + max[2]) * 0.5f;
@@ -806,7 +810,8 @@ struct C3DMeshContent {
             int reps = (p.RepeatingMeshReps > 1) ? p.RepeatingMeshReps : 1;
             int totalVertsToRead = p.VertexCount * reps;
 
-            bool isPosComp = p.IsCompressed;
+            // Apply the exact same logic for the Sphere pass
+            bool isPosComp = (p.InitFlags & 4) != 0 && (p.InitFlags & 0x10) == 0;
             if (MeshType == 4 || (p.VertexStride == 36 && p.AnimatedBlockCount == 0)) isPosComp = false;
             if (reps > 1) isPosComp = false;
 
@@ -830,7 +835,7 @@ struct C3DMeshContent {
                 if (dSq > maxDistSq) maxDistSq = dSq;
             }
         }
-        BoundingSphereRadius = sqrtf(maxDistSq);
+        BoundingSphereRadius = std::sqrt(maxDistSq);
     }
 
     std::vector<uint8_t> SerializeUncompressed() const {
