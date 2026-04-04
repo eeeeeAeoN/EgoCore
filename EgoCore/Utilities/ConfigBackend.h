@@ -11,6 +11,7 @@ struct AppConfig {
     std::vector<std::string> AutoLoadBanks;
     bool IsConfigured = false;
     bool SkipFrontend = false;
+    bool ModSystemDirty = false;
     bool ShowDeleteConfirm = true;
     bool ShowAddConfirm = true;
     bool ShowBankDeleteConfirm = true;
@@ -56,6 +57,7 @@ inline void SaveConfig() {
         file << "ShowUnsavedChangesWarning=" << (g_AppConfig.ShowUnsavedChangesWarning ? "1" : "0") << "\n";
         file << "ShowUnsavedChangesWarning=" << (g_AppConfig.ShowUnsavedChangesWarning ? "1" : "0") << "\n";
         file << "SkipFrontend=" << (g_AppConfig.SkipFrontend ? "1" : "0") << "\n";
+        file << "ModSystemDirty=" << (g_AppConfig.ModSystemDirty ? "1" : "0") << "\n";
         file.close();
     }
 }
@@ -87,7 +89,8 @@ inline void LoadConfig() {
             else if (line.find("ShowBankDeleteConfirm=") == 0) g_AppConfig.ShowBankDeleteConfirm = (line.substr(22) == "1");
             else if (line.find("ShowUnsavedChangesWarning=") == 0) g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
             else if (line.find("ShowUnsavedChangesWarning=") == 0) g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
-            else if (line.find("SkipFrontend=") == 0) g_AppConfig.SkipFrontend = (line.substr(13) == "1"); // Add this line
+            else if (line.find("SkipFrontend=") == 0) g_AppConfig.SkipFrontend = (line.substr(13) == "1");
+            else if (line.find("ModSystemDirty=") == 0) g_AppConfig.ModSystemDirty = (line.substr(15) == "1");
         }
         file.close();
     }

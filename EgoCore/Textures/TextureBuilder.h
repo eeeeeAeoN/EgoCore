@@ -167,7 +167,10 @@ public:
         int mips = 1;
         if (opts.GenerateMipmaps) {
             int mw = physW, mh = physH;
-            while (mw > 1 || mh > 1) {
+            // DXT blocks cannot be smaller than 4x4. ARGB can go down to 1x1.
+            int minDim = (opts.Format == ETextureFormat::ARGB8888) ? 1 : 4;
+
+            while (mw > minDim || mh > minDim) {
                 mips++;
                 mw = (mw > 1) ? mw >> 1 : 1;
                 mh = (mh > 1) ? mh >> 1 : 1;
@@ -256,7 +259,13 @@ public:
         int mips = 1;
         if (opts.GenerateMipmaps) {
             int mw = physW, mh = physH;
-            while (mw > 1 || mh > 1) { mips++; mw = (mw > 1) ? mw >> 1 : 1; mh = (mh > 1) ? mh >> 1 : 1; }
+            int minDim = (opts.Format == ETextureFormat::ARGB8888) ? 1 : 4;
+
+            while (mw > minDim || mh > minDim) {
+                mips++;
+                mw = (mw > 1) ? mw >> 1 : 1;
+                mh = (mh > 1) ? mh >> 1 : 1;
+            }
         }
         if (opts.ForceMipLevels > 0) mips = opts.ForceMipLevels;
         header.MipmapLevels = mips;

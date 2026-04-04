@@ -55,6 +55,10 @@ static int g_EditingTargetIndex = -1;
 static char g_BoneSearchBuf[128] = "";
 static bool g_PreserveCamera = false;
 static bool g_ShowCloth = false;
+static bool g_ExportTextures = true;
+static bool g_ExportAnimation = true;
+static bool g_ShowExportPopup = false;
+static bool g_TriggerExportPopup = false;
 
 struct VolumeBoxState {
     bool IsBoxMode = false;
@@ -716,35 +720,80 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Export to glTF")) {
-        std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
-        if (!savePath.empty()) {
-            for (auto& b : g_OpenBanks) FlushStagedEntries(&b);
-            if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
-            std::string expDir = savePath.substr(0, savePath.find_last_of("\\/") + 1);
-            auto extFunc = [expDir](int id) { return ExtractTextureForGltf(id, expDir); };
-
-            if (g_BBMParser.IsParsed) GltfExporter::ExportBBM(g_BBMParser, savePath);
-            else if (g_ActiveMeshContent.IsParsed) GltfExporter::Export(g_ActiveMeshContent, savePath, nullptr, 6, extFunc);
-        }
+    if (ImGui::Button("Export")) {
+        g_TriggerExportPopup = true;
     }
 
-    if (g_ActiveMeshContent.IsParsed && g_PreviewAnimParser.Data.IsParsed) {
-        ImGui::SameLine();
-        if (ImGui::Button("Export Mesh + Anim (glTF)")) {
-            std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
-            if (!savePath.empty()) {
-                for (auto& b : g_OpenBanks) FlushStagedEntries(&b);
-                if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
-                GltfExporter::Export(g_ActiveMeshContent, savePath, &g_PreviewAnimParser, g_SelectedAnimType);
+    if (g_TriggerExportPopup) {
+        ImGui::OpenPopup("Export Options");
+        g_ShowExportPopup = true;
+        g_TriggerExportPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Export Options", &g_ShowExportPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Checkbox("Export Textures", &g_ExportTextures);
+
+        bool canExportAnim = g_ActiveMeshContent.IsParsed && g_PreviewAnimParser.Data.IsParsed;
+
+        if (!canExportAnim) {
+            ImGui::BeginDisabled();
+            g_ExportAnimation = false;
+        }
+
+        ImGui::Checkbox("Export Animation", &g_ExportAnimation);
+
+        if (!canExportAnim) {
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("No animation is currently loaded/playing.");
             }
         }
-        if (ImGui::IsItemHovered()) {
-            std::string tooltip = "Exports the mesh along with the currently playing animation.";
+        else if (ImGui::IsItemHovered()) {
+            std::string tooltip = "Exports the mesh with the currently playing animation.";
             if (g_SelectedAnimType == 7) tooltip += "\nDelta Animation: Baked to Bind Pose.";
             if (g_SelectedAnimType == 9) tooltip += "\nPartial Animation: Only masked bones are exported.";
             ImGui::SetTooltip("%s", tooltip.c_str());
         }
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Export", ImVec2(120, 0))) {
+            std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+            if (!savePath.empty()) {
+                for (auto& b : g_OpenBanks) FlushStagedEntries(&b);
+                if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
+                std::string expDir = savePath.substr(0, savePath.find_last_of("\\/") + 1);
+
+                std::function<std::string(int)> finalExtFunc = nullptr;
+                if (g_ExportTextures) {
+                    finalExtFunc = [expDir](int id) { return ExtractTextureForGltf(id, expDir); };
+                }
+
+                if (g_BBMParser.IsParsed) {
+                    GltfExporter::ExportBBM(g_BBMParser, savePath);
+                }
+                else if (g_ActiveMeshContent.IsParsed) {
+                    const AnimParser* animToExport = nullptr;
+                    int animTypeToExport = 6;
+
+                    if (g_ExportAnimation && canExportAnim) {
+                        animToExport = &g_PreviewAnimParser;
+                        animTypeToExport = g_SelectedAnimType;
+                    }
+
+                    GltfExporter::Export(g_ActiveMeshContent, savePath, animToExport, animTypeToExport, finalExtFunc);
+                }
+            }
+            g_ShowExportPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowExportPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     ImGui::SameLine();
@@ -816,6 +865,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 g_MeshRenderer.RenderVolumes(ctx, viewportWidth, avail.y, v.Planes, false);
             }
         }
+    }
+
+    if (g_ShowCloth && !g_BBMParser.IsParsed && g_ActiveMeshContent.IsParsed) {
+        g_MeshRenderer.RenderClothSpheres(ctx, viewportWidth, avail.y, g_ActiveMeshContent.Primitives);
     }
 
     if (g_ShowPhysicsOverlay && g_OverlayBBMParser.IsParsed && !g_BBMParser.IsParsed) {
@@ -1277,6 +1330,18 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                                 if (ImGui::Checkbox("Enable Bezier (Curved Cloth)", &bezierEn)) { prog.BezierEnable = bezierEn ? 1 : 0; changed = true; }
 
                                 ImGui::TreePop();
+
+                                if (ImGui::TreeNodeEx("Collision Boundary (Sphere)", ImGuiTreeNodeFlags_DefaultOpen)) {
+                                    ImGui::TextDisabled("Prevents cloth from clipping into the body.");
+
+                                    ImGui::SetNextItemWidth(200);
+                                    if (ImGui::DragFloat3("Sphere Center", prim.SphereCenter, 0.05f)) changed = true;
+
+                                    ImGui::SetNextItemWidth(150);
+                                    if (ImGui::DragFloat("Sphere Radius", &prim.SphereRadius, 0.05f, 0.0f, 100.0f)) changed = true;
+
+                                    ImGui::TreePop();
+                                }
                             }
 
                             if (changed && saveCallback) saveCallback();

@@ -317,7 +317,9 @@ namespace GltfExporter {
                             float cz = sim.Positions[i * 3 + 2];
                             if (std::abs(vx - cx) < 0.001f && std::abs(vy - cy) < 0.001f && std::abs(vz - cz) < 0.001f) {
                                 isSim = true;
-                                simAlpha = (i < sim.SimulationAlphas.size()) ? sim.SimulationAlphas[i] : 1.0f;
+                                if (i < sim.SimulationAlphas.size()) {
+                                    memcpy(&simAlpha, &sim.SimulationAlphas[i], 4);
+                                }
                                 break;
                             }
                         }
@@ -427,6 +429,7 @@ namespace GltfExporter {
             extras.imbue(std::locale("C"));
             extras << "\"AvgTextureStretch\":" << prim.AvgTextureStretch
                 << ",\"SphereRadius\":" << prim.SphereRadius
+                << ",\"SphereCenter\":[" << prim.SphereCenter[0] << "," << prim.SphereCenter[1] << "," << prim.SphereCenter[2] << "]"
                 << ",\"Fable_InitFlags\":" << prim.InitFlags;
 
             if (isPosComp) {

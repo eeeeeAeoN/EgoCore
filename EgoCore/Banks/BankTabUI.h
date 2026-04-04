@@ -9,8 +9,7 @@
 #include "FontProperties.h"
 #include "ParticleProperties.h"
 #include "StreamingFontProperties.h"
-#include "ModPackageCompiler.h"
-#include "ModPackageTracker.h"
+#include "ModManagerCompiler.h"
 #include <thread>
 
 static int g_ContextEntryIndex = -1;
@@ -19,7 +18,7 @@ static bool g_ShowAddEntryPopup = false;
 static bool g_ShowTexImportPopup = false;
 static std::string g_PendingImportPath = "";
 static int g_ImportFormat = 1;
-static int g_ImportType = 0; 
+static int g_ImportType = 0;
 static float g_ImportBumpFactor = 5.0f;
 static bool g_ScrollToSelected = false;
 static bool g_ShowAddLODPopup = false;
@@ -620,12 +619,12 @@ static void DrawBankTab() {
                         staged.EntryName = e.Name;
                         staged.EntryType = e.Type;
                         staged.BankType = bank.Type;
-                        staged.TypeName = GetEntryTypeName(bank.Type, e.Type, bank.FileName);
+                        staged.TypeName = GetEntryTypeName(bank.Type, e.Type, bank.FileName); // This is in ModManagerCompiler.h now
                         staged.BankName = bank.FileName;
                         staged.SourceFullPath = bank.FullPath;
                         staged.SubBankName = (bank.ActiveSubBankIndex >= 0 && bank.ActiveSubBankIndex < bank.SubBanks.size()) ? bank.SubBanks[bank.ActiveSubBankIndex].Name : "N/A";
 
-                        ModPackageTracker::ToggleMark(staged);
+                        ModPackageTracker::ToggleMark(staged); // This is in ModManagerCompiler.h now
                     }
                     ImGui::Separator();
 

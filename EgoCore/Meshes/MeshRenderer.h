@@ -770,6 +770,54 @@ public:
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     }
 
+    void RenderClothSpheres(ID3D11DeviceContext* ctx, float w, float h, const std::vector<C3DPrimitive>& primitives) {
+        if (!VS || !DebugVBuffer || primitives.empty()) return;
+
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        ctx->PSSetShader(PS_Solid, nullptr, 0);
+        ctx->RSSetState(RastStateSolid);
+
+        UINT stride = sizeof(GPUVertex); UINT offset = 0;
+        ctx->IASetVertexBuffers(0, 1, &DebugVBuffer, &stride, &offset);
+        ctx->IASetIndexBuffer(DebugIBuffer, DXGI_FORMAT_R32_UINT, 0);
+
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), w / h, 0.1f, 100000.0f);
+        XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
+        XMMATRIX worldCam = XMMatrixTranslation(CenterOffset.x, CenterOffset.y, CenterOffset.z) * XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
+
+        CBMatrix cb;
+        cb.HasAnimation = 0;
+        cb.Color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f); // Vivid Red
+
+        for (const auto& prim : primitives) {
+            // Only draw if this primitive actually has cloth physics and a radius > 0
+            if (prim.ClothPrimitives.empty() || prim.SphereRadius <= 0.001f) continue;
+
+            XMMATRIX sphereScaleTrans = XMMatrixScaling(prim.SphereRadius, prim.SphereRadius, prim.SphereRadius) * XMMatrixTranslation(prim.SphereCenter[0], prim.SphereCenter[1], prim.SphereCenter[2]);
+
+            // Ring 1 (XY Plane)
+            XMMATRIX ring1 = sphereScaleTrans * worldCam;
+            cb.WorldViewProj = XMMatrixTranspose(ring1 * view * proj);
+            ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+            ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+            // Ring 2 (XZ Plane)
+            XMMATRIX ring2 = XMMatrixRotationX(XM_PIDIV2) * sphereScaleTrans * worldCam;
+            cb.WorldViewProj = XMMatrixTranspose(ring2 * view * proj);
+            ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+            ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+
+            // Ring 3 (YZ Plane)
+            XMMATRIX ring3 = XMMatrixRotationY(XM_PIDIV2) * sphereScaleTrans * worldCam;
+            cb.WorldViewProj = XMMatrixTranspose(ring3 * view * proj);
+            ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
+            ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
+        }
+
+        // Restore topology
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    }
+
     void RenderVolumes(ID3D11DeviceContext* ctx, float w, float h, const std::vector<CPlane>& planes, bool isPhysics = false) {
         if (!VS || !DebugVBuffer || planes.empty()) return;
 

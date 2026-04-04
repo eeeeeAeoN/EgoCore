@@ -450,7 +450,7 @@ inline std::unique_ptr<LoadedBank> CreateBankFromDisk(const std::string& path) {
 }
 
 inline void LoadBank(const std::string& path) {
-    if (g_OpenBanks.size() >= 10) { g_BankStatus = "Limit reached."; return; }
+    if (g_OpenBanks.size() >= 25) { g_BankStatus = "Limit reached."; return; }
     for (const auto& b : g_OpenBanks) { if (b.FullPath == path) { g_BankStatus = "Bank already open."; return; } }
     auto newBank = CreateBankFromDisk(path);
     if (newBank) { g_OpenBanks.push_back(std::move(*newBank)); g_ActiveBankIndex = (int)g_OpenBanks.size() - 1; g_BankStatus = "Loaded: " + g_OpenBanks.back().FileName; }

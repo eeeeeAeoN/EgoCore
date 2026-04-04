@@ -59,11 +59,11 @@ struct InternalBankInfo {
 enum class EFilterMode { Name, ID, Speaker };
 
 struct StagedTextureInfo {
-    ETextureFormat TargetFormat = ETextureFormat::DXT3;
-    CGraphicHeader Header;
-    std::vector<std::vector<uint8_t>> RawFrames; 
-};
+    ETextureFormat TargetFormat = ETextureFormat::Unknown;
 
+    CGraphicHeader Header;
+    std::vector<std::vector<uint8_t>> RawFrames;
+};
 
 struct CLipSyncData;
 
@@ -88,6 +88,7 @@ struct LoadedBank {
     EBankType Type = EBankType::Unknown;
 
     uint32_t FileVersion = 2;
+    bool IsDirty = false;
 
     std::vector<InternalBankInfo> SubBanks;
     int ActiveSubBankIndex = -1;

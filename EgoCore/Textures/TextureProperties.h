@@ -4,14 +4,15 @@
 #include "TextureParser.h"
 #include "TextureExporter.h"
 #include "ImageBackend.h" 
+#include "TextureBuilder.h"
 #include <d3d11.h>
 #include <string>
 #include <vector>
 
-void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& filePath);
+void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& filePath, TextureBuilder::ImportOptions opts);
 void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx);
 void RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName);
-void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath);
+void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath, TextureBuilder::ImportOptions opts);
 
 extern ID3D11Device* g_pd3dDevice;
 
@@ -222,6 +223,10 @@ struct TextureViewport {
 };
 
 static TextureViewport g_TexViewport;
+static bool g_IsAddFrame = false;
+static std::string g_TexFrameImportPath = "";
+static int g_PendingImportTargetFrame = 0;
+static TextureBuilder::ImportOptions g_ImportOptions;
 
 inline void DrawTextureProperties() {
     CreateBackgroundTexture();
@@ -273,12 +278,17 @@ inline void DrawTextureProperties() {
     if (entry.Type != 0x4 && entry.Type != 0x5) {
 
 
-        ImGui::SameLine();
-        if (ImGui::Button("Add Frame")) {
-            std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
-            if (!path.empty()) {
-                AddTextureFrame(&bank, bank.SelectedEntryIndex, path);
-                g_TexViewport.Release();
+        if (entry.Type != 0x4 && entry.Type != 0x5) {
+            ImGui::SameLine();
+            if (ImGui::Button("Add Frame")) {
+                std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
+                if (!path.empty()) {
+                    g_TexFrameImportPath = path;
+                    g_IsAddFrame = true;
+                    // Automatically default to the current texture's format!
+                    g_ImportOptions.Format = g_TextureParser.DecodedFormat;
+                    ImGui::OpenPopup("Import Options");
+                }
             }
         }
 
@@ -435,9 +445,53 @@ inline void DrawTextureProperties() {
     if (ImGui::Button("Import")) {
         std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
         if (!path.empty()) {
-            int targetFrame = isFlatSeq ? 0 : g_SelectedFrame;
-            ReplaceTextureFrame(&bank, bank.SelectedEntryIndex, targetFrame, path);
-            g_TexViewport.Release();
+            g_TexFrameImportPath = path;
+            g_IsAddFrame = false;
+            g_PendingImportTargetFrame = isFlatSeq ? 0 : g_SelectedFrame;
+            // Automatically default to the current texture's format!
+            g_ImportOptions.Format = g_TextureParser.DecodedFormat;
+            ImGui::OpenPopup("Import Options");
         }
+    }
+
+    if (ImGui::BeginPopupModal("Import Options", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const char* formats[] = { "Unknown", "DXT1", "DXT3", "DXT5", "ARGB8888", "NormalMap (DXT1)", "NormalMap (DXT5)" };
+
+        int currentFormat = (int)g_ImportOptions.Format;
+        if (ImGui::Combo("Format", &currentFormat, formats, IM_ARRAYSIZE(formats))) {
+            g_ImportOptions.Format = (ETextureFormat)currentFormat;
+        }
+
+        // Force mipmap generation behind the scenes
+        g_ImportOptions.GenerateMipmaps = true;
+        // Keep the builder's default power of 2 behavior, just hide the UI for it.
+
+        ImGui::Checkbox("Is Bumpmap", &g_ImportOptions.IsBumpmap);
+
+        if (g_ImportOptions.IsBumpmap) {
+            ImGui::SliderFloat("Bump Factor", &g_ImportOptions.BumpFactor, 0.1f, 10.0f);
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Import", ImVec2(120, 0))) {
+            if (g_IsAddFrame) {
+                AddTextureFrame(&bank, bank.SelectedEntryIndex, g_TexFrameImportPath, g_ImportOptions);
+            }
+            else {
+                ReplaceTextureFrame(&bank, bank.SelectedEntryIndex, g_PendingImportTargetFrame, g_TexFrameImportPath, g_ImportOptions);
+            }
+            g_TexViewport.Release();
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SetItemDefaultFocus();
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
     }
 }

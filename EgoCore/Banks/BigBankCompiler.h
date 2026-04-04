@@ -10,7 +10,7 @@ public:
     static bool Compile(LoadedBank* bank) {
         if (!bank || !bank->Stream) return false;
 
-        std::string tempPath = bank->FullPath + ".tmp";
+        std::string tempPath = bank->FullPath + ".build_tmp";
         std::ofstream out(tempPath, std::ios::binary);
         if (!out.is_open()) return false;
 

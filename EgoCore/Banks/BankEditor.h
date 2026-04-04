@@ -328,11 +328,12 @@ bool CreateNewTextureEntry(LoadedBank* bank, const std::string& filePath, ETextu
     return true;
 }
 
-inline void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& filePath) {
+inline void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& filePath, TextureBuilder::ImportOptions opts) {
     if (!bank->StagedEntries.count(entryIdx)) SaveEntryChanges(bank);
     auto& stagedTex = bank->StagedEntries[entryIdx].Texture;
 
-    int x, y, c; stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
+    int x, y, c;
+    stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
     if (!pixels) { g_BankStatus = "Error loading frame."; return; }
 
     int physW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
@@ -342,15 +343,19 @@ inline void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& f
     stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4);
     stbi_image_free(pixels);
 
-    bool isBump = (bank->Entries[entryIdx].Type == 2 || bank->Entries[entryIdx].Type == 3);
-    if (isBump) {
-        TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, g_ImportBumpFactor);
+    // 1. Use the modal's options for bump map conversion
+    if (opts.IsBumpmap) {
+        TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, opts.BumpFactor);
     }
 
     stagedTex->RawFrames.push_back(rgba);
     stagedTex->Header.FrameCount = (uint16_t)stagedTex->RawFrames.size();
 
-    SelectEntry(bank, entryIdx); g_BankStatus = "Frame Added (Staged).";
+    // 2. CRITICAL FIX: Sync the staged texture's format to what was selected in the UI!
+    stagedTex->TargetFormat = opts.Format;
+
+    SelectEntry(bank, entryIdx);
+    g_BankStatus = "Frame Added (Staged).";
 }
 
 inline void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx) {
@@ -367,11 +372,12 @@ inline void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx) {
     }
 }
 
-inline void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath) {
+inline void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath, TextureBuilder::ImportOptions opts) {
     if (!bank->StagedEntries.count(entryIdx)) SaveEntryChanges(bank);
     auto& stagedTex = bank->StagedEntries[entryIdx].Texture;
 
-    int x, y, c; stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
+    int x, y, c;
+    stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
     if (!pixels) { g_BankStatus = "Error loading frame."; return; }
 
     int physW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
@@ -381,14 +387,20 @@ inline void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, co
     stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4);
     stbi_image_free(pixels);
 
-    bool isBump = (bank->Entries[entryIdx].Type == 2 || bank->Entries[entryIdx].Type == 3);
-    if (isBump) {
-        TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, g_ImportBumpFactor);
+    // 1. Use our new options to determine bump map conversion
+    if (opts.IsBumpmap) {
+        TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, opts.BumpFactor);
     }
 
     if (frameIdx < stagedTex->RawFrames.size()) {
         stagedTex->RawFrames[frameIdx] = rgba;
-        SelectEntry(bank, entryIdx); g_BankStatus = "Frame Replaced (Staged).";
+
+        // 2. CRITICAL FIX: Update the staged texture's format!
+        // This ensures the compiler uses the format you selected in the UI.
+        stagedTex->TargetFormat = opts.Format;
+
+        SelectEntry(bank, entryIdx);
+        g_BankStatus = "Frame Replaced (Staged).";
     }
 }
 
@@ -560,12 +572,15 @@ inline void CreateNewDialogueEntry(LoadedBank* bank) {
 inline void CreateNewTextEntry(LoadedBank* bank, int type) {
     if (!bank) return;
     BankEntry newEntry; newEntry.ID = GetNextFreeID(bank); newEntry.Type = type; newEntry.Offset = 0; newEntry.Size = 0;
-    newEntry.Name = "New_Entry_" + std::to_string(newEntry.ID); newEntry.FriendlyName = newEntry.Name;
+
+    newEntry.Name = "NEW_ENTRY_" + std::to_string(newEntry.ID);
+    newEntry.FriendlyName = newEntry.Name;
 
     StagedEntry staged;
 
     if (type == 0) {
-        CTextEntry t; t.Content = L"New Text Content"; t.Identifier = "NEW_ID_" + std::to_string(newEntry.ID);
+        CTextEntry t; t.Content = L"New Text Content";
+        t.Identifier = newEntry.Name;
         staged.Text = std::make_shared<CTextEntry>(t);
     }
     else {
@@ -871,30 +886,48 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             int h = staged.Texture->Header.Height ? staged.Texture->Header.Height : staged.Texture->Header.FrameHeight;
 
             newBytes.clear();
-            newInfo.clear();
+
+            // 1. Grab the ORIGINAL 34-byte Info chunk from the cache. 
+            // This guarantees we NEVER destroy Fable's internal DX8 PixelFormatInit or Engine Flags!
+            newInfo = bank->SubheaderCache[idx];
+            if (newInfo.size() < sizeof(CGraphicHeader)) {
+                newInfo.resize(sizeof(CGraphicHeader) + sizeof(CPixelFormatInit));
+            }
+            CGraphicHeader* headerToPatch = (CGraphicHeader*)newInfo.data();
 
             for (size_t i = 0; i < staged.Texture->RawFrames.size(); i++) {
                 auto result = TextureBuilder::CompileFromRGBA(staged.Texture->RawFrames[i], w, h, opts);
                 if (i == 0) {
-                    staged.Texture->Header.MipmapLevels = ((CGraphicHeader*)result.HeaderInfo.data())->MipmapLevels;
-                    staged.Texture->Header.FrameDataSize = ((CGraphicHeader*)result.HeaderInfo.data())->FrameDataSize;
-                    newInfo = result.HeaderInfo;
+                    // 2. ONLY patch the physical sizes. Leave all other engine flags completely untouched!
+                    headerToPatch->MipmapLevels = ((CGraphicHeader*)result.HeaderInfo.data())->MipmapLevels;
+                    headerToPatch->FrameDataSize = ((CGraphicHeader*)result.HeaderInfo.data())->FrameDataSize;
                 }
                 newBytes.insert(newBytes.end(), result.FullData.begin(), result.FullData.end());
             }
 
-            staged.Texture->Header.FrameCount = (uint16_t)staged.Texture->RawFrames.size();
+            // 3. Force MipSize0 to 0 (bypass LZO decompression) and sync the frame count
+            headerToPatch->FrameCount = (uint16_t)staged.Texture->RawFrames.size();
+            headerToPatch->MipSize0 = 0;
 
-            if (staged.Texture->Header.FrameCount > 1) {
-                staged.Texture->Header.MipSize0 = 0;
-                if (e.Type == 0) e.Type = 1;
-                else if (e.Type == 2) e.Type = 3;
+            // 4. Safely sync transparency without overriding Fable's Alpha Test cutout flag (Type 2)
+            switch (opts.Format) {
+            case ETextureFormat::DXT1:
+            case ETextureFormat::NormalMap_DXT1:
+                if (headerToPatch->TransparencyType != 2) headerToPatch->TransparencyType = 0;
+                break;
+            case ETextureFormat::DXT3: headerToPatch->TransparencyType = 1; break;
+            case ETextureFormat::DXT5:
+            case ETextureFormat::NormalMap_DXT5: headerToPatch->TransparencyType = 3; break;
+            case ETextureFormat::ARGB8888: headerToPatch->TransparencyType = 255; break;
+            default: break;
             }
 
-            if (newInfo.size() >= sizeof(CGraphicHeader)) {
-                memcpy(newInfo.data(), &staged.Texture->Header, sizeof(CGraphicHeader));
-            }
+            // Sync the patched header back to the staged texture so the EgoCore UI updates correctly
+            memcpy(&staged.Texture->Header, headerToPatch, sizeof(CGraphicHeader));
+
             e.InfoSize = (uint32_t)newInfo.size();
+
+            // WE NO LONGER MUTATE e.Type HERE. Fable relies on strictly hardcoded bank types!
         }
         else if (staged.Text || staged.TextGroup || staged.NarratorList) {
             CTextParser tempParser;
@@ -912,12 +945,10 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             newInfo.resize(4); memcpy(newInfo.data(), &duration, 4);
             e.InfoSize = 4;
         }
-
         else if (staged.Particle) {
             newBytes = ParticleCompiler::Compile(*staged.Particle);
             e.InfoSize = 0; // Particles do not use TOC subheader metadata
         }
-
         else if (staged.ShaderCode) {
             printf("[Shader] FlushStagedEntries reached for idx %d\n", idx);
             printf("[Shader] Code length: %zu\n", staged.ShaderCode->length());
@@ -944,10 +975,8 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 e.InfoSize = 0;
             }
             else {
-                // --- TRIGGER THE POPUP HERE ---
                 g_ShaderCompileError = compileError;
                 g_ShowShaderErrorPopup = true;
-
                 g_BankStatus = "Shader Compile Error: Check Popup";
                 continue;
             }
@@ -1214,7 +1243,11 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         }
         if (g_TextureParser.IsParsed) {
             if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {
-                staged = bank->StagedEntries[bank->SelectedEntryIndex];
+                // Entry already staged (e.g. by ReplaceTextureFrame/AddTextureFrame).
+                // Those functions write directly to StagedEntries — do NOT clobber their work.
+                g_BankStatus = "Texture already staged.";
+                UpdateFilter(*bank);
+                return;
             }
             else {
                 auto texInfo = std::make_shared<StagedTextureInfo>();
@@ -1244,6 +1277,9 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         else {
             g_TextParser.TextData.SpeechBank = EnforceLugExtension(g_TextParser.TextData.SpeechBank);
             if (!g_TextParser.TextData.SpeechBank.empty()) SaveAssociatedHeader(g_TextParser.TextData.SpeechBank);
+            e.Name = g_TextParser.TextData.Identifier;
+            e.FriendlyName = e.Name;
+
             staged.Text = std::make_shared<CTextEntry>(g_TextParser.TextData);
         }
         g_IsTextDirty = false;

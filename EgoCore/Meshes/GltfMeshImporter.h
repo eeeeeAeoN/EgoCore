@@ -202,7 +202,6 @@ namespace GltfMeshImporter {
         }
     }
 
-
     struct Mat4 { float m[16]; };
 
     static Mat4 Identity() { return { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }; }
@@ -938,8 +937,17 @@ namespace GltfMeshImporter {
             outPrim.MaterialIndex = -1;
 
             outPrim.AvgTextureStretch = ExtractFloatClean(meshExtras, "AvgTextureStretch", 0.1f);
-            outPrim.SphereRadius = ExtractFloatClean(meshExtras, "SphereRadius", 0.0f);
-            memset(outPrim.SphereCenter, 0, 12);
+            outPrim.SphereRadius = ExtractFloatClean(meshExtras, "SphereRadius", 0.0f); // Defaults to 0.0f if not in GLTF
+
+            std::vector<float> sCenter = GetJsonFloatArray(meshExtras, "SphereCenter");
+            if (sCenter.size() >= 3) {
+                outPrim.SphereCenter[0] = sCenter[0];
+                outPrim.SphereCenter[1] = sCenter[1];
+                outPrim.SphereCenter[2] = sCenter[2];
+            }
+            else {
+                memset(outPrim.SphereCenter, 0, 12);
+            }
 
             struct BaseVertex { float p[3], n[3], u[2]; };
             std::vector<BaseVertex> uniqueVerts;

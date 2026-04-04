@@ -4,9 +4,10 @@
 #include "DefExplorer.h"
 #include "BankTabUI.h" 
 #include "InputManager.h"
-#include "ModPackageUI.h"
-#include "ModPackageCompiler.h"
-#include "ModPackageTracker.h"
+#include "ModManagerUI.h"
+
+#include <windows.h>
+#include <shellapi.h>
 
 static bool g_HasInitialized = false;
 static bool g_TriggerKeybindPopup = false;
@@ -16,7 +17,8 @@ inline float g_UIScale = 1.0f;
 enum class EAppState {
     Setup,
     Frontend,
-    ModCreator
+    ModCreator,
+    ModsManager
 };
 
 inline EAppState g_CurrentAppState = EAppState::Setup;
@@ -30,6 +32,38 @@ static void UpdateUIScale(float scale) {
     style.ScaleAllSizes(scale);
 }
 
+static void DrawLaunchPopup() {
+    if (g_LaunchState == 1) {
+        ImGui::OpenPopup("Launching Fable");
+        g_LaunchState = 2;
+    }
+
+    if (ImGui::BeginPopupModal("Launching Fable", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove)) {
+        ImGui::Text("Preparing to launch Fable...");
+        ImGui::Dummy(ImVec2(0, 10));
+
+        if (g_AppConfig.ModSystemDirty) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Compiling modified banks and applying load order...");
+            ImGui::Text("Please wait. The application will exit automatically when finished.");
+        }
+        else {
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Load order clean. Launching directly...");
+        }
+
+        // Delay for a few frames to allow ImGui to calculate the auto-resize layout
+        // and for the graphics API to physically swap the buffers to the monitor.
+        if (g_LaunchState >= 2 && g_LaunchState < 6) {
+            g_LaunchState++;
+        }
+        else if (g_LaunchState == 6) {
+            ModManagerBackend::ProcessModsAndLaunch();
+            // ProcessModsAndLaunch calls exit(0), so the code will never proceed past this line.
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
 static void DrawFrontendHub() {
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(400, 450));
@@ -39,16 +73,17 @@ static void DrawFrontendHub() {
         ImGui::SetWindowFontScale(1.5f);
         ImGui::Text("Ego Core");
         ImGui::SetWindowFontScale(1.0f);
-        //ImGui::TextDisabled("Fable Modding Suite");
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 10));
 
         if (ImGui::Button("Launch Fable", ImVec2(-1, 50))) {
-            g_BankStatus = "Launching Fable...";
+            g_LaunchState = 1; // Trigger the popup cascade
         }
         ImGui::Dummy(ImVec2(0, 5));
 
         if (ImGui::Button("Mods Manager", ImVec2(-1, 50))) {
+            ModManagerBackend::InitializeAndLoad();
+            g_CurrentAppState = EAppState::ModsManager;
         }
         ImGui::Dummy(ImVec2(0, 5));
 
@@ -99,6 +134,9 @@ static void DrawBankExplorer() {
         g_HasInitialized = true;
     }
 
+    // DRAW THE POPUP GLOBALLY SO IT CAN NEVER BE BLOCKED
+    DrawLaunchPopup();
+
     if (g_CurrentAppState == EAppState::Setup) {
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(400, 200));
@@ -128,6 +166,16 @@ static void DrawBankExplorer() {
         DrawFrontendHub();
         return;
     }
+
+    // --- MOD MANAGER TRAP ---
+    if (g_CurrentAppState == EAppState::ModsManager) {
+        DrawModManagerWindow();
+        return;
+    }
+
+    // =====================================================================
+    // EVERYTHING BELOW THIS LINE BELONGS TO THE EDITOR / CREATOR UI
+    // =====================================================================
 
     // --- GLOBAL SHORTCUT LISTENER ---
     if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
@@ -296,7 +344,10 @@ static void DrawBankExplorer() {
             if (ImGui::MenuItem("Create Mod Package")) {
                 g_ShowModPackageWindow = true;
             }
-            if (ImGui::MenuItem("Run Fable")) g_BankStatus = "Run Fable clicked (Placeholder)";
+            if (ImGui::MenuItem("Run Fable")) {
+                // FIXED: Trigger the compiler popup instead of hard-exiting
+                g_LaunchState = 1;
+            }
             if (ImGui::MenuItem("Change Game Folder")) {
                 std::string root = OpenFolderDialog();
                 if (!root.empty()) { InitializeSetup(root); LoadSystemBinaries(root); }
@@ -505,6 +556,7 @@ static void DrawBankExplorer() {
         }
         ImGui::EndPopup();
     }
+
     if (g_CurrentAppState == EAppState::ModCreator) {
         DrawModPackageWindow();
     }

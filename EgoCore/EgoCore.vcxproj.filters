@@ -282,13 +282,13 @@
     <ClInclude Include="InputManager.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="ModPackageUI.h">
+    <ClInclude Include="Mods\ModManagerBackend.h">
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
-    <ClInclude Include="ModPackageCompiler.h">
+    <ClInclude Include="Mods\ModManagerCompiler.h">
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
-    <ClInclude Include="ModPackageTracker.h">
+    <ClInclude Include="Mods\ModManagerUI.h">
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
   </ItemGroup>
