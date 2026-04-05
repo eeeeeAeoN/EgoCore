@@ -8,6 +8,10 @@
 #include <algorithm>
 #include "InputManager.h"
 
+struct DefDragPayload { int ContextIndex; char Category[64]; int EntryIndex; };
+struct HeaderDragPayload { int EnumIndex; };
+struct EventDragPayload { int FileType; int EventIndex; };
+
 static void DrawDefTab() {
     static float leftPaneWidth = 350.0f;
     if (leftPaneWidth < 50.0f) leftPaneWidth = 50.0f;
@@ -17,7 +21,6 @@ static void DrawDefTab() {
     static bool triggerDeletePopup = false;
     static std::string typeToAddPending = "";
     static bool triggerAddPopup = false;
-    static bool triggerCompileSuccess = false;
 
     // Master helper to safely push whatever we are looking at right now
     auto PushCurrentDefState = [&]() {
@@ -61,28 +64,6 @@ static void DrawDefTab() {
         }
         return;
     }
-
-    // --- POPUPS FOR COMPILATION ---
-    if (g_IsCompiling) { ImGui::OpenPopup("Compiling..."); }
-    if (ImGui::BeginPopupModal("Compiling...", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::Text("%s", g_CompileStatus.c_str());
-        ImGui::Separator();
-        static int dots = 0; if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
-        std::string spinner = "Please wait"; for (int i = 0; i < dots; i++) spinner += ".";
-        ImGui::Text("%s", spinner.c_str());
-        if (!g_IsCompiling) { ImGui::CloseCurrentPopup(); triggerCompileSuccess = true; }
-        ImGui::EndPopup();
-    }
-
-    if (triggerCompileSuccess) { ImGui::OpenPopup("Compile Complete"); triggerCompileSuccess = false; }
-    if (ImGui::BeginPopupModal("Compile Complete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Successfully compiled definitions!");
-        ImGui::Text("Generated: frontend.bin & game.bin");
-        ImGui::Separator();
-        if (ImGui::Button("OK", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
-        ImGui::EndPopup();
-    }
-
 
     // --- LAYER 2: THE DEF CONTROL HEADER ---
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.12f, 1.0f));
@@ -237,6 +218,17 @@ static void DrawDefTab() {
                     if (ImGui::Selectable(label.c_str(), isSelected)) {
                         RequestLoadDef(type, k);
                     }
+
+                    // --- NEW: DRAG AND DROP SOURCE FOR DEFS ---
+                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                        DefDragPayload payload;
+                        payload.ContextIndex = g_DefWorkspace.ActiveContextIndex;
+                        snprintf(payload.Category, sizeof(payload.Category), "%s", type.c_str());                        payload.EntryIndex = k;
+                        
+                        ImGui::SetDragDropPayload("DEF_ENTRY_PAYLOAD", &payload, sizeof(DefDragPayload));
+                        ImGui::Text("Stage Def: %s", entries[k].Name.c_str());
+                        ImGui::EndDragDropSource();
+                    }
                 }
                 ImGui::TreePop();
             }
@@ -327,6 +319,58 @@ static void DrawDefTab() {
                 ImGui::PopFont();
                 fontToUse->Scale = oldScale;
 
+                // --- GO TO DEFINITION LOGIC ---
+                std::string hoveredWordOriginal = g_DefWorkspace.Editor.GetHoveredWord();
+
+                if (g_AppConfig.EnableLookupGeneration && g_Keybinds.LookupDefinition.IsDown() && g_DefWorkspace.Editor.IsHovered() && !hoveredWordOriginal.empty()) {
+
+                    std::string hoveredWord = hoveredWordOriginal;
+                    std::transform(hoveredWord.begin(), hoveredWord.end(), hoveredWord.begin(), ::toupper);
+
+                    bool isEnum = g_DefWorkspace.EnumMemberLookup.count(hoveredWord) > 0;
+                    bool isDef = g_DefWorkspace.DefEntryLookup.count(hoveredWord) > 0;
+
+                    if (isEnum || isDef) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Ctrl+Click to go to definition:");
+                        ImGui::Separator();
+
+                        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.2f, 0.4f, 0.8f, 1.0f));
+
+                        if (isDef) {
+                            auto& targets = g_DefWorkspace.DefEntryLookup[hoveredWord];
+                            for (const auto& target : targets) {
+                                ImGui::TextColored(ImVec4(0.8f, 1.0f, 0.6f, 1.0f), "Def:");
+                                ImGui::SameLine();
+                                ImGui::Text("[%s] %s", target.first.c_str(), hoveredWordOriginal.c_str());
+                            }
+                        }
+
+                        if (isEnum) {
+                            auto& targets = g_DefWorkspace.EnumMemberLookup[hoveredWord];
+                            for (int targetIdx : targets) {
+                                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.6f, 1.0f), "Header:");
+                                ImGui::SameLine();
+                                ImGui::Text("%s", g_DefWorkspace.AllEnums[targetIdx].Name.c_str());
+                            }
+                        }
+
+                        ImGui::PopStyleColor();
+                        ImGui::EndTooltip();
+
+                        if (ImGui::IsMouseClicked(0)) {
+                            if (isDef) {
+                                auto& targets = g_DefWorkspace.DefEntryLookup[hoveredWord];
+                                RequestLoadDef(targets[0].first, targets[0].second);
+                            }
+                            else if (isEnum) {
+                                auto& targets = g_DefWorkspace.EnumMemberLookup[hoveredWord];
+                                RequestLoadHeader(targets[0]);
+                            }
+                        }
+                    }
+                }
+
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl && g_Keybinds.SaveEntry.IsPressed()) SaveDefEntry(entry);
             }
         }
@@ -368,6 +412,14 @@ static void DrawDefTab() {
                     RequestLoadHeader(i);
                 }
                 if (isSelected) ImGui::SetItemDefaultFocus();
+
+                // --- NEW: DRAG AND DROP SOURCE FOR HEADERS ---
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    HeaderDragPayload payload = { i };
+                    ImGui::SetDragDropPayload("HEADER_ENTRY_PAYLOAD", &payload, sizeof(HeaderDragPayload));
+                    ImGui::Text("Stage Header: %s", g_DefWorkspace.AllEnums[i].Name.c_str());
+                    ImGui::EndDragDropSource();
+                }
             }
             ImGui::EndListBox();
         }
@@ -514,6 +566,14 @@ static void DrawDefTab() {
                     g_EventWorkspace.SelectedEventIndex = i;
                     g_EventWorkspace.Editor.SetText(ev.Content);
                     g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                }
+
+                // --- NEW: DRAG AND DROP SOURCE FOR EVENTS ---
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    EventDragPayload payload = { g_EventWorkspace.SelectedFileType, i };
+                    ImGui::SetDragDropPayload("EVENT_ENTRY_PAYLOAD", &payload, sizeof(EventDragPayload));
+                    ImGui::Text("Stage Event: %s", ev.AnimName.c_str());
+                    ImGui::EndDragDropSource();
                 }
             }
         }

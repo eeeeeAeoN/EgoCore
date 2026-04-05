@@ -17,7 +17,18 @@ struct ShortcutKey {
 
     bool IsPressed() const {
         ImGuiIO& io = ImGui::GetIO();
-        if (!ImGui::IsKeyPressed(Key, false)) return false;
+        if (Key != ImGuiKey_None && !ImGui::IsKeyPressed(Key, false)) return false;
+        if (Key == ImGuiKey_None && !Ctrl && !Shift && !Alt) return false;
+        if (Ctrl != io.KeyCtrl) return false;
+        if (Shift != io.KeyShift) return false;
+        if (Alt != io.KeyAlt) return false;
+        return true;
+    }
+
+    bool IsDown() const {
+        ImGuiIO& io = ImGui::GetIO();
+        if (Key != ImGuiKey_None && !ImGui::IsKeyDown(Key)) return false;
+        if (Key == ImGuiKey_None && !Ctrl && !Shift && !Alt) return false;
         if (Ctrl != io.KeyCtrl) return false;
         if (Shift != io.KeyShift) return false;
         if (Alt != io.KeyAlt) return false;
@@ -29,7 +40,7 @@ struct ShortcutKey {
         if (Ctrl) s += "Ctrl + ";
         if (Shift) s += "Shift + ";
         if (Alt) s += "Alt + ";
-        s += ImGui::GetKeyName(Key);
+        if (Key != ImGuiKey_None) s += ImGui::GetKeyName(Key);
         return s;
     }
 };
@@ -38,11 +49,12 @@ struct AppKeybindings {
     ShortcutKey SwitchBankMode = { ImGuiKey_B, true, false, false };
     ShortcutKey SwitchDefMode = { ImGuiKey_D, true, false, false };
     ShortcutKey SaveEntry = { ImGuiKey_S, true, false, false };
-    ShortcutKey Compile = { ImGuiKey_M, true, false, false };
-    ShortcutKey NavigateBack = { ImGuiKey_Escape, false, false, false };
-    ShortcutKey NavigateForward = { ImGuiKey_F1, false, false, false };
+    ShortcutKey Compile = { ImGuiKey_F5, false, false, false };
+    ShortcutKey NavigateBack = { ImGuiKey_LeftArrow, true, false, true };
+    ShortcutKey NavigateForward = { ImGuiKey_RightArrow, true, false, true };
     ShortcutKey DeleteEntry = { ImGuiKey_Delete, false, false, false };
-    ShortcutKey ToggleLeftPanel = { ImGuiKey_L, true, false, false };
+    ShortcutKey ToggleLeftPanel = { ImGuiKey_T, true, false, false };
+    ShortcutKey LookupDefinition = { ImGuiKey_LeftCtrl, true, false, false };
 };
 inline AppKeybindings g_Keybinds;
 

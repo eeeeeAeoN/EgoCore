@@ -11,6 +11,7 @@
 #include <set>
 #include <shlobj.h> 
 #include "TextEditor.h"
+#include "ConfigBackend.h"
 
 namespace fs = std::filesystem;
 
@@ -72,6 +73,9 @@ struct DefWorkspace {
     int SelectedEnumIndex = -1;
     char HeaderFilter[128] = "";
 
+    std::unordered_map<std::string, std::vector<int>> EnumMemberLookup;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, int>>> DefEntryLookup;
+
     PendingNavigation PendingNav;
     bool TriggerUnsavedPopup = false;
     bool ShowDefsMode = true;
@@ -111,6 +115,41 @@ struct DefWorkspace {
 inline DefWorkspace g_DefWorkspace;
 inline std::vector<std::string> g_AvailableSoundBanks;
 
+static std::string CreateCommentMaskedString(const std::string& input) {
+    std::string masked = input;
+    bool inBlockComment = false;
+    bool inLineComment = false;
+    bool inString = false;
+
+    for (size_t i = 0; i < masked.length(); ++i) {
+        if (inBlockComment) {
+            // End of block comment
+            if (i + 1 < masked.length() && masked[i] == '*' && masked[i + 1] == '/') {
+                masked[i] = ' '; masked[i + 1] = ' '; inBlockComment = false; i++;
+            }
+            // Replace with spaces, but keep newlines so offsets don't break
+            else if (masked[i] != '\n' && masked[i] != '\r') masked[i] = ' ';
+        }
+        else if (inLineComment) {
+            if (masked[i] == '\n') inLineComment = false;
+            else if (masked[i] != '\r') masked[i] = ' ';
+        }
+        else if (inString) {
+            if (masked[i] == '"' && (i == 0 || masked[i - 1] != '\\')) inString = false;
+        }
+        else {
+            if (masked[i] == '"') inString = true;
+            else if (i + 1 < masked.length() && masked[i] == '/' && masked[i + 1] == '*') {
+                masked[i] = ' '; masked[i + 1] = ' '; inBlockComment = true; i++;
+            }
+            else if (i + 1 < masked.length() && masked[i] == '/' && masked[i + 1] == '/') {
+                masked[i] = ' '; masked[i + 1] = ' '; inLineComment = true; i++;
+            }
+        }
+    }
+    return masked;
+}
+
 inline void ScanSoundBanks() {
     g_AvailableSoundBanks.clear();
     if (g_DefWorkspace.CategorizedDefs.count("SOUND_SETUP")) {
@@ -147,6 +186,51 @@ inline void ScanSoundBanks() {
     }
 }
 
+inline void BuildEnumMemberLookup() {
+    g_DefWorkspace.EnumMemberLookup.clear();
+
+    for (int i = 0; i < (int)g_DefWorkspace.AllEnums.size(); i++) {
+        std::string content = g_DefWorkspace.AllEnums[i].FullContent;
+
+        size_t openBrace = content.find('{');
+        size_t closeBrace = content.rfind('}');
+        if (openBrace == std::string::npos || closeBrace == std::string::npos) continue;
+
+        std::string body = content.substr(openBrace + 1, closeBrace - openBrace - 1);
+
+        std::regex re(R"(([A-Za-z0-9_]+)\s*(?:=.*?)?(?:,|$))");
+        auto begin = std::sregex_iterator(body.begin(), body.end(), re);
+        auto end = std::sregex_iterator();
+
+        for (auto it = begin; it != end; ++it) {
+            std::string val = (*it)[1].str();
+            if (val != "force_dword" && val != "FORCE_DWORD") {
+                // Force Uppercase for safe lookup
+                std::string upperVal = val;
+                std::transform(upperVal.begin(), upperVal.end(), upperVal.begin(), ::toupper);
+
+                auto& vec = g_DefWorkspace.EnumMemberLookup[upperVal];
+                if (std::find(vec.begin(), vec.end(), i) == vec.end()) {
+                    vec.push_back(i);
+                }
+            }
+        }
+    }
+}
+
+inline void BuildDefEntryLookup() {
+    g_DefWorkspace.DefEntryLookup.clear();
+    for (const auto& [type, entries] : g_DefWorkspace.CategorizedDefs) {
+        for (int i = 0; i < (int)entries.size(); i++) {
+            // Force Uppercase for safe lookup
+            std::string upperName = entries[i].Name;
+            std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
+
+            g_DefWorkspace.DefEntryLookup[upperName].push_back({ type, i });
+        }
+    }
+}
+
 inline void LoadHeadersFromDir(const std::string& rootPath) {
     g_DefWorkspace.AllEnums.clear();
     std::set<std::string> visitedFiles;
@@ -168,16 +252,24 @@ inline void LoadHeadersFromDir(const std::string& rootPath) {
                     std::stringstream buffer;
                     buffer << file.rdbuf();
                     std::string content = buffer.str();
-                    auto words_begin = std::sregex_iterator(content.begin(), content.end(), enumRegex);
+
+                    // Create the safe Ghost string
+                    std::string maskedContent = CreateCommentMaskedString(content);
+
+                    // Run regex on the Ghost string (Commented enums are invisible)
+                    auto words_begin = std::sregex_iterator(maskedContent.begin(), maskedContent.end(), enumRegex);
                     auto words_end = std::sregex_iterator();
+
                     for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
                         std::smatch match = *i;
                         EnumEntry newEnum;
                         newEnum.Name = match[1].str();
-                        newEnum.FullContent = "enum " + newEnum.Name + "\n" + match[2].str();
                         newEnum.FilePath = pathStr;
                         newEnum.StartOffset = match.position(0);
                         newEnum.EndOffset = newEnum.StartOffset + match.length(0);
+
+                        // Extract actual data using original content so inner comments are preserved
+                        newEnum.FullContent = content.substr(newEnum.StartOffset, newEnum.EndOffset - newEnum.StartOffset);
                         g_DefWorkspace.AllEnums.push_back(newEnum);
                     }
                 }
@@ -186,6 +278,7 @@ inline void LoadHeadersFromDir(const std::string& rootPath) {
     }
     catch (...) {}
     std::sort(g_DefWorkspace.AllEnums.begin(), g_DefWorkspace.AllEnums.end(), [](const EnumEntry& a, const EnumEntry& b) { return a.Name < b.Name; });
+    if (g_AppConfig.EnableLookupGeneration) BuildEnumMemberLookup();
 }
 
 inline std::vector<std::string> GetEnumMembers(const std::string& enumName) {
@@ -226,18 +319,25 @@ inline void ScanFileForDefs(const fs::path& filePath) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) return;
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    // Create the safe Ghost string
+    std::string maskedContent = CreateCommentMaskedString(content);
+
     size_t cursor = 0;
     while (true) {
-        size_t defStart = content.find("#definition", cursor);
+        // Search using the Ghost string (Commented-out defs are invisible here)
+        size_t defStart = maskedContent.find("#definition", cursor);
         if (defStart == std::string::npos) break;
-        size_t defEnd = content.find("#end_definition", defStart);
+        size_t defEnd = maskedContent.find("#end_definition", defStart);
         if (defEnd == std::string::npos) break;
         defEnd += 15;
+
         size_t lineEnd = content.find('\n', defStart);
         std::string headerLine = content.substr(defStart, lineEnd - defStart);
         std::stringstream ss(headerLine);
         std::string token, type, name;
         ss >> token >> type >> name;
+
         if (!type.empty() && !name.empty()) {
             DefEntry entry;
             entry.Type = type; entry.Name = name; entry.SourceFile = filePath.string();
@@ -262,6 +362,7 @@ inline void LoadDefsFromFolder(const std::string& rootPath, bool forceScan = fal
         g_DefWorkspace.IsLoaded = true;
         LoadHeadersFromDir(rootPath);
         ScanSoundBanks();
+
         return;
     }
 
@@ -297,6 +398,9 @@ inline void LoadDefsFromFolder(const std::string& rootPath, bool forceScan = fal
     LoadHeadersFromDir(rootPath);
     ScanSoundBanks();
     g_DefWorkspace.SelectedType = ""; g_DefWorkspace.SelectedEntryIndex = -1; g_DefWorkspace.Editor.SetText("");
+
+    if (g_AppConfig.EnableLookupGeneration) BuildDefEntryLookup();
+
     g_DefWorkspace.IsLoaded = true;
 }
 

@@ -12,6 +12,8 @@
 static bool g_HasInitialized = false;
 static bool g_TriggerKeybindPopup = false;
 inline bool g_TriggerScalingPopup = false;
+inline bool g_TriggerGeneralSettingsPopup = false;
+inline bool g_ShowAboutPopup = false;
 inline float g_UIScale = 1.0f;
 
 enum class EAppState {
@@ -42,7 +44,7 @@ static void DrawLaunchPopup() {
         ImGui::Text("Preparing to launch Fable...");
         ImGui::Dummy(ImVec2(0, 10));
 
-        if (g_AppConfig.ModSystemDirty) {
+        if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty) {
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Compiling modified banks and applying load order...");
             ImGui::Text("Please wait. The application will exit automatically when finished.");
         }
@@ -50,14 +52,19 @@ static void DrawLaunchPopup() {
             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Load order clean. Launching directly...");
         }
 
-        // Delay for a few frames to allow ImGui to calculate the auto-resize layout
-        // and for the graphics API to physically swap the buffers to the monitor.
         if (g_LaunchState >= 2 && g_LaunchState < 6) {
             g_LaunchState++;
         }
         else if (g_LaunchState == 6) {
+            g_LaunchState = 7; // Advance state so it doesn't loop
             ModManagerBackend::ProcessModsAndLaunch();
-            // ProcessModsAndLaunch calls exit(0), so the code will never proceed past this line.
+        }
+
+        // BUGFIX: If the compiler successfully kicked off, close this popup 
+        // so the "Compiling..." modal can take over!
+        if (g_IsCompiling) {
+            g_LaunchState = 0;
+            ImGui::CloseCurrentPopup();
         }
 
         ImGui::EndPopup();
@@ -95,13 +102,8 @@ static void DrawFrontendHub() {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 10));
 
-        if (ImGui::Checkbox("Skip this menu on startup", &g_AppConfig.SkipFrontend)) {
-            SaveConfig();
-        }
-
-        ImGui::Dummy(ImVec2(0, 10));
-
         if (ImGui::Button("About", ImVec2(185, 40))) {
+            g_ShowAboutPopup = true; // Trigger the global popup!
         }
         ImGui::SameLine(ImGui::GetWindowWidth() - 185.0f - ImGui::GetStyle().WindowPadding.x);
         if (ImGui::Button("Exit", ImVec2(185, 40))) {
@@ -136,6 +138,98 @@ static void DrawBankExplorer() {
 
     // DRAW THE POPUP GLOBALLY SO IT CAN NEVER BE BLOCKED
     DrawLaunchPopup();
+
+    if (g_IsCompiling) { ImGui::OpenPopup("Compiling..."); }
+    if (ImGui::BeginPopupModal("Compiling...", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::Text("%s", g_CompileStatus.c_str());
+        ImGui::Separator();
+        static int dots = 0; if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
+        std::string spinner = "Please wait"; for (int i = 0; i < dots; i++) spinner += ".";
+        ImGui::Text("%s", spinner.c_str());
+
+        if (!g_IsCompiling) {
+            ImGui::CloseCurrentPopup();
+            if (g_PendingGameLaunch) {
+                // Launch sequence — go straight to game, no extra popup
+                g_PendingGameLaunch = false;
+                std::string exePath = g_AppConfig.GameRootPath + "\\FableLauncher.exe";
+                ShellExecuteA(NULL, "open", exePath.c_str(), NULL, g_AppConfig.GameRootPath.c_str(), SW_SHOWDEFAULT);
+                exit(0);
+            }
+            else {
+                // Manual editor compile — show the confirmation popup
+                g_TriggerCompileSuccess = true;
+            }
+        }
+        ImGui::EndPopup();
+    }
+
+    if (g_TriggerCompileSuccess) { ImGui::OpenPopup("Compile Complete"); g_TriggerCompileSuccess = false; }
+    if (ImGui::BeginPopupModal("Compile Complete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Successfully compiled definitions!");
+        ImGui::Text("Generated: frontend.bin & game.bin");
+        ImGui::Separator();
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // --- GENERAL SETTINGS POPUP ---
+    if (g_TriggerGeneralSettingsPopup) {
+        ImGui::OpenPopup("General Settings");
+        g_TriggerGeneralSettingsPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("General Settings", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("General Application Settings");
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 5));
+
+        // NEW: Moved from Frontend Hub
+        if (ImGui::Checkbox("Skip Frontend Menu", &g_AppConfig.SkipFrontend)) {
+            SaveConfig();
+        }
+
+        if (ImGui::Checkbox("Generate Lookup Dictionary", &g_AppConfig.EnableLookupGeneration)) {
+            SaveConfig();
+            // REMOVED IMMEDIATE BUILD: It will safely build on the next load!
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enables the 'Ctrl+Click' Go to Definition feature.\nChanges will take effect the next time you load.");
+
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::Separator();
+        if (ImGui::Button("Close", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // --- ABOUT POPUP ---
+    if (g_ShowAboutPopup) {
+        ImGui::OpenPopup("About EgoCore");
+        g_ShowAboutPopup = false;
+    }
+
+    // NEW: Enforce a much larger starting size
+    ImGui::SetNextWindowSize(ImVec2(500, 350), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("About EgoCore", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "EgoCore - Modding Tool for Fable");
+        ImGui::Separator();
+        ImGui::Text("Version: 1.0.0");
+        ImGui::Text("Author: AlbionSecrets");
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::TextWrapped("Placeholder text for About window. You can safely write paragraphs of text here, and they will wrap dynamically to fit the window bounds.");
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::Separator();
+
+        // Pin the close button to the bottom right
+        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 40);
+        if (ImGui::Button("Close", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     if (g_CurrentAppState == EAppState::Setup) {
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -364,6 +458,9 @@ static void DrawBankExplorer() {
         }
 
         if (ImGui::BeginMenu("Settings")) {
+            if (ImGui::MenuItem("General")) {
+                g_TriggerGeneralSettingsPopup = true;
+            }
             if (ImGui::MenuItem("Keybindings")) {
                 g_TriggerKeybindPopup = true;
             }
@@ -377,7 +474,12 @@ static void DrawBankExplorer() {
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("About")) { ImGui::TextDisabled("EgoCore"); ImGui::EndMenu(); }
+        if (ImGui::BeginMenu("About")) {
+            if (ImGui::MenuItem("About EgoCore")) {
+                g_ShowAboutPopup = true;
+            }
+            ImGui::EndMenu();
+        }
 
         float rightAlign = ImGui::GetWindowWidth() - 140.0f;
         if (rightAlign > 0) ImGui::SameLine(rightAlign);
@@ -429,6 +531,7 @@ static void DrawBankExplorer() {
         DrawBindRow("Navigate Forward", g_Keybinds.NavigateForward);
         DrawBindRow("Delete Entry", g_Keybinds.DeleteEntry);
         DrawBindRow("Toggle Left Panel", g_Keybinds.ToggleLeftPanel);
+        DrawBindRow("Lookup Definition", g_Keybinds.LookupDefinition);
 
         if (g_ListeningForRebind) {
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "Press desired key combination. Press ESC to cancel.");

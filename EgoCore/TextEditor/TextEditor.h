@@ -262,6 +262,11 @@ public:
 	void Undo(int aSteps = 1);
 	void Redo(int aSteps = 1);
 
+	Coordinates ScreenPosToCoordinates(const ImVec2& aPosition) const;
+	std::string GetWordAt(const Coordinates& aCoords) const;
+	std::string GetHoveredWord() const { return mHoveredWord; }
+	bool IsHovered() const { return mIsHovered; }
+
 	static const Palette& GetDarkPalette();
 	static const Palette& GetLightPalette();
 	static const Palette& GetRetroBluePalette();
@@ -309,6 +314,9 @@ private:
 		EditorState mAfter;
 	};
 
+	std::string mHoveredWord;
+	bool mIsHovered = false;
+
 	typedef std::vector<UndoRecord> UndoBuffer;
 
 	void ProcessInputs();
@@ -325,7 +333,6 @@ private:
 	void DeleteRange(const Coordinates& aStart, const Coordinates& aEnd);
 	int InsertTextAt(Coordinates& aWhere, const char* aValue);
 	void AddUndo(UndoRecord& aValue);
-	Coordinates ScreenPosToCoordinates(const ImVec2& aPosition) const;
 	Coordinates FindWordStart(const Coordinates& aFrom) const;
 	Coordinates FindWordEnd(const Coordinates& aFrom) const;
 	Coordinates FindNextWord(const Coordinates& aFrom) const;
@@ -341,7 +348,6 @@ private:
 	void Backspace();
 	void DeleteSelection();
 	std::string GetWordUnderCursor() const;
-	std::string GetWordAt(const Coordinates& aCoords) const;
 	ImU32 GetGlyphColor(const Glyph& aGlyph) const;
 
 	void HandleKeyboardInputs();

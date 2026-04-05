@@ -73,62 +73,52 @@ inline void DrawModManagerWindow() {
                 ImGui::SetNextItemAllowOverlap();
                 ImGui::Selectable(rowLabel, false, ImGuiSelectableFlags_SpanAllColumns);
 
-                // --- Drag and Drop Source ---
+                // --- Drag and Drop Source (MUST BE RIGHT AFTER SELECTABLE) ---
                 if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                     ImGui::SetDragDropPayload("MOD_ORDER_PAYLOAD", &i, sizeof(int));
                     ImGui::Text("Moving: %s", mod.Name.c_str());
                     ImGui::EndDragDropSource();
                 }
 
-                // --- Drag and Drop Target ---
+                // --- Drag and Drop Target (MUST BE RIGHT AFTER SELECTABLE) ---
                 if (ImGui::BeginDragDropTarget()) {
                     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("MOD_ORDER_PAYLOAD")) {
                         int sourceIdx = *(const int*)payload->Data;
                         if (sourceIdx != i) {
+                            bool wasAsset = ModManagerBackend::g_LoadedMods[sourceIdx].IsAssetMod; // Fixed
+                            bool wasDef = ModManagerBackend::g_LoadedMods[sourceIdx].IsDefMod;   // Fixed
                             auto temp = ModManagerBackend::g_LoadedMods[sourceIdx];
+
                             ModManagerBackend::g_LoadedMods.erase(ModManagerBackend::g_LoadedMods.begin() + sourceIdx);
                             ModManagerBackend::g_LoadedMods.insert(ModManagerBackend::g_LoadedMods.begin() + i, temp);
 
                             ModManagerBackend::SaveLoadOrder();
                             ModManagerBackend::UpdateGlobalModsIni();
 
-                            g_AppConfig.ModSystemDirty = true;
+                            if (wasAsset) g_AppConfig.ModSystemDirty = true; // Fixed
+                            if (wasDef) g_AppConfig.DefSystemDirty = true;   // Fixed
                             SaveConfig();
                         }
                     }
                     ImGui::EndDragDropTarget();
                 }
 
-                // --- Right-Click Context Menu ---
-                if (ImGui::BeginPopupContextItem()) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Mod Options");
-                    ImGui::Separator();
-
-                    if (mod.IsCoreMod) {
-                        ImGui::TextDisabled("Cannot delete Core Mods");
-                    }
-                    else {
-                        if (ImGui::MenuItem("Delete Mod Permanently")) {
-                            g_ModToDeleteIndex = i;
-                            triggerDeletePopup = true;
-                        }
-                    }
-                    ImGui::EndPopup();
-                }
-
+                // VISUAL FIX: Draw the index number *after* setting up the drag and drop!
                 ImGui::SameLine();
-                ImGui::Text("  %d", i + 1);
+                ImGui::Text("%d", i + 1);
 
                 // 2. Enabled Toggle
                 ImGui::TableSetColumnIndex(1);
                 if (ImGui::Checkbox("##enabled", &mod.IsEnabled)) {
                     ModManagerBackend::UpdateGlobalModsIni();
                     ModManagerBackend::SaveLoadOrder();
-                    g_AppConfig.ModSystemDirty = true;
+                    if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true; // Fixed
+                    if (mod.IsDefMod) g_AppConfig.DefSystemDirty = true;   // Fixed
                     SaveConfig();
                 }
 
-                // 3. Name
+                // --- RESTORED COLUMN 2: Mod Name ---
+                // 3. Mod Name
                 ImGui::TableSetColumnIndex(2);
                 ImGui::Text("%s", mod.Name.c_str());
 
@@ -140,11 +130,17 @@ inline void DrawModManagerWindow() {
                 else if (mod.HasDll) {
                     ImGui::TextColored(ImVec4(0.8f, 0.4f, 1.0f, 1.0f), ".DLL Plugin");
                 }
+                else if (mod.IsAssetMod && mod.IsDefMod) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Asset & Def Mod");
+                }
+                else if (mod.IsDefMod) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Def Mod");
+                }
                 else if (mod.IsAssetMod) {
                     ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Asset Mod");
                 }
                 else {
-                    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Data Mod");
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Data Mod");
                 }
 
                 // 5. Expandable Details 
@@ -219,8 +215,12 @@ inline void DrawModManagerWindow() {
             ImGui::Separator();
 
             if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
+                bool wasDef = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsDefMod; // Track state
+
                 ModManagerBackend::DeleteMod(g_ModToDeleteIndex);
+
                 g_AppConfig.ModSystemDirty = true;
+                if (wasDef) g_AppConfig.DefSystemDirty = true; // Smart toggle
                 SaveConfig();
                 ImGui::CloseCurrentPopup();
             }
@@ -266,6 +266,7 @@ inline void DrawModPackageWindow() {
                         }
                         if (!exists) {
                             StagedModPackageEntry staged;
+                            staged.Category = EModAssetCategory::BankEntry; // Ensure default classification
                             staged.EntryID = bank.Entries[i].ID;
                             staged.EntryName = bank.Entries[i].Name;
                             staged.EntryType = bank.Entries[i].Type;
@@ -310,7 +311,11 @@ inline void DrawModPackageWindow() {
                 auto& e = g_ModPackageEntries[i];
                 ImGui::TableNextRow();
 
-                ImGui::TableSetColumnIndex(0); ImGui::Text("%u", e.EntryID);
+                // ID format handler (Text entries don't use real IDs)
+                ImGui::TableSetColumnIndex(0);
+                if (e.Category == EModAssetCategory::BankEntry) ImGui::Text("%u", e.EntryID);
+                else ImGui::TextDisabled("TEXT");
+
                 ImGui::TableSetColumnIndex(1); ImGui::Text("%s", e.EntryName.c_str());
                 ImGui::TableSetColumnIndex(2); ImGui::Text("%s", e.TypeName.c_str());
                 ImGui::TableSetColumnIndex(3); ImGui::Text("%s", e.BankName.c_str());
@@ -328,6 +333,8 @@ inline void DrawModPackageWindow() {
 
         // --- Drag and Drop Logic for Adding Individual Entries ---
         if (ImGui::BeginDragDropTarget()) {
+
+            // --- 1. HANDLE BANK ENTRIES (Existing) ---
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("BANK_ENTRY_PAYLOAD")) {
 
                 // 0. COMPILER TRIGGER: Force all unsaved entries to recompile to update definitions before pulling
@@ -373,16 +380,14 @@ inline void DrawModPackageWindow() {
                         if (isDisallowedNewAudio) {
                             g_SuccessMessage = "Directly adding new audio/lipsync entries is locked!\nDrag the matching Text.big entry instead to auto-link dependencies.";
                             g_ShowSuccessPopup = true;
-                            ImGui::EndDragDropTarget();
-                            return;
+                            goto EndOfBankDropLogic;
                         }
 
                         // Gate B: Streaming Font GlyphData Lock
                         if (bank.Type == EBankType::Fonts && entry.Type == 2) {
                             g_SuccessMessage = "GlyphData cannot be added manually!\nDrag a Streaming Font entry instead to auto-link its GlyphData.";
                             g_ShowSuccessPopup = true;
-                            ImGui::EndDragDropTarget();
-                            return;
+                            goto EndOfBankDropLogic;
                         }
 
                         // Helper lambda to add entries to avoid duplicate code
@@ -395,6 +400,7 @@ inline void DrawModPackageWindow() {
                             }
                             if (!exists) {
                                 StagedModPackageEntry staged;
+                                staged.Category = EModAssetCategory::BankEntry; // Ensure it tracks as a binary asset
                                 staged.EntryID = id; staged.EntryName = name; staged.EntryType = type;
                                 staged.BankType = bType; staged.BankName = bName; staged.SubBankName = sbName;
                                 staged.SourceFullPath = fullPath;
@@ -534,7 +540,97 @@ inline void DrawModPackageWindow() {
                         }
                     }
                 }
+            EndOfBankDropLogic:; // Label for bypassing via logic gates
             }
+
+            // --- 2. HANDLE DEFINITION ENTRIES ---
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DEF_ENTRY_PAYLOAD")) {
+                DefDragPayload* data = (DefDragPayload*)payload->Data;
+                auto& entry = g_DefWorkspace.CategorizedDefs[data->Category][data->EntryIndex];
+
+                // CRITICAL FIX: DO NOT call SaveDefEntry(entry) here! It overwrites the file with an empty editor buffer.
+
+                bool exists = false;
+                for (const auto& existing : g_ModPackageEntries) {
+                    if (existing.EntryName == entry.Name && existing.Category == EModAssetCategory::Definition) {
+                        exists = true; break;
+                    }
+                }
+                if (!exists) {
+                    StagedModPackageEntry staged;
+                    staged.Category = EModAssetCategory::Definition;
+                    staged.EntryName = entry.Name;
+                    staged.TypeName = "Definition";
+                    staged.BankName = std::filesystem::path(entry.SourceFile).filename().string();
+                    staged.SubBankName = data->Category;
+                    staged.SourceFullPath = entry.SourceFile;
+                    g_ModPackageEntries.push_back(staged);
+                }
+            }
+
+            // --- 3. HANDLE C++ HEADER ENTRIES ---
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HEADER_ENTRY_PAYLOAD")) {
+                HeaderDragPayload* data = (HeaderDragPayload*)payload->Data;
+                auto& entry = g_DefWorkspace.AllEnums[data->EnumIndex];
+
+                std::vector<std::string> blockedEnums = {
+                    "SNDS", "ESNDS", "EMeshType2", "EAnimType2", "ELipSync", "ELipSync2",
+                    "ELipSync3", "ELipSync4", "EGuiGraphicBank", "EParticleEmitter",
+                    "EFrontEndGraphicBank", "EEngineGraphic"
+                };
+
+                if (std::find(blockedEnums.begin(), blockedEnums.end(), entry.Name) != blockedEnums.end()) {
+                    g_SuccessMessage = "This header is auto-generated by the asset builder and cannot be staged manually!";
+                    g_ShowSuccessPopup = true;
+                }
+                else {
+                    // CRITICAL FIX: DO NOT call SaveHeaderEntry(entry) here!
+
+                    bool exists = false;
+                    for (const auto& existing : g_ModPackageEntries) {
+                        if (existing.EntryName == entry.Name && existing.Category == EModAssetCategory::Header) {
+                            exists = true; break;
+                        }
+                    }
+                    if (!exists) {
+                        StagedModPackageEntry staged;
+                        staged.Category = EModAssetCategory::Header;
+                        staged.EntryName = entry.Name;
+                        staged.TypeName = "C++ Header";
+                        staged.BankName = std::filesystem::path(entry.FilePath).filename().string();
+                        staged.SubBankName = "Defs";
+                        staged.SourceFullPath = entry.FilePath;
+                        g_ModPackageEntries.push_back(staged);
+                    }
+                }
+            }
+
+            // --- 4. HANDLE ANIMATION EVENT ENTRIES ---
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("EVENT_ENTRY_PAYLOAD")) {
+                EventDragPayload* data = (EventDragPayload*)payload->Data;
+                EventFile* file = (data->FileType == 0) ? &g_EventWorkspace.SoundEvents : &g_EventWorkspace.GameEvents;
+                auto& ev = file->Events[data->EventIndex];
+
+                // CRITICAL FIX: DO NOT call file->Save() here!
+
+                bool exists = false;
+                for (const auto& existing : g_ModPackageEntries) {
+                    if (existing.EntryName == ev.AnimName && existing.Category == EModAssetCategory::AnimationEvent) {
+                        exists = true; break;
+                    }
+                }
+                if (!exists) {
+                    StagedModPackageEntry staged;
+                    staged.Category = EModAssetCategory::AnimationEvent;
+                    staged.EntryName = ev.AnimName;
+                    staged.TypeName = (data->FileType == 0) ? "Sound Event" : "Game Event";
+                    staged.BankName = file->FileName;
+                    staged.SubBankName = "Misc";
+                    staged.SourceFullPath = file->FilePath;
+                    g_ModPackageEntries.push_back(staged);
+                }
+            }
+
             ImGui::EndDragDropTarget();
         }
 
@@ -552,6 +648,21 @@ inline void DrawModPackageWindow() {
             g_ShowSuccessPopup = true;
         }
         ImGui::EndDisabled();
+
+        // --- THIS WAS OMITTED: THE SUCCESS POPUP RENDERER ---
+        if (g_ShowSuccessPopup) {
+            ImGui::OpenPopup("Success");
+            g_ShowSuccessPopup = false;
+        }
+
+        if (ImGui::BeginPopupModal("Success", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s", g_SuccessMessage.c_str());
+            ImGui::Separator();
+            if (ImGui::Button("OK", ImVec2(120, 0))) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
     ImGui::End();
 }

@@ -14,9 +14,13 @@
 
 namespace fs = std::filesystem;
 
-// ==========================================
-// 1. CORE DATA STRUCTURES
-// ==========================================
+enum class EModAssetCategory {
+    BankEntry,
+    Definition,
+    Header,
+    AnimationEvent
+};
+
 struct IniLine {
     std::string Raw;
     std::string Key;
@@ -31,6 +35,7 @@ struct ModEntry {
     bool HasDll = false;
     bool IsCoreMod = false;
     bool IsAssetMod = false;
+    bool IsDefMod = false;
     std::string ModFolderPath;
     std::string SettingsIniPath;
     std::vector<IniLine> SettingsLines;
@@ -43,19 +48,17 @@ struct ModAssetOverride {
 };
 
 struct StagedModPackageEntry {
-    uint32_t EntryID;
-    std::string EntryName;
-    int32_t EntryType;
-    EBankType BankType;
-    std::string TypeName;
-    std::string BankName;
-    std::string SubBankName;
-    std::string SourceFullPath;
+    EModAssetCategory Category = EModAssetCategory::BankEntry;
+    uint32_t EntryID = 0;          // Used for Banks
+    std::string EntryName;         // Used for all
+    int32_t EntryType = 0;         // Used for Banks
+    EBankType BankType = (EBankType)0;
+    std::string TypeName;          // Display type
+    std::string BankName;          // Or File Name for texts
+    std::string SubBankName;       // Or Context Name for texts
+    std::string SourceFullPath;    // Crucial for replicating the path
 };
 
-// ==========================================
-// 2. HELPER FUNCTIONS
-// ==========================================
 inline std::string GetEntryTypeName(EBankType bankType, int32_t type, const std::string& bankName) {
     if (bankType == EBankType::Graphics || bankType == EBankType::XboxGraphics) {
         switch (type) {
@@ -100,9 +103,6 @@ inline std::string GetEntryTypeName(EBankType bankType, int32_t type, const std:
     return "Type " + std::to_string(type);
 }
 
-// ==========================================
-// 3. TRACKER CLASS
-// ==========================================
 class ModPackageTracker {
 public:
     inline static std::vector<StagedModPackageEntry> g_MarkedEntries;
@@ -159,9 +159,6 @@ public:
     static void ClearAll() { g_MarkedEntries.clear(); SaveMarkedState(); }
 };
 
-// ==========================================
-// 4. PATCHER CLASS
-// ==========================================
 class ModBankPatcher {
 public:
     static inline std::map<std::string, ModAssetOverride> g_ActiveModAssets;
@@ -448,9 +445,6 @@ public:
     }
 };
 
-// ==========================================
-// 5. COMPILER CLASS 
-// ==========================================
 class ModManagerCompiler {
 public:
     static std::string ExtractLanguageFromPath(const std::string& fullPath) {
@@ -683,7 +677,100 @@ public:
         std::string modRoot = fs::current_path().string() + "\\ExportedMods\\" + modName;
         if (!fs::exists(modRoot)) fs::create_directories(modRoot);
 
+        std::map<std::string, std::string> defFiles;
+        std::map<std::string, std::string> headerFiles;
+        std::map<std::string, std::string> eventFiles;
+
         for (const auto& entry : entries) {
+
+            // --- TEXT ASSETS (Defs, Headers, Events) ---
+            if (entry.Category != EModAssetCategory::BankEntry) {
+
+                // Safe Path Resolution (CASE INSENSITIVE)
+                std::string sourcePath = entry.SourceFullPath;
+                std::replace(sourcePath.begin(), sourcePath.end(), '/', '\\');
+
+                std::string lowerPath = sourcePath;
+                std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::tolower);
+
+                size_t dataPos = lowerPath.find("\\data\\");
+                if (dataPos != std::string::npos) {
+
+                    std::string relativePath = sourcePath.substr(dataPos);
+                    if (relativePath.length() > 0 && relativePath[0] == '\\') relativePath = relativePath.substr(1);
+
+                    std::string targetFilePath = modRoot + "\\" + relativePath;
+
+                    // 1. Safe Extraction: Definitions
+                    if (entry.Category == EModAssetCategory::Definition) {
+
+                        // Helper lambda to search map safely and strictly match context paths
+                        auto ExtractDefFromMap = [&](const std::map<std::string, std::vector<DefEntry>>& mapToSearch) -> bool {
+                            for (const auto& [type, defList] : mapToSearch) {
+                                for (const auto& def : defList) {
+                                    if (def.Name == entry.EntryName) {
+                                        // Strict Case-Insensitive Path Match prevents grabbing GameDefs instead of ScriptDefs
+                                        std::string defSrc = def.SourceFile;
+                                        std::string entSrc = entry.SourceFullPath;
+                                        std::transform(defSrc.begin(), defSrc.end(), defSrc.begin(), ::tolower);
+                                        std::transform(entSrc.begin(), entSrc.end(), entSrc.begin(), ::tolower);
+                                        std::replace(defSrc.begin(), defSrc.end(), '/', '\\');
+                                        std::replace(entSrc.begin(), entSrc.end(), '/', '\\');
+
+                                        if (defSrc == entSrc) {
+                                            std::ifstream inFile(def.SourceFile, std::ios::binary | std::ios::ate);
+                                            if (inFile.is_open()) {
+                                                std::streamsize fileSize = inFile.tellg();
+                                                if (def.StartOffset >= 0 && def.EndOffset <= fileSize && def.EndOffset > def.StartOffset) {
+                                                    inFile.seekg(def.StartOffset, std::ios::beg);
+                                                    std::string buffer(def.EndOffset - def.StartOffset, '\0');
+                                                    if (inFile.read(&buffer[0], buffer.size())) {
+                                                        defFiles[targetFilePath] += buffer + "\n\n";
+                                                    }
+                                                }
+                                                inFile.close();
+                                            }
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                            return false;
+                            };
+
+                        // Check active context first, if missing (tab switched), deep-scan cached contexts
+                        if (!ExtractDefFromMap(g_DefWorkspace.CategorizedDefs)) {
+                            for (const auto& context : g_DefWorkspace.Contexts) {
+                                if (ExtractDefFromMap(context.CategorizedDefs)) break;
+                            }
+                        }
+                    }
+                    // 2. Safe Extraction: Headers
+                    else if (entry.Category == EModAssetCategory::Header) {
+                        for (const auto& enumEntry : g_DefWorkspace.AllEnums) {
+                            if (enumEntry.Name == entry.EntryName) {
+                                headerFiles[targetFilePath] += enumEntry.FullContent + "\n\n";
+                                break;
+                            }
+                        }
+                    }
+                    // 3. Safe Extraction: Events
+                    else if (entry.Category == EModAssetCategory::AnimationEvent) {
+                        EventFile* fileToSearch = (entry.TypeName == "Sound Event") ? &g_EventWorkspace.SoundEvents : &g_EventWorkspace.GameEvents;
+                        for (const auto& ev : fileToSearch->Events) {
+                            if (ev.AnimName == entry.EntryName) {
+                                eventFiles[targetFilePath] += "BEGIN_EVENTS: " + ev.AnimName + "\n" + ev.Content;
+                                if (!ev.Content.empty() && ev.Content.back() != '\n') eventFiles[targetFilePath] += "\n";
+                                eventFiles[targetFilePath] += "END_EVENTS\n\n";
+                                break;
+                            }
+                        }
+                    }
+                }
+                continue; // Skip binary logic below for Text Assets
+            }
+
+            // --- BINARY ASSETS (Original Logic) ---
             std::string targetDir = GetTargetDirectoryForEntry(entry, modRoot);
             if (!fs::exists(targetDir)) fs::create_directories(targetDir);
 
@@ -740,6 +827,35 @@ public:
                 }
             }
         }
+
+        // --- WRITE THE TEXT ASSET BUFFERS TO HARD DRIVE ---
+        auto WriteMappedFiles = [](const std::map<std::string, std::string>& fileMap, const std::string& header, const std::string& footer) {
+            for (const auto& [filePath, content] : fileMap) {
+                // BUGFIX: Prevent creation of ghost/empty files entirely
+                if (content.empty()) continue;
+
+                // BUGFIX: Defer folder creation until we guarantee the file has content.
+                // This eliminates the useless 'RetailHeaders' ghost folder.
+                std::string finalDir = std::filesystem::path(filePath).parent_path().string();
+                if (!std::filesystem::exists(finalDir)) {
+                    std::filesystem::create_directories(finalDir);
+                }
+
+                std::ofstream outFile(filePath, std::ios::binary | std::ios::trunc);
+                if (outFile.is_open()) {
+                    if (!header.empty()) outFile << header;
+                    outFile << content;
+                    if (!footer.empty()) outFile << footer;
+                    outFile.close();
+                }
+            }
+            };
+
+        WriteMappedFiles(defFiles, "", "");
+        WriteMappedFiles(headerFiles, "#pragma once\n\n", "");
+        WriteMappedFiles(eventFiles, "BEGIN_ANIMATION_EVENTS\n\n", "END_ANIMATION_EVENTS\n");
+
+        // --- RUN AUTO-GENERATION LAST ---
         GenerateEnumHeaders(modName, entries);
         GenerateAudioDefs(modName, entries);
     }

@@ -19,6 +19,8 @@ namespace fs = std::filesystem;
 
 static std::atomic<bool> g_IsCompiling(false);
 static std::atomic<bool> g_StopWatchdog(false);
+inline bool g_TriggerCompileSuccess = false;
+inline bool g_PendingGameLaunch = false;
 static std::string g_CompileStatus = "";
 static std::string g_TargetIniPath = "";
 static std::string g_OriginalIniContent = "";
@@ -216,10 +218,7 @@ static bool RunHiddenFable(const std::string& exePath, bool shouldPatchCode) {
 }
 
 static void CompileAllDefs_Stealth() {
-    if (!g_DefWorkspace.IsLoaded) {
-        g_CompileStatus = "Error: Workspace not loaded.";
-        return;
-    }
+    // BUGFIX: Removed the !g_DefWorkspace.IsLoaded check!
 
     if (!g_OpenBanks.empty()) {
         g_OpenBanks.clear();
@@ -235,10 +234,12 @@ static void CompileAllDefs_Stealth() {
 
         g_CompileStatus = "Compiling Sound Binaries...";
         std::string log;
-        std::string defsPath = g_DefWorkspace.RootPath + "\\Data\\Defs";
+
+        // BUGFIX: Use g_AppConfig.GameRootPath instead of g_DefWorkspace.RootPath!
+        std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
         BinaryParser::CompileSoundBinaries(defsPath, log);
 
-        std::string exePath = g_DefWorkspace.RootPath + "\\ego_r.exe";
+        std::string exePath = g_AppConfig.GameRootPath + "\\ego_r.exe";
         if (!fs::exists(exePath)) {
             g_CompileStatus = "Sound Binaries compiled, but ego_r.exe not found! Game defs skipped.";
             g_StopWatchdog = true;
@@ -247,7 +248,7 @@ static void CompileAllDefs_Stealth() {
             return;
         }
 
-        if (!PatchIniFile(g_DefWorkspace.RootPath)) {
+        if (!PatchIniFile(g_AppConfig.GameRootPath)) {
             g_CompileStatus = "Sound Binaries compiled, but INI patch failed! Game defs skipped.";
             g_StopWatchdog = true;
             if (watchdog.joinable()) watchdog.join();
@@ -269,4 +270,17 @@ static void CompileAllDefs_Stealth() {
         g_CompileStatus = "Success! Definitions & Binaries Compiled.";
         g_IsCompiling = false;
         }).detach();
+}
+
+static void RunStealthCompilerSync() {
+    std::string exePath = g_AppConfig.GameRootPath + "\\ego_r.exe";
+    if (!fs::exists(exePath)) return;
+
+    if (!PatchIniFile(g_AppConfig.GameRootPath)) return;
+
+    // Run synchronously
+    RunHiddenFable(exePath, false); // Compile Frontend
+    RunHiddenFable(exePath, true);  // Compile Game
+
+    RestoreIniFile();
 }
