@@ -211,20 +211,29 @@ static void DrawBankExplorer() {
         g_ShowAboutPopup = false;
     }
 
-    // NEW: Enforce a much larger starting size
-    ImGui::SetNextWindowSize(ImVec2(500, 350), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(520, 480), ImGuiCond_Appearing);
     if (ImGui::BeginPopupModal("About EgoCore", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        float buttonAreaHeight = 45.0f;
+        ImGui::BeginChild("##content", ImVec2(0, -buttonAreaHeight));
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "EgoCore - Modding Tool for Fable");
         ImGui::Separator();
-        ImGui::Text("Version: 1.0.0");
+        ImGui::Text("Version: 4.5.26 [BETA]");
         ImGui::Text("Author: AlbionSecrets");
         ImGui::Dummy(ImVec2(0, 10));
-        ImGui::TextWrapped("Placeholder text for About window. You can safely write paragraphs of text here, and they will wrap dynamically to fit the window bounds.");
+        ImGui::TextWrapped("EgoCore is the culmination of over twenty years of obsession with the inner workings of Albion. What began as curiosity has evolved into a six-month intensive development journey to provide the community with a modern, robust, and versatile modding framework.");
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::TextWrapped("I believe the tools to keep this game alive should be accessible to everyone. That is why EgoCore is, and will always be, Free and Open Source.");
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::TextWrapped("Developing a tool of this scale involves hundreds of hours of reverse engineering, debugging, and refinement. I don't believe in paywalling progress, so I rely entirely on the generosity of the community to keep this project sustainable. If EgoCore has saved you time or helped you bring a new vision to life, please consider supporting the project.");
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::Separator();
+        ImGui::Text("[Donations Page]");
+        ImGui::Text("[GitHub Repository]");
+        ImGui::Text("[Discord Group]");
+        ImGui::Text("[Tutorials& Documentation] - Waiting on MakhnoBlazed");
+        ImGui::EndChild();
 
-        // Pin the close button to the bottom right
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 40);
+        ImGui::Separator();
         if (ImGui::Button("Close", ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();
         }

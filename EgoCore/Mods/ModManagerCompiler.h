@@ -109,32 +109,38 @@ public:
 
     static void LoadMarkedState() {
         g_MarkedEntries.clear();
-        std::ifstream file("EgoCore_MarkedEntries.txt");
-        if (!file.is_open()) return;
-
-        std::string line;
-        while (std::getline(file, line)) {
-            if (line.empty()) continue;
+        // g_SavedMarkedEntries is populated by LoadConfig() from the [MarkedEntries]
+        // section of the config file. Promote them into typed StagedModPackageEntry objects.
+        for (const auto& raw : g_SavedMarkedEntries) {
             StagedModPackageEntry e;
-            e.EntryID = std::stoul(line);
-            std::getline(file, e.EntryName);
-            std::getline(file, line); e.EntryType = std::stoi(line);
-            std::getline(file, line); e.BankType = (EBankType)std::stoi(line);
-            std::getline(file, e.TypeName);
-            std::getline(file, e.BankName);
-            std::getline(file, e.SubBankName);
-            std::getline(file, e.SourceFullPath);
+            e.EntryID = raw.EntryID;
+            e.EntryName = raw.EntryName;
+            e.EntryType = raw.EntryType;
+            e.BankType = (EBankType)raw.BankType;
+            e.TypeName = raw.TypeName;
+            e.BankName = raw.BankName;
+            e.SubBankName = raw.SubBankName;
+            e.SourceFullPath = raw.SourceFullPath;
             g_MarkedEntries.push_back(e);
         }
     }
 
     static void SaveMarkedState() {
-        std::ofstream file("EgoCore_MarkedEntries.txt");
+        // Sync g_MarkedEntries back into the staging vector, then flush to config.
+        g_SavedMarkedEntries.clear();
         for (const auto& e : g_MarkedEntries) {
-            file << e.EntryID << "\n" << e.EntryName << "\n" << e.EntryType << "\n"
-                << (int)e.BankType << "\n" << e.TypeName << "\n" << e.BankName << "\n"
-                << e.SubBankName << "\n" << e.SourceFullPath << "\n";
+            RawMarkedEntry raw;
+            raw.EntryID = e.EntryID;
+            raw.EntryName = e.EntryName;
+            raw.EntryType = e.EntryType;
+            raw.BankType = (int32_t)e.BankType;
+            raw.TypeName = e.TypeName;
+            raw.BankName = e.BankName;
+            raw.SubBankName = e.SubBankName;
+            raw.SourceFullPath = e.SourceFullPath;
+            g_SavedMarkedEntries.push_back(raw);
         }
+        SaveConfig();
     }
 
     static bool IsMarked(const std::string& bankName, const std::string& entryName) {

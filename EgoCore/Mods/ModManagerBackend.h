@@ -18,7 +18,6 @@ inline int g_LaunchState = 0;
 class ModManagerBackend {
 public:
     static inline std::vector<ModEntry> g_LoadedMods;
-    static inline std::string g_EgoCoreModOrderFile = "egocore_modorder.txt";
 
     static void InitializeAndLoad() {
         g_LoadedMods.clear();
@@ -26,24 +25,9 @@ public:
 
         if (!fs::exists(modsDir)) fs::create_directories(modsDir);
 
-        std::vector<std::pair<std::string, bool>> savedOrder;
-        std::ifstream orderFile(g_EgoCoreModOrderFile);
-        if (orderFile.is_open()) {
-            std::string line;
-            while (std::getline(orderFile, line)) {
-                if (line.empty()) continue;
-
-                size_t delim = line.find_last_of('|');
-                if (delim != std::string::npos) {
-                    std::string name = line.substr(0, delim);
-                    bool isEnabled = (line.substr(delim + 1) == "1");
-                    savedOrder.push_back({ name, isEnabled });
-                }
-                else {
-                    savedOrder.push_back({ line, false });
-                }
-            }
-        }
+        // Load order now comes from the [ModOrder] section of the config file,
+        // populated into g_SavedModOrder by LoadConfig().
+        std::vector<std::pair<std::string, bool>>& savedOrder = g_SavedModOrder;
 
         std::vector<ModEntry> discoveredMods;
 
@@ -242,8 +226,11 @@ public:
     }
 
     static void SaveLoadOrder() {
-        std::ofstream orderFile(g_EgoCoreModOrderFile);
-        for (const auto& mod : g_LoadedMods) orderFile << mod.Name << "|" << (mod.IsEnabled ? "1" : "0") << "\n";
+        // Update the staging vector then flush everything to the config file.
+        g_SavedModOrder.clear();
+        for (const auto& mod : g_LoadedMods)
+            g_SavedModOrder.push_back({ mod.Name, mod.IsEnabled });
+        SaveConfig();
     }
 
     static void DeleteMod(int index) {

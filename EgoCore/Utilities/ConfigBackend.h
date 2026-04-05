@@ -23,6 +23,19 @@ struct AppConfig {
 inline AppConfig g_AppConfig;
 static const std::string CONFIG_FILENAME = "egocore_config.ini";
 
+struct RawMarkedEntry {
+    uint32_t    EntryID;
+    std::string EntryName;
+    int32_t     EntryType;
+    int32_t     BankType;
+    std::string TypeName;
+    std::string BankName;
+    std::string SubBankName;
+    std::string SourceFullPath;
+};
+inline std::vector<std::pair<std::string, bool>> g_SavedModOrder;
+inline std::vector<RawMarkedEntry>               g_SavedMarkedEntries;
+
 inline std::vector<std::string> GetDefaultBanks(const std::string& root) {
     const char* langs[] = { "English", "French", "Italian", "Chinese", "German", "Korean", "Japanese", "Spanish" };
     std::string detectedLang = "English";
@@ -73,6 +86,25 @@ inline void SaveConfig() {
         SaveKey("Key_ToggleLeftPanel", g_Keybinds.ToggleLeftPanel);
         SaveKey("Key_LookupDefinition", g_Keybinds.LookupDefinition);
 
+        // [ModOrder] section
+        file << "[ModOrder]\n";
+        for (const auto& mod : g_SavedModOrder)
+            file << mod.first << "|" << (mod.second ? "1" : "0") << "\n";
+
+        // [MarkedEntries] section
+        // Fields: EntryID|EntryName|EntryType|BankType|TypeName|BankName|SubBankName|SourceFullPath
+        file << "[MarkedEntries]\n";
+        for (const auto& e : g_SavedMarkedEntries) {
+            file << e.EntryID << "|"
+                << e.EntryName << "|"
+                << e.EntryType << "|"
+                << e.BankType << "|"
+                << e.TypeName << "|"
+                << e.BankName << "|"
+                << e.SubBankName << "|"
+                << e.SourceFullPath << "\n";
+        }
+
         file.close();
     }
 }
@@ -88,9 +120,12 @@ inline void LoadConfig() {
     g_AppConfig.ShowUnsavedChangesWarning = true;
     g_AppConfig.DefSystemDirty = false;
     g_AppConfig.EnableLookupGeneration = false;
+    g_SavedModOrder.clear();
+    g_SavedMarkedEntries.clear();
 
     if (file.is_open()) {
         std::string line;
+        std::string currentSection = "";
 
         auto ParseKey = [](const std::string& val, ShortcutKey& k) {
             std::stringstream ss(val);
@@ -103,18 +138,56 @@ inline void LoadConfig() {
 
         while (std::getline(file, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
 
+            // Section header detection
+            if (line.front() == '[') {
+                currentSection = line;
+                continue;
+            }
+
+            // [ModOrder] section
+            if (currentSection == "[ModOrder]") {
+                size_t delim = line.find_last_of('|');
+                if (delim != std::string::npos)
+                    g_SavedModOrder.push_back({ line.substr(0, delim), line.substr(delim + 1) == "1" });
+                else
+                    g_SavedModOrder.push_back({ line, false });
+                continue;
+            }
+
+            // [MarkedEntries] section
+            // Fields: EntryID|EntryName|EntryType|BankType|TypeName|BankName|SubBankName|SourceFullPath
+            if (currentSection == "[MarkedEntries]") {
+                std::stringstream ss(line);
+                std::string token;
+                std::vector<std::string> fields;
+                while (std::getline(ss, token, '|')) fields.push_back(token);
+                if (fields.size() == 8) {
+                    RawMarkedEntry e;
+                    e.EntryID = std::stoul(fields[0]);
+                    e.EntryName = fields[1];
+                    e.EntryType = std::stoi(fields[2]);
+                    e.BankType = std::stoi(fields[3]);
+                    e.TypeName = fields[4];
+                    e.BankName = fields[5];
+                    e.SubBankName = fields[6];
+                    e.SourceFullPath = fields[7];
+                    g_SavedMarkedEntries.push_back(e);
+                }
+                continue;
+            }
+
+            // Default section - existing key=value config
             if (line.find("Root=") == 0) {
                 g_AppConfig.GameRootPath = line.substr(5);
-                if (!g_AppConfig.GameRootPath.empty() && fs::exists(g_AppConfig.GameRootPath)) {
+                if (!g_AppConfig.GameRootPath.empty() && fs::exists(g_AppConfig.GameRootPath))
                     g_AppConfig.IsConfigured = true;
-                }
             }
             else if (line.find("Bank=") == 0) g_AppConfig.AutoLoadBanks.push_back(line.substr(5));
             else if (line.find("ShowDeleteConfirm=") == 0) g_AppConfig.ShowDeleteConfirm = (line.substr(18) == "1");
             else if (line.find("ShowAddConfirm=") == 0) g_AppConfig.ShowAddConfirm = (line.substr(15) == "1");
             else if (line.find("ShowBankDeleteConfirm=") == 0) g_AppConfig.ShowBankDeleteConfirm = (line.substr(22) == "1");
-            else if (line.find("ShowUnsavedChangesWarning=") == 0) g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
             else if (line.find("ShowUnsavedChangesWarning=") == 0) g_AppConfig.ShowUnsavedChangesWarning = (line.substr(26) == "1");
             else if (line.find("SkipFrontend=") == 0) g_AppConfig.SkipFrontend = (line.substr(13) == "1");
             else if (line.find("ModSystemDirty=") == 0) g_AppConfig.ModSystemDirty = (line.substr(15) == "1");
