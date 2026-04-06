@@ -167,7 +167,6 @@ public:
         int mips = 1;
         if (opts.GenerateMipmaps) {
             int mw = physW, mh = physH;
-            // DXT blocks cannot be smaller than 4x4. ARGB can go down to 1x1.
             int minDim = (opts.Format == ETextureFormat::ARGB8888) ? 1 : 4;
 
             while (mw > minDim || mh > minDim) {
@@ -186,7 +185,6 @@ public:
 
         for (int m = 0; m < mips; m++) {
             if (opts.Format == ETextureFormat::ARGB8888) {
-                // Convert staging/stbi RGBA back to Fable's native BGRA
                 std::vector<uint8_t> bgraMip = currentMip;
                 for (size_t i = 0; i < bgraMip.size() / 4; i++) {
                     std::swap(bgraMip[i * 4 + 0], bgraMip[i * 4 + 2]);
@@ -276,7 +274,6 @@ public:
 
         for (int m = 0; m < mips; m++) {
             if (opts.Format == ETextureFormat::ARGB8888) {
-                // Convert staging/stbi RGBA back to Fable's native BGRA
                 std::vector<uint8_t> bgraMip = currentMip;
                 for (size_t i = 0; i < bgraMip.size() / 4; i++) {
                     std::swap(bgraMip[i * 4 + 0], bgraMip[i * 4 + 2]);

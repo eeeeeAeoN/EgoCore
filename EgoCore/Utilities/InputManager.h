@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 
-enum class EAppMode { Banks, Defs };
+enum class EAppMode { Banks, Defs, FSE };
 inline EAppMode g_CurrentMode = EAppMode::Banks;
 
 enum class EDefViewType { Defs, Headers, Events };
@@ -48,6 +48,7 @@ struct ShortcutKey {
 struct AppKeybindings {
     ShortcutKey SwitchBankMode = { ImGuiKey_B, true, false, false };
     ShortcutKey SwitchDefMode = { ImGuiKey_D, true, false, false };
+    ShortcutKey SwitchFSEMode = { ImGuiKey_K, true, false, false };
     ShortcutKey SaveEntry = { ImGuiKey_S, true, false, false };
     ShortcutKey Compile = { ImGuiKey_F5, false, false, false };
     ShortcutKey NavigateBack = { ImGuiKey_LeftArrow, true, false, true };

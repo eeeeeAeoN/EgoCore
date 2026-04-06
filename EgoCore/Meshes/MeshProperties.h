@@ -69,7 +69,6 @@ struct VolumeBoxState {
 
 static std::map<std::string, VolumeBoxState> g_VolumeStates;
 
-// --- XBOX TEXTURE CACHING SYSTEM ---
 struct XboxTexMeta {
     std::string Name;
     uint32_t Type;
@@ -77,6 +76,7 @@ struct XboxTexMeta {
     uint32_t Size;
     std::vector<uint8_t> Info;
 };
+
 static std::map<int, std::map<uint32_t, XboxTexMeta>> g_XboxTexCache;
 
 inline void EnsureXboxTextureCache(int bankIndex) {
@@ -122,7 +122,6 @@ inline void EnsureXboxTextureCache(int bankIndex) {
     bank.Stream->clear();
     bank.Stream->seekg(pos, std::ios::beg); // Restore original file position
 }
-// -----------------------------------
 
 inline std::string GetTextureNameForMesh(int textureID) {
     if (textureID <= 0) return "";
@@ -1046,7 +1045,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                                 std::ofstream out(savePath, std::ios::binary);
                                 for (const auto& p : g_ActiveMeshContent.Primitives) {
                                     for (const auto& cp : p.ClothPrimitives) {
-                                        // Write a tiny header for the hex editor: PrimID, MatID, Size
                                         uint32_t pIdx = cp.PrimitiveIndex;
                                         uint32_t mIdx = cp.MaterialIndex;
                                         uint32_t sz = (uint32_t)cp.ParticleProgramData.size();
@@ -1155,11 +1153,9 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 struct FoundAnim { int BankIdx; int EntryIdx; std::string Name; uint32_t ID; int Type; };
                 std::vector<FoundAnim> anims;
 
-                // --- ISOLATED ANIMATION SCANNER ---
                 bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
 
                 if (isXboxActive) {
-                    // XBOX: Only scan the local active bank
                     int i = g_ActiveBankIndex;
                     for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
                         int t = g_OpenBanks[i].Entries[j].Type;
@@ -1169,7 +1165,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     }
                 }
                 else {
-                    // PC: Scan all standard graphics banks
                     for (int i = 0; i < g_OpenBanks.size(); i++) {
                         if (g_OpenBanks[i].Type == EBankType::Graphics) {
                             for (int j = 0; j < g_OpenBanks[i].Entries.size(); j++) {
@@ -1257,7 +1252,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 ImGui::EndTabItem();
             }
 
-            // --- CLOTH PHYSICS TAB ---
             if (g_ActiveMeshContent.ClothFlag && ImGui::BeginTabItem("Cloth Physics")) {
                 int cGlobalIdx = 0;
                 for (size_t pIdx = 0; pIdx < g_ActiveMeshContent.Primitives.size(); pIdx++) {
@@ -1283,7 +1277,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
                             bool changed = false;
 
-                            // --- SECTION: CORE SIMULATION ---
                             if (ImGui::TreeNodeEx("Simulation Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
                                 ImGui::SetNextItemWidth(150);
                                 if (ImGui::DragFloat("Timestep", &sim.Timestep, 0.0001f, 0.0f, 1.0f, "%.4f")) changed = true;
@@ -1303,7 +1296,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                                 ImGui::TreePop();
                             }
 
-                            // --- SECTION: DRAG & ACCELERATION ---
                             if (ImGui::TreeNodeEx("Drag & Interaction", ImGuiTreeNodeFlags_DefaultOpen)) {
                                 bool dragEn = sim.DraggingEnable != 0;
                                 if (ImGui::Checkbox("Enable Drag", &dragEn)) { sim.DraggingEnable = dragEn ? 1 : 0; changed = true; }
@@ -1321,7 +1313,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                                 ImGui::TreePop();
                             }
 
-                            // --- SECTION: RENDERING ---
                             if (ImGui::TreeNodeEx("Rendering Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
                                 ImGui::SetNextItemWidth(150);
                                 if (ImGui::DragFloat("Avg Patch Size", &prog.AveragePatchSize, 0.01f)) changed = true;
@@ -2039,7 +2030,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
 
         if (isXboxActive) {
-            // 1. Local Xbox Textures ONLY
             EnsureXboxTextureCache(g_ActiveBankIndex);
             for (const auto& [id, meta] : g_XboxTexCache[g_ActiveBankIndex]) {
                 foundAny = true;

@@ -58,6 +58,9 @@
     <Filter Include="Source Files\Mods">
       <UniqueIdentifier>{ec2e6cc1-ac9c-4fc7-b279-4c436cfd893a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\FSE">
+      <UniqueIdentifier>{ea5d4ddc-ecd5-4e9f-a71b-08b5d6e2d554}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -100,9 +103,6 @@
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>
     <ClInclude Include="Utilities\Utils.h">
-      <Filter>Source Files\Utilities</Filter>
-    </ClInclude>
-    <ClInclude Include="Utilities\GltfExporter.h">
       <Filter>Source Files\Utilities</Filter>
     </ClInclude>
     <ClInclude Include="resource.h">
@@ -279,9 +279,6 @@
     <ClInclude Include="Particles\ParticleCompiler.h">
       <Filter>Source Files\Particles</Filter>
     </ClInclude>
-    <ClInclude Include="InputManager.h">
-      <Filter>Source Files\Utilities</Filter>
-    </ClInclude>
     <ClInclude Include="Mods\ModManagerBackend.h">
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
@@ -289,6 +286,24 @@
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
     <ClInclude Include="Mods\ModManagerUI.h">
+      <Filter>Source Files\Mods</Filter>
+    </ClInclude>
+    <ClInclude Include="Utilities\InputManager.h">
+      <Filter>Source Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\GltfExporter.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="FSE\FSEAutosuggest.h">
+      <Filter>Source Files\FSE</Filter>
+    </ClInclude>
+    <ClInclude Include="FSE\FSEBackend.h">
+      <Filter>Source Files\FSE</Filter>
+    </ClInclude>
+    <ClInclude Include="FSE\FSETabUI.h">
+      <Filter>Source Files\FSE</Filter>
+    </ClInclude>
+    <ClInclude Include="Mods\TngMerger.h">
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
   </ItemGroup>

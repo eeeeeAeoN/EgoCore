@@ -10,6 +10,7 @@
 #include "ModManagerCompiler.h"
 #include "BankEditor.h"
 #include "CompilerBackend.h"
+#include "TngMerger.h"
 
 namespace fs = std::filesystem;
 
@@ -25,8 +26,6 @@ public:
 
         if (!fs::exists(modsDir)) fs::create_directories(modsDir);
 
-        // Load order now comes from the [ModOrder] section of the config file,
-        // populated into g_SavedModOrder by LoadConfig().
         std::vector<std::pair<std::string, bool>>& savedOrder = g_SavedModOrder;
 
         std::vector<ModEntry> discoveredMods;
@@ -62,17 +61,22 @@ public:
                 // Reset flags before deep scan
                 mod.IsAssetMod = false;
                 mod.IsDefMod = false;
+                mod.IsTngMod = false;
 
-                // Unified deep scan for .resource, .def, and event files
                 try {
                     for (const auto& file : fs::recursive_directory_iterator(mod.ModFolderPath)) {
                         if (file.is_regular_file()) {
                             std::string ext = file.path().extension().string();
                             std::string filename = file.path().filename().string();
+                            std::string relPath = file.path().string().substr(mod.ModFolderPath.length());
+
                             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                             std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
 
-                            // Asset Mod Condition
+                            std::string lowerRelPath = relPath;
+                            std::transform(lowerRelPath.begin(), lowerRelPath.end(), lowerRelPath.begin(), ::tolower);
+
+                            // Asset Mod Condition (Binary Banks)
                             if (ext == ".resource") {
                                 mod.IsAssetMod = true;
                             }
@@ -84,8 +88,41 @@ public:
                                 mod.IsDefMod = true;
                             }
 
-                            // Optimization: If we found both, no need to keep scanning this mod's folders
-                            if (mod.IsAssetMod && mod.IsDefMod) {
+                            // Tng Mod Condition
+                            if (ext == ".tng") {
+                                mod.IsTngMod = true;
+                            }
+
+                            // Loose Asset Mod Condition
+                            if (!mod.IsAssetMod) {
+                                if (lowerRelPath.find("\\data\\bones\\") != std::string::npos ||
+                                    lowerRelPath.find("\\data\\enginecache\\") != std::string::npos ||
+                                    (lowerRelPath.find("\\data\\levels\\") != std::string::npos && ext != ".tng") ||
+                                    lowerRelPath.find("\\data\\lightingtable\\") != std::string::npos ||
+                                    lowerRelPath.find("\\data\\video\\") != std::string::npos ||
+                                    lowerRelPath.find("\\data\\tattoos\\") != std::string::npos) {
+                                    mod.IsAssetMod = true;
+                                }
+                                else if (lowerRelPath.find("\\data\\misc\\") != std::string::npos &&
+                                    lowerRelPath.find("\\data\\misc\\pc\\") == std::string::npos) {
+                                    if (filename != "game_animation_events.txt" && filename != "sound_animation_events.txt" &&
+                                        filename != "game_animation_events.bin" && filename != "sound_animation_events.bin" &&
+                                        filename != "stars.dat") {
+                                        mod.IsAssetMod = true;
+                                    }
+                                }
+                                else if (lowerRelPath.find("\\data\\sound\\") != std::string::npos) {
+                                    if (ext != ".lug" && ext != ".met") mod.IsAssetMod = true;
+                                }
+                                else if (lowerRelPath.find("\\") == lowerRelPath.find_last_of("\\")) {
+                                    if (ext == ".ini" && filename != "mods.ini" && filename.find("_info.txt") == std::string::npos) {
+                                        mod.IsAssetMod = true;
+                                    }
+                                }
+                            }
+
+                            // Optimization: Break early only if all three are found
+                            if (mod.IsAssetMod && mod.IsDefMod && mod.IsTngMod) {
                                 break;
                             }
                         }
@@ -226,7 +263,6 @@ public:
     }
 
     static void SaveLoadOrder() {
-        // Update the staging vector then flush everything to the config file.
         g_SavedModOrder.clear();
         for (const auto& mod : g_LoadedMods)
             g_SavedModOrder.push_back({ mod.Name, mod.IsEnabled });
@@ -239,6 +275,7 @@ public:
 
         bool wasAsset = g_LoadedMods[index].IsAssetMod;
         bool wasDef = g_LoadedMods[index].IsDefMod;
+        bool wasTng = g_LoadedMods[index].IsTngMod;
 
         std::string path = g_LoadedMods[index].ModFolderPath;
         try { if (fs::exists(path)) fs::remove_all(path); }
@@ -250,7 +287,8 @@ public:
 
         if (wasAsset) g_AppConfig.ModSystemDirty = true;
         if (wasDef) g_AppConfig.DefSystemDirty = true;
-        if (wasAsset || wasDef) SaveConfig();
+        if (wasTng) g_AppConfig.TngSystemDirty = true;
+        if (wasAsset || wasDef || wasTng) SaveConfig();
     }
 
     static void MergeDefFile(const std::string& modFile, const std::string& targetFile) {
@@ -420,9 +458,9 @@ public:
     }
 
     static void ProcessModsAndLaunch() {
-
         bool hasActiveAssetMods = false;
         bool hasActiveDefMods = false;
+        bool hasActiveTngMods = false;
         std::set<std::string> neededBankFiles;
 
         for (const auto& mod : g_LoadedMods) {
@@ -434,17 +472,21 @@ public:
             if (mod.IsDefMod) {
                 hasActiveDefMods = true;
             }
+            if (mod.IsTngMod) {
+                hasActiveTngMods = true;
+            }
         }
 
-        if (!hasActiveAssetMods && !hasActiveDefMods) {
-
+        if (!hasActiveAssetMods && !hasActiveDefMods && !hasActiveTngMods) {
             bool wasBankDirty = g_AppConfig.ModSystemDirty;
             bool wasDefDirty = g_AppConfig.DefSystemDirty;
+            bool wasTngDirty = g_AppConfig.TngSystemDirty;
 
             RestoreAllTmpBackups();
 
             g_AppConfig.ModSystemDirty = false;
             g_AppConfig.DefSystemDirty = false;
+            g_AppConfig.TngSystemDirty = false;
             SaveConfig();
 
             if (wasDefDirty) {
@@ -457,7 +499,7 @@ public:
             return;
         }
 
-        if (!g_AppConfig.ModSystemDirty && !g_AppConfig.DefSystemDirty) {
+        if (!g_AppConfig.ModSystemDirty && !g_AppConfig.DefSystemDirty && !g_AppConfig.TngSystemDirty) {
             LaunchGame();
             return;
         }
@@ -468,13 +510,12 @@ public:
 
         ModBankPatcher::BuildMasterModIndex(g_LoadedMods);
 
-        RestoreVanillaFiles(g_AppConfig.ModSystemDirty, g_AppConfig.DefSystemDirty);
-        if (g_AppConfig.ModSystemDirty) {
-            BackupNeededBankFiles(neededBankFiles);
-        }
-        if (g_AppConfig.DefSystemDirty) {
-            BackupAffectedDefFiles();
-        }
+        RestoreVanillaFiles(g_AppConfig.ModSystemDirty, g_AppConfig.DefSystemDirty, g_AppConfig.TngSystemDirty);
+
+        if (g_AppConfig.ModSystemDirty) BackupNeededBankFiles(neededBankFiles);
+        if (g_AppConfig.DefSystemDirty) BackupAffectedDefFiles();
+        if (g_AppConfig.TngSystemDirty) BackupAffectedTngFiles();
+
         if (g_AppConfig.ModSystemDirty && hasActiveAssetMods) {
             EnsureNeededBanksAreLoaded(neededBankFiles);
             LoadHeadersFromDir(g_AppConfig.GameRootPath);
@@ -497,45 +538,76 @@ public:
                     ReloadBankInPlace(&bank);
                 }
             }
+            DeployLooseAssetMods();
         }
-
         g_AppConfig.ModSystemDirty = false;
 
-        if (g_AppConfig.DefSystemDirty && hasActiveDefMods) {
-            CompileAudioBinFiles();
+        if (g_AppConfig.TngSystemDirty) {
+            if (hasActiveTngMods) {
+                std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
 
-            std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
+                for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
+                    const auto& mod = *it;
+                    if (!mod.IsEnabled || !mod.IsTngMod) continue;
 
-            for (const auto& mod : g_LoadedMods) {
-                if (!mod.IsEnabled)  continue;
-                if (!mod.IsDefMod)   continue;
+                    std::string modDataPath = mod.ModFolderPath + "\\Data\\Levels";
+                    if (!fs::exists(modDataPath)) continue;
 
-                std::string modDataPath = mod.ModFolderPath + "\\Data";
-                if (!fs::exists(modDataPath)) continue;
+                    for (const auto& entry : fs::recursive_directory_iterator(modDataPath)) {
+                        if (entry.is_regular_file() && entry.path().extension() == ".tng") {
+                            std::string relPath = entry.path().string().substr(mod.ModFolderPath.length() + 5);
+                            std::string targetPath = dataPath + relPath;
 
-                for (const auto& entry : fs::recursive_directory_iterator(modDataPath)) {
-                    if (!entry.is_regular_file()) continue;
-
-                    std::string ext = entry.path().extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-                    if (ext != ".def" && ext != ".txt" && ext != ".h" && ext != ".bin") continue;
-
-                    std::string relPath = entry.path().string().substr(modDataPath.length());
-                    std::string targetPath = dataPath + relPath;
-
-                    fs::create_directories(fs::path(targetPath).parent_path());
-
-                    if (!fs::exists(targetPath)) {
-                        fs::copy_file(entry.path(), targetPath);
-                        continue;
+                            if (!fs::exists(targetPath)) {
+                                fs::create_directories(fs::path(targetPath).parent_path());
+                                fs::copy_file(entry.path(), targetPath);
+                            }
+                            else {
+                                TngMerger::ProcessTngMod(entry.path().string(), targetPath);
+                            }
+                        }
                     }
-                    if (ext == ".def") MergeDefFile(entry.path().string(), targetPath);
-                    else if (ext == ".txt") MergeEventFile(entry.path().string(), targetPath);
-                    else if (ext == ".h")   MergeHeaderFile(entry.path().string(), targetPath);
-                    else if (ext == ".bin") fs::copy_file(entry.path(), targetPath,
-                        fs::copy_options::overwrite_existing);
                 }
+            }
+            g_AppConfig.TngSystemDirty = false;
+        }
+
+        if (g_AppConfig.DefSystemDirty) {
+            if (hasActiveDefMods) {
+                std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
+
+                for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
+                    const auto& mod = *it;
+                    if (!mod.IsEnabled)  continue;
+                    if (!mod.IsDefMod)   continue;
+
+                    std::string modDataPath = mod.ModFolderPath + "\\Data";
+                    if (!fs::exists(modDataPath)) continue;
+
+                    for (const auto& entry : fs::recursive_directory_iterator(modDataPath)) {
+                        if (!entry.is_regular_file()) continue;
+
+                        std::string ext = entry.path().extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                        if (ext != ".def" && ext != ".txt" && ext != ".h" && ext != ".bin") continue;
+
+                        std::string relPath = entry.path().string().substr(modDataPath.length());
+                        std::string targetPath = dataPath + relPath;
+
+                        fs::create_directories(fs::path(targetPath).parent_path());
+
+                        if (!fs::exists(targetPath)) {
+                            fs::copy_file(entry.path(), targetPath);
+                            continue;
+                        }
+                        if (ext == ".def") MergeDefFile(entry.path().string(), targetPath);
+                        else if (ext == ".txt") MergeEventFile(entry.path().string(), targetPath);
+                        else if (ext == ".h")   MergeHeaderFile(entry.path().string(), targetPath);
+                        else if (ext == ".bin") fs::copy_file(entry.path(), targetPath, fs::copy_options::overwrite_existing);
+                    }
+                }
+                CompileAudioBinFiles();
             }
 
             g_AppConfig.DefSystemDirty = false;
@@ -545,12 +617,13 @@ public:
             CompileAllDefs_Stealth();
             return;
         }
+
         g_AppConfig.DefSystemDirty = false;
         SaveConfig();
         LaunchGame();
     }
 
-    static void RestoreVanillaFiles(bool restoreBanks, bool restoreDefs) {
+    static void RestoreVanillaFiles(bool restoreBanks, bool restoreDefs, bool restoreTngs) {
         std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
         if (!fs::exists(dataPath)) return;
 
@@ -565,8 +638,11 @@ public:
 
             bool isBank = (origExt == ".big" || origExt == ".lut" || origExt == ".lug");
             bool isDef = (origExt == ".def" || origExt == ".txt" || origExt == ".h" || origExt == ".bin");
+            bool isTng = (origExt == ".tng");
+            bool isLooseAsset = (!isBank && !isDef && !isTng);
 
-            if ((restoreBanks && isBank) || (restoreDefs && isDef)) {
+            // Group Loose Assets with Bank restoration (Asset Mods)
+            if ((restoreBanks && (isBank || isLooseAsset)) || (restoreDefs && isDef) || (restoreTngs && isTng)) {
                 try {
                     if (fs::exists(originalPath)) fs::remove(originalPath);
                     fs::rename(tmpPath, originalPath);
@@ -577,7 +653,7 @@ public:
     }
 
     static void RestoreAllTmpBackups() {
-        RestoreVanillaFiles(true, true);
+        RestoreVanillaFiles(true, true, true);
     }
 
     static void BackupNeededBankFiles(const std::set<std::string>& neededBankFileNames) {
@@ -630,6 +706,115 @@ public:
                     catch (...) {}
                 }
             }
+        }
+    }
+
+    static void BackupAffectedTngFiles() {
+        std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
+        if (!fs::exists(dataPath)) return;
+
+        for (const auto& mod : g_LoadedMods) {
+            if (!mod.IsEnabled || !mod.IsTngMod) continue;
+
+            std::string modDataPath = mod.ModFolderPath + "\\Data\\Levels";
+            if (!fs::exists(modDataPath)) continue;
+
+            for (const auto& entry : fs::recursive_directory_iterator(modDataPath)) {
+                if (!entry.is_regular_file()) continue;
+
+                std::string ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext != ".tng") continue;
+                std::string relPath = entry.path().string().substr(mod.ModFolderPath.length() + 5);
+                std::string targetPath = dataPath + relPath;
+
+                if (!fs::exists(targetPath)) continue;
+
+                std::string tmpPath = targetPath + ".tmp";
+                if (!fs::exists(tmpPath)) {
+                    try { fs::copy_file(targetPath, tmpPath); }
+                    catch (...) {}
+                }
+            }
+        }
+    }
+
+    static void DeployLooseAssetMods() {
+        std::string gameRoot = g_AppConfig.GameRootPath;
+
+        for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
+            const auto& mod = *it;
+            if (!mod.IsEnabled || !mod.IsAssetMod) continue;
+
+            try {
+                for (const auto& file : fs::recursive_directory_iterator(mod.ModFolderPath)) {
+                    if (!file.is_regular_file()) continue;
+
+                    std::string modFilePath = file.path().string();
+                    std::string relPath = modFilePath.substr(mod.ModFolderPath.length());
+
+                    std::string lowerRelPath = relPath;
+                    std::transform(lowerRelPath.begin(), lowerRelPath.end(), lowerRelPath.begin(), ::tolower);
+
+                    std::string filename = file.path().filename().string();
+                    std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
+
+                    std::string ext = file.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                    // --- Gatekeeper Logic ---
+                    bool isAllowed = false;
+
+                    if (lowerRelPath.find("\\data\\bones\\") != std::string::npos ||
+                        lowerRelPath.find("\\data\\enginecache\\") != std::string::npos ||
+                        (lowerRelPath.find("\\data\\levels\\") != std::string::npos && ext != ".tng") ||
+                        lowerRelPath.find("\\data\\lightingtable\\") != std::string::npos ||
+                        lowerRelPath.find("\\data\\video\\") != std::string::npos ||
+                        lowerRelPath.find("\\data\\tattoos\\") != std::string::npos) {
+                        isAllowed = true;
+                    }
+                    else if (lowerRelPath.find("\\data\\misc\\") != std::string::npos &&
+                        lowerRelPath.find("\\data\\misc\\pc\\") == std::string::npos) {
+                        if (filename != "game_animation_events.txt" && filename != "sound_animation_events.txt" &&
+                            filename != "game_animation_events.bin" && filename != "sound_animation_events.bin" &&
+                            filename != "stars.dat") {
+                            isAllowed = true;
+                        }
+                    }
+                    else if (lowerRelPath.find("\\data\\sound\\") != std::string::npos) {
+                        if (ext != ".lug" && ext != ".met") isAllowed = true;
+                    }
+                    else if (lowerRelPath.find("\\") == lowerRelPath.find_last_of("\\")) {
+                        if (ext == ".ini" && filename != "mods.ini" && filename.find("_info.txt") == std::string::npos) {
+                            isAllowed = true;
+                        }
+                    }
+
+                    if (!isAllowed) continue;
+
+                    // --- The Replacement Logic ---
+                    std::string targetPath = gameRoot + relPath;
+                    std::string tmpPath = targetPath + ".tmp";
+
+                    fs::create_directories(fs::path(targetPath).parent_path());
+
+                    if (fs::exists(targetPath)) {
+                        if (fs::exists(tmpPath)) {
+                            fs::remove(targetPath);
+                            fs::copy_file(tmpPath, targetPath);
+                            fs::copy_file(targetPath, tmpPath, fs::copy_options::overwrite_existing);
+                        }
+                        else {
+                            fs::copy_file(targetPath, tmpPath);
+                        }
+                        fs::copy_file(modFilePath, targetPath, fs::copy_options::overwrite_existing);
+                    }
+                    else {
+                        fs::copy_file(modFilePath, targetPath, fs::copy_options::overwrite_existing);
+                    }
+                }
+            }
+            catch (...) {}
         }
     }
 

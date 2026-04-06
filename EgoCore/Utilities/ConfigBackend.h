@@ -14,11 +14,13 @@ struct AppConfig {
     bool SkipFrontend = false;
     bool ModSystemDirty = false;
     bool DefSystemDirty = false;
+    bool TngSystemDirty = false;
     bool ShowDeleteConfirm = true;
     bool ShowAddConfirm = true;
     bool ShowBankDeleteConfirm = true;
     bool ShowUnsavedChangesWarning = true;
     bool EnableLookupGeneration = false;
+    bool EnableAutosuggest = true;
 };
 inline AppConfig g_AppConfig;
 static const std::string CONFIG_FILENAME = "egocore_config.ini";
@@ -71,13 +73,16 @@ inline void SaveConfig() {
         file << "SkipFrontend=" << (g_AppConfig.SkipFrontend ? "1" : "0") << "\n";
         file << "ModSystemDirty=" << (g_AppConfig.ModSystemDirty ? "1" : "0") << "\n";
         file << "DefSystemDirty=" << (g_AppConfig.DefSystemDirty ? "1" : "0") << "\n";
+        file << "TngSystemDirty=" << (g_AppConfig.TngSystemDirty ? "1" : "0") << "\n";
         file << "EnableLookupGeneration=" << (g_AppConfig.EnableLookupGeneration ? "1" : "0") << "\n";
+        file << "EnableAutosuggest=" << (g_AppConfig.EnableAutosuggest ? "1" : "0") << "\n";
 
         auto SaveKey = [&](const std::string& name, const ShortcutKey& k) {
             file << name << "=" << (int)k.Key << "," << k.Ctrl << "," << k.Shift << "," << k.Alt << "\n";
             };
         SaveKey("Key_SwitchBankMode", g_Keybinds.SwitchBankMode);
         SaveKey("Key_SwitchDefMode", g_Keybinds.SwitchDefMode);
+        SaveKey("Key_SwitchFSEMode", g_Keybinds.SwitchFSEMode);
         SaveKey("Key_SaveEntry", g_Keybinds.SaveEntry);
         SaveKey("Key_Compile", g_Keybinds.Compile);
         SaveKey("Key_NavigateBack", g_Keybinds.NavigateBack);
@@ -86,12 +91,10 @@ inline void SaveConfig() {
         SaveKey("Key_ToggleLeftPanel", g_Keybinds.ToggleLeftPanel);
         SaveKey("Key_LookupDefinition", g_Keybinds.LookupDefinition);
 
-        // [ModOrder] section
         file << "[ModOrder]\n";
         for (const auto& mod : g_SavedModOrder)
             file << mod.first << "|" << (mod.second ? "1" : "0") << "\n";
 
-        // [MarkedEntries] section
         // Fields: EntryID|EntryName|EntryType|BankType|TypeName|BankName|SubBankName|SourceFullPath
         file << "[MarkedEntries]\n";
         for (const auto& e : g_SavedMarkedEntries) {
@@ -118,7 +121,9 @@ inline void LoadConfig() {
     g_AppConfig.ShowAddConfirm = true;
     g_AppConfig.ShowBankDeleteConfirm = true;
     g_AppConfig.ShowUnsavedChangesWarning = true;
+    g_AppConfig.ModSystemDirty = false;
     g_AppConfig.DefSystemDirty = false;
+    g_AppConfig.TngSystemDirty = false;
     g_AppConfig.EnableLookupGeneration = false;
     g_SavedModOrder.clear();
     g_SavedMarkedEntries.clear();
@@ -140,13 +145,11 @@ inline void LoadConfig() {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.empty()) continue;
 
-            // Section header detection
             if (line.front() == '[') {
                 currentSection = line;
                 continue;
             }
 
-            // [ModOrder] section
             if (currentSection == "[ModOrder]") {
                 size_t delim = line.find_last_of('|');
                 if (delim != std::string::npos)
@@ -156,7 +159,6 @@ inline void LoadConfig() {
                 continue;
             }
 
-            // [MarkedEntries] section
             // Fields: EntryID|EntryName|EntryType|BankType|TypeName|BankName|SubBankName|SourceFullPath
             if (currentSection == "[MarkedEntries]") {
                 std::stringstream ss(line);
@@ -178,7 +180,6 @@ inline void LoadConfig() {
                 continue;
             }
 
-            // Default section - existing key=value config
             if (line.find("Root=") == 0) {
                 g_AppConfig.GameRootPath = line.substr(5);
                 if (!g_AppConfig.GameRootPath.empty() && fs::exists(g_AppConfig.GameRootPath))
@@ -192,9 +193,12 @@ inline void LoadConfig() {
             else if (line.find("SkipFrontend=") == 0) g_AppConfig.SkipFrontend = (line.substr(13) == "1");
             else if (line.find("ModSystemDirty=") == 0) g_AppConfig.ModSystemDirty = (line.substr(15) == "1");
             else if (line.find("DefSystemDirty=") == 0) g_AppConfig.DefSystemDirty = (line.substr(15) == "1");
+            else if (line.find("TngSystemDirty=") == 0) g_AppConfig.TngSystemDirty = (line.substr(15) == "1");
             else if (line.find("EnableLookupGeneration=") == 0) g_AppConfig.EnableLookupGeneration = (line.substr(23) == "1");
+            else if (line.find("EnableAutosuggest=") == 0) g_AppConfig.EnableAutosuggest = (line.substr(18) == "1");
             else if (line.find("Key_SwitchBankMode=") == 0) ParseKey(line.substr(19), g_Keybinds.SwitchBankMode);
             else if (line.find("Key_SwitchDefMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchDefMode);
+            else if (line.find("Key_SwitchFSEMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchFSEMode);
             else if (line.find("Key_SaveEntry=") == 0) ParseKey(line.substr(14), g_Keybinds.SaveEntry);
             else if (line.find("Key_Compile=") == 0) ParseKey(line.substr(12), g_Keybinds.Compile);
             else if (line.find("Key_NavigateBack=") == 0) ParseKey(line.substr(17), g_Keybinds.NavigateBack);

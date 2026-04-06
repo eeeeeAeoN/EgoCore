@@ -74,7 +74,7 @@ struct CParticleSimulation {
     uint32_t TimestepChanged;
     float TimestepMultiplier;
     uint32_t Size;
-    std::vector<float> Positions; // Size * 3 (Stored as 12-byte C3DVector)
+    std::vector<float> Positions;
     std::vector<uint32_t> SimulationAlphas;
     float GravityStrength;
     float WindStrength;
@@ -111,14 +111,14 @@ struct CConstraintInstruction {
 
 struct CParticleProgram {
     uint32_t Version;
-    std::vector<uint8_t> Constraints; // The raw bytecode
+    std::vector<uint8_t> Constraints;
     std::vector<CConstraintInstruction> ParsedInstructions;
     CParticleSimulation InitialSimulation;
     std::vector<C3DTriangle2> RenderTris;
     std::vector<C3DQuad2> RenderQuads;
     std::vector<C3DClothRenderVertex> RenderVertices;
     uint32_t NonSimCount;
-    std::vector<float> NonSimPositions; // NonSimCount * 3
+    std::vector<float> NonSimPositions;
     std::vector<C2DVector> IndexedTextureCoords;
     std::vector<uint32_t> ParticleIndices;
     std::vector<uint32_t> VertexIndices;
@@ -148,7 +148,7 @@ struct CParticleProgram {
         auto ReadString = [&]() -> std::string {
             std::string s;
             while (cursor < sz && b[cursor] != 0) { s += (char)b[cursor++]; }
-            if (cursor < sz) cursor++; // skip null terminator
+            if (cursor < sz) cursor++;
             return s;
             };
 
@@ -160,7 +160,6 @@ struct CParticleProgram {
             Constraints.resize(constraintsLen);
             if (!ReadBytes(Constraints.data(), constraintsLen)) return false;
 
-            // --- EGOCORE BYTECODE INTERPRETER ---
             size_t cCursor = 0;
             while (cCursor + 12 <= Constraints.size()) {
                 CConstraintInstruction inst;
@@ -296,12 +295,10 @@ struct CParticleProgram {
 
         WriteU32(Version);
 
-        // Rebuild Constraints array from the ParsedInstructions
         std::vector<uint8_t> rebuiltConstraints;
         for (const auto& inst : ParsedInstructions) {
             uint32_t op = inst.Opcode;
             uint32_t cnt = inst.Count;
-            // FIX: Force the payload size to be the actual byte size of the vector
             uint32_t psz = (uint32_t)inst.Payload.size();
 
             size_t old = rebuiltConstraints.size();
@@ -316,7 +313,6 @@ struct CParticleProgram {
         WriteU32((uint32_t)rebuiltConstraints.size());
         if (!rebuiltConstraints.empty()) Write(rebuiltConstraints.data(), rebuiltConstraints.size());
 
-        // Simulation Header
         WriteF32(InitialSimulation.Timestep);
         WriteU32(InitialSimulation.TimestepChanged);
         WriteF32(InitialSimulation.TimestepMultiplier);
@@ -333,15 +329,12 @@ struct CParticleProgram {
         WriteU8(InitialSimulation.AccelerationEnable);
         WriteF32(InitialSimulation.GlobalDamping);
 
-        // Rendering Data
         WriteU32((uint32_t)RenderTris.size()); if (!RenderTris.empty()) Write(RenderTris.data(), RenderTris.size() * 6);
         WriteU32((uint32_t)RenderQuads.size()); if (!RenderQuads.empty()) Write(RenderQuads.data(), RenderQuads.size() * 8);
         WriteU32((uint32_t)RenderVertices.size()); if (!RenderVertices.empty()) Write(RenderVertices.data(), RenderVertices.size() * 4);
 
-        // NonSim
         WriteU32(NonSimCount); if (NonSimCount > 0) Write(NonSimPositions.data(), NonSimCount * 12);
 
-        // UVs and Indices
         WriteU32((uint32_t)IndexedTextureCoords.size()); if (!IndexedTextureCoords.empty()) Write(IndexedTextureCoords.data(), IndexedTextureCoords.size() * 8);
         WriteU32((uint32_t)ParticleIndices.size()); if (!ParticleIndices.empty()) Write(ParticleIndices.data(), ParticleIndices.size() * 4);
         WriteU32((uint32_t)VertexIndices.size()); if (!VertexIndices.empty()) Write(VertexIndices.data(), VertexIndices.size() * 4);
@@ -349,11 +342,9 @@ struct CParticleProgram {
         WriteF32(AveragePatchSize);
         WriteU8(BezierEnable);
 
-        // Export Particles
         WriteU32((uint32_t)ExportParticles.size());
         for (const auto& ep : ExportParticles) { WriteString(ep.Name); WriteU32(ep.Value); }
 
-        // Groups
         auto WriteGroups = [&](const std::vector<C3DGroup2>& groups) {
             WriteU32((uint32_t)groups.size());
             for (const auto& g : groups) {
@@ -772,10 +763,8 @@ struct C3DMeshContent {
             int reps = (p.RepeatingMeshReps > 1) ? p.RepeatingMeshReps : 1;
             int totalVertsToRead = p.VertexCount * reps;
 
-            // 1. Your fix: precise bitmask for position compression (Stride 20 vs 28/36)
             bool isPosComp = (p.InitFlags & 4) != 0 && (p.InitFlags & 0x10) == 0;
 
-            // 2. Untouched original logic: Type 2 and Type 4 meshes store raw floats regardless
             if (MeshType == 4 || (p.VertexStride == 36 && p.AnimatedBlockCount == 0)) isPosComp = false;
             if (reps > 1) isPosComp = false;
 
@@ -809,8 +798,6 @@ struct C3DMeshContent {
         for (const auto& p : Primitives) {
             int reps = (p.RepeatingMeshReps > 1) ? p.RepeatingMeshReps : 1;
             int totalVertsToRead = p.VertexCount * reps;
-
-            // Apply the exact same logic for the Sphere pass
             bool isPosComp = (p.InitFlags & 4) != 0 && (p.InitFlags & 0x10) == 0;
             if (MeshType == 4 || (p.VertexStride == 36 && p.AnimatedBlockCount == 0)) isPosComp = false;
             if (reps > 1) isPosComp = false;

@@ -597,8 +597,6 @@ namespace GltfMeshImporter {
             if (pt.type == 1) {
                 pt.physLocalIdx = sim.Size++;
                 sim.Positions.push_back(pt.p[0]); sim.Positions.push_back(pt.p[1]); sim.Positions.push_back(pt.p[2]);
-
-                // Explicit 0 bits (perfectly represents float 0.0f for Fable)
                 sim.SimulationAlphas.push_back(0);
             }
         }
@@ -610,11 +608,9 @@ namespace GltfMeshImporter {
 
                 uint32_t finalAlphaBits;
                 if (pt.alpha > 1.01f) {
-                    // Backwards compatibility: Original EgoCore floats (1065353216.0f)
                     finalAlphaBits = (uint32_t)std::round(pt.alpha);
                 }
                 else {
-                    // Blender fix: Clamped 1.0f float bit-cast to Fable's required IEEE bits
                     memcpy(&finalAlphaBits, &pt.alpha, 4);
                 }
                 sim.SimulationAlphas.push_back(finalAlphaBits);
@@ -849,7 +845,7 @@ namespace GltfMeshImporter {
                 (int)ExtractFloatClean(a, "byteOffset", 0),
                 (int)ExtractFloatClean(a, "count", 0),
                 (int)ExtractFloatClean(a, "componentType", 0),
-                ExtractStringClean(a, "type") // <--- NEW: Extract the VEC3/VEC4 type string
+                ExtractStringClean(a, "type")
                 });
         }
 
@@ -912,32 +908,25 @@ namespace GltfMeshImporter {
             if (primObjs.empty()) continue;
 
             std::string meshExtras = ExtractBlock(meshObj, "extras");
-            //if (ExtractBool(meshExtras, "FableCloth", false)) continue; // Processed later!
-
             C3DPrimitive outPrim = {};
             outPrim.RepeatingMeshReps = 0;
 
-            // --- NEW INIT FLAGS LOGIC ---
             int savedFlags = (int)ExtractFloatClean(meshExtras, "Fable_InitFlags", -1);
             if (savedFlags != -1) {
                 outPrim.InitFlags = savedFlags;
             }
             else {
-                outPrim.InitFlags = outMesh.AnimatedFlag ? 0x14 : 0x04; // Fallback for new custom meshes
+                outPrim.InitFlags = outMesh.AnimatedFlag ? 0x14 : 0x04;
             }
 
             outPrim.IsCompressed = (outPrim.InitFlags & 4) != 0 && (outPrim.InitFlags & 0x10) == 0;
-            // ----------------------------
-
             outPrim.BufferType = 0;
-
-            // Let the engine calculate the exact stride using the flags (handles Bump Maps automatically)
             outPrim.VertexStride = outMesh.CalculateVertexStride(outPrim.InitFlags, outMesh.AnimatedFlag);
 
             outPrim.MaterialIndex = -1;
 
             outPrim.AvgTextureStretch = ExtractFloatClean(meshExtras, "AvgTextureStretch", 0.1f);
-            outPrim.SphereRadius = ExtractFloatClean(meshExtras, "SphereRadius", 0.0f); // Defaults to 0.0f if not in GLTF
+            outPrim.SphereRadius = ExtractFloatClean(meshExtras, "SphereRadius", 0.0f);
 
             std::vector<float> sCenter = GetJsonFloatArray(meshExtras, "SphereCenter");
             if (sCenter.size() >= 3) {
@@ -1048,7 +1037,6 @@ namespace GltfMeshImporter {
                 int16_t cU = CompressUV(uniqueVerts[v].u[0]), cV = CompressUV(uniqueVerts[v].u[1]);
 
                 if (outPrim.IsCompressed) {
-                    // Standard 4-byte packed positions
                     uint32_t pP = PackPOSPACKED3(uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2], outPrim.Compression.Scale, outPrim.Compression.Offset);
                     memcpy(vDest + 0, &pP, 4);
                     memcpy(vDest + 4, &pN, 4);
@@ -1056,14 +1044,13 @@ namespace GltfMeshImporter {
                     memcpy(vDest + 10, &cV, 2);
                 }
                 else {
-                    // Uncompressed interior/cloth meshes expect 12 bytes of raw floats
                     memcpy(vDest + 0, &uniqueVerts[v].p[0], 12);
                     memcpy(vDest + 12, &pN, 4);
                     memcpy(vDest + 16, &cU, 2);
                     memcpy(vDest + 18, &cV, 2);
                 }
 
-                vDest += outPrim.VertexStride; // Safely skips tangents/binormals which stay zero-initialized
+                vDest += outPrim.VertexStride;
             }
 
             outPrim.IndexCount = (uint32_t)mergedBaseIndices.size();
@@ -1079,7 +1066,6 @@ namespace GltfMeshImporter {
 
             if (ExtractBool(meshExtras, "FableCloth", false)) {
                 int targetPrim = (int)outMesh.Primitives.size() - 1;
-                // Type 1 usually doesn't need the axis fix, so we pass 'false'
                 CompileFableClothFromGLTF(meshExtras, primObjs[0], binData, views, accessors, outMesh, targetPrim, false);
             }
 
@@ -1092,7 +1078,6 @@ namespace GltfMeshImporter {
             return aT < bT;
             });
 
-        // FIX: Update cloth primitive indices after sorting!
         for (int i = 0; i < outMesh.Primitives.size(); i++) {
             for (auto& cp : outMesh.Primitives[i].ClothPrimitives) {
                 cp.PrimitiveIndex = i;
@@ -1398,7 +1383,7 @@ namespace GltfMeshImporter {
                 (int)ExtractFloatClean(a, "byteOffset", 0),
                 (int)ExtractFloatClean(a, "count", 0),
                 (int)ExtractFloatClean(a, "componentType", 0),
-                ExtractStringClean(a, "type") // <--- NEW: Extract the VEC3/VEC4 type string
+                ExtractStringClean(a, "type")
                 });
         }
 
@@ -1819,7 +1804,7 @@ namespace GltfMeshImporter {
                 (int)ExtractFloatClean(a, "byteOffset", 0),
                 (int)ExtractFloatClean(a, "count", 0),
                 (int)ExtractFloatClean(a, "componentType", 0),
-                ExtractStringClean(a, "type") // <--- NEW: Extract the VEC3/VEC4 type string
+                ExtractStringClean(a, "type")
                 });
         }
 
@@ -2011,25 +1996,21 @@ namespace GltfMeshImporter {
             if (primObjs.empty()) continue;
 
             std::string meshExtras = ExtractBlock(meshObj, "extras");
-            //if (ExtractBool(meshExtras, "FableCloth", false)) continue; // Processed later!
 
             C3DPrimitive outPrim = {};
             outPrim.RepeatingMeshReps = 0;
 
-            // --- NEW INIT FLAGS LOGIC ---
             int savedFlags = (int)ExtractFloatClean(meshExtras, "Fable_InitFlags", -1);
             if (savedFlags != -1) {
                 outPrim.InitFlags = savedFlags;
             }
             else {
-                // Fallback for brand new custom meshes
                 outPrim.InitFlags = outMesh.AnimatedFlag ? 0x14 : 0x04;
             }
 
             outPrim.IsCompressed = (outPrim.InitFlags & 4) != 0 && (outPrim.InitFlags & 0x10) == 0;
             outPrim.BufferType = 0;
 
-            // Let the engine accurately calculate the stride based on ALL flags (including 0x02 Bump Maps)
             outPrim.VertexStride = outMesh.CalculateVertexStride(outPrim.InitFlags, outMesh.AnimatedFlag);
 
             outPrim.MaterialIndex = -1;
@@ -2266,7 +2247,6 @@ namespace GltfMeshImporter {
                         memcpy(dest + 18, &cV, 2);
                     }
                     else {
-                        // Uncompressed expects 12 bytes of raw floats for position
                         memcpy(dest + 0, &v.p[0], 12);
                         memcpy(dest + 12, fj, 4);
                         memcpy(dest + 16, fw, 4);
@@ -2275,7 +2255,7 @@ namespace GltfMeshImporter {
                         memcpy(dest + 26, &cV, 2);
                     }
 
-                    dest += outPrim.VertexStride; // Use dynamic stride!
+                    dest += outPrim.VertexStride;
                 }
 
                 currentGlobalVertexOffset += fBlock.VertexCount;
@@ -2293,7 +2273,6 @@ namespace GltfMeshImporter {
 
             if (ExtractBool(meshExtras, "FableCloth", false)) {
                 int targetPrim = (int)outMesh.Primitives.size() - 1;
-                // Type 5 (characters) needs the Blender axis fix
                 CompileFableClothFromGLTF(meshExtras, primObjs[0], binData, views, accessors, outMesh, targetPrim, applyBlenderFix);
             }
 

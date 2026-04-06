@@ -285,7 +285,6 @@ inline void DrawTextureProperties() {
                 if (!path.empty()) {
                     g_TexFrameImportPath = path;
                     g_IsAddFrame = true;
-                    // Automatically default to the current texture's format!
                     g_ImportOptions.Format = g_TextureParser.DecodedFormat;
                     ImGui::OpenPopup("Import Options");
                 }
@@ -448,7 +447,6 @@ inline void DrawTextureProperties() {
             g_TexFrameImportPath = path;
             g_IsAddFrame = false;
             g_PendingImportTargetFrame = isFlatSeq ? 0 : g_SelectedFrame;
-            // Automatically default to the current texture's format!
             g_ImportOptions.Format = g_TextureParser.DecodedFormat;
             ImGui::OpenPopup("Import Options");
         }
@@ -462,9 +460,7 @@ inline void DrawTextureProperties() {
             g_ImportOptions.Format = (ETextureFormat)currentFormat;
         }
 
-        // Force mipmap generation behind the scenes
         g_ImportOptions.GenerateMipmaps = true;
-        // Keep the builder's default power of 2 behavior, just hide the UI for it.
 
         ImGui::Checkbox("Is Bumpmap", &g_ImportOptions.IsBumpmap);
 

@@ -509,7 +509,7 @@ public:
                 }
 
                 for (const auto& inst : cp.Program.ParsedInstructions) {
-                    if (inst.Opcode == 2) { // Distance Constraint
+                    if (inst.Opcode == 2) {
                         for (uint32_t c = 0; c < inst.Count; ++c) {
                             uint32_t offset = c * inst.PayloadSize;
                             if (offset + 8 <= inst.Payload.size()) {
@@ -662,7 +662,6 @@ public:
             ID3D11ShaderResourceView* srvs[3] = { DefaultWhiteSRV, DefaultNormalSRV, DefaultSpecSRV };
             float matIllum = 0.0f;
 
-            // Reset flags per batch
             cb.HasBump = 0;
             cb.HasSpec = 0;
 
@@ -787,34 +786,29 @@ public:
 
         CBMatrix cb;
         cb.HasAnimation = 0;
-        cb.Color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f); // Vivid Red
+        cb.Color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
 
         for (const auto& prim : primitives) {
-            // Only draw if this primitive actually has cloth physics and a radius > 0
             if (prim.ClothPrimitives.empty() || prim.SphereRadius <= 0.001f) continue;
 
             XMMATRIX sphereScaleTrans = XMMatrixScaling(prim.SphereRadius, prim.SphereRadius, prim.SphereRadius) * XMMatrixTranslation(prim.SphereCenter[0], prim.SphereCenter[1], prim.SphereCenter[2]);
 
-            // Ring 1 (XY Plane)
             XMMATRIX ring1 = sphereScaleTrans * worldCam;
             cb.WorldViewProj = XMMatrixTranspose(ring1 * view * proj);
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
 
-            // Ring 2 (XZ Plane)
             XMMATRIX ring2 = XMMatrixRotationX(XM_PIDIV2) * sphereScaleTrans * worldCam;
             cb.WorldViewProj = XMMatrixTranspose(ring2 * view * proj);
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
 
-            // Ring 3 (YZ Plane)
             XMMATRIX ring3 = XMMatrixRotationY(XM_PIDIV2) * sphereScaleTrans * worldCam;
             cb.WorldViewProj = XMMatrixTranspose(ring3 * view * proj);
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
             ctx->DrawIndexed(DebugCircleIndexCount, DebugCircleStartIndex, 0);
         }
 
-        // Restore topology
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     }
 

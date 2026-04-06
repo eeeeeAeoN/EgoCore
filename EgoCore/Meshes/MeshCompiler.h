@@ -136,7 +136,7 @@ public:
                 Write(&cp.PrimitiveIndex, 4); Write(&cp.MaterialIndex, 4);
                 std::vector<uint8_t> progData = cp.Program.IsParsed ? cp.Program.Serialize() : cp.ParticleProgramData;
 
-                // FIX: Write the uncompressed length of the program data before the LZO block!
+                // Write the uncompressed length of the program data before the LZO block!
                 uint32_t progLen = (uint32_t)progData.size();
                 Write(&progLen, 4);
 

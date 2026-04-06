@@ -880,6 +880,14 @@ void TextEditor::Render()
 	auto scrollX = ImGui::GetScrollX();
 	auto scrollY = ImGui::GetScrollY();
 
+	// Calculate screen pos with scroll offsets subtracted so the popup sticks to the text perfectly
+	auto pos = GetActualCursorCoordinates();
+	float cx = TextDistanceToLineStart(pos);
+	mCursorScreenPos = ImVec2(
+		cursorScreenPos.x + mTextStart + cx - scrollX,
+		cursorScreenPos.y + (pos.mLine * mCharAdvance.y) - scrollY
+	);
+
 	auto lineNo = (int)floor(scrollY / mCharAdvance.y);
 	auto globalLineMax = (int)mLines.size();
 	auto lineMax = std::max(0, std::min((int)mLines.size() - 1, lineNo + (int)floor((scrollY + contentSize.y) / mCharAdvance.y)));
@@ -1132,6 +1140,8 @@ void TextEditor::Render(const char* aTitle, const ImVec2& aSize, bool aBorder)
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
 	if (!mIgnoreImGuiChild)
 		ImGui::BeginChild(aTitle, aSize, aBorder, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_AlwaysHorizontalScrollbar | ImGuiWindowFlags_NoMove);
+
+	mIsFocused = ImGui::IsWindowFocused();
 
 	if (mHandleKeyboardInputs)
 	{

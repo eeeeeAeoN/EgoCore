@@ -3,6 +3,8 @@
 #include "FileDialogs.h"
 #include "DefExplorer.h"
 #include "BankTabUI.h" 
+#include "FSEBackend.h"
+#include "FSETabUI.h"
 #include "InputManager.h"
 #include "ModManagerUI.h"
 
@@ -121,6 +123,7 @@ static void DrawBankExplorer() {
 
         if (g_AppConfig.IsConfigured) {
             LoadSystemBinaries(g_AppConfig.GameRootPath);
+            CheckFSEInstalled(g_AppConfig.GameRootPath);
 
             if (g_AppConfig.SkipFrontend) {
                 g_CurrentAppState = EAppState::ModCreator;
@@ -197,6 +200,11 @@ static void DrawBankExplorer() {
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enables the 'Ctrl+Click' Go to Definition feature.\nChanges will take effect the next time you load.");
 
+        if (ImGui::Checkbox("Enable Autosuggest", &g_AppConfig.EnableAutosuggest)) {
+            SaveConfig();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the smart dropdown list when typing functions in FSE.");
+
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::Separator();
         if (ImGui::Button("Close", ImVec2(120, 0))) {
@@ -217,20 +225,20 @@ static void DrawBankExplorer() {
         ImGui::BeginChild("##content", ImVec2(0, -buttonAreaHeight));
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "EgoCore - Modding Tool for Fable");
         ImGui::Separator();
-        ImGui::Text("Version: 4.5.26 [BETA]");
+        ImGui::Text("Version: 6.4.26 [BETA]");
         ImGui::Text("Author: AlbionSecrets");
         ImGui::Dummy(ImVec2(0, 10));
-        ImGui::TextWrapped("EgoCore is the culmination of over twenty years of obsession with the inner workings of Albion. What began as curiosity has evolved into a six-month intensive development journey to provide the community with a modern, robust, and versatile modding framework.");
+        ImGui::TextWrapped("EgoCore is the culmination of over twenty years of obsession with the inner workings of Fable. What began as programming related curiosity has evolved into a six-month intensive development journey to provide the community with a modern, robust, and versatile modding framework.");
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::TextWrapped("I believe the tools to keep this game alive should be accessible to everyone. That is why EgoCore is, and will always be, Free and Open Source.");
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::TextWrapped("Developing a tool of this scale involves hundreds of hours of reverse engineering, debugging, and refinement. I don't believe in paywalling progress, so I rely entirely on the generosity of the community to keep this project sustainable. If EgoCore has saved you time or helped you bring a new vision to life, please consider supporting the project.");
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::Separator();
-        ImGui::Text("[Donations Page]");
-        ImGui::Text("[GitHub Repository]");
-        ImGui::Text("[Discord Group]");
-        ImGui::Text("[Tutorials& Documentation] - Waiting on MakhnoBlazed");
+        ImGui::Text("[Donations]");
+        ImGui::Text("[GitHub]");
+        ImGui::Text("[Discord]");
+        ImGui::Text("[Documentation]");
         ImGui::EndChild();
 
         ImGui::Separator();
@@ -285,6 +293,7 @@ static void DrawBankExplorer() {
 
         if (g_Keybinds.SwitchBankMode.IsPressed()) g_CurrentMode = EAppMode::Banks;
         if (g_Keybinds.SwitchDefMode.IsPressed())  g_CurrentMode = EAppMode::Defs;
+        if (g_FSEWorkspace.IsInstalled && g_Keybinds.SwitchFSEMode.IsPressed()) g_CurrentMode = EAppMode::FSE;
 
         if (g_Keybinds.NavigateBack.IsPressed()) {
             g_IsNavigating = true;
@@ -490,7 +499,7 @@ static void DrawBankExplorer() {
             ImGui::EndMenu();
         }
 
-        float rightAlign = ImGui::GetWindowWidth() - 140.0f;
+        float rightAlign = ImGui::GetWindowWidth() - 210.0f;
         if (rightAlign > 0) ImGui::SameLine(rightAlign);
 
         bool isBanks = (g_CurrentMode == EAppMode::Banks);
@@ -504,6 +513,16 @@ static void DrawBankExplorer() {
         if (isDefs) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.14f, 0.24f, 1.0f));
         if (ImGui::Button("Defs", ImVec2(60, 0))) g_CurrentMode = EAppMode::Defs;
         if (isDefs) ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+
+        if (g_FSEWorkspace.IsInstalled) {
+            ImGui::SameLine();
+            bool isFSE = (g_CurrentMode == EAppMode::FSE);
+            if (isFSE) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.52f, 0.24f, 1.0f));
+            if (ImGui::Button("FSE", ImVec2(60, 0))) g_CurrentMode = EAppMode::FSE;
+            if (isFSE) ImGui::PopStyleColor();
+        }
 
         ImGui::EndMenuBar();
     }
@@ -534,6 +553,7 @@ static void DrawBankExplorer() {
 
         DrawBindRow("Switch to Banks", g_Keybinds.SwitchBankMode);
         DrawBindRow("Switch to Defs", g_Keybinds.SwitchDefMode);
+        DrawBindRow("Switch to FSE", g_Keybinds.SwitchFSEMode);
         DrawBindRow("Save Entry", g_Keybinds.SaveEntry);
         DrawBindRow("Compile Active", g_Keybinds.Compile);
         DrawBindRow("Navigate Back", g_Keybinds.NavigateBack);
@@ -608,8 +628,11 @@ static void DrawBankExplorer() {
     if (g_CurrentMode == EAppMode::Banks) {
         DrawBankTab();
     }
-    else {
+    else if (g_CurrentMode == EAppMode::Defs) {
         DrawDefTab();
+    }
+    else if (g_CurrentMode == EAppMode::FSE) {
+        DrawFSETab();
     }
 
     if (g_DefWorkspace.TriggerUnsavedPopup) {

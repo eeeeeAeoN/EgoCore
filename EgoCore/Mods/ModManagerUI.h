@@ -3,28 +3,18 @@
 #include <vector>
 #include <string>
 #include <algorithm>
-
-// Include our newly consolidated backend and compiler
 #include "ModManagerBackend.h"
 #include "ModManagerCompiler.h"
 
-// Forward declarations for global app state (assuming these are in your main app file)
 enum class EAppState;
 extern EAppState g_CurrentAppState;
 extern std::string g_SuccessMessage;
 extern bool g_ShowSuccessPopup;
-
-// ==========================================================================================
-// UI STATE GLOBALS
-// ==========================================================================================
 inline int g_ModToDeleteIndex = -1;
 inline bool g_ShowModPackageWindow = false;
 inline std::vector<StagedModPackageEntry> g_ModPackageEntries;
 inline char g_ModNameBuffer[128] = "";
 
-// ==========================================================================================
-// 1. MAIN MOD MANAGER WINDOW
-// ==========================================================================================
 inline void DrawModManagerWindow() {
     bool triggerDeletePopup = false;
 
@@ -64,7 +54,6 @@ inline void DrawModManagerWindow() {
                 ImGui::PushID(i);
                 ImGui::TableNextRow();
 
-                // 1. Order (Full Row Drag & Context Menu)
                 ImGui::TableSetColumnIndex(0);
 
                 char rowLabel[32];
@@ -73,20 +62,19 @@ inline void DrawModManagerWindow() {
                 ImGui::SetNextItemAllowOverlap();
                 ImGui::Selectable(rowLabel, false, ImGuiSelectableFlags_SpanAllColumns);
 
-                // --- Drag and Drop Source (MUST BE RIGHT AFTER SELECTABLE) ---
                 if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                     ImGui::SetDragDropPayload("MOD_ORDER_PAYLOAD", &i, sizeof(int));
                     ImGui::Text("Moving: %s", mod.Name.c_str());
                     ImGui::EndDragDropSource();
                 }
 
-                // --- Drag and Drop Target (MUST BE RIGHT AFTER SELECTABLE) ---
                 if (ImGui::BeginDragDropTarget()) {
                     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("MOD_ORDER_PAYLOAD")) {
                         int sourceIdx = *(const int*)payload->Data;
                         if (sourceIdx != i) {
-                            bool wasAsset = ModManagerBackend::g_LoadedMods[sourceIdx].IsAssetMod; // Fixed
-                            bool wasDef = ModManagerBackend::g_LoadedMods[sourceIdx].IsDefMod;   // Fixed
+                            bool wasAsset = ModManagerBackend::g_LoadedMods[sourceIdx].IsAssetMod;
+                            bool wasDef = ModManagerBackend::g_LoadedMods[sourceIdx].IsDefMod;
+                            bool wasTng = ModManagerBackend::g_LoadedMods[sourceIdx].IsTngMod;
                             auto temp = ModManagerBackend::g_LoadedMods[sourceIdx];
 
                             ModManagerBackend::g_LoadedMods.erase(ModManagerBackend::g_LoadedMods.begin() + sourceIdx);
@@ -95,34 +83,32 @@ inline void DrawModManagerWindow() {
                             ModManagerBackend::SaveLoadOrder();
                             ModManagerBackend::UpdateGlobalModsIni();
 
-                            if (wasAsset) g_AppConfig.ModSystemDirty = true; // Fixed
-                            if (wasDef) g_AppConfig.DefSystemDirty = true;   // Fixed
+                            if (wasAsset) g_AppConfig.ModSystemDirty = true;
+                            if (wasDef) g_AppConfig.DefSystemDirty = true;
+                            if (wasTng)   g_AppConfig.TngSystemDirty = true;
                             SaveConfig();
                         }
                     }
                     ImGui::EndDragDropTarget();
                 }
 
-                // VISUAL FIX: Draw the index number *after* setting up the drag and drop!
                 ImGui::SameLine();
                 ImGui::Text("%d", i + 1);
 
-                // 2. Enabled Toggle
                 ImGui::TableSetColumnIndex(1);
                 if (ImGui::Checkbox("##enabled", &mod.IsEnabled)) {
                     ModManagerBackend::UpdateGlobalModsIni();
                     ModManagerBackend::SaveLoadOrder();
-                    if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true; // Fixed
-                    if (mod.IsDefMod) g_AppConfig.DefSystemDirty = true;   // Fixed
+                    if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true;
+                    if (mod.IsDefMod)   g_AppConfig.DefSystemDirty = true;
+                    if (mod.IsTngMod)   g_AppConfig.TngSystemDirty = true;
                     SaveConfig();
                 }
 
-                // --- RESTORED COLUMN 2: Mod Name ---
-                // 3. Mod Name
                 ImGui::TableSetColumnIndex(2);
                 ImGui::Text("%s", mod.Name.c_str());
 
-                // 4. Type
+
                 ImGui::TableSetColumnIndex(3);
                 if (mod.IsCoreMod) {
                     ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Core .DLL");
@@ -143,7 +129,6 @@ inline void DrawModManagerWindow() {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Data Mod");
                 }
 
-                // 5. Expandable Details 
                 ImGui::TableSetColumnIndex(4);
                 bool treeNodeOpen = ImGui::TreeNodeEx("View Details & Settings", ImGuiTreeNodeFlags_SpanFullWidth);
 
@@ -206,7 +191,6 @@ inline void DrawModManagerWindow() {
             ImGui::EndTable();
         }
 
-        // --- Delete Confirmation Popup ---
         if (triggerDeletePopup) ImGui::OpenPopup("Delete Mod?");
 
         if (ImGui::BeginPopupModal("Delete Mod?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -215,12 +199,12 @@ inline void DrawModManagerWindow() {
             ImGui::Separator();
 
             if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
-                bool wasDef = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsDefMod; // Track state
+                bool wasDef = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsDefMod;
 
                 ModManagerBackend::DeleteMod(g_ModToDeleteIndex);
 
                 g_AppConfig.ModSystemDirty = true;
-                if (wasDef) g_AppConfig.DefSystemDirty = true; // Smart toggle
+                if (wasDef) g_AppConfig.DefSystemDirty = true;
                 SaveConfig();
                 ImGui::CloseCurrentPopup();
             }
@@ -234,9 +218,6 @@ inline void DrawModManagerWindow() {
     ImGui::End();
 }
 
-// ==========================================================================================
-// 2. MOD PACKAGE CREATION WINDOW
-// ==========================================================================================
 inline void DrawModPackageWindow() {
     if (!g_ShowModPackageWindow) return;
 
@@ -266,7 +247,7 @@ inline void DrawModPackageWindow() {
                         }
                         if (!exists) {
                             StagedModPackageEntry staged;
-                            staged.Category = EModAssetCategory::BankEntry; // Ensure default classification
+                            staged.Category = EModAssetCategory::BankEntry;
                             staged.EntryID = bank.Entries[i].ID;
                             staged.EntryName = bank.Entries[i].Name;
                             staged.EntryType = bank.Entries[i].Type;
@@ -311,7 +292,6 @@ inline void DrawModPackageWindow() {
                 auto& e = g_ModPackageEntries[i];
                 ImGui::TableNextRow();
 
-                // ID format handler (Text entries don't use real IDs)
                 ImGui::TableSetColumnIndex(0);
                 if (e.Category == EModAssetCategory::BankEntry) ImGui::Text("%u", e.EntryID);
                 else ImGui::TextDisabled("TEXT");
@@ -331,7 +311,6 @@ inline void DrawModPackageWindow() {
             ImGui::EndTable();
         }
 
-        // --- Drag and Drop Logic for Adding Individual Entries ---
         if (ImGui::BeginDragDropTarget()) {
 
             // --- 1. HANDLE BANK ENTRIES (Existing) ---
@@ -540,15 +519,13 @@ inline void DrawModPackageWindow() {
                         }
                     }
                 }
-            EndOfBankDropLogic:; // Label for bypassing via logic gates
+            EndOfBankDropLogic:;
             }
 
             // --- 2. HANDLE DEFINITION ENTRIES ---
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DEF_ENTRY_PAYLOAD")) {
                 DefDragPayload* data = (DefDragPayload*)payload->Data;
                 auto& entry = g_DefWorkspace.CategorizedDefs[data->Category][data->EntryIndex];
-
-                // CRITICAL FIX: DO NOT call SaveDefEntry(entry) here! It overwrites the file with an empty editor buffer.
 
                 bool exists = false;
                 for (const auto& existing : g_ModPackageEntries) {
@@ -568,7 +545,7 @@ inline void DrawModPackageWindow() {
                 }
             }
 
-            // --- 3. HANDLE C++ HEADER ENTRIES ---
+            // --- 3. HANDLE HEADER ENTRIES ---
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HEADER_ENTRY_PAYLOAD")) {
                 HeaderDragPayload* data = (HeaderDragPayload*)payload->Data;
                 auto& entry = g_DefWorkspace.AllEnums[data->EnumIndex];
@@ -584,7 +561,6 @@ inline void DrawModPackageWindow() {
                     g_ShowSuccessPopup = true;
                 }
                 else {
-                    // CRITICAL FIX: DO NOT call SaveHeaderEntry(entry) here!
 
                     bool exists = false;
                     for (const auto& existing : g_ModPackageEntries) {
@@ -610,8 +586,6 @@ inline void DrawModPackageWindow() {
                 EventDragPayload* data = (EventDragPayload*)payload->Data;
                 EventFile* file = (data->FileType == 0) ? &g_EventWorkspace.SoundEvents : &g_EventWorkspace.GameEvents;
                 auto& ev = file->Events[data->EventIndex];
-
-                // CRITICAL FIX: DO NOT call file->Save() here!
 
                 bool exists = false;
                 for (const auto& existing : g_ModPackageEntries) {
@@ -649,7 +623,6 @@ inline void DrawModPackageWindow() {
         }
         ImGui::EndDisabled();
 
-        // --- THIS WAS OMITTED: THE SUCCESS POPUP RENDERER ---
         if (g_ShowSuccessPopup) {
             ImGui::OpenPopup("Success");
             g_ShowSuccessPopup = false;

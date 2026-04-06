@@ -10,7 +10,7 @@
 #include "BankBackend.h"
 #include "BigBankCompiler.h"
 #include "DefBackend.h"
-#include "BinaryParser.h" // Needed for CRC calculations
+#include "BinaryParser.h"
 
 namespace fs = std::filesystem;
 
@@ -36,6 +36,7 @@ struct ModEntry {
     bool IsCoreMod = false;
     bool IsAssetMod = false;
     bool IsDefMod = false;
+    bool IsTngMod = false;
     std::string ModFolderPath;
     std::string SettingsIniPath;
     std::vector<IniLine> SettingsLines;
@@ -49,14 +50,14 @@ struct ModAssetOverride {
 
 struct StagedModPackageEntry {
     EModAssetCategory Category = EModAssetCategory::BankEntry;
-    uint32_t EntryID = 0;          // Used for Banks
-    std::string EntryName;         // Used for all
-    int32_t EntryType = 0;         // Used for Banks
+    uint32_t EntryID = 0;
+    std::string EntryName;
+    int32_t EntryType = 0;
     EBankType BankType = (EBankType)0;
-    std::string TypeName;          // Display type
-    std::string BankName;          // Or File Name for texts
-    std::string SubBankName;       // Or Context Name for texts
-    std::string SourceFullPath;    // Crucial for replicating the path
+    std::string TypeName;
+    std::string BankName;
+    std::string SubBankName;
+    std::string SourceFullPath; 
 };
 
 inline std::string GetEntryTypeName(EBankType bankType, int32_t type, const std::string& bankName) {
@@ -109,8 +110,6 @@ public:
 
     static void LoadMarkedState() {
         g_MarkedEntries.clear();
-        // g_SavedMarkedEntries is populated by LoadConfig() from the [MarkedEntries]
-        // section of the config file. Promote them into typed StagedModPackageEntry objects.
         for (const auto& raw : g_SavedMarkedEntries) {
             StagedModPackageEntry e;
             e.EntryID = raw.EntryID;
@@ -126,7 +125,6 @@ public:
     }
 
     static void SaveMarkedState() {
-        // Sync g_MarkedEntries back into the staging vector, then flush to config.
         g_SavedMarkedEntries.clear();
         for (const auto& e : g_MarkedEntries) {
             RawMarkedEntry raw;
@@ -171,7 +169,8 @@ public:
 
     static void BuildMasterModIndex(const std::vector<ModEntry>& loadedMods) {
         g_ActiveModAssets.clear();
-        for (const auto& mod : loadedMods) {
+        for (auto it = loadedMods.rbegin(); it != loadedMods.rend(); ++it) {
+            const auto& mod = *it;
             if (!mod.IsEnabled || !mod.IsAssetMod) continue;
             std::string modDataPath = mod.ModFolderPath + "\\Data";
             if (!fs::exists(modDataPath)) continue;
@@ -595,14 +594,11 @@ public:
         if (audioMap.empty()) return;
         if (!fs::exists(defsDir)) fs::create_directories(defsDir);
 
-        // Relaxed regex: captures Word = Number, ignoring line starts or tabs
         std::regex entryRegex(R"(([A-Za-z0-9_]+)\s*=\s*(\d+))");
 
         for (const auto& [headerName, modEntries] : audioMap) {
             std::string vanillaContent = "";
 
-            // BYPASS ALLENUMS: Read directly from hard drive. 
-            // This perfectly skirts around anonymous enums failing to load into RAM!
             std::string sourcePath = g_AppConfig.GameRootPath + "\\Data\\Defs\\" + headerName;
             std::ifstream inFile(sourcePath, std::ios::binary);
 
@@ -611,7 +607,6 @@ public:
                 inFile.close();
             }
             else {
-                // Fallback to memory if disk file mysteriously vanished
                 for (const auto& enumEntry : g_DefWorkspace.AllEnums) {
                     if (fs::path(enumEntry.FilePath).filename().string() == headerName) {
                         vanillaContent = enumEntry.FullContent;
@@ -640,7 +635,6 @@ public:
                     sanitized = SanitizeForEnum(sanitized, true);
                 }
                 else {
-                    // Less strict targeted ID search
                     std::regex specificIdRegex(R"(([A-Za-z0-9_]+)\s*=\s*)" + std::to_string(e.EntryID) + R"(\b)");
                     std::sregex_iterator idBegin(vanillaContent.begin(), vanillaContent.end(), specificIdRegex);
 
@@ -688,11 +682,8 @@ public:
         std::map<std::string, std::string> eventFiles;
 
         for (const auto& entry : entries) {
-
-            // --- TEXT ASSETS (Defs, Headers, Events) ---
             if (entry.Category != EModAssetCategory::BankEntry) {
 
-                // Safe Path Resolution (CASE INSENSITIVE)
                 std::string sourcePath = entry.SourceFullPath;
                 std::replace(sourcePath.begin(), sourcePath.end(), '/', '\\');
 
@@ -707,10 +698,7 @@ public:
 
                     std::string targetFilePath = modRoot + "\\" + relativePath;
 
-                    // 1. Safe Extraction: Definitions
                     if (entry.Category == EModAssetCategory::Definition) {
-
-                        // Helper lambda to search map safely and strictly match context paths
                         auto ExtractDefFromMap = [&](const std::map<std::string, std::vector<DefEntry>>& mapToSearch) -> bool {
                             for (const auto& [type, defList] : mapToSearch) {
                                 for (const auto& def : defList) {
@@ -744,14 +732,12 @@ public:
                             return false;
                             };
 
-                        // Check active context first, if missing (tab switched), deep-scan cached contexts
                         if (!ExtractDefFromMap(g_DefWorkspace.CategorizedDefs)) {
                             for (const auto& context : g_DefWorkspace.Contexts) {
                                 if (ExtractDefFromMap(context.CategorizedDefs)) break;
                             }
                         }
                     }
-                    // 2. Safe Extraction: Headers
                     else if (entry.Category == EModAssetCategory::Header) {
                         for (const auto& enumEntry : g_DefWorkspace.AllEnums) {
                             if (enumEntry.Name == entry.EntryName) {
@@ -760,7 +746,6 @@ public:
                             }
                         }
                     }
-                    // 3. Safe Extraction: Events
                     else if (entry.Category == EModAssetCategory::AnimationEvent) {
                         EventFile* fileToSearch = (entry.TypeName == "Sound Event") ? &g_EventWorkspace.SoundEvents : &g_EventWorkspace.GameEvents;
                         for (const auto& ev : fileToSearch->Events) {
@@ -773,10 +758,9 @@ public:
                         }
                     }
                 }
-                continue; // Skip binary logic below for Text Assets
+                continue;
             }
 
-            // --- BINARY ASSETS (Original Logic) ---
             std::string targetDir = GetTargetDirectoryForEntry(entry, modRoot);
             if (!fs::exists(targetDir)) fs::create_directories(targetDir);
 
@@ -834,14 +818,10 @@ public:
             }
         }
 
-        // --- WRITE THE TEXT ASSET BUFFERS TO HARD DRIVE ---
         auto WriteMappedFiles = [](const std::map<std::string, std::string>& fileMap, const std::string& header, const std::string& footer) {
             for (const auto& [filePath, content] : fileMap) {
-                // BUGFIX: Prevent creation of ghost/empty files entirely
                 if (content.empty()) continue;
 
-                // BUGFIX: Defer folder creation until we guarantee the file has content.
-                // This eliminates the useless 'RetailHeaders' ghost folder.
                 std::string finalDir = std::filesystem::path(filePath).parent_path().string();
                 if (!std::filesystem::exists(finalDir)) {
                     std::filesystem::create_directories(finalDir);
@@ -861,7 +841,6 @@ public:
         WriteMappedFiles(headerFiles, "#pragma once\n\n", "");
         WriteMappedFiles(eventFiles, "BEGIN_ANIMATION_EVENTS\n\n", "END_ANIMATION_EVENTS\n");
 
-        // --- RUN AUTO-GENERATION LAST ---
         GenerateEnumHeaders(modName, entries);
         GenerateAudioDefs(modName, entries);
     }

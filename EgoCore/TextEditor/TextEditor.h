@@ -267,6 +267,9 @@ public:
 	std::string GetHoveredWord() const { return mHoveredWord; }
 	bool IsHovered() const { return mIsHovered; }
 
+	bool IsFocused() const { return mIsFocused; }
+	ImVec2 GetCursorScreenPos() const { return mCursorScreenPos; }
+
 	static const Palette& GetDarkPalette();
 	static const Palette& GetLightPalette();
 	static const Palette& GetRetroBluePalette();
@@ -392,4 +395,6 @@ private:
 	uint64_t mStartTime;
 
 	float mLastClick;
+	bool mIsFocused = false;
+	ImVec2 mCursorScreenPos = ImVec2(0, 0);
 };
