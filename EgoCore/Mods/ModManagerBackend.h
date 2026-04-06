@@ -115,7 +115,8 @@ public:
                                     if (ext != ".lug" && ext != ".met") mod.IsAssetMod = true;
                                 }
                                 else if (lowerRelPath.find("\\") == lowerRelPath.find_last_of("\\")) {
-                                    if (ext == ".ini" && filename != "mods.ini" && filename.find("_info.txt") == std::string::npos) {
+                                    if (filename == "user.ini" || filename == "userst.ini" ||
+                                        filename == "dbug.ini" || filename == "dbust.ini") {
                                         mod.IsAssetMod = true;
                                     }
                                 }
@@ -785,7 +786,8 @@ public:
                         if (ext != ".lug" && ext != ".met") isAllowed = true;
                     }
                     else if (lowerRelPath.find("\\") == lowerRelPath.find_last_of("\\")) {
-                        if (ext == ".ini" && filename != "mods.ini" && filename.find("_info.txt") == std::string::npos) {
+                        if (filename == "user.ini" || filename == "userst.ini" ||
+                            filename == "dbug.ini" || filename == "dbust.ini") {
                             isAllowed = true;
                         }
                     }
