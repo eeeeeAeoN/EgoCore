@@ -129,33 +129,32 @@ bool CStringParser::ReadNextItem(CParsedItem& item) {
     char c = *m_Cursor;
     char nextC = (m_Cursor + 1 < m_BufferEnd) ? *(m_Cursor + 1) : '\0';
 
-    // 1. Is it a Number? (Starts with a digit, or a '-' followed by a digit)
+    // 1. Is it a Number?
     if (std::isdigit(static_cast<unsigned char>(c)) ||
         (c == '-' && std::isdigit(static_cast<unsigned char>(nextC)))) {
         return ReadNextNumber(item);
     }
 
-    // 2. Is it an Identifier/String? (Starts with a letter or an underscore)
-    if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+    // 2. Is it an Identifier? (Now includes '#' for directives)
+    if (std::isalpha(static_cast<unsigned char>(c)) || c == '_' || c == '#') {
         return ReadNextString(item);
     }
 
-    // 3. If it's neither, it must be a Symbol (like '{', ';', '=')
+    // 3. Otherwise, it's a Symbol
     return ReadNextSymbol(item);
 }
 
 bool CStringParser::ReadNextString(CParsedItem& item) {
     if (IsEOF()) return false;
-
     const char* start = m_Cursor;
 
-    // Keep moving forward as long as it's a letter, number, or underscore
-    while (!IsEOF() && (std::isalnum(static_cast<unsigned char>(*m_Cursor)) || *m_Cursor == '_')) {
+    // Directives and identifiers can contain alphanumeric, _, or #
+    while (!IsEOF() && (std::isalnum(static_cast<unsigned char>(*m_Cursor)) ||
+        *m_Cursor == '_' || *m_Cursor == '#')) {
         MoveStringPos(1);
     }
 
-    if (m_Cursor == start) return false; // Nothing was read
-
+    if (m_Cursor == start) return false;
     item.Type = EParsedItemType::Identifier;
     item.StringValue = std::string(start, m_Cursor - start);
     return true;
@@ -163,65 +162,46 @@ bool CStringParser::ReadNextString(CParsedItem& item) {
 
 bool CStringParser::ReadNextNumber(CParsedItem& item) {
     if (IsEOF()) return false;
-
     const char* start = m_Cursor;
     bool hasDecimal = false;
     bool isHex = false;
 
-    // Skip past the negative sign if it exists
-    if (*m_Cursor == '-') {
-        MoveStringPos(1);
-    }
+    if (*m_Cursor == '-') MoveStringPos(1);
 
-    // Check for Hexadecimal prefix (0x or 0X)
-    if (*m_Cursor == '0' && m_Cursor + 1 < m_BufferEnd &&
-        (*(m_Cursor + 1) == 'x' || *(m_Cursor + 1) == 'X')) {
+    if (*m_Cursor == '0' && m_Cursor + 1 < m_BufferEnd && std::tolower(*(m_Cursor + 1)) == 'x') {
         isHex = true;
-        MoveStringPos(2); // Step over '0x'
+        MoveStringPos(2);
     }
 
-    // Keep reading digits based on base type
     while (!IsEOF()) {
         char c = *m_Cursor;
-
-        if (isHex) {
-            // If it's hex, accept 0-9, a-f, A-F
-            if (std::isxdigit(static_cast<unsigned char>(c))) {
-                MoveStringPos(1);
-            }
-            else {
-                break; // Stop at the first non-hex character
-            }
+        if (isHex ? std::isxdigit(static_cast<unsigned char>(c)) : std::isdigit(static_cast<unsigned char>(c))) {
+            MoveStringPos(1);
         }
-        else {
-            // Standard Base-10 parsing
-            if (std::isdigit(static_cast<unsigned char>(c))) {
-                MoveStringPos(1);
-            }
-            else if (c == '.' && !hasDecimal) {
-                hasDecimal = true;
-                MoveStringPos(1);
-            }
-            else {
-                break; // Not a number character, stop reading
-            }
+        else if (c == '.' && !hasDecimal && !isHex) {
+            hasDecimal = true;
+            MoveStringPos(1);
         }
+        else break;
     }
 
     std::string numStr(start, m_Cursor - start);
+    item.StringValue = numStr;
 
-    if (hasDecimal && !isHex) { // Hex values won't have decimals
-        item.Type = EParsedItemType::Float;
-        item.FloatValue = std::stof(numStr);
-        item.StringValue = numStr;
+    try {
+        if (hasDecimal) {
+            item.Type = EParsedItemType::Float;
+            item.FloatValue = std::stof(numStr);
+        }
+        else {
+            item.Type = EParsedItemType::Integer;
+            item.IntValue = std::stoi(numStr, nullptr, isHex ? 16 : 0);
+        }
     }
-    else {
-        item.Type = EParsedItemType::Integer;
-        // std::stoi with base 0 automatically parses "0x..." strings properly!
-        item.IntValue = std::stoi(numStr, nullptr, 0);
-        item.StringValue = numStr;
+    catch (...) {
+        item.Type = EParsedItemType::Unknown;
+        return false;
     }
-
     return true;
 }
 

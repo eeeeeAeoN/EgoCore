@@ -1149,7 +1149,6 @@ public:
     }
 };
 
-
 // Factories
 inline IDefObject* Alloc_CFrontEndDef() { return new CFrontEndDef(); }
 inline IDefObject* Alloc_CUIMiscThingsDef() { return new CUIMiscThingsDef(); }

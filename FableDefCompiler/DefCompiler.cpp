@@ -36,10 +36,10 @@ namespace FableCompiler {
 
         LogToFile("Queueing symbol headers...");
         defManager.SetSymbolPaths({
-            defsRoot + L"pc\\textures.h",
-            defsRoot + L"fonts.h",
-            defsRoot + L"pc\\front_end_bank.h",
-            defsRoot + L"pc\\particles_frontend.h",
+            defsRoot + L"RetailHeaders\\pc\\textures.h",
+            defsRoot + L"RetailHeaders\\fonts.h",
+            defsRoot + L"RetailHeaders\\pc\\front_end_bank.h",
+            defsRoot + L"RetailHeaders\\pc\\particles_frontend.h",
             defsRoot + L"FrontEndDefs\\engine.def",
             defsRoot + L"FrontEndDefs\\engine_video_options.def",
             defsRoot + L"FrontEndDefs\\front_end.def",

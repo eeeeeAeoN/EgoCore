@@ -29,31 +29,44 @@ void CDefinitionManager::SetSymbolPaths(const std::vector<std::wstring>& paths) 
 void CDefinitionManager::SetCompilePaths(const std::vector<std::wstring>& paths) { m_CompilePathList = paths; }
 
 void CDefinitionManager::Compile() {
-    LogToFile("Compiling definitions...");
+    LogToFile("--- Starting Compilation Sequence ---");
+
+    LogToFile("Step 1/4: Generating Symbol Map...");
     CreateSymbolsFromPathList();
+
+    LogToFile("Step 2/4: Parsing and Instantiating .def files...");
     DoCompilePathList();
 
     std::string outPath(m_CompiledFileName.begin(), m_CompiledFileName.end());
     size_t lastSlash = outPath.find_last_of("\\/");
     std::string dirPath = (lastSlash != std::string::npos) ? outPath.substr(0, lastSlash) : "";
 
+    LogToFile("Step 3/4: Saving String Table (name.bin)...");
     std::string nameBinPath = dirPath + "\\name.bin";
     m_StringTable->SaveTable(nameBinPath);
-    LogToFile("Exported String Table to: " + nameBinPath);
+    LogToFile("Successfully exported String Table to: " + nameBinPath);
 
+    LogToFile("Step 4/4: Packing Binary Definitions (frontend.bin)...");
     SaveBinaryDefinitions();
+
+    LogToFile("--- All Steps Completed Successfully ---");
 }
 
 void CDefinitionManager::CreateSymbolsFromPathList() {
-    LogToFile("Parsing headers for symbol map...");
     m_SymbolMap.clear();
 
     for (const auto& path : m_SymbolPathList) {
+        std::string fileName(path.begin(), path.end());
+        LogToFile(" -> Reading header for symbols: " + fileName);
+
         std::string rawContent = ReadFileToString(path);
-        if (rawContent.empty()) continue;
+        if (rawContent.empty()) {
+            LogToFile("    ! Warning: File is empty or missing.");
+            continue;
+        }
         ParseStringForSymbols(rawContent, false);
     }
-    LogToFile("Loaded " + std::to_string(m_SymbolMap.size()) + " symbols into memory.");
+    LogToFile("Symbol Map populated with " + std::to_string(m_SymbolMap.size()) + " entries.");
 }
 
 void CDefinitionManager::ParseEnumForSymbols(CStringParser& parser) {
@@ -93,7 +106,6 @@ void CDefinitionManager::ParseEnumForSymbols(CStringParser& parser) {
             return;
         }
     }
-    if (parser.ReadAsSymbol(symbol) && symbol != ";") {}
 }
 
 void CDefinitionManager::ParseStringForSymbols(const std::string& script, bool parseDefs) {
@@ -133,39 +145,42 @@ void CDefinitionManager::ParseStringForSymbols(const std::string& script, bool p
 }
 
 void CDefinitionManager::DoCompilePathList() {
-    LogToFile("Compiling .def files...");
-
     for (const auto& path : m_CompilePathList) {
+        std::string fileName(path.begin(), path.end());
+        LogToFile(" -> Compiling File: " + fileName);
+
         std::string rawContent = ReadFileToString(path);
         if (rawContent.empty()) continue;
 
         CStringParser parser;
-        parser.Init(rawContent, std::string(path.begin(), path.end()));
+        parser.Init(rawContent, fileName);
 
-        while (parser.SkipPastWholeString("#definition_template")) {
-            std::string defClass, defName;
-            if (parser.ReadAsString(defClass) && parser.ReadAsString(defName)) {
-                CompileDefinition(parser, defClass, defName, true);
+        while (parser.NextItemExists()) {
+            CParsedItem item;
+            parser.PeekNextItem(item);
+
+            // Now that # is handled, this single string check will work perfectly
+            if (item.StringValue == "#definition_template" || item.StringValue == "#definition") {
+                parser.ReadNextItem(item); // Consume directive
+                std::string defClass, defName;
+                if (parser.ReadAsString(defClass) && parser.ReadAsString(defName)) {
+                    LogToFile("    + " + defClass + " [" + defName + "]");
+                    CompileDefinition(parser, defClass, defName, false);
+                }
             }
-        }
-
-        parser.SetStringPos(0);
-
-        while (parser.SkipPastWholeString("#definition")) {
-            std::string defClass, defName;
-            if (parser.ReadAsString(defClass) && parser.ReadAsString(defName)) {
-                CompileDefinition(parser, defClass, defName, false);
+            else {
+                parser.ReadNextItem(item); // Skip random noise between blocks
             }
         }
     }
-    LogToFile("Instantiated " + std::to_string(m_InstantiatedDefs.size()) + " definition objects.");
 }
 
 void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::string& defClass, const std::string& defName, bool isTemplate) {
     uint32_t typeCrc = CDefStringTable::GetCRC(defClass);
     auto classIt = m_RegisteredClasses.find(typeCrc);
     if (classIt == m_RegisteredClasses.end()) {
-        parser.Error("Unknown Definition Class: " + defClass);
+        LogToFile("      ! Unknown Class: " + defClass);
+        parser.SkipUntilWholeString("#end_definition");
         return;
     }
 
@@ -174,42 +189,38 @@ void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::str
     newDef->SetInstantiationName(defName);
 
     CParsedItem item;
-    if (parser.PeekNextItem(item) && item.StringValue == "specialises") {
-        parser.ReadNextItem(item);
-        std::string parentName;
-        parser.ReadAsString(parentName);
-    }
-
     while (parser.NextItemExists()) {
         if (parser.PeekNextItem(item) && item.StringValue == "#end_definition") {
             parser.ReadNextItem(item);
             break;
         }
 
-        if (parser.PeekNextItem(item) && item.StringValue == "<") {
-            parser.ReadNextSymbol(item);
-            std::string subDefName;
-            parser.ReadAsString(subDefName);
-            parser.SkipPastString(">");
-            parser.SkipPastString("<\\" + subDefName + ">");
-            continue;
+        auto prePos = parser.SaveState();
+        try {
+            newDef->ParseFromText(parser, m_SymbolMap);
+        }
+        catch (const std::exception& e) {
+            LogToFile("      CRITICAL ERROR in " + defName + ": " + e.what());
         }
 
-        newDef->ParseFromText(parser, m_SymbolMap);
-        if (parser.PeekNextItem(item) && item.Type == EParsedItemType::Unknown) {
-            parser.MoveStringPos(1);
+        auto postPos = parser.SaveState();
+        if (prePos.Ptr == postPos.Ptr) {
+            parser.ReadNextItem(item);
+            LogToFile("      ? Property Skipped: " + item.StringValue);
         }
     }
     m_InstantiatedDefs.push_back(newDef);
 }
 
 void CDefinitionManager::SaveBinaryDefinitions() {
-    LogToFile("Building binary stream...");
-
     std::string outPath(m_CompiledFileName.begin(), m_CompiledFileName.end());
     std::ofstream os(outPath, std::ios::binary);
-    if (!os.is_open()) return;
+    if (!os.is_open()) {
+        LogToFile("ERROR: Failed to open output file for writing: " + outPath);
+        return;
+    }
 
+    LogToFile(" -> Writing Global Header...");
     uint8_t useSafeBinary = 0;
     uint32_t dependencyCRC = 0xDE4C6EE8;
     uint32_t randomID = 0xE36C34E8;
@@ -220,6 +231,7 @@ void CDefinitionManager::SaveBinaryDefinitions() {
     os.write((char*)&randomID, 4);
     os.write((char*)&noDefs, 4);
 
+    LogToFile(" -> Writing Definition Roster (" + std::to_string(noDefs) + " entries)...");
     for (auto* def : m_InstantiatedDefs) {
         uint32_t classTablePos = m_StringTable->AddString(def->GetClassName());
         uint32_t instTablePos = m_StringTable->AddString(def->GetInstantiationName());
@@ -230,6 +242,7 @@ void CDefinitionManager::SaveBinaryDefinitions() {
         os.write((char*)&classIndex, 4);
     }
 
+    LogToFile(" -> Serializing and Chunking Data...");
     std::vector<uint8_t> uncompressedBuffer;
     std::vector<uint16_t> defOffsets;
     std::vector<std::pair<uint32_t, uint32_t>> chunkMap;
@@ -244,6 +257,7 @@ void CDefinitionManager::SaveBinaryDefinitions() {
         uint32_t projectedSize = uncompressedBuffer.size() + (defOffsets.size() * 2) + defOs.GetLength() + 2;
 
         if (!uncompressedBuffer.empty() && projectedSize > 0x8000) {
+            LogToFile("    * Chunk Threshold reached at Def " + std::to_string(i) + ". Compressing block...");
             CompressBlock(uncompressedBuffer, defOffsets, firstCompressedDef, chunkMap, compressedStream);
             firstCompressedDef = i;
         }
@@ -254,9 +268,11 @@ void CDefinitionManager::SaveBinaryDefinitions() {
     }
 
     if (!uncompressedBuffer.empty()) {
+        LogToFile("    * Compressing final remaining block...");
         CompressBlock(uncompressedBuffer, defOffsets, firstCompressedDef, chunkMap, compressedStream);
     }
 
+    LogToFile(" -> Finalizing Chunk Map (" + std::to_string(chunkMap.size()) + " chunks)...");
     uint32_t chunkMapCount = chunkMap.size();
     os.write((char*)&chunkMapCount, 4);
     for (const auto& chunk : chunkMap) {
@@ -264,12 +280,13 @@ void CDefinitionManager::SaveBinaryDefinitions() {
         os.write((char*)&chunk.second, 4);
     }
 
+    LogToFile(" -> Finalizing Compressed Stream...");
     uint32_t compressedSize = compressedStream.size();
     os.write((char*)&compressedSize, 4);
     os.write((char*)compressedStream.data(), compressedStream.size());
 
     os.close();
-    LogToFile("Successfully exported: " + outPath);
+    LogToFile("Binary Sequence Complete. frontend.bin written to disk.");
 }
 
 void CDefinitionManager::CompressBlock(std::vector<uint8_t>& uncompressed, std::vector<uint16_t>& offsets,
