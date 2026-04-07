@@ -116,6 +116,11 @@
   <ItemGroup>
     <ResourceCompile Include="EgoCore.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FableDefCompiler\FableDefCompiler.vcxproj">
+      <Project>{4982f328-7c3a-488e-9991-13aa3de920f8}</Project>
+    </ProjectReference>
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -223,7 +228,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\FSE;C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\FableDefCompiler;C:\Users\Emi\source\repos\EgoCore\EgoCore\FSE;C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

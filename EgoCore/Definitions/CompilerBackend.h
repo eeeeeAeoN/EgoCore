@@ -14,6 +14,7 @@
 #include <sstream>
 #include <algorithm>
 #include <map>
+#include "DefCompiler.h"
 
 namespace fs = std::filesystem;
 
@@ -217,9 +218,13 @@ static bool RunHiddenFable(const std::string& exePath, bool shouldPatchCode) {
     return true;
 }
 
-static void CompileAllDefs_Stealth() {
-    // BUGFIX: Removed the !g_DefWorkspace.IsLoaded check!
+static void NativeCompileFrontend() {
+    g_CompileStatus = "Native Compiling... Check compiler.log in Fable folder.";
 
+    FableCompiler::CompileFrontendNative(g_AppConfig.GameRootPath);
+}
+
+static void CompileAllDefs_Stealth() {
     if (!g_OpenBanks.empty()) {
         g_OpenBanks.clear();
         g_ActiveBankIndex = -1;
@@ -235,7 +240,6 @@ static void CompileAllDefs_Stealth() {
         g_CompileStatus = "Compiling Sound Binaries...";
         std::string log;
 
-        // BUGFIX: Use g_AppConfig.GameRootPath instead of g_DefWorkspace.RootPath!
         std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
         BinaryParser::CompileSoundBinaries(defsPath, log);
 
@@ -278,9 +282,8 @@ static void RunStealthCompilerSync() {
 
     if (!PatchIniFile(g_AppConfig.GameRootPath)) return;
 
-    // Run synchronously
-    RunHiddenFable(exePath, false); // Compile Frontend
-    RunHiddenFable(exePath, true);  // Compile Game
+    RunHiddenFable(exePath, false);
+    RunHiddenFable(exePath, true);
 
     RestoreIniFile();
 }
