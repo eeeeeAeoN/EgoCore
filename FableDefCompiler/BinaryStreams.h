@@ -70,6 +70,9 @@ public:
     }
 };
 
+// GLOBAL POINTER - EXACTLY HERE!
+extern CDefStringTable* GDefStringTable;
+
 class CDataOutputStream {
 public:
     virtual ~CDataOutputStream() = default;
@@ -86,8 +89,13 @@ public:
     void Write3DVector(const C3DVector* vec) { Write(vec, sizeof(C3DVector)); }
 
     void WriteString(const std::string& str) {
-        uint32_t crc = CDefStringTable::GetCRC(str);
-        WriteULONG(crc);
+        if (GDefStringTable) {
+            uint32_t offset = GDefStringTable->AddString(str);
+            WriteULONG(offset);
+        }
+        else {
+            WriteULONG(0);
+        }
     }
 
     void WriteNullTerminatedString(const std::string& str) {
@@ -142,6 +150,13 @@ public:
         }
     }
 
+    void WriteMapStringToUint32(const std::map<std::string, uint32_t>& m) {
+        WriteSLONG((int32_t)m.size());
+        for (const auto& pair : m) {
+            WriteString(pair.first); // Fable writes strings to the StringTable
+            WriteULONG(pair.second);
+        }
+    }
 };
 
 class CMemoryDataOutputStream : public CDataOutputStream {

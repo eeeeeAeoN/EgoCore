@@ -3,8 +3,11 @@
 #include <iostream>
 #include <zlib.h>
 
+CDefStringTable* GDefStringTable = nullptr;
+
 CDefinitionManager::CDefinitionManager(const std::wstring& outFileName) : m_CompiledFileName(outFileName) {
     m_StringTable = new CDefStringTable();
+    GDefStringTable = m_StringTable;
 }
 
 CDefinitionManager::~CDefinitionManager() {
@@ -153,23 +156,24 @@ void CDefinitionManager::DoCompilePathList() {
         if (rawContent.empty()) continue;
 
         CStringParser parser;
+
+        // PASS 1: Compile Templates First
         parser.Init(rawContent, fileName);
-
-        while (parser.NextItemExists()) {
-            CParsedItem item;
-            parser.PeekNextItem(item);
-
-            // Now that # is handled, this single string check will work perfectly
-            if (item.StringValue == "#definition_template" || item.StringValue == "#definition") {
-                parser.ReadNextItem(item); // Consume directive
-                std::string defClass, defName;
-                if (parser.ReadAsString(defClass) && parser.ReadAsString(defName)) {
-                    LogToFile("    + " + defClass + " [" + defName + "]");
-                    CompileDefinition(parser, defClass, defName, false);
-                }
+        while (parser.SkipPastWholeString("#definition_template")) {
+            std::string defClass, defName;
+            if (parser.ReadAsString(defClass) && parser.ReadAsString(defName)) {
+                LogToFile("    + " + defClass + " [" + defName + "] (Template)");
+                CompileDefinition(parser, defClass, defName, true);
             }
-            else {
-                parser.ReadNextItem(item); // Skip random noise between blocks
+        }
+
+        // PASS 2: Compile Definitions Second
+        parser.Init(rawContent, fileName); // Reset parser to the top of the file
+        while (parser.SkipPastWholeString("#definition")) {
+            std::string defClass, defName;
+            if (parser.ReadAsString(defClass) && parser.ReadAsString(defName)) {
+                LogToFile("    + " + defClass + " [" + defName + "]");
+                CompileDefinition(parser, defClass, defName, false);
             }
         }
     }
@@ -188,7 +192,28 @@ void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::str
     if (!newDef) return;
     newDef->SetInstantiationName(defName);
 
+    // HERE: The missing inheritance hook is restored!
     CParsedItem item;
+    if (parser.PeekNextItem(item) && item.StringValue == "specialises") {
+        parser.ReadNextItem(item);
+        std::string parentName;
+        if (parser.ReadAsIdentifierOrNumber(parentName)) {
+            IDefObject* parentDef = nullptr;
+            for (auto* existingDef : m_InstantiatedDefs) {
+                if (existingDef->GetInstantiationName() == parentName) {
+                    parentDef = existingDef;
+                    break;
+                }
+            }
+            if (parentDef) {
+                newDef->CopyFrom(parentDef);
+            }
+            else {
+                LogToFile("      ! Warning: Parent template '" + parentName + "' not found for '" + defName + "'");
+            }
+        }
+    }
+
     while (parser.NextItemExists()) {
         if (parser.PeekNextItem(item) && item.StringValue == "#end_definition") {
             parser.ReadNextItem(item);
@@ -221,12 +246,12 @@ void CDefinitionManager::SaveBinaryDefinitions() {
     }
 
     LogToFile(" -> Writing Global Header...");
-    uint8_t useSafeBinary = 0;
+    int32_t useSafeBinary = 0;
     uint32_t dependencyCRC = 0xDE4C6EE8;
     uint32_t randomID = 0xE36C34E8;
     uint32_t noDefs = (uint32_t)m_InstantiatedDefs.size();
 
-    os.write((char*)&useSafeBinary, 1);
+    os.write((char*)&useSafeBinary, 4);
     os.write((char*)&dependencyCRC, 4);
     os.write((char*)&randomID, 4);
     os.write((char*)&noDefs, 4);

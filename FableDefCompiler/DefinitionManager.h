@@ -22,7 +22,7 @@ private:
     std::vector<std::wstring> m_SymbolPathList;
     std::vector<std::wstring> m_CompilePathList;
     std::wstring m_CompiledFileName;
-
+    uint32_t m_DefCounter = 0;
     std::map<std::string, int> m_SymbolMap;
     std::vector<IDefObject*> m_InstantiatedDefs;
     CDefStringTable* m_StringTable;

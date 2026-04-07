@@ -17,34 +17,17 @@ void CStringParser::Init(const std::string& buffer, const std::string& filename)
 }
 
 bool CStringParser::IsEOF() const {
-    // We are at the end if the cursor hits the end pointer or a null terminator
     return m_Cursor >= m_BufferEnd || *m_Cursor == '\0';
 }
 
-int CStringParser::GetCurrentLine() const {
-    return m_CurrentLine;
-}
-
-bool CStringParser::IsInQuotes() const {
-    return m_InQuotes;
-}
-
+int CStringParser::GetCurrentLine() const { return m_CurrentLine; }
+bool CStringParser::IsInQuotes() const { return m_InQuotes; }
 
 void CStringParser::MoveStringPos(unsigned int n) {
-    // Move forward 'n' times safely
     for (unsigned int i = 0; i < n && !IsEOF(); ++i) {
-
-        // Toggle the InQuotes flag if we hit a quotation mark
-        if (*m_Cursor == '"' || *m_Cursor == '\'') {
-            m_InQuotes = !m_InQuotes;
-        }
-
-        // Keep track of line numbers automatically
-        if (*m_Cursor == '\n') {
-            m_CurrentLine++;
-        }
-
-        m_Cursor++; // Actually move the pointer
+        if (*m_Cursor == '"' || *m_Cursor == '\'') m_InQuotes = !m_InQuotes;
+        if (*m_Cursor == '\n') m_CurrentLine++;
+        m_Cursor++;
     }
 }
 
@@ -54,69 +37,56 @@ void CStringParser::MoveStringPos(unsigned int n) {
 
 void CStringParser::SkipWhitespace() {
     while (!IsEOF()) {
-        // 1. Skip standard whitespace
+        // Space, Tab, \r, \n
         if (std::isspace(static_cast<unsigned char>(*m_Cursor))) {
             MoveStringPos(1);
             continue;
         }
-
-        // 2. Skip single-line comments (//)
+        // // Comments
         if (*m_Cursor == '/' && m_Cursor + 1 < m_BufferEnd && *(m_Cursor + 1) == '/') {
             SkipPastNewline();
             continue;
         }
-
-        // 3. Skip multi-line comments (/* ... */)
+        // /* Comments */
         if (*m_Cursor == '/' && m_Cursor + 1 < m_BufferEnd && *(m_Cursor + 1) == '*') {
-            MoveStringPos(2); // Step over the opening /*
-
+            MoveStringPos(2);
             while (!IsEOF()) {
                 if (*m_Cursor == '*' && m_Cursor + 1 < m_BufferEnd && *(m_Cursor + 1) == '/') {
-                    MoveStringPos(2); // Step over the closing */
+                    MoveStringPos(2);
                     break;
                 }
                 MoveStringPos(1);
             }
-            continue; // Loop back around to check if there is trailing whitespace
+            continue;
         }
-
-        // If we get here, it's not whitespace and not a comment. We are looking at real code.
         break;
     }
 }
 
 unsigned int CStringParser::SkipUntilWhitespace() {
     const char* start = m_Cursor;
-
-    // Keep moving forward until we hit a space or the end of the file
     while (!IsEOF() && !std::isspace(static_cast<unsigned char>(*m_Cursor))) {
         MoveStringPos(1);
     }
-
-    // Return how many characters we skipped over
     return static_cast<unsigned int>(m_Cursor - start);
 }
 
 int CStringParser::SkipPastNewline() {
     const char* start = m_Cursor;
-
     while (!IsEOF()) {
         char c = *m_Cursor;
-
-        // If we hit a newline (Linux \n or Windows \r)
         if (c == '\n' || c == '\r') {
-            // Consume all consecutive newlines to completely clear the line break
-            while (!IsEOF() && (*m_Cursor == '\n' || *m_Cursor == '\r')) {
-                MoveStringPos(1);
-            }
-            break; // Stop after clearing the newlines
+            while (!IsEOF() && (*m_Cursor == '\n' || *m_Cursor == '\r')) MoveStringPos(1);
+            break;
         }
-
         MoveStringPos(1);
     }
-
     return static_cast<int>(m_Cursor - start);
 }
+
+// ---------------------------------------------------------
+// Strict Tokenizer (Matches Fable Engine)
+// ---------------------------------------------------------
 
 bool CStringParser::ReadNextItem(CParsedItem& item) {
     SkipWhitespace();
@@ -129,18 +99,17 @@ bool CStringParser::ReadNextItem(CParsedItem& item) {
     char c = *m_Cursor;
     char nextC = (m_Cursor + 1 < m_BufferEnd) ? *(m_Cursor + 1) : '\0';
 
-    // 1. Is it a Number?
-    if (std::isdigit(static_cast<unsigned char>(c)) ||
-        (c == '-' && std::isdigit(static_cast<unsigned char>(nextC)))) {
+    // 1. Number?
+    if (std::isdigit(static_cast<unsigned char>(c)) || (c == '-' && std::isdigit(static_cast<unsigned char>(nextC)))) {
         return ReadNextNumber(item);
     }
 
-    // 2. Is it an Identifier? (Now includes '#' for directives)
+    // 2. Identifier? (Strictly alnum, _, or #)
     if (std::isalpha(static_cast<unsigned char>(c)) || c == '_' || c == '#') {
         return ReadNextString(item);
     }
 
-    // 3. Otherwise, it's a Symbol
+    // 3. Symbol (Everything else, exactly 1 char)
     return ReadNextSymbol(item);
 }
 
@@ -148,15 +117,23 @@ bool CStringParser::ReadNextString(CParsedItem& item) {
     if (IsEOF()) return false;
     const char* start = m_Cursor;
 
-    // Directives and identifiers can contain alphanumeric, _, or #
-    while (!IsEOF() && (std::isalnum(static_cast<unsigned char>(*m_Cursor)) ||
-        *m_Cursor == '_' || *m_Cursor == '#')) {
+    // FABLE ENGINE RULE: Loop STOPS if it hits a bracket, dot, \r, \n, space, etc.
+    while (!IsEOF() && (std::isalnum(static_cast<unsigned char>(*m_Cursor)) || *m_Cursor == '_' || *m_Cursor == '#')) {
         MoveStringPos(1);
     }
 
     if (m_Cursor == start) return false;
     item.Type = EParsedItemType::Identifier;
     item.StringValue = std::string(start, m_Cursor - start);
+    return true;
+}
+
+bool CStringParser::ReadNextSymbol(CParsedItem& item) {
+    if (IsEOF()) return false;
+
+    item.Type = EParsedItemType::Symbol;
+    item.StringValue = std::string(1, *m_Cursor); // Grab exactly 1 character
+    MoveStringPos(1);
     return true;
 }
 
@@ -207,27 +184,10 @@ bool CStringParser::ReadNextNumber(CParsedItem& item) {
 
 bool CStringParser::ReadLineAsString(std::string& outStr) {
     if (IsEOF()) return false;
-
     const char* start = m_Cursor;
-
-    // Move forward until we hit EOF or a newline
-    while (!IsEOF() && *m_Cursor != '\n' && *m_Cursor != '\r') {
-        MoveStringPos(1);
-    }
-
+    while (!IsEOF() && *m_Cursor != '\n' && *m_Cursor != '\r') MoveStringPos(1);
     outStr = std::string(start, m_Cursor - start);
-    SkipPastNewline(); // Step over the actual line breaks
-
-    return true;
-}
-
-bool CStringParser::ReadNextSymbol(CParsedItem& item) {
-    if (IsEOF()) return false;
-
-    item.Type = EParsedItemType::Symbol;
-    item.StringValue = std::string(1, *m_Cursor); // Grab exactly 1 character
-
-    MoveStringPos(1);
+    SkipPastNewline();
     return true;
 }
 
@@ -236,18 +196,14 @@ bool CStringParser::ReadNextItemAsQuotedString(std::string& outStr) {
     if (IsEOF()) return false;
 
     char quoteChar = *m_Cursor;
-
-    // Check if we are actually starting at a quote
     if (quoteChar != '"' && quoteChar != '\'') return false;
 
-    MoveStringPos(1); // Step over the opening quote
+    MoveStringPos(1);
     outStr.clear();
 
     while (!IsEOF()) {
         char c = *m_Cursor;
-
         if (c == '\\') {
-            // It's an escape character, skip the backslash and read the next literal char
             MoveStringPos(1);
             if (!IsEOF()) {
                 outStr += *m_Cursor;
@@ -255,32 +211,121 @@ bool CStringParser::ReadNextItemAsQuotedString(std::string& outStr) {
             }
         }
         else if (c == quoteChar) {
-            // We found the closing quote! Step over it and finish.
             MoveStringPos(1);
             return true;
         }
         else {
-            // Standard character, just add it to the string
             outStr += c;
             MoveStringPos(1);
         }
     }
-
-    return false; // Error: Reached the end of the file without finding a closing quote
+    return false;
 }
 
 void CStringParser::SetStringPos(unsigned int n) {
-    if (n > (m_BufferEnd - m_BufferStart)) return; // Safety check
-
+    if (n > (m_BufferEnd - m_BufferStart)) return;
     m_Cursor = m_BufferStart + n;
-
-    // The engine recalculates the InQuotes state from the beginning up to 'n'
     m_InQuotes = false;
     for (const char* ptr = m_BufferStart; ptr < m_Cursor; ++ptr) {
-        if (*ptr == '"' || *ptr == '\'') {
-            m_InQuotes = !m_InQuotes;
+        if (*ptr == '"' || *ptr == '\'') m_InQuotes = !m_InQuotes;
+    }
+}
+
+// ---------------------------------------------------------
+// Advanced Seekers and Extractors
+// ---------------------------------------------------------
+
+bool CStringParser::SkipUntilString(const std::string& str) {
+    if (str.empty()) return false;
+    while (!IsEOF()) {
+        if (std::strncmp(m_Cursor, str.c_str(), str.length()) == 0) return true;
+        MoveStringPos(1);
+    }
+    return false;
+}
+
+bool CStringParser::SkipUntilWholeString(const std::string& str) {
+    if (str.empty()) return false;
+    while (SkipUntilString(str)) {
+        bool leftOk = (m_Cursor == m_BufferStart) || (!std::isalnum(*(m_Cursor - 1)) && *(m_Cursor - 1) != '_');
+        const char* right = m_Cursor + str.length();
+        bool rightOk = (right >= m_BufferEnd) || (!std::isalnum(*right) && *right != '_');
+        if (leftOk && rightOk) return true;
+        MoveStringPos(1);
+    }
+    return false;
+}
+
+bool CStringParser::SkipPastString(const std::string& str) {
+    if (SkipUntilString(str)) { MoveStringPos(str.length()); return true; }
+    return false;
+}
+
+bool CStringParser::SkipPastWholeString(const std::string& str) {
+    if (SkipUntilWholeString(str)) { MoveStringPos(str.length()); return true; }
+    return false;
+}
+
+bool CStringParser::ReadAsStringUntilWhitespace(std::string& outStr) {
+    if (IsEOF()) return false;
+    const char* start = m_Cursor;
+    SkipUntilWhitespace();
+    outStr = std::string(start, m_Cursor - start);
+    return true;
+}
+
+bool CStringParser::ReadAsStringUntilString(const std::string& target, std::string& outStr) {
+    const char* start = m_Cursor;
+    if (SkipUntilString(target)) {
+        outStr = std::string(start, m_Cursor - start);
+        return true;
+    }
+    return false;
+}
+
+bool CStringParser::ReadAsStringUntilWholeString(const std::string& target, std::string& outStr) {
+    const char* start = m_Cursor;
+    if (SkipUntilWholeString(target)) {
+        outStr = std::string(start, m_Cursor - start);
+        return true;
+    }
+    return false;
+}
+
+bool CStringParser::ReadAsStringUntilPastString(const std::string& target, std::string& outStr) {
+    const char* start = m_Cursor;
+    if (SkipUntilString(target)) {
+        MoveStringPos(target.length());
+        outStr = std::string(start, m_Cursor - start);
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------
+// Strict Typed Extractors
+// ---------------------------------------------------------
+
+bool CStringParser::ReadAsString(std::string& outStr) {
+    CParsedItem item;
+    if (ReadNextItem(item) && item.Type == EParsedItemType::Identifier) {
+        outStr = item.StringValue;
+        return true;
+    }
+    Error("Error parsing string");
+    return false;
+}
+
+bool CStringParser::ReadAsIdentifierOrNumber(std::string& outStr) {
+    CParsedItem item;
+    if (ReadNextItem(item)) {
+        if (item.Type == EParsedItemType::Identifier || item.Type == EParsedItemType::Integer || item.Type == EParsedItemType::Float) {
+            outStr = item.StringValue;
+            return true;
         }
     }
+    Error("Expected an identifier or a number.");
+    return false;
 }
 
 bool CStringParser::ReadAsSymbol(std::string& outSymbol) {
@@ -293,167 +338,29 @@ bool CStringParser::ReadAsSymbol(std::string& outSymbol) {
     return false;
 }
 
-// ---------------------------------------------------------
-// Advanced Skipping
-// ---------------------------------------------------------
-
-bool CStringParser::SkipUntilString(const std::string& str) {
-    if (str.empty()) return false;
-
-    while (!IsEOF()) {
-        // If the remaining buffer matches the target string
-        if (std::strncmp(m_Cursor, str.c_str(), str.length()) == 0) {
-            return true; // Success: Cursor is now exactly AT the start of the string
-        }
-        MoveStringPos(1);
-    }
-    return false;
-}
-
-bool CStringParser::SkipUntilWholeString(const std::string& str) {
-    if (str.empty()) return false;
-
-    while (SkipUntilString(str)) {
-        // We found the string, but is it a WHOLE word? (e.g., don't match "TRUE" inside "TRUE_VALUE")
-
-        // Check character before the match
-        bool leftOk = (m_Cursor == m_BufferStart) ||
-            (!std::isalnum(*(m_Cursor - 1)) && *(m_Cursor - 1) != '_');
-
-        // Check character after the match
-        const char* right = m_Cursor + str.length();
-        bool rightOk = (right >= m_BufferEnd) ||
-            (!std::isalnum(*right) && *right != '_');
-
-        if (leftOk && rightOk) {
-            return true; // It is a standalone word!
-        }
-
-        // It was a partial match. Step forward one char and keep looking.
-        MoveStringPos(1);
-    }
-    return false;
-}
-
-bool CStringParser::SkipPastString(const std::string& str) {
-    if (SkipUntilString(str)) {
-        MoveStringPos(str.length()); // Found it, now jump over it
-        return true;
-    }
-    return false;
-}
-
-bool CStringParser::SkipPastWholeString(const std::string& str) {
-    if (SkipUntilWholeString(str)) {
-        MoveStringPos(str.length()); // Found the whole word, now jump over it
-        return true;
-    }
-    return false;
-}
-// ---------------------------------------------------------
-// Advanced Seeking & Extracting
-// ---------------------------------------------------------
-
-bool CStringParser::ReadAsStringUntilWhitespace(std::string& outStr) {
-    if (IsEOF()) return false;
-
-    const char* start = m_Cursor;
-    SkipUntilWhitespace();
-
-    outStr = std::string(start, m_Cursor - start);
-    return true;
-}
-
-bool CStringParser::ReadAsStringUntilString(const std::string& target, std::string& outStr) {
-    const char* start = m_Cursor;
-
-    if (SkipUntilString(target)) {
-        outStr = std::string(start, m_Cursor - start);
-        return true;
-    }
-    return false;
-}
-
-bool CStringParser::ReadAsStringUntilWholeString(const std::string& target, std::string& outStr) {
-    const char* start = m_Cursor;
-
-    if (SkipUntilWholeString(target)) {
-        outStr = std::string(start, m_Cursor - start);
-        return true;
-    }
-    return false;
-}
-
-bool CStringParser::ReadAsStringUntilPastString(const std::string& target, std::string& outStr) {
-    const char* start = m_Cursor;
-
-    if (SkipUntilString(target)) {
-        MoveStringPos(target.length()); // Move past the target
-        outStr = std::string(start, m_Cursor - start); // Extract everything including the target
-        return true;
-    }
-    return false;
-}
-
-// ---------------------------------------------------------
-// Strict Typed Readers
-// ---------------------------------------------------------
-
-bool CStringParser::ReadAsString(std::string& outStr) {
-    CParsedItem item;
-
-    // Attempt to read the next item, and ensure it's specifically an Identifier/String
-    if (ReadNextItem(item) && item.Type == EParsedItemType::Identifier) {
-        outStr = item.StringValue;
-        return true;
-    }
-
-    Error("Error parsing string");
-    return false;
-}
-
 int CStringParser::ReadAsInteger() {
     CParsedItem item;
-
-    if (ReadNextItem(item) && item.Type == EParsedItemType::Integer) {
-        return item.IntValue;
-    }
-
+    if (ReadNextItem(item) && item.Type == EParsedItemType::Integer) return item.IntValue;
     Error("Error parsing integer");
     return 0;
 }
 
 float CStringParser::ReadAsFloat() {
     CParsedItem item;
-
     if (ReadNextItem(item)) {
-        // If it's explicitly a float (has a decimal), return it
-        if (item.Type == EParsedItemType::Float) {
-            return item.FloatValue;
-        }
-        // If it happens to be an integer (e.g., they typed '5' instead of '5.0'), gracefully cast it
-        if (item.Type == EParsedItemType::Integer) {
-            return static_cast<float>(item.IntValue);
-        }
+        if (item.Type == EParsedItemType::Float) return item.FloatValue;
+        if (item.Type == EParsedItemType::Integer) return static_cast<float>(item.IntValue);
     }
-
     Error("Error parsing float");
     return 0.0f;
 }
 
 // ---------------------------------------------------------
-// State Saving & Peeking
+// State Saving & Error
 // ---------------------------------------------------------
 
-CStringParser::CursorState CStringParser::SaveState() const {
-    return { m_Cursor, m_CurrentLine, m_InQuotes };
-}
-
-void CStringParser::RestoreState(const CursorState& state) {
-    m_Cursor = state.Ptr;
-    m_CurrentLine = state.Line;
-    m_InQuotes = state.InQuotes;
-}
+CStringParser::CursorState CStringParser::SaveState() const { return { m_Cursor, m_CurrentLine, m_InQuotes }; }
+void CStringParser::RestoreState(const CursorState& state) { m_Cursor = state.Ptr; m_CurrentLine = state.Line; m_InQuotes = state.InQuotes; }
 
 bool CStringParser::PeekNextItem(CParsedItem& item) {
     CursorState oldState = SaveState();
@@ -464,10 +371,7 @@ bool CStringParser::PeekNextItem(CParsedItem& item) {
 
 EParsedItemType CStringParser::PeekNextItemType() {
     CParsedItem item;
-    if (PeekNextItem(item)) {
-        return item.Type;
-    }
-    return EParsedItemType::Unknown;
+    return PeekNextItem(item) ? item.Type : EParsedItemType::Unknown;
 }
 
 bool CStringParser::NextItemExists() {
@@ -478,15 +382,7 @@ bool CStringParser::NextItemExists() {
     return exists;
 }
 
-// ---------------------------------------------------------
-// Error Reporting
-// ---------------------------------------------------------
-
 void CStringParser::Error(const std::string& msg) const {
-    // Formats exactly like Lionhead's: "filename.def(42) : error : message"
     std::string fullError = m_Filename + "(" + std::to_string(m_CurrentLine) + ") : error : " + msg;
-
-    // TODO: Route this to your FableCompiler::LogToFile! 
-    // For now, we print to standard out:
     printf("%s\n", fullError.c_str());
 }

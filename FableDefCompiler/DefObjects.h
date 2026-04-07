@@ -7,6 +7,14 @@
 
 // --- frontend.bin ----
 
+// --- SAFE SYMBOL RESOLVER ---
+inline uint32_t ResolveSymbol(const std::string& str, const std::map<std::string, int>& symbolMap) {
+    auto it = symbolMap.find(str);
+    if (it != symbolMap.end()) return it->second;
+    try { return std::stoi(str); }
+    catch (...) { return 0; }
+}
+
 // --- SUBCLASSES& STRUCTURES ---
 struct CActionInputControl {
     int32_t GameAction = 0;
@@ -97,10 +105,7 @@ public:
 
                 std::string enumName;
                 if (parser.ReadAsString(enumName)) {
-                    auto it = symbolMap.find(enumName);
-                    if (it != symbolMap.end()) {
-                        ErrorMessageBackgroundGraphic = it->second;
-                    }
+                    ErrorMessageBackgroundGraphic = ResolveSymbol(enumName, symbolMap);
                 }
                 parser.SkipPastString(";");
             }
@@ -108,8 +113,7 @@ public:
                 parser.ReadNextItem(item);
                 std::string enumName;
                 if (parser.ReadAsString(enumName)) {
-                    auto it = symbolMap.find(enumName);
-                    if (it != symbolMap.end()) ButtonABigGraphic = it->second;
+                    ButtonABigGraphic = ResolveSymbol(enumName, symbolMap);
                 }
                 parser.SkipPastString(";");
             }
@@ -117,8 +121,7 @@ public:
                 parser.ReadNextItem(item);
                 std::string enumName;
                 if (parser.ReadAsString(enumName)) {
-                    auto it = symbolMap.find(enumName);
-                    if (it != symbolMap.end()) ButtonBBigGraphic = it->second;
+                    ButtonBBigGraphic = ResolveSymbol(enumName, symbolMap);
                 }
                 parser.SkipPastString(";");
             }
@@ -177,17 +180,15 @@ public:
                     CActionInputControl ctrl;
                     std::string tempStr;
 
-                    if (parser.ReadAsString(tempStr) && symbolMap.count(tempStr))
-                        ctrl.GameAction = symbolMap.at(tempStr);
+                    if (parser.ReadAsString(tempStr)) ctrl.GameAction = ResolveSymbol(tempStr, symbolMap);
                     parser.SkipPastString(",");
 
                     std::string typeStr;
-                    if (parser.ReadAsString(typeStr) && symbolMap.count(typeStr))
-                        ctrl.ControllerType = symbolMap.at(typeStr);
+                    if (parser.ReadAsString(typeStr)) ctrl.ControllerType = ResolveSymbol(typeStr, symbolMap);
                     parser.SkipPastString(",");
 
-                    if (parser.ReadAsString(tempStr) && symbolMap.count(tempStr)) {
-                        int32_t btnVal = symbolMap.at(tempStr);
+                    if (parser.ReadAsString(tempStr)) {
+                        int32_t btnVal = ResolveSymbol(tempStr, symbolMap);
                         if (typeStr == "CONTROLLER_KEYBOARD") ctrl.KeyboardKey = btnVal;
                         else if (typeStr == "CONTROLLER_MOUSE") ctrl.MouseButton = btnVal;
                         else ctrl.XboxButton = btnVal;
@@ -329,16 +330,13 @@ public:
                 parser.ReadNextItem(item);
                 std::string enumName;
                 if (parser.ReadAsString(enumName)) {
-                    auto it = symbolMap.find(enumName);
-                    if (it != symbolMap.end()) {
-                        int32_t val = it->second;
-                        if (prop == "TestStaticMesh") TestStaticMesh = val;
-                        else if (prop == "TestAnimatedMesh") TestAnimatedMesh = val;
-                        else if (prop == "TestAnim") TestAnim = val;
-                        else if (prop == "TestGraphic") TestGraphic = val;
-                        else if (prop == "InvalidTextureStandin") InvalidTextureStandin = val;
-                        else if (prop == "InvalidThemeStandin") InvalidThemeStandin = val;
-                    }
+                    int32_t val = ResolveSymbol(enumName, symbolMap);
+                    if (prop == "TestStaticMesh") TestStaticMesh = val;
+                    else if (prop == "TestAnimatedMesh") TestAnimatedMesh = val;
+                    else if (prop == "TestAnim") TestAnim = val;
+                    else if (prop == "TestGraphic") TestGraphic = val;
+                    else if (prop == "InvalidTextureStandin") InvalidTextureStandin = val;
+                    else if (prop == "InvalidThemeStandin") InvalidThemeStandin = val;
                 }
                 parser.SkipPastString(";");
             }
@@ -482,7 +480,6 @@ public:
     std::string GetInstantiationName() const override { return m_InstantiationName; }
     void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
 
-    // --- 3. Inheritance ---
     void CopyFrom(const IDefObject* parentObject) override {
         if (const auto* parent = dynamic_cast<const CEngineVideoOptionsDef*>(parentObject)) {
             *this = *parent;
@@ -656,8 +653,8 @@ public:
 
             parser.ReadNextItem(item);
             parser.SkipPastString("[");
-            std::string keyStr; parser.ReadAsString(keyStr);
-            uint32_t key = symbolMap.count(keyStr) ? symbolMap.at(keyStr) : std::stoi(keyStr);
+            std::string keyStr; parser.ReadAsIdentifierOrNumber(keyStr);
+            uint32_t key = ResolveSymbol(keyStr, symbolMap);
             parser.SkipPastString("]");
 
             if (prop == "ActionMap") {
@@ -665,8 +662,8 @@ public:
                 if (parser.ReadNextItemAsQuotedString(valStr)) ActionMap[key] = valStr;
             }
             else {
-                std::string valStr; parser.ReadAsString(valStr);
-                uint32_t val = symbolMap.count(valStr) ? symbolMap.at(valStr) : std::stoi(valStr);
+                std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
+                uint32_t val = ResolveSymbol(valStr, symbolMap);
 
                 if (prop == "Sprites") Sprites[key] = val;
                 else if (prop == "ActionMapAliases") ActionMapAliases[key] = val;
@@ -689,16 +686,16 @@ public:
         if (prop == "States") {
             parser.ReadNextItem(item);
             parser.SkipPastString("[");
-            std::string keyStr; parser.ReadAsString(keyStr);
-            uint32_t index = symbolMap.count(keyStr) ? symbolMap.at(keyStr) : std::stoi(keyStr);
+            std::string keyStr; parser.ReadAsIdentifierOrNumber(keyStr);
+            uint32_t index = ResolveSymbol(keyStr, symbolMap);
             parser.SkipPastString("].");
 
             if (index >= States.size()) States.resize(index + 1);
 
             std::string subProp; parser.ReadAsString(subProp);
             if (subProp == "GraphicIndex") {
-                std::string valStr; parser.ReadAsString(valStr);
-                States[index].GraphicIndex = symbolMap.count(valStr) ? symbolMap.at(valStr) : std::stoi(valStr);
+                std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
+                States[index].GraphicIndex = ResolveSymbol(valStr, symbolMap);
             }
             else if (subProp == "PositionX") States[index].Position.x = parser.ReadAsFloat();
             else if (subProp == "PositionY") States[index].Position.y = parser.ReadAsFloat();
@@ -710,14 +707,15 @@ public:
             return;
         }
         parser.ReadNextItem(item);
-        if (prop == "Font") parser.ReadAsString(Font);
+        if (prop == "Font") parser.ReadNextItemAsQuotedString(Font);
         else if (prop == "TextValue") parser.ReadNextItemAsQuotedString(TextValue);
         else if (prop == "MovieFilename") parser.ReadNextItemAsQuotedString(MovieFilename);
-        else if (prop == "Type" || prop == "MeshIndex" || prop == "AnimationIndex" || prop == "Action" || prop == "Layer" || prop == "MeshType") {
-            std::string valStr; parser.ReadAsString(valStr);
-            uint32_t val = symbolMap.count(valStr) ? symbolMap.at(valStr) : std::stoi(valStr);
+        else if (prop == "Type" || prop == "MeshIndex" || prop == "AnimationIndex" || prop == "Action" || prop == "Layer" || prop == "MeshType" || prop == "ExpansionType") {
+            std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
+            uint32_t val = ResolveSymbol(valStr, symbolMap);
             if (prop == "Type") Type = val; else if (prop == "MeshIndex") MeshIndex = val; else if (prop == "AnimationIndex") AnimationIndex = val;
             else if (prop == "Action") Action = val; else if (prop == "Layer") Layer = (int32_t)val; else if (prop == "MeshType") MeshType = val;
+            else if (prop == "ExpansionType") ExpansionType = val;
         }
         else if (prop == "Height" || prop == "Width" || prop == "ScrollingSpeed" || prop == "PositionOffsetX" || prop == "PositionOffsetY" || prop == "TextWindowBRX" || prop == "TextWindowBRY") {
             float val = parser.ReadAsFloat();
@@ -826,7 +824,7 @@ public:
     float DigitCountTime = 3.0f;
     uint32_t SaveHeroGraphicIndex = 0;
 
-    std::map<int32_t, std::string> MiniMapGraphics;
+    std::map<std::string, uint32_t> MiniMapGraphics;
 
     std::string SoundKeyboardUp, SoundKeyboardDown, SoundKeyboardLeft, SoundKeyboardRight;
     std::string SoundKeyboardEnterCharacter, SoundKeyboardDeleteCharacter, SoundKeyboardDone;
@@ -854,8 +852,8 @@ public:
             uint32_t key = parser.ReadAsInteger();
             parser.SkipPastString("]");
 
-            std::string valStr; parser.ReadAsString(valStr);
-            uint32_t val = symbolMap.count(valStr) ? symbolMap.at(valStr) : std::stoi(valStr);
+            std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
+            uint32_t val = ResolveSymbol(valStr, symbolMap);
 
             MapPaths[key] = val;
             parser.SkipPastString(";");
@@ -926,8 +924,8 @@ public:
         else if (prop == "CoreGraphic" || prop == "VignetteGraphic" || prop == "OptionalGraphic" || prop == "FeatGraphic" ||
             prop == "QuestStartScreenMusic" || prop == "QuestCompleteScreenMusic" || prop == "QuestFailureScreenMusic" ||
             prop == "DeathScreenMusic" || prop == "SaveHeroGraphicIndex") {
-            std::string valStr; parser.ReadAsString(valStr);
-            uint32_t val = symbolMap.count(valStr) ? symbolMap.at(valStr) : std::stoi(valStr);
+            std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
+            uint32_t val = ResolveSymbol(valStr, symbolMap);
 
             if (prop == "CoreGraphic") CoreGraphic = val; else if (prop == "VignetteGraphic") VignetteGraphic = val;
             else if (prop == "OptionalGraphic") OptionalGraphic = val; else if (prop == "FeatGraphic") FeatGraphic = val;
@@ -940,7 +938,7 @@ public:
             prop == "BackBufferFilterSaturation" || prop == "BackBufferFilterContrast" || prop == "BackBufferFilterBrightness" ||
             prop == "BackBufferFilterTintR" || prop == "BackBufferFilterTintG" || prop == "BackBufferFilterTintB" ||
             prop == "BackBufferFilterTintScale" || prop == "BackBufferDiffuseScale" || prop == "BackBufferAmbientScale" || prop == "MinimumFilterColor" ||
-            prop.find("X") != std::string::npos || prop.find("Y") != std::string::npos) { // Catch all the X/Y coordinates
+            prop.find("X") != std::string::npos || prop.find("Y") != std::string::npos) {
             float val = parser.ReadAsFloat();
 
             if (prop == "WorldMapWidth") WorldMapWidth = val; else if (prop == "WorldMapHeight") WorldMapHeight = val;
@@ -961,13 +959,30 @@ public:
             else if (prop == "HeroDollBRX_PC") HeroDollBR_PC.x = val; else if (prop == "HeroDollBRY_PC") HeroDollBR_PC.y = val;
             else if (prop == "HeroDollFrameTLX_PC") HeroDollFrameTL_PC.x = val; else if (prop == "HeroDollFrameTLY_PC") HeroDollFrameTL_PC.y = val;
         }
+        else if (prop == "MiniMapGraphics") {
+            CParsedItem itemBracket;
+            parser.ReadNextItem(itemBracket); // Skip '['
+
+            std::string keyStr;
+            parser.ReadNextItemAsQuotedString(keyStr);
+            parser.SkipPastString("]");
+
+            std::string valStr;
+            if (parser.ReadAsIdentifierOrNumber(valStr)) {
+                MiniMapGraphics[keyStr] = ResolveSymbol(valStr, symbolMap);
+            }
+        }
         else {
-            int32_t val = parser.ReadAsInteger();
-            if (prop == "TotalSpellsInPalettes") TotalSpellsInPalettes = val;
-            else if (prop == "TotalSpellsInContainer") TotalSpellsInContainer = val;
-            else if (prop == "TotalAssignableThings") TotalAssignableThings = val;
-            else if (prop == "KeyboardSmallKeyGraphic") KeyboardSmallKeyGraphic = val;
-            else if (prop == "KeyboardLargeKeyGraphic") KeyboardLargeKeyGraphic = val;
+            std::string valStr;
+            if (parser.ReadAsIdentifierOrNumber(valStr)) {
+                int32_t val = ResolveSymbol(valStr, symbolMap);
+
+                if (prop == "TotalSpellsInPalettes") TotalSpellsInPalettes = val;
+                else if (prop == "TotalSpellsInContainer") TotalSpellsInContainer = val;
+                else if (prop == "TotalAssignableThings") TotalAssignableThings = val;
+                else if (prop == "KeyboardSmallKeyGraphic") KeyboardSmallKeyGraphic = val;
+                else if (prop == "KeyboardLargeKeyGraphic") KeyboardLargeKeyGraphic = val;
+            }
         }
 
         parser.SkipPastString(";");
@@ -1006,7 +1021,7 @@ public:
 
         os->WriteCharString(CountUpSound); os->WriteFloat(DigitCountTime); os->WriteULONG(SaveHeroGraphicIndex);
 
-        os->WriteMapInt32ToString(MiniMapGraphics);
+        os->WriteMapStringToUint32(MiniMapGraphics);
 
         std::vector<std::string> c2 = { SoundKeyboardUp, SoundKeyboardDown, SoundKeyboardLeft, SoundKeyboardRight, SoundKeyboardEnterCharacter, SoundKeyboardDeleteCharacter, SoundKeyboardDone };
         for (const auto& s : c2) os->WriteCharString(s);
@@ -1073,8 +1088,8 @@ public:
         parser.ReadNextItem(item);
 
         std::string valStr;
-        if (parser.ReadAsString(valStr)) {
-            uint32_t val = symbolMap.count(valStr) ? symbolMap.at(valStr) : std::stoi(valStr);
+        if (parser.ReadAsIdentifierOrNumber(valStr)) {
+            uint32_t val = ResolveSymbol(valStr, symbolMap);
 
             if (prop == "IconFriendRequestReceived") IconFriendRequestReceived = val;
             else if (prop == "IconFriendRequestReceivedOn") IconFriendRequestReceivedOn = val;

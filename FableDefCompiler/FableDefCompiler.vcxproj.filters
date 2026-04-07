@@ -13,27 +13,21 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-    <Filter Include="Source Files\Parser">
-      <UniqueIdentifier>{c67aa1b9-410b-4b72-a63f-5e312a6376c8}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DefCompiler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="StringParser.cpp">
-      <Filter>Source Files\Parser</Filter>
-    </ClCompile>
     <ClCompile Include="DefinitionManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="StringParser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DefCompiler.h">
       <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="StringParser.h">
-      <Filter>Source Files\Parser</Filter>
     </ClInclude>
     <ClInclude Include="DefObjects.h">
       <Filter>Source Files</Filter>
@@ -42,6 +36,9 @@
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="DefinitionManager.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="StringParser.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>

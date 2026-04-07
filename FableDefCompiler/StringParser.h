@@ -96,6 +96,7 @@ public:
     bool ReadAsSymbol(std::string& outSymbol);
     int ReadAsInteger();
     float ReadAsFloat();
+    bool ReadAsIdentifierOrNumber(std::string& outStr);
 
     // --- Utilities ---
     void Error(const std::string& msg) const;
