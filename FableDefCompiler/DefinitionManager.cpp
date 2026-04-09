@@ -24,10 +24,18 @@ std::string CDefinitionManager::ReadFileToString(const std::wstring& path) {
 void CDefinitionManager::AddDefClass(const std::string& name, DefAllocFunc allocFunc) {
     uint32_t crc = CDefStringTable::GetCRC(name);
     m_RegisteredClasses[crc] = { name, crc, allocFunc };
-    m_StringTable->AddString("NULLDEF_" + name);
-    m_StringTable->AddString(name);
-}
 
+    std::string nullDefName = "NULLDEF_" + name;
+    m_StringTable->AddString(nullDefName);
+    m_StringTable->AddString(name);
+
+    // Replicate Fable's InstantiateDef for the NULL objects
+    IDefObject* nullDef = allocFunc();
+    if (nullDef) {
+        nullDef->SetInstantiationName(nullDefName);
+        m_InstantiatedDefs.push_back(nullDef);
+    }
+}
 void CDefinitionManager::SetSymbolPaths(const std::vector<std::wstring>& paths) { m_SymbolPathList = paths; }
 void CDefinitionManager::SetCompilePaths(const std::vector<std::wstring>& paths) { m_CompilePathList = paths; }
 
@@ -44,8 +52,8 @@ void CDefinitionManager::Compile() {
     size_t lastSlash = outPath.find_last_of("\\/");
     std::string dirPath = (lastSlash != std::string::npos) ? outPath.substr(0, lastSlash) : "";
 
-    LogToFile("Step 3/4: Saving String Table (name.bin)...");
-    std::string nameBinPath = dirPath + "\\name.bin";
+    LogToFile("Step 3/4: Saving String Table (names_custom.bin)...");
+    std::string nameBinPath = dirPath + "\\names_custom.bin";
     m_StringTable->SaveTable(nameBinPath);
     LogToFile("Successfully exported String Table to: " + nameBinPath);
 
@@ -80,35 +88,73 @@ void CDefinitionManager::ParseEnumForSymbols(CStringParser& parser) {
 
     std::string symbol;
     if (!parser.ReadAsSymbol(symbol) || symbol != "{") return;
-
     int currentValue = 0;
-    CParsedItem item;
 
-    while (parser.ReadNextItem(item)) {
+    while (true) {
+        CParsedItem item;
+        if (!parser.ReadNextItem(item)) break;
         if (item.Type == EParsedItemType::Symbol && item.StringValue == "}") break;
         if (item.Type != EParsedItemType::Identifier) return;
 
         std::string memberName = item.StringValue;
-        if (!parser.ReadAsSymbol(symbol)) break;
+
+        std::string symbol = "";
+        if (parser.PeekNextItemType() == EParsedItemType::Symbol) {
+             parser.ReadAsSymbol(symbol);
+        }
 
         if (symbol == "=") {
-            currentValue = parser.ReadAsInteger();
+            // handle hex, negative, bitshifts, or identifiers
+            CParsedItem valItem;
+            if (parser.ReadNextItem(valItem)) {
+                 if (valItem.Type == EParsedItemType::Integer) {
+                     currentValue = valItem.IntValue;
+                 } else if (valItem.Type == EParsedItemType::Identifier) {
+                     auto it = m_SymbolMap.find(valItem.StringValue);
+                     if (it != m_SymbolMap.end()) currentValue = it->second;
+                     
+                     // Read away any trailing operations like `<< 8`
+                     while (true) {
+                         CParsedItem junk;
+                         if (!parser.PeekNextItem(junk)) break;
+                         if (junk.StringValue == "," || junk.StringValue == "}") break;
+                         
+                         parser.ReadNextItem(junk);
+                         if (junk.StringValue == "<<" || junk.StringValue == ">>") {
+                             CParsedItem shift;
+                             if (parser.ReadNextItem(shift) && shift.Type == EParsedItemType::Integer) {
+                                 if (junk.StringValue == "<<") currentValue <<= shift.IntValue;
+                                 else currentValue >>= shift.IntValue;
+                             }
+                         }
+                     }
+                 }
+            }
             m_SymbolMap[memberName] = currentValue;
+            
             if (parser.PeekNextItemType() == EParsedItemType::Symbol) {
-                parser.PeekNextItem(item);
-                if (item.StringValue == ",") parser.ReadNextSymbol(item);
+                parser.PeekNextItem(valItem);
+                if (valItem.StringValue == ",") {
+                    parser.ReadAsSymbol(symbol);
+                } else if (valItem.StringValue == "}") {
+                    // let loop handle }
+                }
             }
             currentValue++;
         }
-        else if (symbol == "," || symbol == "}") {
+        else if (symbol == "," || symbol == "") {
             m_SymbolMap[memberName] = currentValue;
             currentValue++;
-            if (symbol == "}") break;
+        }
+        else if (symbol == "}") {
+            m_SymbolMap[memberName] = currentValue;
+            break;
         }
         else {
-            return;
+            break;
         }
     }
+
 }
 
 void CDefinitionManager::ParseStringForSymbols(const std::string& script, bool parseDefs) {
@@ -128,22 +174,44 @@ void CDefinitionManager::ParseStringForSymbols(const std::string& script, bool p
         while (parser.SkipPastWholeString("#definition")) {
             std::string defClass, defName;
             if (parser.ReadAsString(defClass) && parser.ReadAsString(defName)) {
-                m_StringTable->AddString(defClass);
-                m_StringTable->AddString("NULLDEF_" + defClass);
-                m_StringTable->AddString(defName);
-                CParsedItem peekItem;
-                if (parser.PeekNextItem(peekItem) && peekItem.StringValue == "specialises") {
-                    parser.ReadNextItem(peekItem);
-                    std::string parentName;
-                    if (parser.ReadAsString(parentName)) m_StringTable->AddString(parentName);
-                }
+                CompileDefinition(parser, defClass, defName, true);
             }
         }
         parser.SetStringPos(0);
     }
 
-    while (parser.SkipPastWholeString("enum")) {
-        ParseEnumForSymbols(parser);
+    // Robust Enum and Define Search
+    parser.SetStringPos(0);
+    while (!parser.IsEOF()) {
+        auto enumState = parser.SaveState();
+        bool foundEnum = parser.SkipUntilWholeString("enum");
+        auto enumFoundState = parser.SaveState();
+        parser.RestoreState(enumState);
+        
+        bool foundDefine = parser.SkipUntilWholeString("#define");
+        auto defineFoundState = parser.SaveState();
+
+        if (!foundEnum && !foundDefine) break;
+
+        if (foundEnum && (!foundDefine || enumFoundState.Ptr < defineFoundState.Ptr)) {
+            parser.RestoreState(enumFoundState);
+            parser.MoveStringPos(4); // past "enum"
+            ParseEnumForSymbols(parser);
+        } else {
+            parser.RestoreState(defineFoundState);
+            parser.MoveStringPos(7); // past "#define"
+            std::string defName;
+            if (parser.ReadAsIdentifierOrNumber(defName)) {
+                CParsedItem valItem;
+                if (parser.ReadNextItem(valItem)) {
+                    if (valItem.Type == EParsedItemType::Integer) {
+                        m_SymbolMap[defName] = valItem.IntValue;
+                    } else if (valItem.Type == EParsedItemType::Float) {
+                        m_SymbolMap[defName] = (int)valItem.FloatValue;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -180,24 +248,54 @@ void CDefinitionManager::DoCompilePathList() {
 }
 
 void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::string& defClass, const std::string& defName, bool isTemplate) {
+    if (m_StringTable) {
+        m_StringTable->AddString(defClass);
+        m_StringTable->AddString(defName);
+    }
+
     uint32_t typeCrc = CDefStringTable::GetCRC(defClass);
     auto classIt = m_RegisteredClasses.find(typeCrc);
     if (classIt == m_RegisteredClasses.end()) {
         LogToFile("      ! Unknown Class: " + defClass);
-        parser.SkipUntilWholeString("#end_definition");
+        std::string junk;
+        parser.ReadAsStringUntilWholeString("#end_definition", junk);
+        parser.SkipPastWholeString("#end_definition");
         return;
     }
 
-    IDefObject* newDef = classIt->second.AllocFunc();
-    if (!newDef) return;
-    newDef->SetInstantiationName(defName);
+    IDefObject* newDef = nullptr;
+    bool bIsNew = false;
+    if (isTemplate) {
+        auto it = m_Templates.find(defName);
+        if (it != m_Templates.end() && it->second->GetClassName() == defClass) {
+            newDef = it->second;
+        }
+    } else {
+        for (auto* existingDef : m_InstantiatedDefs) {
+            if (existingDef->GetInstantiationName() == defName && existingDef->GetClassName() == defClass) {
+                newDef = existingDef;
+                break;
+            }
+        }
+    }
+    
+    if (!newDef) {
+        newDef = classIt->second.AllocFunc();
+        if (!newDef) return;
+        newDef->SetInstantiationName(defName);
+        bIsNew = true;
+    }
 
-    // HERE: The missing inheritance hook is restored!
     CParsedItem item;
     if (parser.PeekNextItem(item) && item.StringValue == "specialises") {
         parser.ReadNextItem(item);
+
         std::string parentName;
         if (parser.ReadAsIdentifierOrNumber(parentName)) {
+            if (m_StringTable) {
+                m_StringTable->AddString(parentName);
+            }
+
             IDefObject* parentDef = nullptr;
             for (auto* existingDef : m_InstantiatedDefs) {
                 if (existingDef->GetInstantiationName() == parentName) {
@@ -205,36 +303,76 @@ void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::str
                     break;
                 }
             }
+            if (!parentDef) {
+                auto it = m_Templates.find(parentName);
+                if (it != m_Templates.end()) {
+                    parentDef = it->second;
+                }
+            }
+
             if (parentDef) {
                 newDef->CopyFrom(parentDef);
+                newDef->SetInstantiationName(defName);
             }
             else {
-                LogToFile("      ! Warning: Parent template '" + parentName + "' not found for '" + defName + "'");
+                LogToFile("      ! Warning: Parent '" + parentName + "' not found for '" + defName + "'");
             }
         }
     }
 
-    while (parser.NextItemExists()) {
-        if (parser.PeekNextItem(item) && item.StringValue == "#end_definition") {
-            parser.ReadNextItem(item);
-            break;
-        }
+    std::string defText;
+    if (!parser.ReadAsStringUntilWholeString("#end_definition", defText)) {
+        LogToFile("      ! Error: Missing #end_definition for " + defName);
+        delete newDef;
+        return;
+    }
+    parser.SkipPastWholeString("#end_definition");
 
-        auto prePos = parser.SaveState();
-        try {
-            newDef->ParseFromText(parser, m_SymbolMap);
-        }
-        catch (const std::exception& e) {
-            LogToFile("      CRITICAL ERROR in " + defName + ": " + e.what());
-        }
+    CStringParser sandboxParser;
+    sandboxParser.Init(defText, "Sandbox_" + defName);
 
-        auto postPos = parser.SaveState();
-        if (prePos.Ptr == postPos.Ptr) {
-            parser.ReadNextItem(item);
-            LogToFile("      ? Property Skipped: " + item.StringValue);
+    while (sandboxParser.SkipPastString("<")) {
+        uint32_t startPos = sandboxParser.SaveState().Ptr - defText.data() - 1;
+
+        std::string subDefClass;
+        sandboxParser.ReadAsIdentifierOrNumber(subDefClass);
+
+        std::string subDefName;
+        sandboxParser.ReadAsIdentifierOrNumber(subDefName);
+
+        std::string subDefText;
+        sandboxParser.ReadAsStringUntilString(">", subDefText);
+        sandboxParser.SkipPastString(">");
+
+        uint32_t endPos = sandboxParser.SaveState().Ptr - defText.data();
+
+        CStringParser subParser;
+        subParser.Init(subDefText, "SubDef_" + subDefName);
+
+        LogToFile("      + " + subDefClass + " [" + subDefName + "] (Inline Sub-Definition)");
+
+        CompileDefinition(subParser, subDefClass, subDefName, false);
+        for (uint32_t i = startPos; i < endPos; ++i) {
+            if (defText[i] != '\n' && defText[i] != '\r') {
+                defText[i] = ' ';
+            }
         }
     }
-    m_InstantiatedDefs.push_back(newDef);
+
+    // Use CPersistContext in MODE_LOAD_TEXT to scan the def text for all fields.
+    // This mirrors the engine's TransferObjectLoadText / TransferVectorLoadText protocol exactly:
+    // each Transfer(name, val) call scans the mutable defText for the keyword and reads the value,
+    // then blanks out the consumed region so it isn't matched again.
+    CPersistContext loadCtx(&defText, &m_SymbolMap);
+    newDef->Transfer(loadCtx);
+
+    if (bIsNew) {
+        if (isTemplate) {
+            m_Templates[defName] = newDef;
+        } else {
+            m_InstantiatedDefs.push_back(newDef);
+        }
+    }
 }
 
 void CDefinitionManager::SaveBinaryDefinitions() {
@@ -246,12 +384,13 @@ void CDefinitionManager::SaveBinaryDefinitions() {
     }
 
     LogToFile(" -> Writing Global Header...");
-    int32_t useSafeBinary = 0;
-    uint32_t dependencyCRC = 0xDE4C6EE8;
-    uint32_t randomID = 0xE36C34E8;
+    bool useSafeBinary = true;
+    uint32_t dependencyCRC = 0xE86E4CDE;
+    uint32_t randomID = m_StringTable ? m_StringTable->m_RandomID : 0xA8E36C34;
     uint32_t noDefs = (uint32_t)m_InstantiatedDefs.size();
 
-    os.write((char*)&useSafeBinary, 4);
+    int8_t safeBool = useSafeBinary ? 1 : 0;
+    os.write((char*)&safeBool, 1);
     os.write((char*)&dependencyCRC, 4);
     os.write((char*)&randomID, 4);
     os.write((char*)&noDefs, 4);
@@ -276,8 +415,11 @@ void CDefinitionManager::SaveBinaryDefinitions() {
     uint32_t firstCompressedDef = 0;
 
     for (uint32_t i = 0; i < noDefs; ++i) {
+        LogToFile("    + Serializing " + m_InstantiatedDefs[i]->GetInstantiationName() + " (" + m_InstantiatedDefs[i]->GetClassName() + ")");
         CMemoryDataOutputStream defOs;
-        m_InstantiatedDefs[i]->SerializeOut(&defOs);
+        CPersistContext persist(&defOs, CPersistContext::MODE_SAVE_BINARY, useSafeBinary);
+        persist.TransferObjectHeader(0);
+        m_InstantiatedDefs[i]->Transfer(persist);
 
         uint32_t projectedSize = uncompressedBuffer.size() + (defOffsets.size() * 2) + defOs.GetLength() + 2;
 
@@ -327,13 +469,42 @@ void CDefinitionManager::CompressBlock(std::vector<uint8_t>& uncompressed, std::
         blockBuffer.push_back(shifted & 0xFF);
         blockBuffer.push_back((shifted >> 8) & 0xFF);
     }
-
     blockBuffer.insert(blockBuffer.end(), uncompressed.begin(), uncompressed.end());
 
-    uLongf compSize = compressBound(blockBuffer.size());
-    std::vector<uint8_t> compBuffer(compSize);
-    compress(compBuffer.data(), &compSize, blockBuffer.data(), blockBuffer.size());
-    compBuffer.resize(compSize);
+    // Allocate destination buffer using compressBound just to be safe
+    uLongf compBoundSize = compressBound(blockBuffer.size());
+    std::vector<uint8_t> compBuffer(compBoundSize);
+
+    // --- LIONHEAD ZLIB REPLICATION ---
+    z_stream c_stream;
+    c_stream.zalloc = Z_NULL;
+    c_stream.zfree = Z_NULL;
+    c_stream.opaque = Z_NULL;
+
+    // Initialize with Level 1 (Z_BEST_SPEED)
+    deflateInit(&c_stream, 1);
+
+    c_stream.next_in = blockBuffer.data();
+    c_stream.next_out = compBuffer.data();
+
+    // The 1-byte-at-a-time loop of madness
+    while (c_stream.total_in != blockBuffer.size()) {
+        if (c_stream.total_out >= compBuffer.size()) break;
+        c_stream.avail_out = 1;
+        c_stream.avail_in = 1;
+        deflate(&c_stream, Z_NO_FLUSH); // 0
+    }
+
+    // Finish flushing the stream 1 byte at a time
+    do {
+        c_stream.avail_out = 1;
+    } while (deflate(&c_stream, Z_FINISH) != Z_STREAM_END); // Z_FINISH is 4
+
+    uint32_t actualCompSize = c_stream.total_out;
+    deflateEnd(&c_stream);
+    // ---------------------------------
+
+    compBuffer.resize(actualCompSize);
 
     chunkMap.push_back({ firstDef, (uint32_t)compressedStream.size() });
     compressedStream.insert(compressedStream.end(), compBuffer.begin(), compBuffer.end());

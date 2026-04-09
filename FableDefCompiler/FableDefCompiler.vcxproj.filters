@@ -15,6 +15,23 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BinaryStreams.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DefCompiler.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DefinitionManager.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DefObjects.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="StringParser.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
     <ClCompile Include="DefCompiler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -24,22 +41,5 @@
     <ClCompile Include="StringParser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="DefCompiler.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="DefObjects.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="BinaryStreams.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="DefinitionManager.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="StringParser.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
   </ItemGroup>
 </Project>

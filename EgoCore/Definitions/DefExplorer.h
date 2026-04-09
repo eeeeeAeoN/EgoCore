@@ -28,7 +28,6 @@ static void DrawDefTab() {
         showLeftPanel = !showLeftPanel;
     }
 
-    // Master helper to safely push whatever we are looking at right now
     auto PushCurrentDefState = [&]() {
         if (g_CurrentDefView == EDefViewType::Defs) PushDefHistory(EDefViewType::Defs, g_DefWorkspace.ActiveContextIndex, g_DefWorkspace.SelectedType, g_DefWorkspace.SelectedEntryIndex);
         else if (g_CurrentDefView == EDefViewType::Headers) PushDefHistory(EDefViewType::Headers, 0, "", g_DefWorkspace.SelectedEnumIndex);
@@ -71,7 +70,6 @@ static void DrawDefTab() {
         return;
     }
 
-    // --- LAYER 2: THE DEF CONTROL HEADER ---
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.12f, 1.0f));
     ImGui::BeginChild("DefHeaderBar", ImVec2(0, 40), true, ImGuiWindowFlags_NoScrollbar);
 
@@ -83,7 +81,7 @@ static void DrawDefTab() {
     if (ImGui::BeginCombo("##DefViewCombo", viewTypes[(int)g_CurrentDefView])) {
         for (int i = 0; i < 3; i++) {
             if (ImGui::Selectable(viewTypes[i], (int)g_CurrentDefView == i)) {
-                PushCurrentDefState(); // Log before switching
+                PushCurrentDefState();
                 g_CurrentDefView = (EDefViewType)i;
                 if (g_CurrentDefView == EDefViewType::Defs) g_DefWorkspace.ShowDefsMode = true;
                 if (g_CurrentDefView == EDefViewType::Headers) g_DefWorkspace.ShowDefsMode = false;
@@ -102,9 +100,9 @@ static void DrawDefTab() {
             if (ImGui::BeginCombo("##defcontext", current.Name.c_str())) {
                 for (int i = 0; i < g_DefWorkspace.Contexts.size(); i++) {
                     if (ImGui::Selectable(g_DefWorkspace.Contexts[i].Name.c_str(), g_DefWorkspace.ActiveContextIndex == i)) {
-                        PushCurrentDefState(); // Log before switching
+                        PushCurrentDefState();
                         g_DefWorkspace.ActiveContextIndex = i;
-                        LoadDefsFromFolder(g_DefWorkspace.RootPath); // Instant now!
+                        LoadDefsFromFolder(g_DefWorkspace.RootPath);
                     }
                 }
                 ImGui::EndCombo();
@@ -120,7 +118,7 @@ static void DrawDefTab() {
         if (ImGui::BeginCombo("##evtcontext", fileTypes[g_EventWorkspace.SelectedFileType])) {
             for (int i = 0; i < 2; i++) {
                 if (ImGui::Selectable(fileTypes[i], g_EventWorkspace.SelectedFileType == i)) {
-                    PushCurrentDefState(); // Log before switching
+                    PushCurrentDefState();
                     g_EventWorkspace.SelectedFileType = i;
                     g_EventWorkspace.SelectedEventIndex = -1;
                     g_EventWorkspace.Editor.SetText("");
@@ -130,15 +128,15 @@ static void DrawDefTab() {
         }
     }
 
-    // 3. Right-Aligned Compile Button
     float compileBtnWidth = 130.0f;
     float nativeBtnWidth = 170.0f;
     float totalBtnSpacing = ImGui::GetStyle().ItemSpacing.x;
     float totalWidth = compileBtnWidth + nativeBtnWidth + totalBtnSpacing;
 
-    ImGui::SameLine(ImGui::GetWindowWidth() - totalWidth - 15.0f);
+    ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
 
-    // --- NEW: NATIVE COMPILER BUTTON ---
+    /*
+    //NATIVE COMPILER BUTTON ---
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 1.0f)); // Green to distinguish
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.4f, 0.15f, 1.0f));
@@ -157,10 +155,10 @@ static void DrawDefTab() {
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-
+    */
     // --- OLD: STEALTH COMPILER BUTTON ---
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.3f, 0.3f, 1.0f));
-    if (ImGui::Button("COMPILE ALL", ImVec2(compileBtnWidth, 0))) {
+    if (ImGui::Button("RECOMPILE", ImVec2(compileBtnWidth, 0))) {
         if (!g_IsCompiling) {
             CompileAllDefs_Stealth();
         }
@@ -253,7 +251,7 @@ static void DrawDefTab() {
                             RequestLoadDef(type, k);
                         }
 
-                        // --- NEW: DRAG AND DROP SOURCE FOR DEFS ---
+                        // --- DRAG AND DROP SOURCE FOR DEFS ---
                         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                             DefDragPayload payload;
                             payload.ContextIndex = g_DefWorkspace.ActiveContextIndex;
@@ -450,7 +448,7 @@ static void DrawDefTab() {
                     }
                     if (isSelected) ImGui::SetItemDefaultFocus();
 
-                    // --- NEW: DRAG AND DROP SOURCE FOR HEADERS ---
+                    // --- DRAG AND DROP SOURCE FOR HEADERS ---
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                         HeaderDragPayload payload = { i };
                         ImGui::SetDragDropPayload("HEADER_ENTRY_PAYLOAD", &payload, sizeof(HeaderDragPayload));
@@ -607,7 +605,7 @@ static void DrawDefTab() {
                         g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
                     }
 
-                    // --- NEW: DRAG AND DROP SOURCE FOR EVENTS ---
+                    // --- DRAG AND DROP SOURCE FOR EVENTS ---
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                         EventDragPayload payload = { g_EventWorkspace.SelectedFileType, i };
                         ImGui::SetDragDropPayload("EVENT_ENTRY_PAYLOAD", &payload, sizeof(EventDragPayload));
@@ -619,7 +617,7 @@ static void DrawDefTab() {
             else {
                 ImGui::TextDisabled("File not found or loaded.");
             }
-            ImGui::EndChild(); // End EvtList
+            ImGui::EndChild();
 
             if (triggerEventDeletePopup) { ImGui::OpenPopup("DeleteEventConfirmation"); triggerEventDeletePopup = false; }
             if (ImGui::BeginPopupModal("DeleteEventConfirmation", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -645,7 +643,7 @@ static void DrawDefTab() {
                 ImGui::EndPopup();
             }
 
-            ImGui::EndChild(); // End EvtLeftPane
+            ImGui::EndChild();
 
             ImGui::SameLine();
             ImGui::InvisibleButton("vsplitterEvt", ImVec2(4.0f, -1.0f));

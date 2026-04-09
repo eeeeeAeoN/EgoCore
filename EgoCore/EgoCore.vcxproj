@@ -48,6 +48,7 @@
     <ClInclude Include="FSE\FSEAutosuggest.h" />
     <ClInclude Include="FSE\FSEBackend.h" />
     <ClInclude Include="FSE\FSETabUI.h" />
+    <ClInclude Include="Levels\WADBackend.h" />
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
@@ -228,7 +229,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\FableDefCompiler;C:\Users\Emi\source\repos\EgoCore\EgoCore\FSE;C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\Levels;C:\Users\Emi\source\repos\EgoCore\FableDefCompiler;C:\Users\Emi\source\repos\EgoCore\EgoCore\FSE;C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

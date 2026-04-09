@@ -61,6 +61,9 @@
     <Filter Include="Source Files\FSE">
       <UniqueIdentifier>{ea5d4ddc-ecd5-4e9f-a71b-08b5d6e2d554}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Levels">
+      <UniqueIdentifier>{882c817c-4e86-4eb6-bce9-17361c04d6ff}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utilities\ImGUI\imconfig.h">
@@ -305,6 +308,9 @@
     </ClInclude>
     <ClInclude Include="Mods\TngMerger.h">
       <Filter>Source Files\Mods</Filter>
+    </ClInclude>
+    <ClInclude Include="Levels\WADBackend.h">
+      <Filter>Source Files\Levels</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

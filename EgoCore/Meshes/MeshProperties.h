@@ -796,6 +796,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     }
 
     ImGui::SameLine();
+    /*
     if (ImGui::Button("Export Uncompressed Binary")) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
@@ -820,6 +821,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             }
         }
     }
+    */
 
     ImGui::SameLine();
     float availToolW = ImGui::GetContentRegionAvail().x;
@@ -1039,6 +1041,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     if (g_ActiveMeshContent.ClothFlag) {
                         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.8f, 1.0f), "Cloth: YES");
                         ImGui::SameLine();
+                        /*
                         if (ImGui::Button("Export Raw Cloth Data")) {
                             std::string savePath = SaveFileDialog("Binary Data\0*.bin\0All Files\0*.*\0");
                             if (!savePath.empty()) {
@@ -1059,6 +1062,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                                 g_BankStatus = "Exported raw cloth data!";
                             }
                         }
+                    */
                     }
                     else {
                         ImGui::TextDisabled("Cloth: NO");

@@ -18,6 +18,18 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="BinaryStreams.h" />
+    <ClInclude Include="DefCompiler.h" />
+    <ClInclude Include="DefinitionManager.h" />
+    <ClInclude Include="DefObjects.h" />
+    <ClInclude Include="StringParser.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="DefCompiler.cpp" />
+    <ClCompile Include="DefinitionManager.cpp" />
+    <ClCompile Include="StringParser.cpp" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -136,18 +148,6 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <ClCompile Include="DefCompiler.cpp" />
-    <ClCompile Include="DefinitionManager.cpp" />
-    <ClCompile Include="StringParser.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="BinaryStreams.h" />
-    <ClInclude Include="DefCompiler.h" />
-    <ClInclude Include="DefinitionManager.h" />
-    <ClInclude Include="DefObjects.h" />
-    <ClInclude Include="StringParser.h" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

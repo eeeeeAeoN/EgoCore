@@ -4,144 +4,201 @@
 #include <map>
 #include <string>
 
-
-// --- frontend.bin ----
-
-// --- SAFE SYMBOL RESOLVER ---
-inline uint32_t ResolveSymbol(const std::string& str, const std::map<std::string, int>& symbolMap) {
-    auto it = symbolMap.find(str);
-    if (it != symbolMap.end()) return it->second;
-    try { return std::stoi(str); }
-    catch (...) { return 0; }
-}
-
-// --- SUBCLASSES& STRUCTURES ---
-struct CActionInputControl {
-    int32_t GameAction = 0;
-    int32_t ControllerType = 0;
-    int32_t KeyboardKey = 0;
-    int32_t XboxButton = 0;
-    int32_t MouseButton = 0;
-    C2DVector ControlDirection = { 0.0f, 0.0f };
+// --- BASE CLASSES ---
+struct CSubComponent {
+    virtual ~CSubComponent() = default;
+    virtual void Transfer(CPersistContext& persist) = 0;
 };
-
-struct CRectF { float TLX = 0.0f, TLY = 0.0f, BRX = 0.0f, BRY = 0.0f; };
-struct CRect { int32_t TLX = 0, TLY = 0, BRX = 0, BRY = 0; };
-struct CColor { float R = 1.0f, G = 1.0f, B = 1.0f, A = 1.0f; };
-
-struct CUIStateDef {
-    uint32_t GraphicIndex = 0;
-    C2DVector Position = { 0.0f, 0.0f };
-    C2DVector Zoom = { 1.0f, 1.0f };
-    CColor Colour;
-    float UpdateTime = -1.0f;
-    int32_t StateChangeType = 0;
-    bool LinearChange = false;
-    uint32_t StateChangeFlag = 7;
-    std::vector<uint32_t> ChildrenNotAffected;
-
-    void SerializeOut(CDataOutputStream* os) const {
-        os->WriteULONG(GraphicIndex); os->Write2DVector(&Position); os->Write2DVector(&Zoom);
-        os->WriteFloat(Colour.R); os->WriteFloat(Colour.G); os->WriteFloat(Colour.B); os->WriteFloat(Colour.A);
-        os->WriteFloat(UpdateTime); os->WriteSLONG(StateChangeType); os->WriteBool(LinearChange);
-        os->WriteULONG(StateChangeFlag); os->WriteVectorUint32(ChildrenNotAffected);
-    }
-};
-
-// --- CLASSES ---
 
 class IDefObject {
 public:
     virtual ~IDefObject() = default;
-    virtual void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) = 0;
-    virtual void SerializeOut(CDataOutputStream* os) const = 0;
+    virtual void Transfer(CPersistContext& persist) = 0;
     virtual std::string GetClassName() const = 0;
     virtual std::string GetInstantiationName() const = 0;
     virtual void SetInstantiationName(const std::string& name) = 0;
     virtual void CopyFrom(const IDefObject* parentObject) = 0;
 };
 
-class CFrontEndDef : public IDefObject {
+class CDefObject : public IDefObject {
 public:
     std::string m_InstantiationName;
+    std::string GetInstantiationName() const override { return m_InstantiationName; }
+    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
+};
 
+// --- SUBCLASSES & STRUCTURES ---
+struct CDefString {
+    std::string Value;
+    void Transfer(CPersistContext& persist) { 
+        // Logic handled by CPersistContext::Transfer(const char*, CDefString&, ...) overload
+    }
+};
+
+inline void CPersistContext::Transfer(const char* name, CDefString& val, const CDefString& defaultVal) {
+    if (Mode == MODE_LOAD_TEXT) {
+        size_t after = FindWholeWord(name);
+        if (after == std::string::npos) return;
+        size_t fieldStart = after - std::strlen(name);
+        size_t pos = after;
+        val.Value = ReadString(pos);
+        if (GDefStringTable) GDefStringTable->AddString(val.Value);
+        size_t sc = FindSemicolon(pos);
+        BlankRegion(fieldStart, sc != std::string::npos ? sc : pos);
+        return;
+    }
+    if (Mode == MODE_SAVE_BINARY) {
+        WriteTag(name);
+        uint32_t offset = GDefStringTable ? GDefStringTable->AddString(val.Value) : (uint32_t)-1;
+        int32_t toWrite = offset == (uint32_t)-1 ? -1 : (int32_t)offset;
+        PSaveStream->WriteSLONG(toWrite);
+    }
+}
+
+inline void CPersistContext::Transfer(const char* name, C2DVector& val, const C2DVector& defaultVal) {
+    if (Mode == MODE_SAVE_BINARY) {
+        WriteTag(name);
+        PSaveStream->WriteFloat(val.x);
+        PSaveStream->WriteFloat(val.y);
+    }
+}
+
+// (Factory declarations moved below IDefObject)
+
+struct CActionInputControl;
+template<> void CPersistContext::TransferVector<CActionInputControl>(const char* name, std::vector<CActionInputControl>& vec);
+
+// CActionInputControl — parsed via inline parser, exactly matching
+// CPersistTraits<CActionInputControl>::TransferIn (ida_funcs.c line 1071-1197)
+// Text format: CActionInputControl(GameAction, ControllerType, Key[, C2DCoordF(x,y)])
+// EControllerType: CONTROLLER_XBOX_PAD=0, CONTROLLER_KEYBOARD=1, CONTROLLER_MOUSE=2
+struct CActionInputControl : CSubComponent {
+    int32_t GameAction = 0;
+    int32_t ControllerType = 0;
+    int32_t KeyboardKey = 0;
+    int32_t XboxButton = 0;
+    int32_t MouseButton = 0;
+    C2DVector ControlDirection = { 0.0f, 0.0f };
+
+    // Parse from def text inline. Called by CPersistContext::TransferVector<CActionInputControl>
+    // parser is the CPersistContext at position just after the outer '.Add('
+    // (text layout: VectorName.Add(CActionInputControl(arg1, arg2, arg3[, C2DCoordF(x,y)]));)
+    void ParseInline(CPersistContext& ctx, size_t& pos) {
+        // Skip 'CActionInputControl' token and '('
+        ctx.SkipToken(pos, "CActionInputControl");
+        if (!ctx.SkipChar(pos, '(')) return;
+        // Arg 1: GameAction
+        GameAction = ctx.ReadIntExpr(pos);
+        if (!ctx.SkipChar(pos, ',')) return;
+        // Arg 2: ControllerType
+        ControllerType = ctx.ReadIntExpr(pos);
+        if (!ctx.SkipChar(pos, ',')) return;
+        // Arg 3: key/button into correct field based on ControllerType
+        int32_t thirdArg = ctx.ReadIntExpr(pos);
+        KeyboardKey = XboxButton = MouseButton = 0;
+        switch (ControllerType) {
+            case 0: XboxButton  = thirdArg; break; // CONTROLLER_XBOX_PAD
+            case 1: KeyboardKey = thirdArg; break; // CONTROLLER_KEYBOARD
+            case 2: MouseButton = thirdArg; break; // CONTROLLER_MOUSE
+            default: break;
+        }
+        // Optional arg 4: C2DCoordF(x, y)
+        if (ctx.SkipChar(pos, ',')) {
+            // Skip 'C2DCoordF' and '('
+            ctx.SkipToken(pos, "C2DCoordF");
+            if (ctx.SkipChar(pos, '(')) {
+                ControlDirection.x = ctx.ReadFloat(pos);
+                ctx.SkipChar(pos, ',');
+                ControlDirection.y = ctx.ReadFloat(pos);
+                ctx.SkipChar(pos, ')');
+            }
+        }
+        ctx.SkipChar(pos, ')');
+    }
+
+    void Transfer(CPersistContext& persist) override {
+        if (persist.Mode == CPersistContext::MODE_SAVE_BINARY) {
+           // Fixed 28-byte chunk for CActionInputControl in binary
+           persist.PSaveStream->WriteSLONG(GameAction);
+           persist.PSaveStream->WriteSLONG(ControllerType);
+           persist.PSaveStream->WriteSLONG(KeyboardKey);
+           persist.PSaveStream->WriteSLONG(XboxButton);
+           persist.PSaveStream->WriteSLONG(MouseButton);
+           persist.PSaveStream->Write(&ControlDirection.x, 4);
+           persist.PSaveStream->Write(&ControlDirection.y, 4);
+        } else {
+           persist.Transfer("GameAction", GameAction, (int32_t)0);
+           persist.Transfer("ControllerType", ControllerType, (int32_t)0);
+           persist.Transfer("KeyboardKey", KeyboardKey, (int32_t)0);
+           persist.Transfer("XboxButton", XboxButton, (int32_t)30);
+           persist.Transfer("MouseButton", MouseButton, (int32_t)0);
+           persist.Transfer("ControlDirectionX", ControlDirection.x, 0.0f);
+           persist.Transfer("ControlDirectionY", ControlDirection.y, 0.0f);
+        }
+    }
+};
+
+struct CRectF { float TLX = 0.0f, TLY = 0.0f, BRX = 0.0f, BRY = 0.0f; };
+struct CRect { int32_t TLX = 0, TLY = 0, BRX = 0, BRY = 0; };
+struct CColor { float R = 1.0f, G = 1.0f, B = 1.0f, A = 1.0f; };
+
+// --- CUIStateDef ---
+struct CUIStateDef : CSubComponent {
+    uint32_t GraphicIndex = 0;
+    C2DVector Position = {0.0f, 0.0f};
+    C2DVector Zoom = {1.0f, 1.0f};
+    CColor Colour = {1.0f, 1.0f, 1.0f, 1.0f};
+    float UpdateTime = -1.0f;
+    int32_t StateChangeType = 0;
+    bool LinearChange = false;
+    uint32_t StateChangeFlag = 7;
+    std::vector<uint32_t> ChildrenNotAffected;
+
+    void Transfer(CPersistContext& persist) override {
+        persist.Transfer("GraphicIndex", GraphicIndex, (uint32_t)0);
+        persist.Transfer("PositionX", Position.x, 0.0f);
+        persist.Transfer("PositionY", Position.y, 0.0f);
+        persist.Transfer("ZoomX", Zoom.x, 1.0f);
+        persist.Transfer("ZoomY", Zoom.y, 1.0f);
+        persist.Transfer("ColourR", Colour.R, 1.0f);
+        persist.Transfer("ColourG", Colour.G, 1.0f);
+        persist.Transfer("ColourB", Colour.B, 1.0f);
+        persist.Transfer("ColourA", Colour.A, 1.0f);
+        persist.Transfer("UpdateTime", UpdateTime, -1.0f);
+        persist.Transfer("StateChangeType", StateChangeType, (int32_t)0);
+        persist.Transfer("LinearChange", LinearChange, false);
+        persist.Transfer("StateChangeFlag", StateChangeFlag, (uint32_t)7);
+        persist.TransferVector("ChildrenNotAffected", ChildrenNotAffected);
+    }
+};
+
+class CFrontEndDef : public CDefObject {
+public:
     std::vector<std::string> vAttractModeMovie;
     int32_t ErrorMessageBackgroundGraphic = 0;
     int32_t ButtonABigGraphic = 0;
     int32_t ButtonBBigGraphic = 0;
 
     std::string GetClassName() const override { return "FRONT_END"; }
-    std::string GetInstantiationName() const override { return m_InstantiationName; }
-    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-
     void CopyFrom(const IDefObject* parentObject) override {
-        const CFrontEndDef* parent = dynamic_cast<const CFrontEndDef*>(parentObject);
-        if (parent) {
-            vAttractModeMovie = parent->vAttractModeMovie;
-            ErrorMessageBackgroundGraphic = parent->ErrorMessageBackgroundGraphic;
-            ButtonABigGraphic = parent->ButtonABigGraphic;
-            ButtonBBigGraphic = parent->ButtonBBigGraphic;
-        }
-    }
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
-
-        if (parser.PeekNextItem(item) && item.Type == EParsedItemType::Identifier) {
-            std::string propName = item.StringValue;
-
-            if (propName == "vAttractModeMovie") {
-                parser.ReadNextItem(item);
-
-                if (parser.SkipPastString("(")) {
-                    std::string movieName;
-                    if (parser.ReadNextItemAsQuotedString(movieName)) {
-                        vAttractModeMovie.push_back(movieName);
-                    }
-                }
-                parser.SkipPastString(";");
-            }
-            else if (propName == "ErrorMessageBackgroundGraphic") {
-                parser.ReadNextItem(item);
-
-                std::string enumName;
-                if (parser.ReadAsString(enumName)) {
-                    ErrorMessageBackgroundGraphic = ResolveSymbol(enumName, symbolMap);
-                }
-                parser.SkipPastString(";");
-            }
-            else if (propName == "ButtonABigGraphic") {
-                parser.ReadNextItem(item);
-                std::string enumName;
-                if (parser.ReadAsString(enumName)) {
-                    ButtonABigGraphic = ResolveSymbol(enumName, symbolMap);
-                }
-                parser.SkipPastString(";");
-            }
-            else if (propName == "ButtonBBigGraphic") {
-                parser.ReadNextItem(item);
-                std::string enumName;
-                if (parser.ReadAsString(enumName)) {
-                    ButtonBBigGraphic = ResolveSymbol(enumName, symbolMap);
-                }
-                parser.SkipPastString(";");
-            }
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;                   
+            m_InstantiationName = myName;
         }
     }
 
-    void SerializeOut(CDataOutputStream* os) const override {
-        os->WriteSLONG(vAttractModeMovie.size());
-        for (const auto& item : vAttractModeMovie) {
-            os->WriteString(item);
-        }
-        os->WriteSLONG(ErrorMessageBackgroundGraphic);
-        os->WriteSLONG(ButtonABigGraphic);
-        os->WriteSLONG(ButtonBBigGraphic);
+    void Transfer(CPersistContext& persist) override {
+        persist.TransferVector("vAttractModeMovie", vAttractModeMovie);
+        persist.Transfer("ErrorMessageBackgroundGraphic", ErrorMessageBackgroundGraphic, (int32_t)0);
+        persist.Transfer("ButtonABigGraphic", ButtonABigGraphic, (int32_t)0);
+        persist.Transfer("ButtonBBigGraphic", ButtonBBigGraphic, (int32_t)0);
     }
 };
 
-class CControlsDef : public IDefObject {
+// --- CControlSchemeDef ---
+class CControlSchemeDef : public CDefObject {
 public:
-    std::string m_InstantiationName;
     std::vector<CActionInputControl> Controls;
     bool ToggleZTarget = false;
     bool ToggleSpells = false;
@@ -151,299 +208,106 @@ public:
     bool FlourishNeedsAttackButtonHeld = false;
 
     std::string GetClassName() const override { return "CONTROL_SCHEME"; }
-    std::string GetInstantiationName() const override { return m_InstantiationName; }
-    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-
     void CopyFrom(const IDefObject* parentObject) override {
-        const CControlsDef* parent = dynamic_cast<const CControlsDef*>(parentObject);
-        if (parent) {
-            Controls = parent->Controls;
-            ToggleZTarget = parent->ToggleZTarget;
-            ToggleSpells = parent->ToggleSpells;
-            ToggleSneak = parent->ToggleSneak;
-            ToggleExpressionMenu = parent->ToggleExpressionMenu;
-            ToggleExpressionShift = parent->ToggleExpressionShift;
-            FlourishNeedsAttackButtonHeld = parent->FlourishNeedsAttackButtonHeld;
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;
+            m_InstantiationName = myName;
         }
     }
 
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
+    void Transfer(CPersistContext& persist) override {
+        // Vanilla game.bin Controls are untagged chunks
+        bool oldForceNoTags = persist.m_ForceNoTags;
+        if (persist.Mode == CPersistContext::MODE_SAVE_BINARY) persist.m_ForceNoTags = true;
 
-        if (parser.PeekNextItem(item) && item.Type == EParsedItemType::Identifier) {
-            std::string propName = item.StringValue;
+        persist.TransferVector("Controls", Controls);
+        persist.Transfer("ToggleZTarget", ToggleZTarget, false);
+        persist.Transfer("ToggleSpells", ToggleSpells, false);
+        persist.Transfer("ToggleSneak", ToggleSneak, false);
+        persist.Transfer("ToggleExpressionMenu", ToggleExpressionMenu, false);
+        persist.Transfer("ToggleExpressionShift", ToggleExpressionShift, false);
+        persist.Transfer("FlourishNeedsAttackButtonHeld", FlourishNeedsAttackButtonHeld, false);
 
-            if (propName == "Controls") {
-                parser.ReadNextItem(item);
-
-                if (parser.SkipPastString(".Add(CActionInputControl(")) {
-                    CActionInputControl ctrl;
-                    std::string tempStr;
-
-                    if (parser.ReadAsString(tempStr)) ctrl.GameAction = ResolveSymbol(tempStr, symbolMap);
-                    parser.SkipPastString(",");
-
-                    std::string typeStr;
-                    if (parser.ReadAsString(typeStr)) ctrl.ControllerType = ResolveSymbol(typeStr, symbolMap);
-                    parser.SkipPastString(",");
-
-                    if (parser.ReadAsString(tempStr)) {
-                        int32_t btnVal = ResolveSymbol(tempStr, symbolMap);
-                        if (typeStr == "CONTROLLER_KEYBOARD") ctrl.KeyboardKey = btnVal;
-                        else if (typeStr == "CONTROLLER_MOUSE") ctrl.MouseButton = btnVal;
-                        else ctrl.XboxButton = btnVal;
-                    }
-
-                    if (parser.PeekNextItem(item) && item.StringValue == ",") {
-                        parser.ReadNextItem(item);
-                        if (parser.SkipPastString("C2DCoordF(")) {
-                            ctrl.ControlDirection.x = parser.ReadAsFloat();
-                            parser.SkipPastString(",");
-                            ctrl.ControlDirection.y = parser.ReadAsFloat();
-                            parser.SkipPastString(")");
-                        }
-                    }
-
-                    parser.SkipPastString("));");
-                    Controls.push_back(ctrl);
-                }
-            }
-            else if (propName == "ToggleZTarget" || propName == "ToggleSpells" ||
-                propName == "ToggleSneak" || propName == "ToggleExpressionMenu" ||
-                propName == "ToggleExpressionShift" || propName == "FlourishNeedsAttackButtonHeld") {
-
-                parser.ReadNextItem(item);
-
-                std::string boolStr;
-                if (parser.ReadAsString(boolStr)) {
-                    bool val = (boolStr == "TRUE" || boolStr == "true");
-
-                    if (propName == "ToggleZTarget") ToggleZTarget = val;
-                    else if (propName == "ToggleSpells") ToggleSpells = val;
-                    else if (propName == "ToggleSneak") ToggleSneak = val;
-                    else if (propName == "ToggleExpressionMenu") ToggleExpressionMenu = val;
-                    else if (propName == "ToggleExpressionShift") ToggleExpressionShift = val;
-                    else if (propName == "FlourishNeedsAttackButtonHeld") FlourishNeedsAttackButtonHeld = val;
-                }
-                parser.SkipPastString(";");
-            }
-        }
-    }
-
-    void SerializeOut(CDataOutputStream* os) const override {
-        os->WriteSLONG((int32_t)Controls.size());
-
-        for (const auto& ctrl : Controls) {
-            os->WriteSLONG(ctrl.GameAction);
-            os->WriteSLONG(ctrl.ControllerType);
-            os->WriteSLONG(ctrl.KeyboardKey);
-            os->WriteSLONG(ctrl.XboxButton);
-            os->WriteSLONG(ctrl.MouseButton);
-            os->Write2DVector(&ctrl.ControlDirection);
-        }
-
-        os->WriteBool(ToggleZTarget);
-        os->WriteBool(ToggleSpells);
-        os->WriteBool(ToggleSneak);
-        os->WriteBool(ToggleExpressionMenu);
-        os->WriteBool(ToggleExpressionShift);
-        os->WriteBool(FlourishNeedsAttackButtonHeld);
+        persist.m_ForceNoTags = oldForceNoTags;
     }
 };
 
-class CEngineDef : public IDefObject {
+extern CDefStringTable* GDefStringTable;
+
+class CEngineDef : public CDefObject {
 public:
-    std::string m_InstantiationName;
-
-    float LODErrorTolerance = 0.0f;
-    float CharacterLODErrorTolerance = 0.0f;
-    float LODErrorFactor = 0.0f;
-    float SeaHeight = 0.0f;
-    int32_t LocalDetailBooleanAlphaDefaultAlphaRef = 0;
-    int32_t DefaultPrimitiveAlphaRef = 0;
-
-    float GamePrimitiveDefaultFadeStart = 0.0f;
-    float GamePrimitiveDefaultFadeRangeRatio = 0.0f;
-    float LocalDetailDefaultFadeStart = 0.0f;
-    float LocalDetailDefaultFadeRangeRatio = 0.0f;
-
-    int32_t TestStaticMesh = 0;
-    int32_t TestAnimatedMesh = 0;
-    int32_t TestAnim = 0;
-    int32_t TestGraphic = 0;
-
+    float LODErrorTolerance = 0.0f, CharacterLODErrorTolerance = 0.0f, LODErrorFactor = 0.0f, SeaHeight = 0.0f;
+    int32_t LocalDetailBooleanAlphaDefaultAlphaRef = 0, DefaultPrimitiveAlphaRef = 0;
+    float GamePrimitiveDefaultFadeStart = 0.0f, GamePrimitiveDefaultFadeRangeRatio = 0.0f;
+    float LocalDetailDefaultFadeStart = 0.0f, LocalDetailDefaultFadeRangeRatio = 0.0f;
+    int32_t TestStaticMesh = 0, TestAnimatedMesh = 0, TestAnim = 0, TestGraphic = 0;
     float FOV_2D = 0.0f;
-
-    int32_t InvalidTextureStandin = 0;
-    int32_t InvalidThemeStandin = 0;
+    int32_t InvalidTextureStandin = 0, InvalidThemeStandin = 0;
 
     std::string GetClassName() const override { return "ENGINE"; }
-    std::string GetInstantiationName() const override { return m_InstantiationName; }
-    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-
     void CopyFrom(const IDefObject* parentObject) override {
-        if (const auto* parent = dynamic_cast<const CEngineDef*>(parentObject)) {
-            *this = *parent;
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;
+            m_InstantiationName = myName;
         }
     }
 
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
 
-        if (parser.PeekNextItem(item) && item.Type == EParsedItemType::Identifier) {
-            std::string prop = item.StringValue;
-
-            if (prop == "LODErrorTolerance" || prop == "CharacterLODErrorTolerance" ||
-                prop == "LODErrorFactor" || prop == "SeaHeight" ||
-                prop == "GamePrimitiveDefaultFadeStart" || prop == "GamePrimitiveDefaultFadeRangeRatio" ||
-                prop == "LocalDetailDefaultFadeStart" || prop == "LocalDetailDefaultFadeRangeRatio" ||
-                prop == "FOV_2D") {
-
-                parser.ReadNextItem(item);
-                float val = parser.ReadAsFloat();
-
-                if (prop == "LODErrorTolerance") LODErrorTolerance = val;
-                else if (prop == "CharacterLODErrorTolerance") CharacterLODErrorTolerance = val;
-                else if (prop == "LODErrorFactor") LODErrorFactor = val;
-                else if (prop == "SeaHeight") SeaHeight = val;
-                else if (prop == "GamePrimitiveDefaultFadeStart") GamePrimitiveDefaultFadeStart = val;
-                else if (prop == "GamePrimitiveDefaultFadeRangeRatio") GamePrimitiveDefaultFadeRangeRatio = val;
-                else if (prop == "LocalDetailDefaultFadeStart") LocalDetailDefaultFadeStart = val;
-                else if (prop == "LocalDetailDefaultFadeRangeRatio") LocalDetailDefaultFadeRangeRatio = val;
-                else if (prop == "FOV_2D") FOV_2D = val;
-
-                parser.SkipPastString(";");
-            }
-            else if (prop == "LocalDetailBooleanAlphaDefaultAlphaRef" || prop == "DefaultPrimitiveAlphaRef") {
-                parser.ReadNextItem(item);
-                int32_t val = parser.ReadAsInteger();
-
-                if (prop == "LocalDetailBooleanAlphaDefaultAlphaRef") LocalDetailBooleanAlphaDefaultAlphaRef = val;
-                else if (prop == "DefaultPrimitiveAlphaRef") DefaultPrimitiveAlphaRef = val;
-
-                parser.SkipPastString(";");
-            }
-            else if (prop == "TestStaticMesh" || prop == "TestAnimatedMesh" ||
-                prop == "TestAnim" || prop == "TestGraphic" ||
-                prop == "InvalidTextureStandin" || prop == "InvalidThemeStandin") {
-
-                parser.ReadNextItem(item);
-                std::string enumName;
-                if (parser.ReadAsString(enumName)) {
-                    int32_t val = ResolveSymbol(enumName, symbolMap);
-                    if (prop == "TestStaticMesh") TestStaticMesh = val;
-                    else if (prop == "TestAnimatedMesh") TestAnimatedMesh = val;
-                    else if (prop == "TestAnim") TestAnim = val;
-                    else if (prop == "TestGraphic") TestGraphic = val;
-                    else if (prop == "InvalidTextureStandin") InvalidTextureStandin = val;
-                    else if (prop == "InvalidThemeStandin") InvalidThemeStandin = val;
-                }
-                parser.SkipPastString(";");
-            }
-        }
-    }
-
-    void SerializeOut(CDataOutputStream* os) const override {
-        os->WriteFloat(LODErrorTolerance);
-        os->WriteFloat(CharacterLODErrorTolerance);
-        os->WriteFloat(LODErrorFactor);
-        os->WriteFloat(SeaHeight);
-        os->WriteSLONG(LocalDetailBooleanAlphaDefaultAlphaRef);
-        os->WriteSLONG(DefaultPrimitiveAlphaRef);
-        os->WriteFloat(GamePrimitiveDefaultFadeStart);
-        os->WriteFloat(GamePrimitiveDefaultFadeRangeRatio);
-        os->WriteFloat(LocalDetailDefaultFadeStart);
-        os->WriteFloat(LocalDetailDefaultFadeRangeRatio);
-        os->WriteSLONG(TestStaticMesh);
-        os->WriteSLONG(TestAnimatedMesh);
-        os->WriteSLONG(TestAnim);
-        os->WriteSLONG(TestGraphic);
-        os->WriteFloat(FOV_2D);
-        os->WriteSLONG(InvalidTextureStandin);
-        os->WriteSLONG(InvalidThemeStandin);
+    void Transfer(CPersistContext& persist) override {
+        persist.Transfer("LODErrorTolerance", LODErrorTolerance, 0.0f);
+        persist.Transfer("CharacterLODErrorTolerance", CharacterLODErrorTolerance, 0.0f);
+        persist.Transfer("LODErrorFactor", LODErrorFactor, 0.0f);
+        persist.Transfer("SeaHeight", SeaHeight, 0.0f);
+        persist.Transfer("LocalDetailBooleanAlphaDefaultAlphaRef", LocalDetailBooleanAlphaDefaultAlphaRef, (int32_t)0);
+        persist.Transfer("DefaultPrimitiveAlphaRef", DefaultPrimitiveAlphaRef, (int32_t)0);
+        persist.Transfer("GamePrimitiveDefaultFadeStart", GamePrimitiveDefaultFadeStart, 0.0f);
+        persist.Transfer("GamePrimitiveDefaultFadeRangeRatio", GamePrimitiveDefaultFadeRangeRatio, 0.0f);
+        persist.Transfer("LocalDetailDefaultFadeStart", LocalDetailDefaultFadeStart, 0.0f);
+        persist.Transfer("LocalDetailDefaultFadeRangeRatio", LocalDetailDefaultFadeRangeRatio, 0.0f);
+        persist.Transfer("TestStaticMesh", TestStaticMesh, (int32_t)0);
+        persist.Transfer("TestAnimatedMesh", TestAnimatedMesh, (int32_t)0);
+        persist.Transfer("TestAnim", TestAnim, (int32_t)0);
+        persist.Transfer("TestGraphic", TestGraphic, (int32_t)0);
+        persist.Transfer("FOV_2D", FOV_2D, 0.0f);
+        persist.Transfer("InvalidTextureStandin", InvalidTextureStandin, (int32_t)0);
+        persist.Transfer("InvalidThemeStandin", InvalidThemeStandin, (int32_t)0);
     }
 };
 
-class CConfigOptionsDefaultsDef : public IDefObject {
+class CConfigOptionsDefaultsDef : public CDefObject {
 public:
-    std::string m_InstantiationName;
-
     uint32_t Antialiasing = 0;
-    int32_t ResolutionWidth = 1024, MinResolutionWidth = 640;
-    int32_t ResolutionHeight = 768, MinResolutionHeight = 480;
-    int32_t BitDepth = 16;
-
-    float TextureDetail = 1.0f, MaxTextureDetail = 3.0f;
-    float ShadowDetail = 1.0f, MaxShadowDetail = 3.0f;
-    float MeshDetail = 1.0f, MaxMeshDetail = 3.0f;
-    float EffectsDetail = 1.0f, MaxEffectsDetail = 3.0f;
+    int32_t ResolutionWidth = 1024, MinResolutionWidth = 640, ResolutionHeight = 768, MinResolutionHeight = 480, BitDepth = 16;
+    float TextureDetail = 1.0f, MaxTextureDetail = 3.0f, ShadowDetail = 1.0f, MaxShadowDetail = 3.0f;
+    float MeshDetail = 1.0f, MaxMeshDetail = 3.0f, EffectsDetail = 1.0f, MaxEffectsDetail = 3.0f;
 
     std::string GetClassName() const override { return "CONFIG_OPTIONS_DEFAULTS_DEF"; }
-    std::string GetInstantiationName() const override { return m_InstantiationName; }
-    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-
     void CopyFrom(const IDefObject* parentObject) override {
-        if (const auto* parent = dynamic_cast<const CConfigOptionsDefaultsDef*>(parentObject)) {
-            *this = *parent;
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;
+            m_InstantiationName = myName;
         }
     }
 
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
-        if (parser.PeekNextItem(item) && item.Type == EParsedItemType::Identifier) {
-            std::string prop = item.StringValue;
 
-            if (prop == "Antialiasing" || prop == "ResolutionWidth" || prop == "ResolutionHeight" ||
-                prop == "BitDepth" || prop == "MinResolutionWidth" || prop == "MinResolutionHeight") {
-
-                parser.ReadNextItem(item);
-                int32_t val = parser.ReadAsInteger();
-
-                if (prop == "Antialiasing") Antialiasing = val;
-                else if (prop == "ResolutionWidth") ResolutionWidth = val;
-                else if (prop == "ResolutionHeight") ResolutionHeight = val;
-                else if (prop == "BitDepth") BitDepth = val;
-                else if (prop == "MinResolutionWidth") MinResolutionWidth = val;
-                else if (prop == "MinResolutionHeight") MinResolutionHeight = val;
-
-                parser.SkipPastString(";");
-            }
-            else if (prop == "TextureDetail" || prop == "MaxTextureDetail" || prop == "ShadowDetail" ||
-                prop == "MaxShadowDetail" || prop == "MeshDetail" || prop == "MaxMeshDetail" ||
-                prop == "EffectsDetail" || prop == "MaxEffectsDetail") {
-
-                parser.ReadNextItem(item);
-                float val = parser.ReadAsFloat();
-
-                if (prop == "TextureDetail") TextureDetail = val;
-                else if (prop == "MaxTextureDetail") MaxTextureDetail = val;
-                else if (prop == "ShadowDetail") ShadowDetail = val;
-                else if (prop == "MaxShadowDetail") MaxShadowDetail = val;
-                else if (prop == "MeshDetail") MeshDetail = val;
-                else if (prop == "MaxMeshDetail") MaxMeshDetail = val;
-                else if (prop == "EffectsDetail") EffectsDetail = val;
-                else if (prop == "MaxEffectsDetail") MaxEffectsDetail = val;
-
-                parser.SkipPastString(";");
-            }
-        }
-    }
-
-    void SerializeOut(CDataOutputStream* os) const override {
-        os->WriteULONG(Antialiasing);
-        os->WriteSLONG(ResolutionWidth);
-        os->WriteSLONG(ResolutionHeight);
-        os->WriteSLONG(BitDepth);
-        os->WriteFloat(TextureDetail);
-        os->WriteFloat(MaxTextureDetail);
-        os->WriteFloat(ShadowDetail);
-        os->WriteFloat(MaxShadowDetail);
-        os->WriteFloat(MeshDetail);
-        os->WriteFloat(MaxMeshDetail);
-        os->WriteFloat(EffectsDetail);
-        os->WriteFloat(MaxEffectsDetail);
-        os->WriteSLONG(MinResolutionWidth);
-        os->WriteSLONG(MinResolutionHeight);
+    void Transfer(CPersistContext& persist) override {
+        persist.Transfer("Antialiasing", Antialiasing, 0u);
+        persist.Transfer("ResolutionWidth", ResolutionWidth, (int32_t)0);
+        persist.Transfer("ResolutionHeight", ResolutionHeight, (int32_t)0);
+        persist.Transfer("BitDepth", BitDepth, (int32_t)16);
+        persist.Transfer("TextureDetail", TextureDetail, 1.0f);
+        persist.Transfer("MaxTextureDetail", MaxTextureDetail, 3.0f);
+        persist.Transfer("ShadowDetail", ShadowDetail, 1.0f);
+        persist.Transfer("MaxShadowDetail", MaxShadowDetail, 3.0f);
+        persist.Transfer("MeshDetail", MeshDetail, 1.0f);
+        persist.Transfer("MaxMeshDetail", MaxMeshDetail, 3.0f);
+        persist.Transfer("EffectsDetail", EffectsDetail, 1.0f);
+        persist.Transfer("MaxEffectsDetail", MaxEffectsDetail, 3.0f);
+        persist.Transfer("MinResolutionWidth", MinResolutionWidth, (int32_t)1024);
+        persist.Transfer("MinResolutionHeight", MinResolutionHeight, (int32_t)768);
     }
 };
 
@@ -451,725 +315,566 @@ class CEngineVideoOptionsDef : public IDefObject {
 public:
     std::string m_InstantiationName;
     int32_t HiresTextureMemory = 0;
-
-    float LODErrorTolerance = 0.0f;
-    float CharacterLODErrorTolerance = 0.0f;
-    float DrawDistanceMultiplier = 0.0f;
-    float DrawDistanceMinimum = 0.0f;
-    float DrawDistanceMaximum = 0.0f;
-    float RepeatedMeshDrawDistanceFactor = 0.0f;
-    float MinimumZSpriteAsMeshDistance = 0.0f;
-    float MaximumZSpriteAsMeshDistance = 0.0f;
-    float ZSpriteDrawDistanceMultiplier = 0.0f;
-
-    int32_t ShadowBufferSize = 1024;
-    float ShadowDistanceScale = 1.0f;
-
-    bool Enable2DDisplacement = false;
-    bool Enable3DDisplacement = false;
-    bool EnableGlow = false;
-    bool EnableRadialBlur = false;
-    bool EnableWaterReflection = false;
-    bool EnableWeatherEffects = false;
-    bool EnableColourFilter = false;
-
-    float WeatherDensity = 1.0f;
-    bool EnableRepeatedMeshes = true;
+    float LODErrorTolerance = 0.0f, CharacterLODErrorTolerance = 0.0f, DrawDistanceMultiplier = 0.0f;
+    float DrawDistanceMinimum = 0.0f, DrawDistanceMaximum = 0.0f, RepeatedMeshDrawDistanceFactor = 0.0f;
+    float MinimumZSpriteAsMeshDistance = 0.0f, MaximumZSpriteAsMeshDistance = 0.0f, ZSpriteDrawDistanceMultiplier = 0.0f;
+    int32_t ShadowBufferSize = 1024; float ShadowDistanceScale = 1.0f;
+    bool Enable2DDisplacement = false, Enable3DDisplacement = false, EnableGlow = false, EnableRadialBlur = false;
+    bool EnableWaterReflection = false, EnableWeatherEffects = false, EnableColourFilter = false;
+    float WeatherDensity = 1.0f; bool EnableRepeatedMeshes = true;
 
     std::string GetClassName() const override { return "ENGINE_VIDEO_OPTIONS"; }
     std::string GetInstantiationName() const override { return m_InstantiationName; }
     void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-
     void CopyFrom(const IDefObject* parentObject) override {
-        if (const auto* parent = dynamic_cast<const CEngineVideoOptionsDef*>(parentObject)) {
-            *this = *parent;
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;
+            m_InstantiationName = myName;
         }
     }
 
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
 
-        if (parser.PeekNextItem(item) && item.Type == EParsedItemType::Identifier) {
-            std::string prop = item.StringValue;
-
-            if (prop == "HiresTextureMemory" || prop == "ShadowBufferSize") {
-                parser.ReadNextItem(item);
-                int32_t val = parser.ReadAsInteger();
-
-                if (prop == "HiresTextureMemory") HiresTextureMemory = val;
-                else if (prop == "ShadowBufferSize") ShadowBufferSize = val;
-
-                parser.SkipPastString(";");
-            }
-            else if (prop == "LODErrorTolerance" || prop == "CharacterLODErrorTolerance" ||
-                prop == "DrawDistanceMultiplier" || prop == "DrawDistanceMinimum" ||
-                prop == "DrawDistanceMaximum" || prop == "RepeatedMeshDrawDistanceFactor" ||
-                prop == "MinimumZSpriteAsMeshDistance" || prop == "MaximumZSpriteAsMeshDistance" ||
-                prop == "ZSpriteDrawDistanceMultiplier" || prop == "ShadowDistanceScale" ||
-                prop == "WeatherDensity") {
-
-                parser.ReadNextItem(item);
-                float val = parser.ReadAsFloat();
-
-                if (prop == "LODErrorTolerance") LODErrorTolerance = val;
-                else if (prop == "CharacterLODErrorTolerance") CharacterLODErrorTolerance = val;
-                else if (prop == "DrawDistanceMultiplier") DrawDistanceMultiplier = val;
-                else if (prop == "DrawDistanceMinimum") DrawDistanceMinimum = val;
-                else if (prop == "DrawDistanceMaximum") DrawDistanceMaximum = val;
-                else if (prop == "RepeatedMeshDrawDistanceFactor") RepeatedMeshDrawDistanceFactor = val;
-                else if (prop == "MinimumZSpriteAsMeshDistance") MinimumZSpriteAsMeshDistance = val;
-                else if (prop == "MaximumZSpriteAsMeshDistance") MaximumZSpriteAsMeshDistance = val;
-                else if (prop == "ZSpriteDrawDistanceMultiplier") ZSpriteDrawDistanceMultiplier = val;
-                else if (prop == "ShadowDistanceScale") ShadowDistanceScale = val;
-                else if (prop == "WeatherDensity") WeatherDensity = val;
-
-                parser.SkipPastString(";");
-            }
-            else if (prop == "Enable2DDisplacement" || prop == "Enable3DDisplacement" ||
-                prop == "EnableGlow" || prop == "EnableRadialBlur" ||
-                prop == "EnableWaterReflection" || prop == "EnableWeatherEffects" ||
-                prop == "EnableColourFilter" || prop == "EnableRepeatedMeshes") {
-
-                parser.ReadNextItem(item);
-                std::string boolStr;
-                if (parser.ReadAsString(boolStr)) {
-                    bool val = (boolStr == "TRUE" || boolStr == "true");
-
-                    if (prop == "Enable2DDisplacement") Enable2DDisplacement = val;
-                    else if (prop == "Enable3DDisplacement") Enable3DDisplacement = val;
-                    else if (prop == "EnableGlow") EnableGlow = val;
-                    else if (prop == "EnableRadialBlur") EnableRadialBlur = val;
-                    else if (prop == "EnableWaterReflection") EnableWaterReflection = val;
-                    else if (prop == "EnableWeatherEffects") EnableWeatherEffects = val;
-                    else if (prop == "EnableColourFilter") EnableColourFilter = val;
-                    else if (prop == "EnableRepeatedMeshes") EnableRepeatedMeshes = val;
-                }
-                parser.SkipPastString(";");
-            }
-        }
-    }
-
-    void SerializeOut(CDataOutputStream* os) const override {
-        os->WriteSLONG(HiresTextureMemory);
-        os->WriteFloat(LODErrorTolerance);
-        os->WriteFloat(CharacterLODErrorTolerance);
-        os->WriteFloat(DrawDistanceMultiplier);
-        os->WriteFloat(DrawDistanceMinimum);
-        os->WriteFloat(DrawDistanceMaximum);
-        os->WriteFloat(RepeatedMeshDrawDistanceFactor);
-        os->WriteFloat(MinimumZSpriteAsMeshDistance);
-        os->WriteFloat(MaximumZSpriteAsMeshDistance);
-        os->WriteFloat(ZSpriteDrawDistanceMultiplier);
-        os->WriteSLONG(ShadowBufferSize);
-        os->WriteFloat(ShadowDistanceScale);
-        os->WriteBool(Enable2DDisplacement);
-        os->WriteBool(Enable3DDisplacement);
-        os->WriteBool(EnableGlow);
-        os->WriteBool(EnableRadialBlur);
-        os->WriteBool(EnableWaterReflection);
-        os->WriteBool(EnableWeatherEffects);
-        os->WriteBool(EnableColourFilter);
-        os->WriteFloat(WeatherDensity);
-        os->WriteBool(EnableRepeatedMeshes);
+    void Transfer(CPersistContext& persist) override {
+        persist.Transfer("HiresTextureMemory", HiresTextureMemory, (int32_t)0);
+        persist.Transfer("LODErrorTolerance", LODErrorTolerance, 0.0f);
+        persist.Transfer("CharacterLODErrorTolerance", CharacterLODErrorTolerance, 0.0f);
+        persist.Transfer("DrawDistanceMultiplier", DrawDistanceMultiplier, 0.0f);
+        persist.Transfer("DrawDistanceMinimum", DrawDistanceMinimum, 0.0f);
+        persist.Transfer("DrawDistanceMaximum", DrawDistanceMaximum, 0.0f);
+        persist.Transfer("RepeatedMeshDrawDistanceFactor", RepeatedMeshDrawDistanceFactor, 0.0f);
+        persist.Transfer("MinimumZSpriteAsMeshDistance", MinimumZSpriteAsMeshDistance, 0.0f);
+        persist.Transfer("MaximumZSpriteAsMeshDistance", MaximumZSpriteAsMeshDistance, 0.0f);
+        persist.Transfer("ZSpriteDrawDistanceMultiplier", ZSpriteDrawDistanceMultiplier, 0.0f);
+        persist.Transfer("ShadowBufferSize", ShadowBufferSize, (int32_t)1024);
+        persist.Transfer("ShadowDistanceScale", ShadowDistanceScale, 1.0f);
+        persist.Transfer("Enable2DDisplacement", Enable2DDisplacement, false);
+        persist.Transfer("Enable3DDisplacement", Enable3DDisplacement, false);
+        persist.Transfer("EnableGlow", EnableGlow, false);
+        persist.Transfer("EnableRadialBlur", EnableRadialBlur, false);
+        persist.Transfer("EnableWaterReflection", EnableWaterReflection, false);
+        persist.Transfer("EnableWeatherEffects", EnableWeatherEffects, false);
+        persist.Transfer("EnableColourFilter", EnableColourFilter, false);
+        persist.Transfer("WeatherDensity", WeatherDensity, 1.0f);
+        persist.Transfer("EnableRepeatedMeshes", EnableRepeatedMeshes, true);
     }
 };
 
-class CUIDef : public IDefObject {
+class CUIDef : public CDefObject {
 public:
-    std::string m_InstantiationName;
-
-    uint32_t Type = 0;
-    std::vector<uint32_t> Children;
+    int32_t Type = 4; // UI_TYPE_COMPOSITE
+    std::vector<int32_t> Children;
     uint32_t MeshIndex = 0;
-    std::string TextValue;
-    std::string Font;
+    std::wstring TextValue;
+    CDefString Font;
     float Height = 0.0f, Width = 0.0f;
-    uint32_t ExpansionType = 1;
-    std::map<uint32_t, uint32_t> Sprites;
-    std::vector<uint32_t> HorizontalSeparations, VerticalSeparations;
+    int32_t ExpansionType = 1;
+    std::map<int32_t, int32_t> Sprites;
+    std::vector<uint32_t> HorizontalSeparations;
+    std::vector<uint32_t> VerticalSeparations;
     std::vector<CUIStateDef> States;
-    bool TextLineBreak = true, ScaleText = true, Independant = false;
-    uint32_t MeshType = 5;
+    bool TextLineBreak = true;
+    bool ScaleText = true;
+    bool Independant = false;
+    int32_t MeshType = 5;
     std::vector<uint32_t> NonScrollingChildren;
-    CRectF TextWindow;
+    float TextWindowTLX = 0.0f, TextWindowTLY = 0.0f, TextWindowBRX = 0.0f, TextWindowBRY = 0.0f;
     int32_t Layer = 0;
     float Angle = 0.0f;
     bool PositionIsCenter = false;
     float ScrollingSpeed = 1.0f;
-    bool Wrapping = true, Inverted = false;
-    C2DVector PositionOffset = { 0.0f, 0.0f };
+    bool Wrapping = true;
+    bool Inverted = false;
+    float PositionOffsetX = 0.0f, PositionOffsetY = 0.0f;
     uint8_t AlphaOffset = 0;
-    C3DVector Up = { 0.0f, 0.0f, 1.0f }, Forward = { 0.0f, 1.0f, 0.0f }, RotationAxis = { 0.0f, 1.0f, 0.0f };
+    C3DVector Up = {0.0f, 0.0f, 1.0f}, Forward = {0.0f, 1.0f, 0.0f}, RotationAxis = {0.0f, 1.0f, 0.0f};
     float RotationSpeed = 0.0f;
     uint32_t AnimationIndex = 0;
     int32_t DownArrow = 0, UpArrow = 0, UpLimit = 0, DownLimit = 0;
-    bool Scrolling = true, ComputeOffsetsOnActivate = false;
-    C2DVector Min = { 0,0 }, Max = { 0,0 }, Step = { 0,0 }, Dimensions = { 0,0 };
+    bool Scrolling = true;
+    bool ComputeOffsetsOnActivate = false;
+    float MinX = 0.0f, MinY = 0.0f, MaxX = 0.0f, MaxY = 0.0f, StepX = 0.0f, StepY = 0.0f;
+    float DimensionsX = 0.0f, DimensionsY = 0.0f;
     int32_t SliderLeft = 0, SliderRight = 0;
-
-    uint32_t Action = 0, ActionOnBack = 0, ActionOnSelected = 0, ActionOnUnselected = 0, ActionOnDestruction = 0;
-    uint32_t ActionOnLeftClicked = 0, ActionOnLeftUnclicked = 0, ActionOnLeftHeld = 0, ActionOnRightClicked = 0;
-    uint32_t ActionOnDropped = 0, ActionOnDroppedNowhere = 0, PreAction = 0, ActionOnDraggedUp = 0;
-    uint32_t ActionOnDraggedDown = 0, ActionOnLeftClickedAbove = 0, ActionOnLeftClickedUnder = 0;
-
+    int32_t Action = 0, ActionOnBack = 0, ActionOnSelected = 0, ActionOnUnselected = 0;
+    int32_t ActionOnDestruction = 0, ActionOnLeftClicked = 0, ActionOnLeftUnclicked = 0, ActionOnLeftHeld = 0;
+    int32_t ActionOnRightClicked = 0, ActionOnDropped = 0, ActionOnDroppedNowhere = 0, PreAction = 0;
+    int32_t ActionOnDraggedUp = 0, ActionOnDraggedDown = 0, ActionOnLeftClickedAbove = 0, ActionOnLeftClickedUnder = 0;
     float InputDelay = 0.2f;
     bool DrawFromViewport = false;
     uint32_t TextBankIndex = 0;
     int32_t ActionText = 0, KeyText = 0, Redefiner = 0, UndefinedWarning = 0;
-
-    std::map<uint32_t, std::string> ActionMap;
+    std::map<std::string, uint32_t> ActionMap;
     std::map<uint32_t, uint32_t> ActionMapAliases;
     std::vector<uint32_t> ActionOrder;
-
     bool EditBoxParentIsButton = false, PasswordBox = false;
     int32_t EditBoxCharLimit = 0;
     bool EditBoxUsesIME = false;
-    std::string MovieFilename;
-    bool DisallowSpaceAsFirstChar = false, LayerIndependant = false;
+    std::wstring MovieFilename;
+    bool DisallowSpaceAsFirstChar = false;
+    bool LayerIndependant = false;
     std::vector<uint32_t> SwappingStates;
     std::vector<float> SwappingTimes;
     bool BastardChild = false;
-    uint32_t Alignement = 0;
-    bool RandomSwap = false, UseRelativeZoom = false, UseRelativePosition = false;
+    int32_t Alignement = 0;
+    bool RandomSwap = false;
+    bool UseRelativeZoom = false;
+    bool UseRelativePosition = false;
     int32_t HoveredState = 3, LeftClickedState = 3, RightClickedState = 3;
     std::vector<uint32_t> ShapeChildren;
-    CRect ViewArea = { 0,0,640,480 };
-    bool UseViewArea = false, PartOfListTree = true, PCStyle = false;
-    uint32_t Sprite2DFlag = 2;
+    int32_t ViewAreaTLX = 0, ViewAreaTLY = 0, ViewAreaBRX = 640, ViewAreaBRY = 480;
+    bool UseViewArea = false;
+    bool PartOfListTree = true;
+    bool PCStyle = false;
+    int32_t Sprite2DFlag = 2;
 
     std::string GetClassName() const override { return "UI"; }
-    std::string GetInstantiationName() const override { return m_InstantiationName; }
-    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-    void CopyFrom(const IDefObject* parentObject) override { if (const auto* p = dynamic_cast<const CUIDef*>(parentObject)) *this = *p; }
-
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
-        if (!parser.PeekNextItem(item) || item.Type != EParsedItemType::Identifier) return;
-        std::string prop = item.StringValue;
-
-        if (prop == "Children" || prop == "ShapeChildren" || prop == "ActionOrder" ||
-            prop == "SwappingStates" || prop == "HorizontalSeparations" || prop == "VerticalSeparations" ||
-            prop == "NonScrollingChildren" || prop == "Sprites" || prop == "ActionMap" || prop == "ActionMapAliases") {
-
-            parser.ReadNextItem(item);
-            parser.SkipPastString("[");
-            std::string keyStr; parser.ReadAsIdentifierOrNumber(keyStr);
-            uint32_t key = ResolveSymbol(keyStr, symbolMap);
-            parser.SkipPastString("]");
-
-            if (prop == "ActionMap") {
-                std::string valStr;
-                if (parser.ReadNextItemAsQuotedString(valStr)) ActionMap[key] = valStr;
-            }
-            else {
-                std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
-                uint32_t val = ResolveSymbol(valStr, symbolMap);
-
-                if (prop == "Sprites") Sprites[key] = val;
-                else if (prop == "ActionMapAliases") ActionMapAliases[key] = val;
-                else {
-                    std::vector<uint32_t>* targetVec = nullptr;
-                    if (prop == "Children") targetVec = &Children;
-                    else if (prop == "ShapeChildren") targetVec = &ShapeChildren;
-                    else if (prop == "ActionOrder") targetVec = &ActionOrder;
-                    else if (prop == "SwappingStates") targetVec = &SwappingStates;
-
-                    if (targetVec) {
-                        if (key >= targetVec->size()) targetVec->resize(key + 1);
-                        (*targetVec)[key] = val;
-                    }
-                }
-            }
-            parser.SkipPastString(";");
-            return;
+    void CopyFrom(const IDefObject* parentObject) override {
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;
+            m_InstantiationName = myName;
         }
-        if (prop == "States") {
-            parser.ReadNextItem(item);
-            parser.SkipPastString("[");
-            std::string keyStr; parser.ReadAsIdentifierOrNumber(keyStr);
-            uint32_t index = ResolveSymbol(keyStr, symbolMap);
-            parser.SkipPastString("].");
-
-            if (index >= States.size()) States.resize(index + 1);
-
-            std::string subProp; parser.ReadAsString(subProp);
-            if (subProp == "GraphicIndex") {
-                std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
-                States[index].GraphicIndex = ResolveSymbol(valStr, symbolMap);
-            }
-            else if (subProp == "PositionX") States[index].Position.x = parser.ReadAsFloat();
-            else if (subProp == "PositionY") States[index].Position.y = parser.ReadAsFloat();
-            else if (subProp == "ZoomX") States[index].Zoom.x = parser.ReadAsFloat();
-            else if (subProp == "ZoomY") States[index].Zoom.y = parser.ReadAsFloat();
-            else if (subProp == "ColourA") States[index].Colour.A = parser.ReadAsFloat();
-
-            parser.SkipPastString(";");
-            return;
-        }
-        parser.ReadNextItem(item);
-        if (prop == "Font") parser.ReadNextItemAsQuotedString(Font);
-        else if (prop == "TextValue") parser.ReadNextItemAsQuotedString(TextValue);
-        else if (prop == "MovieFilename") parser.ReadNextItemAsQuotedString(MovieFilename);
-        else if (prop == "Type" || prop == "MeshIndex" || prop == "AnimationIndex" || prop == "Action" || prop == "Layer" || prop == "MeshType" || prop == "ExpansionType") {
-            std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
-            uint32_t val = ResolveSymbol(valStr, symbolMap);
-            if (prop == "Type") Type = val; else if (prop == "MeshIndex") MeshIndex = val; else if (prop == "AnimationIndex") AnimationIndex = val;
-            else if (prop == "Action") Action = val; else if (prop == "Layer") Layer = (int32_t)val; else if (prop == "MeshType") MeshType = val;
-            else if (prop == "ExpansionType") ExpansionType = val;
-        }
-        else if (prop == "Height" || prop == "Width" || prop == "ScrollingSpeed" || prop == "PositionOffsetX" || prop == "PositionOffsetY" || prop == "TextWindowBRX" || prop == "TextWindowBRY") {
-            float val = parser.ReadAsFloat();
-            if (prop == "Height") Height = val; else if (prop == "Width") Width = val; else if (prop == "ScrollingSpeed") ScrollingSpeed = val;
-            else if (prop == "PositionOffsetX") PositionOffset.x = val; else if (prop == "PositionOffsetY") PositionOffset.y = val;
-            else if (prop == "TextWindowBRX") TextWindow.BRX = val; else if (prop == "TextWindowBRY") TextWindow.BRY = val;
-        }
-        else if (prop == "Independant" || prop == "Scrolling" || prop == "Wrapping" || prop == "TextLineBreak" || prop == "ScaleText") {
-            std::string boolStr; parser.ReadAsString(boolStr);
-            bool val = (boolStr == "TRUE" || boolStr == "BTRUE" || boolStr == "true");
-            if (prop == "Independant") Independant = val; else if (prop == "Scrolling") Scrolling = val; else if (prop == "Wrapping") Wrapping = val;
-            else if (prop == "TextLineBreak") TextLineBreak = val; else if (prop == "ScaleText") ScaleText = val;
-        }
-
-        parser.SkipPastString(";");
     }
 
-    void SerializeOut(CDataOutputStream* os) const override {
-        os->WriteULONG(Type); os->WriteVectorUint32(Children); os->WriteULONG(MeshIndex);
-        os->WriteWideString(std::wstring(TextValue.begin(), TextValue.end()));
-        os->WriteString(Font);
-        os->WriteFloat(Height); os->WriteFloat(Width); os->WriteULONG(ExpansionType);
-
-        os->WriteMapUint32ToUint32(Sprites);
-        os->WriteVectorUint32(HorizontalSeparations); os->WriteVectorUint32(VerticalSeparations);
-
-        os->WriteSLONG((int32_t)States.size());
-        for (const auto& state : States) state.SerializeOut(os);
-
-        os->WriteBool(TextLineBreak); os->WriteBool(ScaleText); os->WriteBool(Independant); os->WriteULONG(MeshType);
-        os->WriteVectorUint32(NonScrollingChildren);
-        os->WriteFloat(TextWindow.TLX); os->WriteFloat(TextWindow.TLY); os->WriteFloat(TextWindow.BRX); os->WriteFloat(TextWindow.BRY);
-        os->WriteSLONG(Layer); os->WriteFloat(Angle); os->WriteBool(PositionIsCenter); os->WriteFloat(ScrollingSpeed);
-        os->WriteBool(Wrapping); os->WriteBool(Inverted); os->Write2DVector(&PositionOffset); os->Write(&AlphaOffset, 1);
-        os->Write3DVector(&Up); os->Write3DVector(&Forward); os->Write3DVector(&RotationAxis); os->WriteFloat(RotationSpeed);
-        os->WriteULONG(AnimationIndex);
-        os->WriteSLONG(DownArrow); os->WriteSLONG(UpArrow); os->WriteSLONG(UpLimit); os->WriteSLONG(DownLimit);
-        os->WriteBool(Scrolling); os->WriteBool(ComputeOffsetsOnActivate);
-        os->Write2DVector(&Min); os->Write2DVector(&Max); os->Write2DVector(&Step); os->Write2DVector(&Dimensions);
-        os->WriteSLONG(SliderLeft); os->WriteSLONG(SliderRight);
-
-        os->WriteULONG(Action); os->WriteULONG(ActionOnBack); os->WriteULONG(ActionOnSelected); os->WriteULONG(ActionOnUnselected);
-        os->WriteULONG(ActionOnDestruction); os->WriteULONG(ActionOnLeftClicked); os->WriteULONG(ActionOnLeftUnclicked); os->WriteULONG(ActionOnLeftHeld);
-        os->WriteULONG(ActionOnRightClicked); os->WriteULONG(ActionOnDropped); os->WriteULONG(ActionOnDroppedNowhere); os->WriteULONG(PreAction);
-        os->WriteULONG(ActionOnDraggedUp); os->WriteULONG(ActionOnDraggedDown); os->WriteULONG(ActionOnLeftClickedAbove); os->WriteULONG(ActionOnLeftClickedUnder);
-
-        os->WriteFloat(InputDelay); os->WriteBool(DrawFromViewport); os->WriteULONG(TextBankIndex);
-        os->WriteSLONG(ActionText); os->WriteSLONG(KeyText); os->WriteSLONG(Redefiner); os->WriteSLONG(UndefinedWarning);
-
-        os->WriteMapUint32ToString(ActionMap); os->WriteMapUint32ToUint32(ActionMapAliases); os->WriteVectorUint32(ActionOrder);
-
-        os->WriteBool(EditBoxParentIsButton); os->WriteBool(PasswordBox); os->WriteSLONG(EditBoxCharLimit); os->WriteBool(EditBoxUsesIME);
-        os->WriteWideString(std::wstring(MovieFilename.begin(), MovieFilename.end()));
-        os->WriteBool(DisallowSpaceAsFirstChar); os->WriteBool(LayerIndependant);
-        os->WriteVectorUint32(SwappingStates); os->WriteVectorFloat(SwappingTimes);
-        os->WriteBool(BastardChild); os->WriteULONG(Alignement);
-        os->WriteBool(RandomSwap); os->WriteBool(UseRelativeZoom); os->WriteBool(UseRelativePosition);
-        os->WriteSLONG(HoveredState); os->WriteSLONG(LeftClickedState); os->WriteSLONG(RightClickedState);
-        os->WriteVectorUint32(ShapeChildren);
-        os->WriteSLONG(ViewArea.TLX); os->WriteSLONG(ViewArea.TLY); os->WriteSLONG(ViewArea.BRX); os->WriteSLONG(ViewArea.BRY);
-        os->WriteBool(UseViewArea); os->WriteBool(PartOfListTree); os->WriteBool(PCStyle); os->WriteULONG(Sprite2DFlag);
+    void Transfer(CPersistContext& persist) override {
+        persist.Transfer("Type", Type, (int32_t)4);
+        persist.TransferVector("Children", Children);
+        persist.Transfer("MeshIndex", MeshIndex, (uint32_t)0);
+        persist.Transfer("TextValue", TextValue, std::wstring(L""));
+        persist.Transfer("Font", Font, Font);
+        persist.Transfer("Height", Height, 0.0f);
+        persist.Transfer("Width", Width, 0.0f);
+        persist.Transfer("ExpansionType", ExpansionType, (int32_t)1);
+        persist.TransferMap("Sprites", Sprites, (int32_t)0);
+        persist.TransferVector("HorizontalSeparations", HorizontalSeparations);
+        persist.TransferVector("VerticalSeparations", VerticalSeparations);
+        persist.TransferVectorOfSubComponents("States", States);
+        persist.Transfer("TextLineBreak", TextLineBreak, true);
+        persist.Transfer("ScaleText", ScaleText, true);
+        persist.Transfer("Independant", Independant, false);
+        persist.Transfer("MeshType", MeshType, (int32_t)5);
+        persist.TransferVector("NonScrollingChildren", NonScrollingChildren);
+        persist.Transfer("TextWindowTLX", TextWindowTLX, 0.0f);
+        persist.Transfer("TextWindowTLY", TextWindowTLY, 0.0f);
+        persist.Transfer("TextWindowBRX", TextWindowBRX, 0.0f);
+        persist.Transfer("TextWindowBRY", TextWindowBRY, 0.0f);
+        persist.Transfer("Layer", Layer, (int32_t)0);
+        persist.Transfer("Angle", Angle, 0.0f);
+        persist.Transfer("PositionIsCenter", PositionIsCenter, false);
+        persist.Transfer("ScrollingSpeed", ScrollingSpeed, 1.0f);
+        persist.Transfer("Wrapping", Wrapping, true);
+        persist.Transfer("Inverted", Inverted, false);
+        persist.Transfer("PositionOffsetX", PositionOffsetX, 0.0f);
+        persist.Transfer("PositionOffsetY", PositionOffsetY, 0.0f);
+        persist.Transfer("AlphaOffset", AlphaOffset, (uint8_t)0);
+        persist.Transfer("UpX", Up.x, 0.0f);
+        persist.Transfer("UpY", Up.y, 0.0f);
+        persist.Transfer("UpZ", Up.z, 1.0f);
+        persist.Transfer("ForwardX", Forward.x, 0.0f);
+        persist.Transfer("ForwardY", Forward.y, 1.0f);
+        persist.Transfer("ForwardZ", Forward.z, 0.0f);
+        persist.Transfer("RotationAxisX", RotationAxis.x, 0.0f);
+        persist.Transfer("RotationAxisY", RotationAxis.y, 1.0f);
+        persist.Transfer("RotationAxisZ", RotationAxis.z, 0.0f);
+        persist.Transfer("RotationSpeed", RotationSpeed, 0.0f);
+        persist.Transfer("AnimationIndex", AnimationIndex, (uint32_t)0);
+        persist.Transfer("DownArrow", DownArrow, (int32_t)0);
+        persist.Transfer("UpArrow", UpArrow, (int32_t)0);
+        persist.Transfer("UpLimit", UpLimit, (int32_t)0);
+        persist.Transfer("DownLimit", DownLimit, (int32_t)0);
+        persist.Transfer("Scrolling", Scrolling, true);
+        persist.Transfer("ComputeOffsetsOnActivate", ComputeOffsetsOnActivate, false);
+        persist.Transfer("MinX", MinX, 0.0f);
+        persist.Transfer("MinY", MinY, 0.0f);
+        persist.Transfer("MaxX", MaxX, 0.0f);
+        persist.Transfer("MaxY", MaxY, 0.0f);
+        persist.Transfer("StepX", StepX, 0.0f);
+        persist.Transfer("StepY", StepY, 0.0f);
+        persist.Transfer("DimensionsX", DimensionsX, 0.0f);
+        persist.Transfer("DimensionsY", DimensionsY, 0.0f);
+        persist.Transfer("SliderLeft", SliderLeft, (int32_t)0);
+        persist.Transfer("SliderRight", SliderRight, (int32_t)0);
+        persist.Transfer("Action", Action, (int32_t)0);
+        persist.Transfer("ActionOnBack", ActionOnBack, (int32_t)0);
+        persist.Transfer("ActionOnSelected", ActionOnSelected, (int32_t)0);
+        persist.Transfer("ActionOnUnselected", ActionOnUnselected, (int32_t)0);
+        persist.Transfer("ActionOnDestruction", ActionOnDestruction, (int32_t)0);
+        persist.Transfer("ActionOnLeftClicked", ActionOnLeftClicked, (int32_t)0);
+        persist.Transfer("ActionOnLeftUnclicked", ActionOnLeftUnclicked, (int32_t)0);
+        persist.Transfer("ActionOnLeftHeld", ActionOnLeftHeld, (int32_t)0);
+        persist.Transfer("ActionOnRightClicked", ActionOnRightClicked, (int32_t)0);
+        persist.Transfer("ActionOnDropped", ActionOnDropped, (int32_t)0);
+        persist.Transfer("ActionOnDroppedNowhere", ActionOnDroppedNowhere, (int32_t)0);
+        persist.Transfer("PreAction", PreAction, (int32_t)0);
+        persist.Transfer("ActionOnDraggedUp", ActionOnDraggedUp, (int32_t)0);
+        persist.Transfer("ActionOnDraggedDown", ActionOnDraggedDown, (int32_t)0);
+        persist.Transfer("ActionOnLeftClickedAbove", ActionOnLeftClickedAbove, (int32_t)0);
+        persist.Transfer("ActionOnLeftClickedUnder", ActionOnLeftClickedUnder, (int32_t)0);
+        persist.Transfer("InputDelay", InputDelay, 0.2f);
+        persist.Transfer("DrawFromViewport", DrawFromViewport, false);
+        persist.Transfer("TextBankIndex", TextBankIndex, (uint32_t)0);
+        persist.Transfer("ActionText", ActionText, (int32_t)0);
+        persist.Transfer("KeyText", KeyText, (int32_t)0);
+        persist.Transfer("Redefiner", Redefiner, (int32_t)0);
+        persist.Transfer("UndefinedWarning", UndefinedWarning, (int32_t)0);
+        persist.TransferMap("ActionMap", ActionMap, (uint32_t)0);
+        persist.TransferMap("ActionMapAliases", ActionMapAliases, (uint32_t)0);
+        persist.TransferVector("ActionOrder", ActionOrder);
+        persist.Transfer("EditBoxParentIsButton", EditBoxParentIsButton, false);
+        persist.Transfer("PasswordBox", PasswordBox, false);
+        persist.Transfer("EditBoxCharLimit", EditBoxCharLimit, (int32_t)0);
+        persist.Transfer("EditBoxUsesIME", EditBoxUsesIME, false);
+        persist.Transfer("MovieFilename", MovieFilename, std::wstring(L""));
+        persist.Transfer("DisallowSpaceAsFirstChar", DisallowSpaceAsFirstChar, false);
+        persist.Transfer("LayerIndependant", LayerIndependant, false);
+        persist.TransferVector("SwappingStates", SwappingStates);
+        persist.TransferVector("SwappingTimes", SwappingTimes);
+        persist.Transfer("BastardChild", BastardChild, false);
+        persist.Transfer("Alignement", Alignement, (int32_t)0);
+        persist.Transfer("RandomSwap", RandomSwap, false);
+        persist.Transfer("UseRelativeZoom", UseRelativeZoom, false);
+        persist.Transfer("UseRelativePosition", UseRelativePosition, false);
+        persist.Transfer("HoveredState", HoveredState, (int32_t)3);
+        persist.Transfer("LeftClickedState", LeftClickedState, (int32_t)3);
+        persist.Transfer("RightClickedState", RightClickedState, (int32_t)3);
+        persist.TransferVector("ShapeChildren", ShapeChildren);
+        persist.Transfer("ViewAreaTLX", ViewAreaTLX, (int32_t)0);
+        persist.Transfer("ViewAreaTLY", ViewAreaTLY, (int32_t)0);
+        persist.Transfer("ViewAreaBRX", ViewAreaBRX, (int32_t)640);
+        persist.Transfer("ViewAreaBRY", ViewAreaBRY, (int32_t)480);
+        persist.Transfer("UseViewArea", UseViewArea, false);
+        persist.Transfer("PartOfListTree", PartOfListTree, true);
+        persist.Transfer("PCStyle", PCStyle, false);
+        persist.Transfer("Sprite2DFlag", Sprite2DFlag, (int32_t)2);
     }
 };
 
-class CUIMiscThingsDef : public IDefObject {
+
+class CUIMiscThingsDef : public CDefObject {
 public:
-    std::string m_InstantiationName;
-
-    std::string SpaceSeparator, CommaSeparator, NewLineSeparator, OpenBracket, CloseBracket;
-    std::string Positive, WeaponValueString, WeaponAugString, WeaponAugNone, WeaponWeightString;
-    std::string WeaponLightString, WeaponHeavyString, WeaponKillsString, WeaponCatMeleeString;
-    std::string WeaponCatRangedString, WeaponDamageString, TradeCostString, ColonSeparator;
-    std::string TradeProfitString, TradeLossString, TradeAlreadyOwnsString, TradeNumberInStockString;
-    std::string TradeDeliveryString, TradeNoDeliveryString, TradeDaysString, TradeBuyString;
-    std::string TradeSellString, TradeWantedString, QuestFailedString, FailedString, SucceededString, Plus, Minus;
-
+    // CWideString fields (null-terminated UTF-16 in binary)
+    std::wstring SpaceSeparator, CommaSeparator, NewLineSeparator, OpenBracket, CloseBracket, Positive;
+    std::wstring WeaponValueString, WeaponAugString, WeaponAugNone, WeaponWeightString;
+    std::wstring WeaponLightString, WeaponHeavyString, WeaponKillsString, WeaponCatMeleeString;
+    std::wstring WeaponCatRangedString, WeaponDamageString, TradeCostString, ColonSeparator;
+    std::wstring TradeProfitString, TradeLossString, TradeAlreadyOwnsString, TradeNumberInStockString;
+    std::wstring TradeDeliveryString, TradeNoDeliveryString, TradeDaysString, TradeBuyString;
+    std::wstring TradeSellString, TradeWantedString, QuestFailedString, FailedString, SucceededString;
+    std::wstring Plus, Minus;
     uint32_t CoreGraphic = 0, VignetteGraphic = 0, OptionalGraphic = 0, FeatGraphic = 0;
-
-    std::string ObjectsRewardString, NoneString, CheckGuildString, QuestStartingString;
-
-    C2DVector RingCenter = { 0,0 }, PCRingCenter = { 0,0 }, WorldMapOffset = { 0,0 };
+    std::wstring ObjectsRewardString, NoneString, CheckGuildString, QuestStartingString;
+    C2DVector RingCenter = {0,0}, PCRingCenter = {0,0}, WorldMapOffset = {0,0};
     float WorldMapWidth = 0, WorldMapHeight = 0;
-
-    std::string YouString, OwnString, NoString, HousesString, HouseString, InString, ShopsString, ShopString;
-    std::string ThereString, AreString, IsString, ForString, SaleString, GeneralString, TatooString, BarberString, TitleString, LevelString;
-
-    uint32_t TotalSpellsInPalettes = 18, TotalSpellsInContainer = 3, TotalAssignableThings = 8;
-
-    std::string LogBookBasicsCategoryString, LogBookObjectsCategoryString, LogBookTownsCategoryString, LogBookHeroCategoryString;
-    std::string LogBookCombatCategoryString, LogBookQuestCategoryString, LogBookStoryCategoryString;
-    std::string LogBookBasicsCategoryNameString, LogBookObjectsCategoryNameString, LogBookTownsCategoryNameString, LogBookHeroCategoryNameString;
-    std::string LogBookCombatCategoryNameString, LogBookQuestCategoryNameString, LogBookStoryCategoryNameString;
-
+    std::wstring YouString, OwnString, NoString, HousesString, HouseString, InString, ShopsString, ShopString;
+    std::wstring ThereString, AreString, IsString, ForString, SaleString, GeneralString, TatooString, BarberString, TitleString, LevelString;
+    uint32_t TotalSpellsInPalettes = 0x12, TotalSpellsInContainer = 3, TotalAssignableThings = 8;
+    std::wstring LogBookBasicsCategoryString, LogBookObjectsCategoryString, LogBookTownsCategoryString, LogBookHeroCategoryString;
+    std::wstring LogBookCombatCategoryString, LogBookQuestCategoryString, LogBookStoryCategoryString;
+    std::wstring LogBookBasicsCategoryNameString, LogBookObjectsCategoryNameString, LogBookTownsCategoryNameString;
+    std::wstring LogBookHeroCategoryNameString, LogBookCombatCategoryNameString, LogBookQuestCategoryNameString, LogBookStoryCategoryNameString;
     std::map<uint32_t, uint32_t> MapPaths;
+    // CCharString fields (length-prefixed narrow in binary)
     std::string SoundUpDown, SoundSlider, SoundBack, SoundForward, SoundError, SoundExit;
-
-    C2DVector HeroDollTL = { 310,33 }, HeroDollBR = { 560,300 };
+    C2DVector HeroDollTL = {310,33}, HeroDollBR = {560,300};
     float HeroDollSphereRadius = 1.3f;
-    C2DVector HeroDollTL_PC = { 310,33 }, HeroDollBR_PC = { 560,300 };
+    C2DVector HeroDollTL_PC = {310,33}, HeroDollBR_PC = {560,300};
     float HeroDollSphereRadius_PC = 1.3f;
-    C2DVector HeroDollFrameTL_PC = { 0,0 };
-    float HeroDollFrameEmulateListOffset = 0.0f;
-
+    C2DVector HeroDollFrameTL_PC = {0,0};
+    float HeroDollFrameEmulateListOffset = 0;
     uint32_t QuestStartScreenMusic = 2, QuestCompleteScreenMusic = 3, QuestFailureScreenMusic = 9, DeathScreenMusic = 14;
     std::string CountUpSound;
     float DigitCountTime = 3.0f;
     uint32_t SaveHeroGraphicIndex = 0;
-
-    std::map<std::string, uint32_t> MiniMapGraphics;
-
+    std::map<int32_t, std::string> MiniMapGraphics;
     std::string SoundKeyboardUp, SoundKeyboardDown, SoundKeyboardLeft, SoundKeyboardRight;
     std::string SoundKeyboardEnterCharacter, SoundKeyboardDeleteCharacter, SoundKeyboardDone;
-
-    std::string FrontEndMusic;
-
+    std::wstring FrontEndMusic; // CWideString in game
     int32_t KeyboardSmallKeyGraphic = 0, KeyboardLargeKeyGraphic = 0;
     float TimeInSecsForFade = 0, BackBufferFilterSaturation = 0, BackBufferFilterContrast = 0, BackBufferFilterBrightness = 0;
     float BackBufferFilterTintR = 0, BackBufferFilterTintG = 0, BackBufferFilterTintB = 0, BackBufferFilterTintScale = 0;
     float BackBufferDiffuseScale = 0, BackBufferAmbientScale = 0, MinimumFilterColor = 0;
 
     std::string GetClassName() const override { return "UI_MISC_THINGS_DEF"; }
-    std::string GetInstantiationName() const override { return m_InstantiationName; }
-    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-    void CopyFrom(const IDefObject* parentObject) override { if (const auto* p = dynamic_cast<const CUIMiscThingsDef*>(parentObject)) *this = *p; }
-
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
-        if (!parser.PeekNextItem(item) || item.Type != EParsedItemType::Identifier) return;
-        std::string prop = item.StringValue;
-
-        if (prop == "MapPaths") {
-            parser.ReadNextItem(item);
-            parser.SkipPastString("[");
-            uint32_t key = parser.ReadAsInteger();
-            parser.SkipPastString("]");
-
-            std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
-            uint32_t val = ResolveSymbol(valStr, symbolMap);
-
-            MapPaths[key] = val;
-            parser.SkipPastString(";");
-            return;
+    void CopyFrom(const IDefObject* parentObject) override {
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;
+            m_InstantiationName = myName;
         }
-
-        parser.ReadNextItem(item);
-
-        if (prop.find("String") != std::string::npos || prop.find("Separator") != std::string::npos ||
-            prop.find("Bracket") != std::string::npos || prop.find("Sound") != std::string::npos ||
-            prop == "Positive" || prop == "Plus" || prop == "Minus" || prop == "FrontEndMusic" || prop == "Failed" || prop == "CountUpSound") {
-
-            std::string strVal;
-            if (parser.ReadNextItemAsQuotedString(strVal)) {
-                if (prop == "SpaceSeparator") SpaceSeparator = strVal; else if (prop == "CommaSeparator") CommaSeparator = strVal;
-                else if (prop == "NewLineSeparator") NewLineSeparator = strVal; else if (prop == "OpenBracket") OpenBracket = strVal;
-                else if (prop == "CloseBracket") CloseBracket = strVal; else if (prop == "Positive") Positive = strVal;
-                else if (prop == "ColonSeparator") ColonSeparator = strVal; else if (prop == "WeaponValueString") WeaponValueString = strVal;
-                else if (prop == "WeaponAugString") WeaponAugString = strVal; else if (prop == "WeaponAugNone") WeaponAugNone = strVal;
-                else if (prop == "WeaponWeightString") WeaponWeightString = strVal; else if (prop == "WeaponLightString") WeaponLightString = strVal;
-                else if (prop == "WeaponHeavyString") WeaponHeavyString = strVal; else if (prop == "WeaponKillsString") WeaponKillsString = strVal;
-                else if (prop == "WeaponCatMeleeString") WeaponCatMeleeString = strVal; else if (prop == "WeaponCatRangedString") WeaponCatRangedString = strVal;
-                else if (prop == "WeaponDamageString") WeaponDamageString = strVal; else if (prop == "TradeCostString") TradeCostString = strVal;
-                else if (prop == "TradeProfitString") TradeProfitString = strVal; else if (prop == "TradeLossString") TradeLossString = strVal;
-                else if (prop == "TradeAlreadyOwnsString") TradeAlreadyOwnsString = strVal; else if (prop == "TradeNumberInStockString") TradeNumberInStockString = strVal;
-                else if (prop == "TradeDeliveryString") TradeDeliveryString = strVal; else if (prop == "TradeNoDeliveryString") TradeNoDeliveryString = strVal;
-                else if (prop == "TradeDaysString") TradeDaysString = strVal; else if (prop == "TradeBuyString") TradeBuyString = strVal;
-                else if (prop == "TradeSellString") TradeSellString = strVal; else if (prop == "TradeWantedString") TradeWantedString = strVal;
-                else if (prop == "QuestFailedString") QuestFailedString = strVal; else if (prop == "FailedString") FailedString = strVal;
-                else if (prop == "SucceededString") SucceededString = strVal; else if (prop == "Plus") Plus = strVal;
-                else if (prop == "Minus") Minus = strVal; else if (prop == "ObjectsRewardString") ObjectsRewardString = strVal;
-                else if (prop == "NoneString") NoneString = strVal; else if (prop == "CheckGuildString") CheckGuildString = strVal;
-                else if (prop == "QuestStartingString") QuestStartingString = strVal; else if (prop == "YouString") YouString = strVal;
-                else if (prop == "OwnString") OwnString = strVal; else if (prop == "NoString") NoString = strVal;
-                else if (prop == "HousesString") HousesString = strVal; else if (prop == "HouseString") HouseString = strVal;
-                else if (prop == "InString") InString = strVal; else if (prop == "ShopsString") ShopsString = strVal;
-                else if (prop == "ShopString") ShopString = strVal; else if (prop == "ThereString") ThereString = strVal;
-                else if (prop == "AreString") AreString = strVal; else if (prop == "IsString") IsString = strVal;
-                else if (prop == "ForString") ForString = strVal; else if (prop == "SaleString") SaleString = strVal;
-                else if (prop == "GeneralString") GeneralString = strVal; else if (prop == "TatooString") TatooString = strVal;
-                else if (prop == "BarberString") BarberString = strVal; else if (prop == "TitleString") TitleString = strVal;
-                else if (prop == "LevelString") LevelString = strVal;
-                else if (prop == "LogBookBasicsCategoryString") LogBookBasicsCategoryString = strVal;
-                else if (prop == "LogBookObjectsCategoryString") LogBookObjectsCategoryString = strVal;
-                else if (prop == "LogBookTownsCategoryString") LogBookTownsCategoryString = strVal;
-                else if (prop == "LogBookHeroCategoryString") LogBookHeroCategoryString = strVal;
-                else if (prop == "LogBookCombatCategoryString") LogBookCombatCategoryString = strVal;
-                else if (prop == "LogBookQuestCategoryString") LogBookQuestCategoryString = strVal;
-                else if (prop == "LogBookStoryCategoryString") LogBookStoryCategoryString = strVal;
-                else if (prop == "LogBookBasicsCategoryNameString") LogBookBasicsCategoryNameString = strVal;
-                else if (prop == "LogBookObjectsCategoryNameString") LogBookObjectsCategoryNameString = strVal;
-                else if (prop == "LogBookTownsCategoryNameString") LogBookTownsCategoryNameString = strVal;
-                else if (prop == "LogBookHeroCategoryNameString") LogBookHeroCategoryNameString = strVal;
-                else if (prop == "LogBookCombatCategoryNameString") LogBookCombatCategoryNameString = strVal;
-                else if (prop == "LogBookQuestCategoryNameString") LogBookQuestCategoryNameString = strVal;
-                else if (prop == "LogBookStoryCategoryNameString") LogBookStoryCategoryNameString = strVal;
-                else if (prop == "SoundUpDown") SoundUpDown = strVal; else if (prop == "SoundSlider") SoundSlider = strVal;
-                else if (prop == "SoundBack") SoundBack = strVal; else if (prop == "SoundForward") SoundForward = strVal;
-                else if (prop == "SoundError") SoundError = strVal; else if (prop == "SoundExit") SoundExit = strVal;
-                else if (prop == "SoundKeyboardUp") SoundKeyboardUp = strVal; else if (prop == "SoundKeyboardDown") SoundKeyboardDown = strVal;
-                else if (prop == "SoundKeyboardLeft") SoundKeyboardLeft = strVal; else if (prop == "SoundKeyboardRight") SoundKeyboardRight = strVal;
-                else if (prop == "SoundKeyboardEnterCharacter") SoundKeyboardEnterCharacter = strVal;
-                else if (prop == "SoundKeyboardDeleteCharacter") SoundKeyboardDeleteCharacter = strVal;
-                else if (prop == "SoundKeyboardDone") SoundKeyboardDone = strVal;
-                else if (prop == "CountUpSound") CountUpSound = strVal; else if (prop == "FrontEndMusic") FrontEndMusic = strVal;
-            }
-        }
-        else if (prop == "CoreGraphic" || prop == "VignetteGraphic" || prop == "OptionalGraphic" || prop == "FeatGraphic" ||
-            prop == "QuestStartScreenMusic" || prop == "QuestCompleteScreenMusic" || prop == "QuestFailureScreenMusic" ||
-            prop == "DeathScreenMusic" || prop == "SaveHeroGraphicIndex") {
-            std::string valStr; parser.ReadAsIdentifierOrNumber(valStr);
-            uint32_t val = ResolveSymbol(valStr, symbolMap);
-
-            if (prop == "CoreGraphic") CoreGraphic = val; else if (prop == "VignetteGraphic") VignetteGraphic = val;
-            else if (prop == "OptionalGraphic") OptionalGraphic = val; else if (prop == "FeatGraphic") FeatGraphic = val;
-            else if (prop == "QuestStartScreenMusic") QuestStartScreenMusic = val; else if (prop == "QuestCompleteScreenMusic") QuestCompleteScreenMusic = val;
-            else if (prop == "QuestFailureScreenMusic") QuestFailureScreenMusic = val; else if (prop == "DeathScreenMusic") DeathScreenMusic = val;
-            else if (prop == "SaveHeroGraphicIndex") SaveHeroGraphicIndex = val;
-        }
-        else if (prop == "WorldMapWidth" || prop == "WorldMapHeight" || prop == "HeroDollSphereRadius" || prop == "HeroDollSphereRadius_PC" ||
-            prop == "HeroDollFrameEmulateListOffset" || prop == "DigitCountTime" || prop == "TimeInSecsForFade" ||
-            prop == "BackBufferFilterSaturation" || prop == "BackBufferFilterContrast" || prop == "BackBufferFilterBrightness" ||
-            prop == "BackBufferFilterTintR" || prop == "BackBufferFilterTintG" || prop == "BackBufferFilterTintB" ||
-            prop == "BackBufferFilterTintScale" || prop == "BackBufferDiffuseScale" || prop == "BackBufferAmbientScale" || prop == "MinimumFilterColor" ||
-            prop.find("X") != std::string::npos || prop.find("Y") != std::string::npos) {
-            float val = parser.ReadAsFloat();
-
-            if (prop == "WorldMapWidth") WorldMapWidth = val; else if (prop == "WorldMapHeight") WorldMapHeight = val;
-            else if (prop == "HeroDollSphereRadius") HeroDollSphereRadius = val; else if (prop == "HeroDollSphereRadius_PC") HeroDollSphereRadius_PC = val;
-            else if (prop == "HeroDollFrameEmulateListOffset") HeroDollFrameEmulateListOffset = val; else if (prop == "DigitCountTime") DigitCountTime = val;
-            else if (prop == "TimeInSecsForFade") TimeInSecsForFade = val; else if (prop == "BackBufferFilterSaturation") BackBufferFilterSaturation = val;
-            else if (prop == "BackBufferFilterContrast") BackBufferFilterContrast = val; else if (prop == "BackBufferFilterBrightness") BackBufferFilterBrightness = val;
-            else if (prop == "BackBufferFilterTintR") BackBufferFilterTintR = val; else if (prop == "BackBufferFilterTintG") BackBufferFilterTintG = val;
-            else if (prop == "BackBufferFilterTintB") BackBufferFilterTintB = val; else if (prop == "BackBufferFilterTintScale") BackBufferFilterTintScale = val;
-            else if (prop == "BackBufferDiffuseScale") BackBufferDiffuseScale = val; else if (prop == "BackBufferAmbientScale") BackBufferAmbientScale = val;
-            else if (prop == "MinimumFilterColor") MinimumFilterColor = val;
-            else if (prop == "WorldMapOffsetX") WorldMapOffset.x = val; else if (prop == "WorldMapOffsetY") WorldMapOffset.y = val;
-            else if (prop == "RingCenterX") RingCenter.x = val; else if (prop == "RingCenterY") RingCenter.y = val;
-            else if (prop == "PCRingCenterX") PCRingCenter.x = val; else if (prop == "PCRingCenterY") PCRingCenter.y = val;
-            else if (prop == "HeroDollTLX") HeroDollTL.x = val; else if (prop == "HeroDollTLY") HeroDollTL.y = val;
-            else if (prop == "HeroDollBRX") HeroDollBR.x = val; else if (prop == "HeroDollBRY") HeroDollBR.y = val;
-            else if (prop == "HeroDollTLX_PC") HeroDollTL_PC.x = val; else if (prop == "HeroDollTLY_PC") HeroDollTL_PC.y = val;
-            else if (prop == "HeroDollBRX_PC") HeroDollBR_PC.x = val; else if (prop == "HeroDollBRY_PC") HeroDollBR_PC.y = val;
-            else if (prop == "HeroDollFrameTLX_PC") HeroDollFrameTL_PC.x = val; else if (prop == "HeroDollFrameTLY_PC") HeroDollFrameTL_PC.y = val;
-        }
-        else if (prop == "MiniMapGraphics") {
-            CParsedItem itemBracket;
-            parser.ReadNextItem(itemBracket); // Skip '['
-
-            std::string keyStr;
-            parser.ReadNextItemAsQuotedString(keyStr);
-            parser.SkipPastString("]");
-
-            std::string valStr;
-            if (parser.ReadAsIdentifierOrNumber(valStr)) {
-                MiniMapGraphics[keyStr] = ResolveSymbol(valStr, symbolMap);
-            }
-        }
-        else {
-            std::string valStr;
-            if (parser.ReadAsIdentifierOrNumber(valStr)) {
-                int32_t val = ResolveSymbol(valStr, symbolMap);
-
-                if (prop == "TotalSpellsInPalettes") TotalSpellsInPalettes = val;
-                else if (prop == "TotalSpellsInContainer") TotalSpellsInContainer = val;
-                else if (prop == "TotalAssignableThings") TotalAssignableThings = val;
-                else if (prop == "KeyboardSmallKeyGraphic") KeyboardSmallKeyGraphic = val;
-                else if (prop == "KeyboardLargeKeyGraphic") KeyboardLargeKeyGraphic = val;
-            }
-        }
-
-        parser.SkipPastString(";");
     }
 
-    void SerializeOut(CDataOutputStream* os) const override {
-        std::vector<std::string> w1 = { SpaceSeparator, CommaSeparator, NewLineSeparator, OpenBracket, CloseBracket, Positive, WeaponValueString, WeaponAugString, WeaponAugNone, WeaponWeightString, WeaponLightString, WeaponHeavyString, WeaponKillsString, WeaponCatMeleeString, WeaponCatRangedString, WeaponDamageString, TradeCostString, ColonSeparator, TradeProfitString, TradeLossString, TradeAlreadyOwnsString, TradeNumberInStockString, TradeDeliveryString, TradeNoDeliveryString, TradeDaysString, TradeBuyString, TradeSellString, TradeWantedString, QuestFailedString, FailedString, SucceededString, Plus, Minus };
-        for (const auto& s : w1) os->WriteWideString(std::wstring(s.begin(), s.end()));
-
-        os->WriteULONG(CoreGraphic); os->WriteULONG(VignetteGraphic); os->WriteULONG(OptionalGraphic); os->WriteULONG(FeatGraphic);
-
-        std::vector<std::string> w2 = { ObjectsRewardString, NoneString, CheckGuildString, QuestStartingString };
-        for (const auto& s : w2) os->WriteWideString(std::wstring(s.begin(), s.end()));
-
-        os->Write2DVector(&RingCenter); os->Write2DVector(&PCRingCenter); os->Write2DVector(&WorldMapOffset);
-        os->WriteFloat(WorldMapWidth); os->WriteFloat(WorldMapHeight);
-
-        std::vector<std::string> w3 = { YouString, OwnString, NoString, HousesString, HouseString, InString, ShopsString, ShopString, ThereString, AreString, IsString, ForString, SaleString, GeneralString, TatooString, BarberString, TitleString, LevelString };
-        for (const auto& s : w3) os->WriteWideString(std::wstring(s.begin(), s.end()));
-
-        os->WriteULONG(TotalSpellsInPalettes); os->WriteULONG(TotalSpellsInContainer); os->WriteULONG(TotalAssignableThings);
-
-        std::vector<std::string> w4 = { LogBookBasicsCategoryString, LogBookObjectsCategoryString, LogBookTownsCategoryString, LogBookHeroCategoryString, LogBookCombatCategoryString, LogBookQuestCategoryString, LogBookStoryCategoryString, LogBookBasicsCategoryNameString, LogBookObjectsCategoryNameString, LogBookTownsCategoryNameString, LogBookHeroCategoryNameString, LogBookCombatCategoryNameString, LogBookQuestCategoryNameString, LogBookStoryCategoryNameString };
-        for (const auto& s : w4) os->WriteWideString(std::wstring(s.begin(), s.end()));
-
-        os->WriteMapUint32ToUint32(MapPaths);
-
-        std::vector<std::string> c1 = { SoundUpDown, SoundSlider, SoundBack, SoundForward, SoundError, SoundExit };
-        for (const auto& s : c1) os->WriteCharString(s);
-
-        os->Write2DVector(&HeroDollTL); os->Write2DVector(&HeroDollBR); os->WriteFloat(HeroDollSphereRadius);
-        os->Write2DVector(&HeroDollTL_PC); os->Write2DVector(&HeroDollBR_PC); os->WriteFloat(HeroDollSphereRadius_PC);
-        os->Write2DVector(&HeroDollFrameTL_PC); os->WriteFloat(HeroDollFrameEmulateListOffset);
-
-        os->WriteULONG(QuestStartScreenMusic); os->WriteULONG(QuestCompleteScreenMusic); os->WriteULONG(QuestFailureScreenMusic); os->WriteULONG(DeathScreenMusic);
-
-        os->WriteCharString(CountUpSound); os->WriteFloat(DigitCountTime); os->WriteULONG(SaveHeroGraphicIndex);
-
-        os->WriteMapStringToUint32(MiniMapGraphics);
-
-        std::vector<std::string> c2 = { SoundKeyboardUp, SoundKeyboardDown, SoundKeyboardLeft, SoundKeyboardRight, SoundKeyboardEnterCharacter, SoundKeyboardDeleteCharacter, SoundKeyboardDone };
-        for (const auto& s : c2) os->WriteCharString(s);
-
-        os->WriteWideString(std::wstring(FrontEndMusic.begin(), FrontEndMusic.end()));
-        os->WriteSLONG(KeyboardSmallKeyGraphic); os->WriteSLONG(KeyboardLargeKeyGraphic);
-
-        os->WriteFloat(TimeInSecsForFade); os->WriteFloat(BackBufferFilterSaturation); os->WriteFloat(BackBufferFilterContrast); os->WriteFloat(BackBufferFilterBrightness);
-        os->WriteFloat(BackBufferFilterTintR); os->WriteFloat(BackBufferFilterTintG); os->WriteFloat(BackBufferFilterTintB); os->WriteFloat(BackBufferFilterTintScale);
-        os->WriteFloat(BackBufferDiffuseScale); os->WriteFloat(BackBufferAmbientScale); os->WriteFloat(MinimumFilterColor);
+    void Transfer(CPersistContext& persist) override {
+        persist.Transfer("SpaceSeparator", SpaceSeparator, std::wstring(L""));
+        persist.Transfer("CommaSeparator", CommaSeparator, std::wstring(L""));
+        persist.Transfer("NewLineSeparator", NewLineSeparator, std::wstring(L""));
+        persist.Transfer("OpenBracket", OpenBracket, std::wstring(L""));
+        persist.Transfer("CloseBracket", CloseBracket, std::wstring(L""));
+        persist.Transfer("Positive", Positive, std::wstring(L""));
+        persist.Transfer("WeaponValueString", WeaponValueString, std::wstring(L""));
+        persist.Transfer("WeaponAugString", WeaponAugString, std::wstring(L""));
+        persist.Transfer("WeaponAugNone", WeaponAugNone, std::wstring(L""));
+        persist.Transfer("WeaponWeightString", WeaponWeightString, std::wstring(L""));
+        persist.Transfer("WeaponLightString", WeaponLightString, std::wstring(L""));
+        persist.Transfer("WeaponHeavyString", WeaponHeavyString, std::wstring(L""));
+        persist.Transfer("WeaponKillsString", WeaponKillsString, std::wstring(L""));
+        persist.Transfer("WeaponCatMeleeString", WeaponCatMeleeString, std::wstring(L""));
+        persist.Transfer("WeaponCatRangedString", WeaponCatRangedString, std::wstring(L""));
+        persist.Transfer("WeaponDamageString", WeaponDamageString, std::wstring(L""));
+        persist.Transfer("TradeCostString", TradeCostString, std::wstring(L""));
+        persist.Transfer("ColonSeparator", ColonSeparator, std::wstring(L""));
+        persist.Transfer("TradeProfitString", TradeProfitString, std::wstring(L""));
+        persist.Transfer("TradeLossString", TradeLossString, std::wstring(L""));
+        persist.Transfer("TradeAlreadyOwnsString", TradeAlreadyOwnsString, std::wstring(L""));
+        persist.Transfer("TradeNumberInStockString", TradeNumberInStockString, std::wstring(L""));
+        persist.Transfer("TradeDeliveryString", TradeDeliveryString, std::wstring(L""));
+        persist.Transfer("TradeNoDeliveryString", TradeNoDeliveryString, std::wstring(L""));
+        persist.Transfer("TradeDaysString", TradeDaysString, std::wstring(L""));
+        persist.Transfer("TradeBuyString", TradeBuyString, std::wstring(L""));
+        persist.Transfer("TradeSellString", TradeSellString, std::wstring(L""));
+        persist.Transfer("TradeWantedString", TradeWantedString, std::wstring(L""));
+        persist.Transfer("QuestFailedString", QuestFailedString, std::wstring(L""));
+        persist.Transfer("FailedString", FailedString, std::wstring(L""));
+        persist.Transfer("SucceededString", SucceededString, std::wstring(L""));
+        persist.Transfer("Plus", Plus, std::wstring(L""));
+        persist.Transfer("Minus", Minus, std::wstring(L""));
+        persist.Transfer("CoreGraphic", CoreGraphic, (uint32_t)0);
+        persist.Transfer("VignetteGraphic", VignetteGraphic, (uint32_t)0);
+        persist.Transfer("OptionalGraphic", OptionalGraphic, (uint32_t)0);
+        persist.Transfer("FeatGraphic", FeatGraphic, (uint32_t)0);
+        persist.Transfer("ObjectsRewardString", ObjectsRewardString, std::wstring(L""));
+        persist.Transfer("NoneString", NoneString, std::wstring(L""));
+        persist.Transfer("CheckGuildString", CheckGuildString, std::wstring(L""));
+        persist.Transfer("QuestStartingString", QuestStartingString, std::wstring(L""));
+        persist.Transfer("RingCenterX", RingCenter.x, 0.0f);
+        persist.Transfer("RingCenterY", RingCenter.y, 0.0f);
+        persist.Transfer("PCRingCenterX", PCRingCenter.x, 0.0f);
+        persist.Transfer("PCRingCenterY", PCRingCenter.y, 0.0f);
+        persist.Transfer("WorldMapOffsetX", WorldMapOffset.x, 0.0f);
+        persist.Transfer("WorldMapOffsetY", WorldMapOffset.y, 0.0f);
+        persist.Transfer("WorldMapWidth", WorldMapWidth, 0.0f);
+        persist.Transfer("WorldMapHeight", WorldMapHeight, 0.0f);
+        persist.Transfer("YouString", YouString, std::wstring(L""));
+        persist.Transfer("OwnString", OwnString, std::wstring(L""));
+        persist.Transfer("NoString", NoString, std::wstring(L""));
+        persist.Transfer("HousesString", HousesString, std::wstring(L""));
+        persist.Transfer("HouseString", HouseString, std::wstring(L""));
+        persist.Transfer("InString", InString, std::wstring(L""));
+        persist.Transfer("ShopsString", ShopsString, std::wstring(L""));
+        persist.Transfer("ShopString", ShopString, std::wstring(L""));
+        persist.Transfer("ThereString", ThereString, std::wstring(L""));
+        persist.Transfer("AreString", AreString, std::wstring(L""));
+        persist.Transfer("IsString", IsString, std::wstring(L""));
+        persist.Transfer("ForString", ForString, std::wstring(L""));
+        persist.Transfer("SaleString", SaleString, std::wstring(L""));
+        persist.Transfer("GeneralString", GeneralString, std::wstring(L""));
+        persist.Transfer("TatooString", TatooString, std::wstring(L""));
+        persist.Transfer("BarberString", BarberString, std::wstring(L""));
+        persist.Transfer("TitleString", TitleString, std::wstring(L""));
+        persist.Transfer("LevelString", LevelString, std::wstring(L""));
+        persist.Transfer("TotalSpellsInPalettes", TotalSpellsInPalettes, (uint32_t)0x12);
+        persist.Transfer("TotalSpellsInContainer", TotalSpellsInContainer, (uint32_t)3);
+        persist.Transfer("TotalAssignableThings", TotalAssignableThings, (uint32_t)8);
+        persist.Transfer("LogBookBasicsCategoryString", LogBookBasicsCategoryString, std::wstring(L""));
+        persist.Transfer("LogBookObjectsCategoryString", LogBookObjectsCategoryString, std::wstring(L""));
+        persist.Transfer("LogBookTownsCategoryString", LogBookTownsCategoryString, std::wstring(L""));
+        persist.Transfer("LogBookHeroCategoryString", LogBookHeroCategoryString, std::wstring(L""));
+        persist.Transfer("LogBookCombatCategoryString", LogBookCombatCategoryString, std::wstring(L""));
+        persist.Transfer("LogBookQuestCategoryString", LogBookQuestCategoryString, std::wstring(L""));
+        persist.Transfer("LogBookStoryCategoryString", LogBookStoryCategoryString, std::wstring(L""));
+        persist.Transfer("LogBookBasicsCategoryNameString", LogBookBasicsCategoryNameString, std::wstring(L""));
+        persist.Transfer("LogBookObjectsCategoryNameString", LogBookObjectsCategoryNameString, std::wstring(L""));
+        persist.Transfer("LogBookTownsCategoryNameString", LogBookTownsCategoryNameString, std::wstring(L""));
+        persist.Transfer("LogBookHeroCategoryNameString", LogBookHeroCategoryNameString, std::wstring(L""));
+        persist.Transfer("LogBookCombatCategoryNameString", LogBookCombatCategoryNameString, std::wstring(L""));
+        persist.Transfer("LogBookQuestCategoryNameString", LogBookQuestCategoryNameString, std::wstring(L""));
+        persist.Transfer("LogBookStoryCategoryNameString", LogBookStoryCategoryNameString, std::wstring(L""));
+        persist.TransferMap("MapPaths", MapPaths, (uint32_t)0);
+        persist.Transfer("SoundUpDown", SoundUpDown, std::string(""));
+        persist.Transfer("SoundSlider", SoundSlider, std::string(""));
+        persist.Transfer("SoundBack", SoundBack, std::string(""));
+        persist.Transfer("SoundForward", SoundForward, std::string(""));
+        persist.Transfer("SoundError", SoundError, std::string(""));
+        persist.Transfer("SoundExit", SoundExit, std::string(""));
+        persist.Transfer("HeroDollTLX", HeroDollTL.x, 310.0f);
+        persist.Transfer("HeroDollTLY", HeroDollTL.y, 33.0f);
+        persist.Transfer("HeroDollBRX", HeroDollBR.x, 560.0f);
+        persist.Transfer("HeroDollBRY", HeroDollBR.y, 300.0f);
+        persist.Transfer("HeroDollSphereRadius", HeroDollSphereRadius, 1.3f);
+        persist.Transfer("HeroDollTLX_PC", HeroDollTL_PC.x, 310.0f);
+        persist.Transfer("HeroDollTLY_PC", HeroDollTL_PC.y, 33.0f);
+        persist.Transfer("HeroDollBRX_PC", HeroDollBR_PC.x, 560.0f);
+        persist.Transfer("HeroDollBRY_PC", HeroDollBR_PC.y, 300.0f);
+        persist.Transfer("HeroDollSphereRadius_PC", HeroDollSphereRadius_PC, 1.3f);
+        persist.Transfer("HeroDollFrameTLX_PC", HeroDollFrameTL_PC.x, 0.0f);
+        persist.Transfer("HeroDollFrameTLY_PC", HeroDollFrameTL_PC.y, 0.0f);
+        persist.Transfer("HeroDollFrameEmulateListOffset", HeroDollFrameEmulateListOffset, 0.0f);
+        persist.Transfer("QuestStartScreenMusic", QuestStartScreenMusic, (uint32_t)2);
+        persist.Transfer("QuestCompleteScreenMusic", QuestCompleteScreenMusic, (uint32_t)3);
+        persist.Transfer("QuestFailureScreenMusic", QuestFailureScreenMusic, (uint32_t)9);
+        persist.Transfer("DeathScreenMusic", DeathScreenMusic, (uint32_t)14);
+        persist.Transfer("CountUpSound", CountUpSound, std::string(""));
+        persist.Transfer("DigitCountTime", DigitCountTime, 3.0f);
+        persist.Transfer("SaveHeroGraphicIndex", SaveHeroGraphicIndex, (uint32_t)0);
+        persist.TransferMap("MiniMapGraphics", MiniMapGraphics, std::string(""));
+        persist.Transfer("SoundKeyboardUp", SoundKeyboardUp, std::string(""));
+        persist.Transfer("SoundKeyboardDown", SoundKeyboardDown, std::string(""));
+        persist.Transfer("SoundKeyboardLeft", SoundKeyboardLeft, std::string(""));
+        persist.Transfer("SoundKeyboardRight", SoundKeyboardRight, std::string(""));
+        persist.Transfer("SoundKeyboardEnterCharacter", SoundKeyboardEnterCharacter, std::string(""));
+        persist.Transfer("SoundKeyboardDeleteCharacter", SoundKeyboardDeleteCharacter, std::string(""));
+        persist.Transfer("SoundKeyboardDone", SoundKeyboardDone, std::string(""));
+        persist.Transfer("FrontEndMusic", FrontEndMusic, std::wstring(L""));
+        persist.Transfer("KeyboardSmallKeyGraphic", KeyboardSmallKeyGraphic, (int32_t)0);
+        persist.Transfer("KeyboardLargeKeyGraphic", KeyboardLargeKeyGraphic, (int32_t)0);
+        persist.Transfer("TimeInSecsForFade", TimeInSecsForFade, 0.0f);
+        persist.Transfer("BackBufferFilterSaturation", BackBufferFilterSaturation, 0.0f);
+        persist.Transfer("BackBufferFilterContrast", BackBufferFilterContrast, 0.0f);
+        persist.Transfer("BackBufferFilterBrightness", BackBufferFilterBrightness, 0.0f);
+        persist.Transfer("BackBufferFilterTintR", BackBufferFilterTintR, 0.0f);
+        persist.Transfer("BackBufferFilterTintG", BackBufferFilterTintG, 0.0f);
+        persist.Transfer("BackBufferFilterTintB", BackBufferFilterTintB, 0.0f);
+        persist.Transfer("BackBufferFilterTintScale", BackBufferFilterTintScale, 0.0f);
+        persist.Transfer("BackBufferDiffuseScale", BackBufferDiffuseScale, 0.0f);
+        persist.Transfer("BackBufferAmbientScale", BackBufferAmbientScale, 0.0f);
+        persist.Transfer("MinimumFilterColor", MinimumFilterColor, 0.0f);
     }
 };
 
-class CUIIconsDef : public IDefObject {
+class CUIIconsDef : public CDefObject {
 public:
-    std::string m_InstantiationName;
-
-    uint32_t IconFriendRequestReceived = 0;
-    uint32_t IconFriendRequestReceivedOn = 0;
-    uint32_t IconFriendRequestSent = 0;
-    uint32_t IconFriendRequestSentOn = 0;
-    uint32_t IconGameInviteReceived = 0;
-    uint32_t IconGameInviteReceivedOn = 0;
-    uint32_t IconGameInviteSent = 0;
-    uint32_t IconGameInviteSentOn = 0;
-    uint32_t IconMute = 0;
-    uint32_t IconMuteOn = 0;
-    uint32_t IconOnline = 0;
-    uint32_t IconOnlineOn = 0;
-    uint32_t IconPasscodeBlank = 0;
-    uint32_t IconPasscodeFilled = 0;
-    uint32_t IconTV = 0;
-    uint32_t IconTVOn = 0;
-    uint32_t IconVoice = 0;
-    uint32_t IconVoiceOn = 0;
-    uint32_t IconWait1 = 0;
-    uint32_t IconWait2 = 0;
-    uint32_t IconWait3 = 0;
-    uint32_t IconWait4 = 0;
-    uint32_t IconProgress = 0;
-    uint32_t IconProgressOn = 0;
-    uint32_t IconA = 0;
-    uint32_t IconB = 0;
-    uint32_t IconX = 0;
-    uint32_t IconY = 0;
-    uint32_t IconBlank = 0;
-    uint32_t IconUpArrow = 0;
-    uint32_t IconDownArrow = 0;
-    uint32_t IconListHighlight = 0;
+    uint32_t IconFriendRequestReceived = 0, IconFriendRequestReceivedOn = 0;
+    uint32_t IconFriendRequestSent = 0, IconFriendRequestSentOn = 0;
+    uint32_t IconGameInviteReceived = 0, IconGameInviteReceivedOn = 0;
+    uint32_t IconGameInviteSent = 0, IconGameInviteSentOn = 0;
+    uint32_t IconMute = 0, IconMuteOn = 0;
+    uint32_t IconOnline = 0, IconOnlineOn = 0;
+    uint32_t IconPasscodeBlank = 0, IconPasscodeFilled = 0;
+    uint32_t IconTV = 0, IconTVOn = 0;
+    uint32_t IconVoice = 0, IconVoiceOn = 0;
+    uint32_t IconWait1 = 0, IconWait2 = 0, IconWait3 = 0, IconWait4 = 0;
+    uint32_t IconProgress = 0, IconProgressOn = 0;
+    uint32_t IconA = 0, IconB = 0, IconX = 0, IconY = 0;
+    uint32_t IconBlank = 0, IconUpArrow = 0, IconDownArrow = 0, IconListHighlight = 0;
 
     std::string GetClassName() const override { return "UI_ICONS_DEF"; }
-    std::string GetInstantiationName() const override { return m_InstantiationName; }
-    void SetInstantiationName(const std::string& name) override { m_InstantiationName = name; }
-
     void CopyFrom(const IDefObject* parentObject) override {
-        if (const auto* p = dynamic_cast<const CUIIconsDef*>(parentObject)) *this = *p;
-    }
-
-    void ParseFromText(CStringParser& parser, const std::map<std::string, int>& symbolMap) override {
-        CParsedItem item;
-        if (!parser.PeekNextItem(item) || item.Type != EParsedItemType::Identifier) return;
-        std::string prop = item.StringValue;
-
-        parser.ReadNextItem(item);
-
-        std::string valStr;
-        if (parser.ReadAsIdentifierOrNumber(valStr)) {
-            uint32_t val = ResolveSymbol(valStr, symbolMap);
-
-            if (prop == "IconFriendRequestReceived") IconFriendRequestReceived = val;
-            else if (prop == "IconFriendRequestReceivedOn") IconFriendRequestReceivedOn = val;
-            else if (prop == "IconFriendRequestSent") IconFriendRequestSent = val;
-            else if (prop == "IconFriendRequestSentOn") IconFriendRequestSentOn = val;
-            else if (prop == "IconGameInviteReceived") IconGameInviteReceived = val;
-            else if (prop == "IconGameInviteReceivedOn") IconGameInviteReceivedOn = val;
-            else if (prop == "IconGameInviteSent") IconGameInviteSent = val;
-            else if (prop == "IconGameInviteSentOn") IconGameInviteSentOn = val;
-            else if (prop == "IconMute") IconMute = val;
-            else if (prop == "IconMuteOn") IconMuteOn = val;
-            else if (prop == "IconOnline") IconOnline = val;
-            else if (prop == "IconOnlineOn") IconOnlineOn = val;
-            else if (prop == "IconPasscodeBlank") IconPasscodeBlank = val;
-            else if (prop == "IconPasscodeFilled") IconPasscodeFilled = val;
-            else if (prop == "IconTV") IconTV = val;
-            else if (prop == "IconTVOn") IconTVOn = val;
-            else if (prop == "IconVoice") IconVoice = val;
-            else if (prop == "IconVoiceOn") IconVoiceOn = val;
-            else if (prop == "IconWait1") IconWait1 = val;
-            else if (prop == "IconWait2") IconWait2 = val;
-            else if (prop == "IconWait3") IconWait3 = val;
-            else if (prop == "IconWait4") IconWait4 = val;
-            else if (prop == "IconProgress") IconProgress = val;
-            else if (prop == "IconProgressOn") IconProgressOn = val;
-            else if (prop == "IconA") IconA = val;
-            else if (prop == "IconB") IconB = val;
-            else if (prop == "IconX") IconX = val;
-            else if (prop == "IconY") IconY = val;
-            else if (prop == "IconBlank") IconBlank = val;
-            else if (prop == "IconUpArrow") IconUpArrow = val;
-            else if (prop == "IconDownArrow") IconDownArrow = val;
-            else if (prop == "IconListHighlight") IconListHighlight = val;
+        if (const auto* p = dynamic_cast<const std::remove_pointer<decltype(this)>::type*>(parentObject)) {
+            std::string myName = m_InstantiationName;
+            *this = *p;
+            m_InstantiationName = myName;
         }
-
-        parser.SkipPastString(";");
     }
 
-    void SerializeOut(CDataOutputStream* os) const override {
-        os->WriteULONG(IconFriendRequestReceived);
-        os->WriteULONG(IconFriendRequestReceivedOn);
-        os->WriteULONG(IconFriendRequestSent);
-        os->WriteULONG(IconFriendRequestSentOn);
-        os->WriteULONG(IconGameInviteReceived);
-        os->WriteULONG(IconGameInviteReceivedOn);
-        os->WriteULONG(IconGameInviteSent);
-        os->WriteULONG(IconGameInviteSentOn);
-        os->WriteULONG(IconMute);
-        os->WriteULONG(IconMuteOn);
-        os->WriteULONG(IconOnline);
-        os->WriteULONG(IconOnlineOn);
-        os->WriteULONG(IconPasscodeBlank);
-        os->WriteULONG(IconPasscodeFilled);
-        os->WriteULONG(IconTV);
-        os->WriteULONG(IconTVOn);
-        os->WriteULONG(IconVoice);
-        os->WriteULONG(IconVoiceOn);
-        os->WriteULONG(IconWait1);
-        os->WriteULONG(IconWait2);
-        os->WriteULONG(IconWait3);
-        os->WriteULONG(IconWait4);
-        os->WriteULONG(IconProgress);
-        os->WriteULONG(IconProgressOn);
-        os->WriteULONG(IconA);
-        os->WriteULONG(IconB);
-        os->WriteULONG(IconX);
-        os->WriteULONG(IconY);
-        os->WriteULONG(IconBlank);
-        os->WriteULONG(IconUpArrow);
-        os->WriteULONG(IconDownArrow);
-        os->WriteULONG(IconListHighlight);
+    void Transfer(CPersistContext& persist) override {
+        persist.Transfer("IconFriendRequestReceived", IconFriendRequestReceived, (uint32_t)0);
+        persist.Transfer("IconFriendRequestReceivedOn", IconFriendRequestReceivedOn, (uint32_t)0);
+        persist.Transfer("IconFriendRequestSent", IconFriendRequestSent, (uint32_t)0);
+        persist.Transfer("IconFriendRequestSentOn", IconFriendRequestSentOn, (uint32_t)0);
+        persist.Transfer("IconGameInviteReceived", IconGameInviteReceived, (uint32_t)0);
+        persist.Transfer("IconGameInviteReceivedOn", IconGameInviteReceivedOn, (uint32_t)0);
+        persist.Transfer("IconGameInviteSent", IconGameInviteSent, (uint32_t)0);
+        persist.Transfer("IconGameInviteSentOn", IconGameInviteSentOn, (uint32_t)0);
+        persist.Transfer("IconMute", IconMute, (uint32_t)0);
+        persist.Transfer("IconMuteOn", IconMuteOn, (uint32_t)0);
+        persist.Transfer("IconOnline", IconOnline, (uint32_t)0);
+        persist.Transfer("IconOnlineOn", IconOnlineOn, (uint32_t)0);
+        persist.Transfer("IconPasscodeBlank", IconPasscodeBlank, (uint32_t)0);
+        persist.Transfer("IconPasscodeFilled", IconPasscodeFilled, (uint32_t)0);
+        persist.Transfer("IconTV", IconTV, (uint32_t)0);
+        persist.Transfer("IconTVOn", IconTVOn, (uint32_t)0);
+        persist.Transfer("IconVoice", IconVoice, (uint32_t)0);
+        persist.Transfer("IconVoiceOn", IconVoiceOn, (uint32_t)0);
+        persist.Transfer("IconWait1", IconWait1, (uint32_t)0);
+        persist.Transfer("IconWait2", IconWait2, (uint32_t)0);
+        persist.Transfer("IconWait3", IconWait3, (uint32_t)0);
+        persist.Transfer("IconWait4", IconWait4, (uint32_t)0);
+        persist.Transfer("IconProgress", IconProgress, (uint32_t)0);
+        persist.Transfer("IconProgressOn", IconProgressOn, (uint32_t)0);
+        persist.Transfer("IconA", IconA, (uint32_t)0);
+        persist.Transfer("IconB", IconB, (uint32_t)0);
+        persist.Transfer("IconX", IconX, (uint32_t)0);
+        persist.Transfer("IconY", IconY, (uint32_t)0);
+        persist.Transfer("IconBlank", IconBlank, (uint32_t)0);
+        persist.Transfer("IconUpArrow", IconUpArrow, (uint32_t)0);
+        persist.Transfer("IconDownArrow", IconDownArrow, (uint32_t)0);
+        persist.Transfer("IconListHighlight", IconListHighlight, (uint32_t)0);
     }
 };
 
-// Factories
+// ============================================================
+// TransferVector<CActionInputControl> template specialization
+// Must be defined here after CActionInputControl is in scope
+// Parses: VectorName.Add(CActionInputControl(action, ctrl_type, key[, C2DCoordF(x,y)]));
+// From: CPersistTraits<CActionInputControl>::TransferIn (ida_funcs.c line 1071-1197)
+// ============================================================
+template<>
+inline void CPersistContext::TransferVector<CActionInputControl>(
+    const char* name, std::vector<CActionInputControl>& vec)
+{
+    if (Mode == MODE_LOAD_TEXT) {
+        if (!PDefText) return;
+        std::string& text = *PDefText;
+        size_t nlen = std::strlen(name);
+        size_t pos = 0;
+        while (true) {
+            size_t found = std::string::npos;
+            while (pos + nlen <= text.size()) {
+                size_t p = text.find(name, pos);
+                if (p == std::string::npos) break;
+                bool prevOk = (p == 0) || IsWordBoundary(text[p - 1]);
+                bool nextOk = (p + nlen >= text.size()) || IsWordBoundary(text[p + nlen]);
+                if (prevOk && nextOk) { found = p; break; }
+                pos = p + 1;
+            }
+            if (found == std::string::npos) break;
+            size_t fieldStart = found;
+            size_t scanPos = found + nlen;
+            SkipWS(scanPos);
+            if (scanPos >= text.size()) break;
+            char nextCh = text[scanPos];
+            if (nextCh == '.') {
+                scanPos++;
+                std::string cmd = ReadIdent(scanPos);
+                if (cmd == "Add") {
+                    if (!SkipChar(scanPos, '(')) { pos = scanPos; continue; }
+                    CActionInputControl item;
+                    item.ParseInline(*this, scanPos);
+                    if (!SkipChar(scanPos, ')')) { pos = scanPos; continue; }
+                    size_t sc = FindSemicolon(scanPos);
+                    BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
+                    vec.push_back(item);
+                    pos = fieldStart; // re-scan from start (blanked, won't re-match)
+                } else if (cmd == "clear") {
+                    SkipChar(scanPos, '(');
+                    SkipChar(scanPos, ')');
+                    size_t sc = FindSemicolon(scanPos);
+                    BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
+                    vec.clear();
+                    pos = fieldStart;
+                } else {
+                    pos = scanPos;
+                }
+            } else {
+                pos = found + 1; // Not a vector command, skip
+            }
+        }
+        return;
+    }
+    if (Mode == MODE_SAVE_BINARY) {
+        WriteTag(name);
+        PSaveStream->WriteSLONG((int32_t)vec.size());
+        for (auto& item : vec) item.Transfer(*this);
+    }
+}
+
+// Factory implementations
 inline IDefObject* Alloc_CFrontEndDef() { return new CFrontEndDef(); }
+inline IDefObject* Alloc_CControlsDef() { return new CControlSchemeDef(); }
+inline IDefObject* Alloc_CEngineDef() { return new CEngineDef(); }
+inline IDefObject* Alloc_CConfigOptionsDefaultsDef() { return new CConfigOptionsDefaultsDef(); }
+inline IDefObject* Alloc_CEngineVideoOptionsDef() { return new CEngineVideoOptionsDef(); }
+inline IDefObject* Alloc_CUIDef() { return new CUIDef(); }
 inline IDefObject* Alloc_CUIMiscThingsDef() { return new CUIMiscThingsDef(); }
 inline IDefObject* Alloc_CUIIconsDef() { return new CUIIconsDef(); }
-inline IDefObject* Alloc_CControlsDef() { return new CControlsDef(); }
-inline IDefObject* Alloc_CEngineVideoOptionsDef() { return new CEngineVideoOptionsDef(); }
-inline IDefObject* Alloc_CEngineDef() { return new CEngineDef(); }
-inline IDefObject* Alloc_CUIDef() { return new CUIDef(); }
-inline IDefObject* Alloc_CConfigOptionsDefaultsDef() { return new CConfigOptionsDefaultsDef(); }
+

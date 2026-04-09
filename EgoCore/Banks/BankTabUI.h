@@ -376,10 +376,10 @@ static void DrawBankTab() {
     else if (bank.Type == EBankType::Audio) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.4f, 0.0f, 1.0f));
     else ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.0f, 0.5f, 1.0f));
 
-    std::string compileText = "RECOMPILE BANK";
-    if (bank.Type == EBankType::Text) compileText = "RECOMPILE BANK";
-    else if (bank.Type == EBankType::Dialogue) compileText = "RECOMPILE BANK";
-    else if (bank.Type == EBankType::Audio) compileText = bank.LugParserPtr ? "RECOMPILE BANK" : "RECOMPILE BANK";
+    std::string compileText = "RECOMPILE";
+    if (bank.Type == EBankType::Text) compileText = "RECOMPILE";
+    else if (bank.Type == EBankType::Dialogue) compileText = "RECOMPILE";
+    else if (bank.Type == EBankType::Audio) compileText = bank.LugParserPtr ? "RECOMPILE" : "RECOMPILE";
 
     if (ImGui::Button(compileText.c_str(), ImVec2(compileBtnWidth, 0))) {
         if (bank.Type == EBankType::Audio) SaveAudioBank(&bank);

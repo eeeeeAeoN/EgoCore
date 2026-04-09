@@ -25,6 +25,7 @@ private:
     uint32_t m_DefCounter = 0;
     std::map<std::string, int> m_SymbolMap;
     std::vector<IDefObject*> m_InstantiatedDefs;
+    std::map<std::string, IDefObject*> m_Templates;
     CDefStringTable* m_StringTable;
 
 public:

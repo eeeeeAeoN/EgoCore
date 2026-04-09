@@ -21,6 +21,7 @@ struct AppConfig {
     bool ShowUnsavedChangesWarning = true;
     bool EnableLookupGeneration = false;
     bool EnableAutosuggest = true;
+    bool DisableWadPrompt = false;
 };
 inline AppConfig g_AppConfig;
 static const std::string CONFIG_FILENAME = "egocore_config.ini";
@@ -76,6 +77,7 @@ inline void SaveConfig() {
         file << "TngSystemDirty=" << (g_AppConfig.TngSystemDirty ? "1" : "0") << "\n";
         file << "EnableLookupGeneration=" << (g_AppConfig.EnableLookupGeneration ? "1" : "0") << "\n";
         file << "EnableAutosuggest=" << (g_AppConfig.EnableAutosuggest ? "1" : "0") << "\n";
+        file << "DisableWadPrompt=" << (g_AppConfig.DisableWadPrompt ? "1" : "0") << "\n";
 
         auto SaveKey = [&](const std::string& name, const ShortcutKey& k) {
             file << name << "=" << (int)k.Key << "," << k.Ctrl << "," << k.Shift << "," << k.Alt << "\n";
@@ -95,7 +97,6 @@ inline void SaveConfig() {
         for (const auto& mod : g_SavedModOrder)
             file << mod.first << "|" << (mod.second ? "1" : "0") << "\n";
 
-        // Fields: EntryID|EntryName|EntryType|BankType|TypeName|BankName|SubBankName|SourceFullPath
         file << "[MarkedEntries]\n";
         for (const auto& e : g_SavedMarkedEntries) {
             file << e.EntryID << "|"
@@ -125,6 +126,7 @@ inline void LoadConfig() {
     g_AppConfig.DefSystemDirty = false;
     g_AppConfig.TngSystemDirty = false;
     g_AppConfig.EnableLookupGeneration = false;
+    g_AppConfig.DisableWadPrompt = false;
     g_SavedModOrder.clear();
     g_SavedMarkedEntries.clear();
 
@@ -159,7 +161,6 @@ inline void LoadConfig() {
                 continue;
             }
 
-            // Fields: EntryID|EntryName|EntryType|BankType|TypeName|BankName|SubBankName|SourceFullPath
             if (currentSection == "[MarkedEntries]") {
                 std::stringstream ss(line);
                 std::string token;
@@ -196,6 +197,7 @@ inline void LoadConfig() {
             else if (line.find("TngSystemDirty=") == 0) g_AppConfig.TngSystemDirty = (line.substr(15) == "1");
             else if (line.find("EnableLookupGeneration=") == 0) g_AppConfig.EnableLookupGeneration = (line.substr(23) == "1");
             else if (line.find("EnableAutosuggest=") == 0) g_AppConfig.EnableAutosuggest = (line.substr(18) == "1");
+            else if (line.find("DisableWadPrompt=") == 0) g_AppConfig.DisableWadPrompt = (line.substr(17) == "1");
             else if (line.find("Key_SwitchBankMode=") == 0) ParseKey(line.substr(19), g_Keybinds.SwitchBankMode);
             else if (line.find("Key_SwitchDefMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchDefMode);
             else if (line.find("Key_SwitchFSEMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchFSEMode);

@@ -14,7 +14,7 @@
 #include <sstream>
 #include <algorithm>
 #include <map>
-#include "DefCompiler.h"
+//#include "DefCompiler.h"
 
 namespace fs = std::filesystem;
 
@@ -218,11 +218,13 @@ static bool RunHiddenFable(const std::string& exePath, bool shouldPatchCode) {
     return true;
 }
 
+/*
 static void NativeCompileFrontend() {
     g_CompileStatus = "Native Compiling... Check compiler.log in Fable folder.";
 
     FableCompiler::CompileFrontendNative(g_AppConfig.GameRootPath);
 }
+*/
 
 static void CompileAllDefs_Stealth() {
     if (!g_OpenBanks.empty()) {

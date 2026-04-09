@@ -7,7 +7,7 @@
 #include "FSETabUI.h"
 #include "InputManager.h"
 #include "ModManagerUI.h"
-
+#include "WADBackend.h"
 #include <windows.h>
 #include <shellapi.h>
 
@@ -105,7 +105,7 @@ static void DrawFrontendHub() {
         ImGui::Dummy(ImVec2(0, 10));
 
         if (ImGui::Button("About", ImVec2(185, 40))) {
-            g_ShowAboutPopup = true; // Trigger the global popup!
+            g_ShowAboutPopup = true;
         }
         ImGui::SameLine(ImGui::GetWindowWidth() - 185.0f - ImGui::GetStyle().WindowPadding.x);
         if (ImGui::Button("Exit", ImVec2(185, 40))) {
@@ -122,6 +122,7 @@ static void DrawBankExplorer() {
         ModPackageTracker::LoadMarkedState();
 
         if (g_AppConfig.IsConfigured) {
+            WADBackend::TriggerPrompt(g_AppConfig.GameRootPath);
             LoadSystemBinaries(g_AppConfig.GameRootPath);
             CheckFSEInstalled(g_AppConfig.GameRootPath);
 
@@ -139,8 +140,8 @@ static void DrawBankExplorer() {
         g_HasInitialized = true;
     }
 
-    // DRAW THE POPUP GLOBALLY SO IT CAN NEVER BE BLOCKED
     DrawLaunchPopup();
+    WADBackend::DrawWADModal();
 
     if (g_IsCompiling) { ImGui::OpenPopup("Compiling..."); }
     if (ImGui::BeginPopupModal("Compiling...", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
@@ -153,14 +154,12 @@ static void DrawBankExplorer() {
         if (!g_IsCompiling) {
             ImGui::CloseCurrentPopup();
             if (g_PendingGameLaunch) {
-                // Launch sequence — go straight to game, no extra popup
                 g_PendingGameLaunch = false;
                 std::string exePath = g_AppConfig.GameRootPath + "\\FableLauncher.exe";
                 ShellExecuteA(NULL, "open", exePath.c_str(), NULL, g_AppConfig.GameRootPath.c_str(), SW_SHOWDEFAULT);
                 exit(0);
             }
             else {
-                // Manual editor compile — show the confirmation popup
                 g_TriggerCompileSuccess = true;
             }
         }
@@ -178,7 +177,6 @@ static void DrawBankExplorer() {
         ImGui::EndPopup();
     }
 
-    // --- GENERAL SETTINGS POPUP ---
     if (g_TriggerGeneralSettingsPopup) {
         ImGui::OpenPopup("General Settings");
         g_TriggerGeneralSettingsPopup = false;
@@ -189,14 +187,12 @@ static void DrawBankExplorer() {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 5));
 
-        // NEW: Moved from Frontend Hub
         if (ImGui::Checkbox("Skip Frontend Menu", &g_AppConfig.SkipFrontend)) {
             SaveConfig();
         }
 
         if (ImGui::Checkbox("Generate Lookup Dictionary", &g_AppConfig.EnableLookupGeneration)) {
             SaveConfig();
-            // REMOVED IMMEDIATE BUILD: It will safely build on the next load!
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enables the 'Ctrl+Click' Go to Definition feature.\nChanges will take effect the next time you load.");
 
@@ -213,7 +209,6 @@ static void DrawBankExplorer() {
         ImGui::EndPopup();
     }
 
-    // --- ABOUT POPUP ---
     if (g_ShowAboutPopup) {
         ImGui::OpenPopup("About EgoCore");
         g_ShowAboutPopup = false;
@@ -223,10 +218,11 @@ static void DrawBankExplorer() {
     if (ImGui::BeginPopupModal("About EgoCore", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
         float buttonAreaHeight = 45.0f;
         ImGui::BeginChild("##content", ImVec2(0, -buttonAreaHeight));
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "EgoCore - Modding Tool for Fable");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "EgoCore - Asset Bank Editor for Fable");
         ImGui::Separator();
-        ImGui::Text("Version: 6.4.26 [BETA]");
-        ImGui::Text("Author: AlbionSecrets");
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::Text("Version: 9.4.26 [BETA]");
+        ImGui::Text("Author: AeoN (AlbionSecrets)");
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::TextWrapped("EgoCore is the culmination of over twenty years of obsession with the inner workings of Fable. What began as programming related curiosity has evolved into a six-month intensive development journey to provide the community with a modern, robust, and versatile modding framework.");
         ImGui::Dummy(ImVec2(0, 10));
@@ -235,10 +231,35 @@ static void DrawBankExplorer() {
         ImGui::TextWrapped("Developing a tool of this scale involves hundreds of hours of reverse engineering, debugging, and refinement. I don't believe in paywalling progress, so I rely entirely on the generosity of the community to keep this project sustainable. If EgoCore has saved you time or helped you bring a new vision to life, please consider supporting the project.");
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::Separator();
-        ImGui::Text("[Donations]");
-        ImGui::Text("[GitHub]");
-        ImGui::Text("[Discord]");
-        ImGui::Text("[Documentation]");
+        ImGui::Dummy(ImVec2(0, 10));
+
+        auto DrawLink = [](const char* label, const char* url) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+            ImGui::Text("%s", label);
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (ImGui::IsItemClicked()) {
+                    ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL);
+                }
+            }
+        };
+
+        DrawLink("Support EgoCore on Ko-fi", "https://ko-fi.com/aeon5798");
+        DrawLink("Source Code", "https://github.com/eeeeeAeoN/EgoCore");
+        DrawLink("EgoCore Discord", "https://discord.gg/Rw4as5ar3S");
+        ImGui::Text("Documentation");
+        ImGui::Dummy(ImVec2(0, 10));
+
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::Text("Special thanks to:");
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::Text("Odarenkoas - helped by parsing most of the audio banks format.");
+        ImGui::Text("MahknoBlazed - main tester of EgoCore.");
+        ImGui::Text("Jamen - helped in various ways during development.");
+        ImGui::Dummy(ImVec2(0, 10));
+
         ImGui::EndChild();
 
         ImGui::Separator();
@@ -265,6 +286,7 @@ static void DrawBankExplorer() {
                 if (!root.empty()) {
                     InitializeSetup(root);
                     LoadSystemBinaries(root);
+                    WADBackend::TriggerPrompt(root);
                     g_CurrentAppState = EAppState::Frontend;
                 }
             }
@@ -278,17 +300,11 @@ static void DrawBankExplorer() {
         return;
     }
 
-    // --- MOD MANAGER TRAP ---
     if (g_CurrentAppState == EAppState::ModsManager) {
         DrawModManagerWindow();
         return;
     }
 
-    // =====================================================================
-    // EVERYTHING BELOW THIS LINE BELONGS TO THE EDITOR / CREATOR UI
-    // =====================================================================
-
-    // --- GLOBAL SHORTCUT LISTENER ---
     if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
 
         if (g_Keybinds.SwitchBankMode.IsPressed()) g_CurrentMode = EAppMode::Banks;
@@ -452,12 +468,15 @@ static void DrawBankExplorer() {
                 std::string path = OpenFileDialog("Fable Banks\0*.big;*.lut;*.lug\0All Files\0*.*\0");
                 if (!path.empty()) LoadBank(path);
             }
+            if (ImGui::MenuItem("Decompile WAD (.WAD)")) {
+                std::string path = OpenFileDialog("WAD Files\0*.wad\0All Files\0*.*\0");
+                if (!path.empty()) WADBackend::StartManualUnpack(path);
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Create Mod Package")) {
                 g_ShowModPackageWindow = true;
             }
             if (ImGui::MenuItem("Run Fable")) {
-                // FIXED: Trigger the compiler popup instead of hard-exiting
                 g_LaunchState = 1;
             }
             if (ImGui::MenuItem("Change Game Folder")) {

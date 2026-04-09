@@ -20,7 +20,7 @@ namespace FableCompiler {
         LogToFile("--- Fable Frontend Compiler Started ---");
 
         std::wstring root(fableRootPath.begin(), fableRootPath.end());
-        std::wstring outPath = root + L"\\Data\\CompiledDefs\\frontend.bin";
+        std::wstring outPath = root + L"\\Data\\CompiledDefs\\frontend_custom.bin";
         std::wstring defsRoot = root + L"\\Data\\Defs\\";
 
         CDefinitionManager defManager(outPath);
@@ -40,6 +40,8 @@ namespace FableCompiler {
             defsRoot + L"RetailHeaders\\fonts.h",
             defsRoot + L"RetailHeaders\\pc\\front_end_bank.h",
             defsRoot + L"RetailHeaders\\pc\\particles_frontend.h",
+            defsRoot + L"ui.def",
+            defsRoot + L"pc_ui.def",
             defsRoot + L"FrontEndDefs\\engine.def",
             defsRoot + L"FrontEndDefs\\engine_video_options.def",
             defsRoot + L"FrontEndDefs\\front_end.def",
@@ -54,6 +56,7 @@ namespace FableCompiler {
 
         LogToFile("Queueing definition files...");
         defManager.SetCompilePaths({
+            defsRoot + L"ui.def",
             defsRoot + L"FrontEndDefs\\engine.def",
             defsRoot + L"FrontEndDefs\\engine_video_options.def",
             defsRoot + L"FrontEndDefs\\front_end.def",
