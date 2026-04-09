@@ -1,7 +1,4 @@
-# EgoCore - Modding Tool for Fable
-
-**Version:** 9.4.26 [BETA]  
-**Author:** AeoN (AlbionSecrets)  
+# EgoCore - Asset Bank Editor for Fable
 
 EgoCore is the culmination of over twenty years of obsession with the inner workings of Fable. What began as programming-related curiosity has evolved into an intensive development journey to provide the community with a modern, robust, and versatile modding framework.
 
