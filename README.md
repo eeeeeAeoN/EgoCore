@@ -16,7 +16,7 @@ I believe the tools to keep this game alive should be accessible to everyone. Th
 
 ## 🚀 Getting Started
 
-0. **Set up the Unified Build of Fable (Critical):** Weather you're a modder or user it's highly recommended to get the Unified Build of Fable. Without it the .def editing, compilation and mods that use plan text definitions won't work. Check the UnifiedBuildSetup.pdf file in the archive for more details.
+0. **Set up the Unified Build of Fable (Optional but recommended):** Weather you're a modder or user it's highly recommended to get the Unified Build of Fable. Without it the .def editing, compilation and mods that use plan text definitions won't work. Check the UnifiedBuildSetup.pdf file in the archive for more details.
 1. **Extract the Archive:** Unpack the EgoCore folder anywhere on your PC. 
 2. **Launch:** Run `EgoCore.exe`.
 3. **Setup:** On your first launch, EgoCore will ask for your Fable installation directory (the folder containing `Fable.exe` and the `Data` folder).
