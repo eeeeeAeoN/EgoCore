@@ -427,20 +427,22 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                             ImGui::SameLine();
                             if (ImGui::Button(player.IsPlaying() ? "Pause" : "Play", ImVec2(50, 0))) {
                                 if (player.GetTotalDuration() == 0.0f) {
-                                    auto pcm = audioBank->GetDecodedAudio(audioIndex);
-                                    if (!pcm.empty()) player.PlayPCM(pcm, 22050);
+                                    auto riff = audioBank->GetRiffBlob(audioIndex);
+                                    if (!riff.empty()) player.PlayWav(riff);
                                 }
                                 else { if (player.IsPlaying()) player.Pause(); else player.Play(); }
                             }
 
                             ImGui::SameLine();
                             if (ImGui::Button("Export", ImVec2(50, 0))) {
-                                auto pcm = audioBank->GetDecodedAudio(audioIndex);
-                                if (!pcm.empty()) {
+                                auto riff = audioBank->GetRiffBlob(audioIndex);
+                                if (!riff.empty()) {
                                     std::string savePath = SaveFileDialog("WAV File\0*.wav\0");
                                     if (!savePath.empty()) {
                                         if (savePath.find(".wav") == std::string::npos) savePath += ".wav";
-                                        WriteWavFile(savePath, pcm, 22050, 1);
+                                        std::ofstream out(savePath, std::ios::binary);
+                                        out.write((char*)riff.data(), riff.size());
+                                        out.close();
                                     }
                                 }
                             }

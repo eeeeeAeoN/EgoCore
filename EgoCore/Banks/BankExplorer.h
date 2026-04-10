@@ -80,7 +80,7 @@ static void DrawFrontendHub() {
     if (ImGui::Begin("EgoCore Hub", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 
         ImGui::SetWindowFontScale(1.5f);
-        ImGui::Text("Ego Core");
+        ImGui::Text("EgoCore");
         ImGui::SetWindowFontScale(1.0f);
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 10));
@@ -248,7 +248,7 @@ static void DrawBankExplorer() {
         DrawLink("Support EgoCore on Ko-fi", "https://ko-fi.com/aeon5798");
         DrawLink("Source Code", "https://github.com/eeeeeAeoN/EgoCore");
         DrawLink("EgoCore Discord", "https://discord.gg/Rw4as5ar3S");
-        ImGui::Text("Documentation");
+        ImGui::Text("[Documentation] - Coming Soon!");
         ImGui::Dummy(ImVec2(0, 10));
 
         ImGui::Separator();

@@ -36,7 +36,7 @@ int main(int, char**) {
     wc.hIconSm = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON));
 
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Ego Core", WS_OVERLAPPEDWINDOW, 100, 100, 1000, 800, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"EgoCore", WS_OVERLAPPEDWINDOW, 100, 100, 1000, 800, nullptr, nullptr, wc.hInstance, nullptr);
 
     if (!CreateDeviceD3D(hwnd)) { CleanupDeviceD3D(); ::UnregisterClassW(wc.lpszClassName, wc.hInstance); return 1; }
     ::ShowWindow(hwnd, SW_SHOWDEFAULT);

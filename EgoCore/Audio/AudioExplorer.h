@@ -155,17 +155,22 @@ static void DrawAudioProperties(LoadedBank* bank) {
         ImGui::SameLine(); ImGui::Text("%s / %s", FormatTime(p.GetCurrentTime()).c_str(), FormatTime(p.GetTotalDuration()).c_str());
         if (ImGui::Button(p.IsPlaying() ? "Pause" : "Play", ImVec2(80, 0))) {
             if (p.GetTotalDuration() == 0.0f) {
-                auto pcm = bank->AudioParser->GetDecodedAudio(bank->SelectedEntryIndex);
-                if (!pcm.empty()) p.PlayPCM(pcm, 22050);
+                auto riff = bank->AudioParser->GetRiffBlob(bank->SelectedEntryIndex);
+                if (!riff.empty()) p.PlayWav(riff);
             }
             else { if (p.IsPlaying()) p.Pause(); else p.Play(); }
         }
         ImGui::SameLine();
         if (ImGui::Button("Export", ImVec2(80, 0))) {
-            auto pcm = bank->AudioParser->GetDecodedAudio(bank->SelectedEntryIndex);
-            if (!pcm.empty()) {
+            auto riff = bank->AudioParser->GetRiffBlob(bank->SelectedEntryIndex);
+            if (!riff.empty()) {
                 std::string pth = SaveFileDialog("WAV File\0*.wav\0");
-                if (!pth.empty()) { if (pth.find(".wav") == std::string::npos) pth += ".wav"; WriteWavFile(pth, pcm, 22050, 1); }
+                if (!pth.empty()) {
+                    if (pth.find(".wav") == std::string::npos) pth += ".wav";
+                    std::ofstream out(pth, std::ios::binary);
+                    out.write((char*)riff.data(), riff.size());
+                    out.close();
+                }
             }
         }
     }

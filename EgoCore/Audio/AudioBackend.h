@@ -359,17 +359,17 @@ public:
         return true;
     }
 
-    std::vector<int16_t> GetDecodedAudio(int index) {
+    std::vector<uint8_t> GetRiffBlob(int index) {
         if (index < 0 || index >= (int)Entries.size()) return {};
         std::vector<uint8_t> buf = GetRawBlob(index);
 
-        int ds = -1;
-        for (size_t i = 0; i < buf.size() - 8; i++) {
-            if (memcmp(&buf[i], "data", 4) == 0) { ds = (int)i + 8; break; }
+        // Search for the RIFF magic to bypass the proprietary .lut header
+        for (size_t i = 0; i < buf.size() - 4; i++) {
+            if (memcmp(&buf[i], "RIFF", 4) == 0) {
+                return std::vector<uint8_t>(buf.begin() + i, buf.end());
+            }
         }
-        if (ds == -1) return {};
-
-        return XboxAdpcmDecoder::Decode(std::vector<uint8_t>(buf.begin() + ds, buf.end()), 1, 36);
+        return {};
     }
 
 private:

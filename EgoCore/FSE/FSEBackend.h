@@ -217,6 +217,13 @@ inline void CreateFSEQuest(const std::string& name) {
     std::string path = (fs::path(g_FSEWorkspace.FSERoot) / name / (name + ".lua")).string();
     std::string content = "-- Quest: " + name + "\n\nfunction Init(Quest)\nend\n\nfunction Main(Quest)\nend\n\nfunction OnPersist(Quest, Context)\nend\n";
     CreateFSEFileIfMissing(path, content);
+
+    std::string qstPath = (fs::path(g_AppConfig.GameRootPath) / "Data" / "Levels" / "FinalAlbion.qst").string();
+    std::ofstream qstFile(qstPath, std::ios::app);
+    if (qstFile.is_open()) {
+        qstFile << "AddQuest(\"" << name << "\",\t\t\tFALSE);\n";
+        qstFile.close();
+    }
 }
 
 inline void CreateFSEEntity(int questIdx, const std::string& name) {
@@ -283,9 +290,33 @@ inline void DeleteActiveFSEItem() {
     if (g_FSEWorkspace.ActiveItemType == EFSEItemType::QuestMain) {
         if (g_FSEWorkspace.ActiveQuestIdx >= 0 && g_FSEWorkspace.ActiveQuestIdx < g_FSEWorkspace.Quests.size()) {
             auto& q = g_FSEWorkspace.Quests[g_FSEWorkspace.ActiveQuestIdx];
+            std::string questNameToDelete = q.Name;
+
             fs::remove_all(fs::path(g_FSEWorkspace.FSERoot) / q.Name, ec);
             g_FSEWorkspace.Quests.erase(g_FSEWorkspace.Quests.begin() + g_FSEWorkspace.ActiveQuestIdx);
             SaveQuestsLua();
+
+            std::string qstPath = (fs::path(g_AppConfig.GameRootPath) / "Data" / "Levels" / "FinalAlbion.qst").string();
+            if (fs::exists(qstPath)) {
+                std::ifstream qstIn(qstPath);
+                std::vector<std::string> lines;
+                std::string line;
+
+                std::string targetPrefix = "AddQuest(\"" + questNameToDelete + "\"";
+
+                while (std::getline(qstIn, line)) {
+                    if (line.find(targetPrefix) == std::string::npos) {
+                        lines.push_back(line);
+                    }
+                }
+                qstIn.close();
+
+                std::ofstream qstOut(qstPath);
+                for (const auto& l : lines) {
+                    qstOut << l << "\n";
+                }
+                qstOut.close();
+            }
         }
     }
     else if (g_FSEWorkspace.ActiveItemType == EFSEItemType::Entity) {
