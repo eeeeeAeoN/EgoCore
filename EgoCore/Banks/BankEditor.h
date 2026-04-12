@@ -818,7 +818,6 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 //lod->AutoCalculateBounds();
                 std::vector<uint8_t> lodBytes = MeshCompiler::CompileSingleLOD(*lod);
 
-                // Append the Ghost LOD Buffer
                 if ((e.Type == 2 || e.Type == 5) && i == staged.MeshLODs.size() - 1) {
                     C3DMeshContent ghostLOD = *lod;
 
@@ -871,7 +870,6 @@ inline void FlushStagedEntries(LoadedBank* bank) {
         else if (staged.Physics) {
             newBytes = MeshCompiler::CompilePhysics(*staged.Physics);
 
-            // Physics meshes DO NOT use TOC Info blocks, the InfoSize MUST be strictly 0.
             e.InfoSize = 0;
             newInfo.clear();
 
@@ -887,8 +885,6 @@ inline void FlushStagedEntries(LoadedBank* bank) {
 
             newBytes.clear();
 
-            // 1. Grab the ORIGINAL 34-byte Info chunk from the cache. 
-            // This guarantees we NEVER destroy Fable's internal DX8 PixelFormatInit or Engine Flags!
             newInfo = bank->SubheaderCache[idx];
             if (newInfo.size() < sizeof(CGraphicHeader)) {
                 newInfo.resize(sizeof(CGraphicHeader) + sizeof(CPixelFormatInit));
@@ -898,18 +894,15 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             for (size_t i = 0; i < staged.Texture->RawFrames.size(); i++) {
                 auto result = TextureBuilder::CompileFromRGBA(staged.Texture->RawFrames[i], w, h, opts);
                 if (i == 0) {
-                    // 2. ONLY patch the physical sizes. Leave all other engine flags completely untouched!
                     headerToPatch->MipmapLevels = ((CGraphicHeader*)result.HeaderInfo.data())->MipmapLevels;
                     headerToPatch->FrameDataSize = ((CGraphicHeader*)result.HeaderInfo.data())->FrameDataSize;
                 }
                 newBytes.insert(newBytes.end(), result.FullData.begin(), result.FullData.end());
             }
 
-            // 3. Force MipSize0 to 0 (bypass LZO decompression) and sync the frame count
             headerToPatch->FrameCount = (uint16_t)staged.Texture->RawFrames.size();
             headerToPatch->MipSize0 = 0;
 
-            // 4. Safely sync transparency without overriding Fable's Alpha Test cutout flag (Type 2)
             switch (opts.Format) {
             case ETextureFormat::DXT1:
             case ETextureFormat::NormalMap_DXT1:
@@ -922,12 +915,10 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             default: break;
             }
 
-            // Sync the patched header back to the staged texture so the EgoCore UI updates correctly
             memcpy(&staged.Texture->Header, headerToPatch, sizeof(CGraphicHeader));
 
             e.InfoSize = (uint32_t)newInfo.size();
 
-            // WE NO LONGER MUTATE e.Type HERE. Fable relies on strictly hardcoded bank types!
         }
         else if (staged.Text || staged.TextGroup || staged.NarratorList) {
             CTextParser tempParser;
@@ -944,10 +935,31 @@ inline void FlushStagedEntries(LoadedBank* bank) {
             float duration = tempParser.Data.Duration;
             newInfo.resize(4); memcpy(newInfo.data(), &duration, 4);
             e.InfoSize = 4;
+
+            if (EnsureLipSyncLoaded()) {
+                int sbIdx = 0;
+                if (bank->ActiveSubBankIndex >= 0 && bank->ActiveSubBankIndex < bank->SubBanks.size()) {
+                    std::string subName = bank->SubBanks[bank->ActiveSubBankIndex].Name;
+                    if (g_LipSyncState.SubBankMap.count(subName)) sbIdx = g_LipSyncState.SubBankMap[subName];
+                }
+
+                std::string prefix = e.Name;
+                size_t underscore = prefix.find_last_of('_');
+                if (underscore != std::string::npos) prefix = prefix.substr(0, underscore);
+
+                AddedEntryData ae;
+                ae.Type = e.Type;
+                ae.NamePrefix = prefix;
+                ae.Raw = newBytes;
+                ae.Info = newInfo;
+                ae.Dependencies = e.Dependencies;
+
+                g_LipSyncState.PendingAdds[sbIdx][e.ID] = ae;
+            }
         }
         else if (staged.Particle) {
             newBytes = ParticleCompiler::Compile(*staged.Particle);
-            e.InfoSize = 0; // Particles do not use TOC subheader metadata
+            e.InfoSize = 0;
         }
         else if (staged.ShaderCode) {
             printf("[Shader] FlushStagedEntries reached for idx %d\n", idx);
@@ -1285,7 +1297,7 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         g_IsTextDirty = false;
         g_BankStatus = "Text Entry staged for compilation.";
     }
-    else if (bank->Type == EBankType::Dialogue && g_LipSyncParser.IsParsed) {
+    else if (bank->Type == EBankType::Dialogue && g_LipSyncParser.Data.IsParsed) {
         staged.LipSync = std::make_shared<CLipSyncData>(g_LipSyncParser.Data);
         g_BankStatus = "LipSync Entry staged for compilation.";
     }

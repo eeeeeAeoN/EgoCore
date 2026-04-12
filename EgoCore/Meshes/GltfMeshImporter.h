@@ -870,12 +870,12 @@ namespace GltfMeshImporter {
                     m.BooleanAlpha = ExtractBool(extras, "BooleanAlpha", false);
                     m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
                 }
-                else { m.IsTwoSided = true; m.IsTransparent = false; }
+                else { m.IsTwoSided = false; m.IsTransparent = false; }
                 outMesh.Materials.push_back(m);
             }
         }
         else {
-            C3DMaterial defMat = {}; defMat.ID = 0; defMat.Name = "Default_Material"; defMat.IsTwoSided = true;
+            C3DMaterial defMat = {}; defMat.ID = 0; defMat.Name = "Default_Material"; defMat.IsTwoSided = false;
             outMesh.Materials.push_back(defMat);
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
@@ -1037,17 +1037,81 @@ namespace GltfMeshImporter {
                 int16_t cU = CompressUV(uniqueVerts[v].u[0]), cV = CompressUV(uniqueVerts[v].u[1]);
 
                 if (outPrim.IsCompressed) {
-                    uint32_t pP = PackPOSPACKED3(uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2], outPrim.Compression.Scale, outPrim.Compression.Offset);
-                    memcpy(vDest + 0, &pP, 4);
-                    memcpy(vDest + 4, &pN, 4);
-                    memcpy(vDest + 8, &cU, 2);
-                    memcpy(vDest + 10, &cV, 2);
+                    int offset = 0;
+
+                    // 1. Position (Check for High-Precision 0x10 flag)
+                    if ((outPrim.InitFlags & 0x10) != 0) {
+                        // High Precision: Uncompressed FLOAT3 (12 bytes)
+                        memcpy(vDest + 0, &uniqueVerts[v].p[0], 12);
+                        offset = 12;
+                    }
+                    else {
+                        // Standard: Compressed POSPACKED3 (4 bytes)
+                        uint32_t pP = PackPOSPACKED3(uniqueVerts[v].p[0], uniqueVerts[v].p[1], uniqueVerts[v].p[2], outPrim.Compression.Scale, outPrim.Compression.Offset);
+                        memcpy(vDest + 0, &pP, 4);
+                        offset = 4;
+                    }
+
+                    // 2. Compressed Normal & UV (8 bytes)
+                    uint32_t pN = PackNormal(uniqueVerts[v].n[0], uniqueVerts[v].n[1], uniqueVerts[v].n[2]);
+                    int16_t cU = CompressUV(uniqueVerts[v].u[0]), cV = CompressUV(uniqueVerts[v].u[1]);
+
+                    memcpy(vDest + offset, &pN, 4);
+                    memcpy(vDest + offset + 4, &cU, 2);
+                    memcpy(vDest + offset + 6, &cV, 2);
+                    offset += 8;
+
+                    // 3. Safe Tangents for Bumped Static Meshes
+                    if ((outPrim.InitFlags & 2) != 0) {
+                        float nX = uniqueVerts[v].n[0], nY = uniqueVerts[v].n[1], nZ = uniqueVerts[v].n[2];
+                        float tX = 1.0f, tY = 0.0f, tZ = 0.0f;
+
+                        if (nX * nX + nY * nY + nZ * nZ > 0.0001f) {
+                            float cX = 0.0f, cY = 1.0f, cZ = 0.0f;
+                            if (std::abs(nY) > 0.99f) { cX = 1.0f; cY = 0.0f; cZ = 0.0f; }
+                            tX = nY * cZ - nZ * cY; tY = nZ * cX - nX * cZ; tZ = nX * cY - nY * cX;
+                            float tLen = std::sqrt(tX * tX + tY * tY + tZ * tZ);
+                            if (tLen > 0.0001f) { tX /= tLen; tY /= tLen; tZ /= tLen; }
+                            else { tX = 1.0f; tY = 0.0f; tZ = 0.0f; }
+                        }
+
+                        // Fable Compressed Tangents use NORMSHORT4
+                        int16_t sX = (int16_t)std::clamp(std::round(tX * 32767.0f), -32767.0f, 32767.0f);
+                        int16_t sY = (int16_t)std::clamp(std::round(tY * 32767.0f), -32767.0f, 32767.0f);
+                        int16_t sZ = (int16_t)std::clamp(std::round(tZ * 32767.0f), -32767.0f, 32767.0f);
+                        int16_t sW = 32767; // Handedness 1.0f
+
+                        memcpy(vDest + offset, &sX, 2);
+                        memcpy(vDest + offset + 2, &sY, 2);
+                        memcpy(vDest + offset + 4, &sZ, 2);
+                        memcpy(vDest + offset + 6, &sW, 2);
+                    }
                 }
-                else {
+                else { // UNCOMPRESSED STATIC
+                    // Float3 Position (12 bytes)
                     memcpy(vDest + 0, &uniqueVerts[v].p[0], 12);
-                    memcpy(vDest + 12, &pN, 4);
-                    memcpy(vDest + 16, &cU, 2);
-                    memcpy(vDest + 18, &cV, 2);
+                    // Float3 Normal (12 bytes)
+                    memcpy(vDest + 12, &uniqueVerts[v].n[0], 12);
+                    // Float2 UV (8 bytes)
+                    float uvArr[2] = { uniqueVerts[v].u[0], uniqueVerts[v].u[1] };
+                    memcpy(vDest + 24, uvArr, 8);
+
+                    if ((outPrim.InitFlags & 2) != 0) { // Bump
+                        float nX = uniqueVerts[v].n[0], nY = uniqueVerts[v].n[1], nZ = uniqueVerts[v].n[2];
+                        float tX = 1.0f, tY = 0.0f, tZ = 0.0f;
+                        if (nX * nX + nY * nY + nZ * nZ > 0.0001f) {
+                            float cX = 0.0f, cY = 1.0f, cZ = 0.0f;
+                            if (std::abs(nY) > 0.99f) { cX = 1.0f; cY = 0.0f; cZ = 0.0f; }
+                            tX = nY * cZ - nZ * cY; tY = nZ * cX - nX * cZ; tZ = nX * cY - nY * cX;
+                            float tLen = std::sqrt(tX * tX + tY * tY + tZ * tZ);
+                            if (tLen > 0.0001f) { tX /= tLen; tY /= tLen; tZ /= tLen; }
+                            else { tX = 1.0f; tY = 0.0f; tZ = 0.0f; }
+                        }
+
+                        // Fable UNCOMPRESSED Tangents use FLOAT4
+                        float tArr[4] = { tX, tY, tZ, 1.0f };
+                        memcpy(vDest + 32, tArr, 16);
+                    }
                 }
 
                 vDest += outPrim.VertexStride;
@@ -1156,7 +1220,7 @@ namespace GltfMeshImporter {
                     m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
                 }
                 else {
-                    m.IsTwoSided = true;
+                    m.IsTwoSided = false;
                     m.IsTransparent = true;
                 }
                 outMesh.Materials.push_back(m);
@@ -1164,7 +1228,7 @@ namespace GltfMeshImporter {
         }
         else {
             C3DMaterial defMat = {};
-            defMat.ID = 0; defMat.Name = "Grass_Material"; defMat.IsTwoSided = true; defMat.IsTransparent = true;
+            defMat.ID = 0; defMat.Name = "Grass_Material"; defMat.IsTwoSided = false; defMat.IsTransparent = true;
             outMesh.Materials.push_back(defMat);
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
@@ -1407,12 +1471,12 @@ namespace GltfMeshImporter {
                     m.BooleanAlpha = ExtractBool(extras, "BooleanAlpha", false);
                     m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
                 }
-                else { m.IsTwoSided = true; m.IsTransparent = false; }
+                else { m.IsTwoSided = false; m.IsTransparent = false; }
                 outMesh.Materials.push_back(m);
             }
         }
         else {
-            C3DMaterial defMat = {}; defMat.ID = 0; defMat.Name = "Default_Material"; defMat.IsTwoSided = true;
+            C3DMaterial defMat = {}; defMat.ID = 0; defMat.Name = "Default_Material"; defMat.IsTwoSided = false;
             outMesh.Materials.push_back(defMat);
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
@@ -1947,12 +2011,12 @@ namespace GltfMeshImporter {
                     m.BooleanAlpha = ExtractBool(extras, "BooleanAlpha", false);
                     m.DegenerateTriangles = ExtractBool(extras, "DegenerateTriangles", false);
                 }
-                else { m.IsTwoSided = true; m.IsTransparent = false; }
+                else { m.IsTwoSided = false; m.IsTransparent = false; }
                 outMesh.Materials.push_back(m);
             }
         }
         else {
-            C3DMaterial defMat = {}; defMat.ID = 0; defMat.Name = "Default_Material"; defMat.IsTwoSided = true;
+            C3DMaterial defMat = {}; defMat.ID = 0; defMat.Name = "Default_Material"; defMat.IsTwoSided = false;
             outMesh.Materials.push_back(defMat);
         }
         outMesh.MaterialCount = (int32_t)outMesh.Materials.size();
@@ -2238,23 +2302,81 @@ namespace GltfMeshImporter {
                         }
                     }
 
-                    if (outPrim.IsCompressed) {
-                        memcpy(dest + 0, &pP, 4);
-                        memcpy(dest + 4, fj, 4);
-                        memcpy(dest + 8, fw, 4);
-                        memcpy(dest + 12, &pN, 4);
-                        memcpy(dest + 16, &cU, 2);
-                        memcpy(dest + 18, &cV, 2);
+                    int offset = 0;
+
+                    if ((outPrim.InitFlags & 4) == 0 || (outPrim.InitFlags & 0x10) != 0) {
+                        memcpy(dest + 0, &v.p[0], 12);
+                        offset = 12;
                     }
                     else {
-                        memcpy(dest + 0, &v.p[0], 12);
-                        memcpy(dest + 12, fj, 4);
-                        memcpy(dest + 16, fw, 4);
-                        memcpy(dest + 20, &pN, 4);
-                        memcpy(dest + 24, &cU, 2);
-                        memcpy(dest + 26, &cV, 2);
+                        memcpy(dest + 0, &pP, 4);
+                        offset = 4;
                     }
 
+                    memcpy(dest + offset, fj, 4);
+                    offset += 4;
+
+                    if ((outPrim.InitFlags & 4) == 0) {
+                        memcpy(dest + offset, &v.w[0], 12);
+                        offset += 12;
+                    }
+                    else {
+                        memcpy(dest + offset, fw, 4);
+                        offset += 4;
+                    }
+
+                    if ((outPrim.InitFlags & 4) == 0) {
+                        memcpy(dest + offset, &v.n[0], 12);
+                        offset += 12;
+                    }
+                    else {
+                        memcpy(dest + offset, &pN, 4);
+                        offset += 4;
+                    }
+
+                    // UV
+                    if ((outPrim.InitFlags & 4) == 0) {
+                        float uvArr[2] = { v.u[0], v.u[1] };
+                        memcpy(dest + offset, uvArr, 8);
+                        offset += 8;
+                    }
+                    else {
+                        memcpy(dest + offset, &cU, 2);
+                        memcpy(dest + offset + 2, &cV, 2);
+                        offset += 4;
+                    }
+
+                    if ((outPrim.InitFlags & 2) != 0) {
+                        float nX = v.n[0], nY = v.n[1], nZ = v.n[2];
+                        float tX = 1.0f, tY = 0.0f, tZ = 0.0f;
+
+                        if (nX * nX + nY * nY + nZ * nZ > 0.0001f) {
+                            float cX = 0.0f, cY = 1.0f, cZ = 0.0f;
+                            if (std::abs(nY) > 0.99f) { cX = 1.0f; cY = 0.0f; cZ = 0.0f; }
+                            tX = nY * cZ - nZ * cY; tY = nZ * cX - nX * cZ; tZ = nX * cY - nY * cX;
+                            float tLen = std::sqrt(tX * tX + tY * tY + tZ * tZ);
+                            if (tLen > 0.0001f) { tX /= tLen; tY /= tLen; tZ /= tLen; }
+                            else { tX = 1.0f; tY = 0.0f; tZ = 0.0f; }
+                        }
+
+                        if ((outPrim.InitFlags & 4) == 0) {
+                            float tArr[4] = { tX, tY, tZ, 1.0f };
+                            memcpy(dest + offset, tArr, 16);
+                            offset += 16;
+                        }
+                        else {
+                            int16_t sX = (int16_t)std::clamp(std::round(tX * 32767.0f), -32767.0f, 32767.0f);
+                            int16_t sY = (int16_t)std::clamp(std::round(tY * 32767.0f), -32767.0f, 32767.0f);
+                            int16_t sZ = (int16_t)std::clamp(std::round(tZ * 32767.0f), -32767.0f, 32767.0f);
+                            int16_t sW = 32767;
+
+                            memcpy(dest + offset, &sX, 2);
+                            memcpy(dest + offset + 2, &sY, 2);
+                            memcpy(dest + offset + 4, &sZ, 2);
+                            memcpy(dest + offset + 6, &sW, 2);
+                            offset += 8;
+                        }
+                    }
                     dest += outPrim.VertexStride;
                 }
 

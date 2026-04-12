@@ -286,6 +286,7 @@ inline void DrawTextureProperties() {
                     g_TexFrameImportPath = path;
                     g_IsAddFrame = true;
                     g_ImportOptions.Format = g_TextureParser.DecodedFormat;
+                    g_ImportOptions.IsBumpmap = (g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT1 || g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT5);
                     ImGui::OpenPopup("Import Options");
                 }
             }
@@ -447,36 +448,73 @@ inline void DrawTextureProperties() {
             g_TexFrameImportPath = path;
             g_IsAddFrame = false;
             g_PendingImportTargetFrame = isFlatSeq ? 0 : g_SelectedFrame;
-            g_ImportOptions.Format = g_TextureParser.DecodedFormat;
+            g_ImportOptions.IsBumpmap = (g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT1 || g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT5);
             ImGui::OpenPopup("Import Options");
         }
     }
 
     if (ImGui::BeginPopupModal("Import Options", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const char* formats[] = { "Unknown", "DXT1", "DXT3", "DXT5", "ARGB8888", "NormalMap (DXT1)", "NormalMap (DXT5)" };
+        ImGui::Text("File: %s", std::filesystem::path(g_TexFrameImportPath).filename().string().c_str());
+        ImGui::Separator();
 
-        int currentFormat = (int)g_ImportOptions.Format;
-        if (ImGui::Combo("Format", &currentFormat, formats, IM_ARRAYSIZE(formats))) {
-            g_ImportOptions.Format = (ETextureFormat)currentFormat;
-        }
-
-        g_ImportOptions.GenerateMipmaps = true;
-
-        ImGui::Checkbox("Is Bumpmap", &g_ImportOptions.IsBumpmap);
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Bumpmap Settings:");
+        ImGui::Checkbox("Generate Normal Map from Image", &g_ImportOptions.IsBumpmap);
 
         if (g_ImportOptions.IsBumpmap) {
-            ImGui::SliderFloat("Bump Factor", &g_ImportOptions.BumpFactor, 0.1f, 10.0f);
+            ImGui::SliderFloat("Bump Intensity", &g_ImportOptions.BumpFactor, 0.1f, 20.0f, "%.1f");
+            ImGui::TextDisabled("Auto-converts colors to a Fable normal map.");
         }
+        else {
+            ImGui::TextDisabled("Imports the image as-is (must already be a normal map).");
+        }
+        ImGui::Dummy(ImVec2(0, 5));
+
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::TextColored(ImVec4(1, 0, 1, 1), "Compression Format:");
+
+        static int formatRadio = 1;
+        if (g_ImportOptions.Format == ETextureFormat::DXT1 || g_ImportOptions.Format == ETextureFormat::NormalMap_DXT1) formatRadio = 0;
+        else if (g_ImportOptions.Format == ETextureFormat::DXT3) formatRadio = 1;
+        else if (g_ImportOptions.Format == ETextureFormat::DXT5 || g_ImportOptions.Format == ETextureFormat::NormalMap_DXT5) formatRadio = 2;
+        else if (g_ImportOptions.Format == ETextureFormat::ARGB8888) formatRadio = 3;
+
+        ImGui::RadioButton("DXT1 (Opaque/1-bit Alpha)", &formatRadio, 0);
+        ImGui::RadioButton("DXT3 (Sharp Alpha)", &formatRadio, 1);
+        ImGui::RadioButton("DXT5 (Smooth Alpha)", &formatRadio, 2);
+        ImGui::RadioButton("ARGB (Uncompressed)", &formatRadio, 3);
+
+        if (formatRadio == 0) g_ImportOptions.Format = g_ImportOptions.IsBumpmap ? ETextureFormat::NormalMap_DXT1 : ETextureFormat::DXT1;
+        else if (formatRadio == 1) g_ImportOptions.Format = ETextureFormat::DXT3;
+        else if (formatRadio == 2) g_ImportOptions.Format = g_ImportOptions.IsBumpmap ? ETextureFormat::NormalMap_DXT5 : ETextureFormat::DXT5;
+        else if (formatRadio == 3) g_ImportOptions.Format = ETextureFormat::ARGB8888;
 
         ImGui::Separator();
 
         if (ImGui::Button("Import", ImVec2(120, 0))) {
+            g_ImportOptions.PreserveFlags = g_TextureParser.Header.Flags;
+
+            bool originalIsBump = (g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT1 || g_TextureParser.DecodedFormat == ETextureFormat::NormalMap_DXT5);
+
+            if (g_ImportOptions.IsBumpmap == originalIsBump) {
+                g_ImportOptions.PreservePixelFormatIdx = g_TextureParser.Header.PixelFormatIdx;
+            }
+            else {
+                g_ImportOptions.PreservePixelFormatIdx = 0;
+            }
+
+            g_ImportOptions.GenerateMipmaps = true;
+            g_ImportOptions.ForceMipLevels = 0;
+            g_ImportOptions.ResizeToPowerOfTwo = true;
+            g_ImportOptions.TargetWidth = 0;
+            g_ImportOptions.TargetHeight = 0;
+
             if (g_IsAddFrame) {
                 AddTextureFrame(&bank, bank.SelectedEntryIndex, g_TexFrameImportPath, g_ImportOptions);
             }
             else {
                 ReplaceTextureFrame(&bank, bank.SelectedEntryIndex, g_PendingImportTargetFrame, g_TexFrameImportPath, g_ImportOptions);
             }
+
             g_TexViewport.Release();
             ImGui::CloseCurrentPopup();
         }

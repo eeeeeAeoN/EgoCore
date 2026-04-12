@@ -378,6 +378,7 @@ inline void DrawLipSyncProperties(LoadedBank* bank, std::function<void()> onSave
         return;
     }
 
+    /*
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
     if (ImGui::Button("Save Entry (Memory)", ImVec2(160, 30))) {
         if (onSave) onSave();
@@ -386,6 +387,7 @@ inline void DrawLipSyncProperties(LoadedBank* bank, std::function<void()> onSave
     ImGui::SameLine();
     ImGui::TextDisabled("(Recompile via Sidebar)");
     ImGui::Separator();
+    */
 
     auto& d = g_LipSyncParser.Data;
     if (ImGui::CollapsingHeader("Header Info", ImGuiTreeNodeFlags_DefaultOpen)) {

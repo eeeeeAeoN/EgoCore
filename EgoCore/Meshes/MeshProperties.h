@@ -1070,10 +1070,28 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                     ImGui::Dummy(ImVec2(0, 5));
 
                     ImGui::Dummy(ImVec2(0, 5));
-                    if (ImGui::BeginTable("PrimTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30); ImGui::TableSetupColumn("MatIdx"); ImGui::TableSetupColumn("Verts"); ImGui::TableSetupColumn("Tris"); ImGui::TableHeadersRow();
+                    if (ImGui::BeginTable("PrimTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30);
+                        ImGui::TableSetupColumn("MatIdx", ImGuiTableColumnFlags_WidthFixed, 40);
+                        ImGui::TableSetupColumn("Verts", ImGuiTableColumnFlags_WidthFixed, 50);
+                        ImGui::TableSetupColumn("Tris", ImGuiTableColumnFlags_WidthFixed, 50);
+                        ImGui::TableSetupColumn("Avg Stretch");
+                        ImGui::TableHeadersRow();
+
                         for (int p = 0; p < g_ActiveMeshContent.Primitives.size(); p++) {
-                            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", p); ImGui::TableSetColumnIndex(1); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].MaterialIndex); ImGui::TableSetColumnIndex(2); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].VertexCount); ImGui::TableSetColumnIndex(3); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].TriangleCount);
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0); ImGui::Text("%d", p);
+                            ImGui::TableSetColumnIndex(1); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].MaterialIndex);
+                            ImGui::TableSetColumnIndex(2); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].VertexCount);
+                            ImGui::TableSetColumnIndex(3); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].TriangleCount);
+
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::PushID(p);
+                            ImGui::SetNextItemWidth(-1);
+                            if (ImGui::DragFloat("##Stretch", &g_ActiveMeshContent.Primitives[p].AvgTextureStretch, 0.005f, 0.0f, 10.0f, "%.4f")) {
+                                if (saveCallback) saveCallback();
+                            }
+                            ImGui::PopID();
                         }
                         ImGui::EndTable();
                     }
@@ -1943,6 +1961,17 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             DrawTexRow("Specular", m.ReflectionMapID, i, 2, m);
                             DrawTexRow("Illumination", m.IlluminationMapID, i, 3, m);
                             DrawTexRow("Decals", m.DecalID, i, 4, m);
+
+
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::Text("Map Flags");
+                            ImGui::SameLine(130);
+                            ImGui::SetNextItemWidth(120);
+                            if (ImGui::InputInt("##mapflags_int", &m.MapFlags)) {
+                                g_MeshUploadNeeded = true;
+                                if (saveCallback) saveCallback();
+                            }
+
 
                             ImGui::AlignTextToFramePadding();
                             ImGui::Text("Self Illum");

@@ -115,6 +115,7 @@ public:
     void Parse(const std::vector<uint8_t>& rawData, const std::vector<uint8_t>& infoData) {
         Data = CLipSyncData();
         Data.IsParsed = false;
+        IsParsed = false;
 
         if (rawData.size() < 4) return;
         const uint8_t* ptr = rawData.data();
@@ -161,5 +162,6 @@ public:
         }
 
         Data.IsParsed = true;
+        IsParsed = true;
     }
 };

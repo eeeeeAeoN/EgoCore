@@ -84,36 +84,128 @@ struct CActionInputControl : CSubComponent {
     // parser is the CPersistContext at position just after the outer '.Add('
     // (text layout: VectorName.Add(CActionInputControl(arg1, arg2, arg3[, C2DCoordF(x,y)]));)
     void ParseInline(CPersistContext& ctx, size_t& pos) {
-        // Skip 'CActionInputControl' token and '('
-        ctx.SkipToken(pos, "CActionInputControl");
-        if (!ctx.SkipChar(pos, '(')) return;
+        std::string& text = ctx.GetDefText();
+
+        auto SkipWS = [&]() { while (pos < text.length() && isspace(text[pos])) pos++; };
+        auto SkipChar = [&](char c) {
+            SkipWS();
+            if (pos < text.length() && text[pos] == c) { pos++; return true; }
+            return false;
+            };
+
+        SkipWS();
+        ctx.SkipToken_pub(pos, "CActionInputControl");
+        if (!SkipChar('(')) return;
+
         // Arg 1: GameAction
-        GameAction = ctx.ReadIntExpr(pos);
-        if (!ctx.SkipChar(pos, ',')) return;
-        // Arg 2: ControllerType
-        ControllerType = ctx.ReadIntExpr(pos);
-        if (!ctx.SkipChar(pos, ',')) return;
-        // Arg 3: key/button into correct field based on ControllerType
-        int32_t thirdArg = ctx.ReadIntExpr(pos);
-        KeyboardKey = XboxButton = MouseButton = 0;
-        switch (ControllerType) {
-            case 0: XboxButton  = thirdArg; break; // CONTROLLER_XBOX_PAD
-            case 1: KeyboardKey = thirdArg; break; // CONTROLLER_KEYBOARD
-            case 2: MouseButton = thirdArg; break; // CONTROLLER_MOUSE
-            default: break;
+        SkipWS();
+        GameAction = ctx.ReadIntExpr_pub(pos);
+
+        if (!SkipChar(',')) return;
+
+        // Arg 2: ControllerType 
+        SkipWS();
+        size_t savedPos = pos;
+        std::string cToken;
+        while (pos < text.length() && (isalnum(text[pos]) || text[pos] == '_')) cToken += text[pos++];
+
+        if (cToken == "CONTROLLER_XBOX_PAD") ControllerType = 1;
+        else if (cToken == "CONTROLLER_KEYBOARD") ControllerType = 2;
+        else if (cToken == "CONTROLLER_MOUSE") ControllerType = 3;
+        else if (cToken == "CONTROLLER_NONE") ControllerType = 0;
+        else {
+            pos = savedPos;
+            ControllerType = ctx.ReadIntExpr_pub(pos);
         }
-        // Optional arg 4: C2DCoordF(x, y)
-        if (ctx.SkipChar(pos, ',')) {
-            // Skip 'C2DCoordF' and '('
-            ctx.SkipToken(pos, "C2DCoordF");
-            if (ctx.SkipChar(pos, '(')) {
-                ControlDirection.x = ctx.ReadFloat(pos);
-                ctx.SkipChar(pos, ',');
-                ControlDirection.y = ctx.ReadFloat(pos);
-                ctx.SkipChar(pos, ')');
+
+        if (!SkipChar(',')) return;
+
+        // Arg 3: Button/Key (Bypass Symbol Map with explicit arrays)
+        SkipWS();
+        size_t savedPos3 = pos;
+        std::string btnToken;
+        while (pos < text.length() && (isalnum(text[pos]) || text[pos] == '_')) btnToken += text[pos++];
+
+        int32_t thirdArg = 0;
+        if (ControllerType == 2) {
+            const char* kb_keys[] = {
+                "KB_NULL", "KB_ESC", "KB_1", "KB_2", "KB_3", "KB_4", "KB_5", "KB_6", "KB_7", "KB_8", "KB_9", "KB_0",
+                "KB_MINUS", "KB_EQUALS", "KB_BACKSPACE", "KB_TAB", "KB_Q", "KB_W", "KB_E", "KB_R", "KB_T", "KB_Y",
+                "KB_U", "KB_I", "KB_O", "KB_P", "KB_LBRACKET", "KB_RBRACKET", "KB_RETURN", "KB_LCONTROL", "KB_A",
+                "KB_S", "KB_D", "KB_F", "KB_G", "KB_H", "KB_J", "KB_K", "KB_L", "KB_SEMICOLON", "KB_APOSTROPHE",
+                "KB_HASH", "KB_LSHIFT", "KB_BACKSLASH", "KB_Z", "KB_X", "KB_C", "KB_V", "KB_B", "KB_N", "KB_M",
+                "KB_COMMA", "KB_FULLSTOP", "KB_SLASH", "KB_RSHIFT", "KB_PMULTIPLY", "KB_LALT", "KB_SPACE", "KB_CAPSLOCK",
+                "KB_F1", "KB_F2", "KB_F3", "KB_F4", "KB_F5", "KB_F6", "KB_F7", "KB_F8", "KB_F9", "KB_F10", "KB_NUMLOCK",
+                "KB_SCROLLLOCK", "KB_P7", "KB_P8", "KB_P9", "KB_PMINUS", "KB_P4", "KB_P5", "KB_P6", "KB_PPLUS", "KB_P1",
+                "KB_P2", "KB_P3", "KB_P0", "KB_PFULLSTOP", "KB_F11", "KB_F12", "KB_F13", "KB_F14", "KB_F15", "KB_KANA",
+                "KB_CONVERT", "KB_NOCONVERT", "KB_YEN", "KB_PEQUALS", "KB_CIRCUMFLEX", "KB_AT", "KB_COLON", "KB_UNDERLINE",
+                "KB_KANJI", "KB_STOP", "KB_AX", "KB_UNLABELED", "KB_PENTER", "KB_RCONTROL", "KB_PCOMMA", "KB_PDIVIDE",
+                "KB_SYSRQ", "KB_RALT", "KB_HOME", "KB_UP", "KB_PAGEUP", "KB_LEFT", "KB_RIGHT", "KB_END", "KB_DOWN",
+                "KB_PAGEDOWN", "KB_INSERT", "KB_DELETE", "KB_LWIN", "KB_RWIN", "KB_APPS"
+            };
+            for (int i = 0; i < 119; ++i) {
+                if (btnToken == kb_keys[i]) { thirdArg = i; break; }
+            }
+            if (thirdArg == 0 && btnToken != "KB_NULL") { pos = savedPos3; thirdArg = ctx.ReadIntExpr_pub(pos); }
+        }
+        else if (ControllerType == 3) {
+            const char* ms_keys[] = {
+                "MOUSE_BUTTON_NULL_CONTROL", "MOUSE_BUTTON_LEFT_CONTROL", "MOUSE_BUTTON_RIGHT_CONTROL",
+                "MOUSE_BUTTON_MIDDLE_CONTROL", "MOUSE_MOVEMENT", "MOUSE_WHEEL_MOVEMENT", "MOUSE_WHEEL_MOVEMENT_UP",
+                "MOUSE_WHEEL_MOVEMENT_DOWN", "MOUSE_BUTTON_4_CONTROL", "MOUSE_BUTTON_5_CONTROL", "MOUSE_BUTTON_6_CONTROL",
+                "MOUSE_BUTTON_7_CONTROL", "MOUSE_BUTTON_8_CONTROL"
+            };
+            for (int i = 0; i < 13; ++i) {
+                if (btnToken == ms_keys[i]) { thirdArg = i; break; }
+            }
+            if (thirdArg == 0 && btnToken != "MOUSE_BUTTON_NULL_CONTROL") { pos = savedPos3; thirdArg = ctx.ReadIntExpr_pub(pos); }
+        }
+        else if (ControllerType == 1) {
+            const char* xb_keys[] = {
+                "XBOX_PAD_UNDEFINED_BUTTON", "XBOX_PAD_X_BUTTON", "XBOX_PAD_Y_BUTTON", "XBOX_PAD_BLACK_BUTTON",
+                "XBOX_PAD_A_BUTTON", "XBOX_PAD_B_BUTTON", "XBOX_PAD_WHITE_BUTTON", "XBOX_PAD_LEFT_TRIGGER",
+                "XBOX_PAD_RIGHT_TRIGGER", "XBOX_PAD_LEFT_STICK_BUTTON", "XBOX_PAD_RIGHT_STICK_BUTTON",
+                "XBOX_PAD_START_BUTTON", "XBOX_PAD_BACK_BUTTON", "XBOX_PAD_DPAD_UP_BUTTON", "XBOX_PAD_DPAD_DOWN_BUTTON",
+                "XBOX_PAD_DPAD_LEFT_BUTTON", "XBOX_PAD_DPAD_RIGHT_BUTTON", "XBOX_PAD_LEFT_ANALOGUE_STICK",
+                "XBOX_PAD_RIGHT_ANALOGUE_STICK"
+            };
+            for (int i = 0; i < 19; ++i) {
+                if (btnToken == xb_keys[i]) { thirdArg = i; break; }
+            }
+            if (thirdArg == 0 && btnToken != "XBOX_PAD_UNDEFINED_BUTTON") { pos = savedPos3; thirdArg = ctx.ReadIntExpr_pub(pos); }
+        }
+        else {
+            pos = savedPos3;
+            thirdArg = ctx.ReadIntExpr_pub(pos);
+        }
+
+        KeyboardKey = 0;
+        XboxButton = 0;
+        MouseButton = 0;
+
+        switch (ControllerType) {
+        case 1: XboxButton = thirdArg; break;
+        case 2: KeyboardKey = thirdArg; break;
+        case 3: MouseButton = thirdArg; break;
+        default: break;
+        }
+
+        // Arg 4: Optional C2DCoordF
+        if (SkipChar(',')) {
+            SkipWS();
+            if (ctx.SkipToken_pub(pos, "C2DCoordF")) {
+                if (SkipChar('(')) {
+                    SkipWS();
+                    ControlDirection.x = ctx.ReadFloat_pub(pos);
+                    if (SkipChar(',')) {
+                        SkipWS();
+                        ControlDirection.y = ctx.ReadFloat_pub(pos);
+                    }
+                    SkipChar(')');
+                }
             }
         }
-        ctx.SkipChar(pos, ')');
+        SkipChar(')');
     }
 
     void Transfer(CPersistContext& persist) override {
@@ -217,10 +309,6 @@ public:
     }
 
     void Transfer(CPersistContext& persist) override {
-        // Vanilla game.bin Controls are untagged chunks
-        bool oldForceNoTags = persist.m_ForceNoTags;
-        if (persist.Mode == CPersistContext::MODE_SAVE_BINARY) persist.m_ForceNoTags = true;
-
         persist.TransferVector("Controls", Controls);
         persist.Transfer("ToggleZTarget", ToggleZTarget, false);
         persist.Transfer("ToggleSpells", ToggleSpells, false);
@@ -228,8 +316,6 @@ public:
         persist.Transfer("ToggleExpressionMenu", ToggleExpressionMenu, false);
         persist.Transfer("ToggleExpressionShift", ToggleExpressionShift, false);
         persist.Transfer("FlourishNeedsAttackButtonHeld", FlourishNeedsAttackButtonHeld, false);
-
-        persist.m_ForceNoTags = oldForceNoTags;
     }
 };
 
@@ -295,8 +381,8 @@ public:
 
     void Transfer(CPersistContext& persist) override {
         persist.Transfer("Antialiasing", Antialiasing, 0u);
-        persist.Transfer("ResolutionWidth", ResolutionWidth, (int32_t)0);
-        persist.Transfer("ResolutionHeight", ResolutionHeight, (int32_t)0);
+        persist.Transfer("ResolutionWidth", ResolutionWidth, (int32_t)1024);   // <--- FIXED
+        persist.Transfer("ResolutionHeight", ResolutionHeight, (int32_t)768);  // <--- FIXED
         persist.Transfer("BitDepth", BitDepth, (int32_t)16);
         persist.Transfer("TextureDetail", TextureDetail, 1.0f);
         persist.Transfer("MaxTextureDetail", MaxTextureDetail, 3.0f);
@@ -362,7 +448,7 @@ public:
 
 class CUIDef : public CDefObject {
 public:
-    int32_t Type = 4; // UI_TYPE_COMPOSITE
+    int32_t Type = 4;
     std::vector<int32_t> Children;
     uint32_t MeshIndex = 0;
     std::wstring TextValue;
@@ -386,7 +472,7 @@ public:
     bool Wrapping = true;
     bool Inverted = false;
     float PositionOffsetX = 0.0f, PositionOffsetY = 0.0f;
-    uint8_t AlphaOffset = 0;
+    uint32_t AlphaOffset = 0;
     C3DVector Up = {0.0f, 0.0f, 1.0f}, Forward = {0.0f, 1.0f, 0.0f}, RotationAxis = {0.0f, 1.0f, 0.0f};
     float RotationSpeed = 0.0f;
     uint32_t AnimationIndex = 0;
@@ -438,14 +524,14 @@ public:
     }
 
     void Transfer(CPersistContext& persist) override {
-        persist.Transfer("Type", Type, (int32_t)4);
+        persist.TransferEnum("Type", Type, 4);
         persist.TransferVector("Children", Children);
         persist.Transfer("MeshIndex", MeshIndex, (uint32_t)0);
         persist.Transfer("TextValue", TextValue, std::wstring(L""));
         persist.Transfer("Font", Font, Font);
         persist.Transfer("Height", Height, 0.0f);
         persist.Transfer("Width", Width, 0.0f);
-        persist.Transfer("ExpansionType", ExpansionType, (int32_t)1);
+        persist.TransferEnum("ExpansionType", ExpansionType, 1);
         persist.TransferMap("Sprites", Sprites, (int32_t)0);
         persist.TransferVector("HorizontalSeparations", HorizontalSeparations);
         persist.TransferVector("VerticalSeparations", VerticalSeparations);
@@ -453,7 +539,7 @@ public:
         persist.Transfer("TextLineBreak", TextLineBreak, true);
         persist.Transfer("ScaleText", ScaleText, true);
         persist.Transfer("Independant", Independant, false);
-        persist.Transfer("MeshType", MeshType, (int32_t)5);
+        persist.TransferEnum("MeshType", MeshType, 5);
         persist.TransferVector("NonScrollingChildren", NonScrollingChildren);
         persist.Transfer("TextWindowTLX", TextWindowTLX, 0.0f);
         persist.Transfer("TextWindowTLY", TextWindowTLY, 0.0f);
@@ -467,7 +553,7 @@ public:
         persist.Transfer("Inverted", Inverted, false);
         persist.Transfer("PositionOffsetX", PositionOffsetX, 0.0f);
         persist.Transfer("PositionOffsetY", PositionOffsetY, 0.0f);
-        persist.Transfer("AlphaOffset", AlphaOffset, (uint8_t)0);
+        persist.Transfer("AlphaOffset", AlphaOffset, (uint32_t)0);
         persist.Transfer("UpX", Up.x, 0.0f);
         persist.Transfer("UpY", Up.y, 0.0f);
         persist.Transfer("UpZ", Up.z, 1.0f);
@@ -495,22 +581,22 @@ public:
         persist.Transfer("DimensionsY", DimensionsY, 0.0f);
         persist.Transfer("SliderLeft", SliderLeft, (int32_t)0);
         persist.Transfer("SliderRight", SliderRight, (int32_t)0);
-        persist.Transfer("Action", Action, (int32_t)0);
-        persist.Transfer("ActionOnBack", ActionOnBack, (int32_t)0);
-        persist.Transfer("ActionOnSelected", ActionOnSelected, (int32_t)0);
-        persist.Transfer("ActionOnUnselected", ActionOnUnselected, (int32_t)0);
-        persist.Transfer("ActionOnDestruction", ActionOnDestruction, (int32_t)0);
-        persist.Transfer("ActionOnLeftClicked", ActionOnLeftClicked, (int32_t)0);
-        persist.Transfer("ActionOnLeftUnclicked", ActionOnLeftUnclicked, (int32_t)0);
-        persist.Transfer("ActionOnLeftHeld", ActionOnLeftHeld, (int32_t)0);
-        persist.Transfer("ActionOnRightClicked", ActionOnRightClicked, (int32_t)0);
-        persist.Transfer("ActionOnDropped", ActionOnDropped, (int32_t)0);
-        persist.Transfer("ActionOnDroppedNowhere", ActionOnDroppedNowhere, (int32_t)0);
-        persist.Transfer("PreAction", PreAction, (int32_t)0);
-        persist.Transfer("ActionOnDraggedUp", ActionOnDraggedUp, (int32_t)0);
-        persist.Transfer("ActionOnDraggedDown", ActionOnDraggedDown, (int32_t)0);
-        persist.Transfer("ActionOnLeftClickedAbove", ActionOnLeftClickedAbove, (int32_t)0);
-        persist.Transfer("ActionOnLeftClickedUnder", ActionOnLeftClickedUnder, (int32_t)0);
+        persist.TransferEnum("Action", Action, 0);
+        persist.TransferEnum("ActionOnBack", ActionOnBack, 0);
+        persist.TransferEnum("ActionOnSelected", ActionOnSelected, 0);
+        persist.TransferEnum("ActionOnUnselected", ActionOnUnselected, 0);
+        persist.TransferEnum("ActionOnDestruction", ActionOnDestruction, 0);
+        persist.TransferEnum("ActionOnLeftClicked", ActionOnLeftClicked, 0);
+        persist.TransferEnum("ActionOnLeftUnclicked", ActionOnLeftUnclicked, 0);
+        persist.TransferEnum("ActionOnLeftHeld", ActionOnLeftHeld, 0);
+        persist.TransferEnum("ActionOnRightClicked", ActionOnRightClicked, 0);
+        persist.TransferEnum("ActionOnDropped", ActionOnDropped, 0);
+        persist.TransferEnum("ActionOnDroppedNowhere", ActionOnDroppedNowhere, 0);
+        persist.TransferEnum("PreAction", PreAction, 0);
+        persist.TransferEnum("ActionOnDraggedUp", ActionOnDraggedUp, 0);
+        persist.TransferEnum("ActionOnDraggedDown", ActionOnDraggedDown, 0);
+        persist.TransferEnum("ActionOnLeftClickedAbove", ActionOnLeftClickedAbove, 0);
+        persist.TransferEnum("ActionOnLeftClickedUnder", ActionOnLeftClickedUnder, 0);
         persist.Transfer("InputDelay", InputDelay, 0.2f);
         persist.Transfer("DrawFromViewport", DrawFromViewport, false);
         persist.Transfer("TextBankIndex", TextBankIndex, (uint32_t)0);
@@ -531,7 +617,7 @@ public:
         persist.TransferVector("SwappingStates", SwappingStates);
         persist.TransferVector("SwappingTimes", SwappingTimes);
         persist.Transfer("BastardChild", BastardChild, false);
-        persist.Transfer("Alignement", Alignement, (int32_t)0);
+        persist.TransferEnum("Alignement", Alignement, 0);
         persist.Transfer("RandomSwap", RandomSwap, false);
         persist.Transfer("UseRelativeZoom", UseRelativeZoom, false);
         persist.Transfer("UseRelativePosition", UseRelativePosition, false);
@@ -553,7 +639,6 @@ public:
 
 class CUIMiscThingsDef : public CDefObject {
 public:
-    // CWideString fields (null-terminated UTF-16 in binary)
     std::wstring SpaceSeparator, CommaSeparator, NewLineSeparator, OpenBracket, CloseBracket, Positive;
     std::wstring WeaponValueString, WeaponAugString, WeaponAugNone, WeaponWeightString;
     std::wstring WeaponLightString, WeaponHeavyString, WeaponKillsString, WeaponCatMeleeString;
@@ -564,7 +649,7 @@ public:
     std::wstring Plus, Minus;
     uint32_t CoreGraphic = 0, VignetteGraphic = 0, OptionalGraphic = 0, FeatGraphic = 0;
     std::wstring ObjectsRewardString, NoneString, CheckGuildString, QuestStartingString;
-    C2DVector RingCenter = {0,0}, PCRingCenter = {0,0}, WorldMapOffset = {0,0};
+    C2DVector RingCenter = { 0,0 }, PCRingCenter = { 0,0 }, WorldMapOffset = { 0,0 };
     float WorldMapWidth = 0, WorldMapHeight = 0;
     std::wstring YouString, OwnString, NoString, HousesString, HouseString, InString, ShopsString, ShopString;
     std::wstring ThereString, AreString, IsString, ForString, SaleString, GeneralString, TatooString, BarberString, TitleString, LevelString;
@@ -573,23 +658,25 @@ public:
     std::wstring LogBookCombatCategoryString, LogBookQuestCategoryString, LogBookStoryCategoryString;
     std::wstring LogBookBasicsCategoryNameString, LogBookObjectsCategoryNameString, LogBookTownsCategoryNameString;
     std::wstring LogBookHeroCategoryNameString, LogBookCombatCategoryNameString, LogBookQuestCategoryNameString, LogBookStoryCategoryNameString;
-    std::map<uint32_t, uint32_t> MapPaths;
-    // CCharString fields (length-prefixed narrow in binary)
+
+    std::map<std::string, uint32_t> MapPaths;
+    std::map<std::string, uint32_t> MiniMapGraphics;
+
     std::string SoundUpDown, SoundSlider, SoundBack, SoundForward, SoundError, SoundExit;
-    C2DVector HeroDollTL = {310,33}, HeroDollBR = {560,300};
+    C2DVector HeroDollTL = { 310,33 }, HeroDollBR = { 560,300 };
     float HeroDollSphereRadius = 1.3f;
-    C2DVector HeroDollTL_PC = {310,33}, HeroDollBR_PC = {560,300};
+    C2DVector HeroDollTL_PC = { 310,33 }, HeroDollBR_PC = { 560,300 };
     float HeroDollSphereRadius_PC = 1.3f;
-    C2DVector HeroDollFrameTL_PC = {0,0};
+    C2DVector HeroDollFrameTL_PC = { 0,0 };
     float HeroDollFrameEmulateListOffset = 0;
     uint32_t QuestStartScreenMusic = 2, QuestCompleteScreenMusic = 3, QuestFailureScreenMusic = 9, DeathScreenMusic = 14;
     std::string CountUpSound;
     float DigitCountTime = 3.0f;
     uint32_t SaveHeroGraphicIndex = 0;
-    std::map<int32_t, std::string> MiniMapGraphics;
+
     std::string SoundKeyboardUp, SoundKeyboardDown, SoundKeyboardLeft, SoundKeyboardRight;
     std::string SoundKeyboardEnterCharacter, SoundKeyboardDeleteCharacter, SoundKeyboardDone;
-    std::wstring FrontEndMusic; // CWideString in game
+    std::wstring FrontEndMusic;
     int32_t KeyboardSmallKeyGraphic = 0, KeyboardLargeKeyGraphic = 0;
     float TimeInSecsForFade = 0, BackBufferFilterSaturation = 0, BackBufferFilterContrast = 0, BackBufferFilterBrightness = 0;
     float BackBufferFilterTintR = 0, BackBufferFilterTintG = 0, BackBufferFilterTintB = 0, BackBufferFilterTintScale = 0;
@@ -690,12 +777,13 @@ public:
         persist.Transfer("LogBookQuestCategoryNameString", LogBookQuestCategoryNameString, std::wstring(L""));
         persist.Transfer("LogBookStoryCategoryNameString", LogBookStoryCategoryNameString, std::wstring(L""));
         persist.TransferMap("MapPaths", MapPaths, (uint32_t)0);
-        persist.Transfer("SoundUpDown", SoundUpDown, std::string(""));
-        persist.Transfer("SoundSlider", SoundSlider, std::string(""));
-        persist.Transfer("SoundBack", SoundBack, std::string(""));
-        persist.Transfer("SoundForward", SoundForward, std::string(""));
-        persist.Transfer("SoundError", SoundError, std::string(""));
-        persist.Transfer("SoundExit", SoundExit, std::string(""));
+        persist.Transfer("SoundUpDown", SoundUpDown, "");
+        persist.Transfer("SoundSlider", SoundSlider, "");
+        persist.Transfer("SoundBack", SoundBack, "");
+        persist.Transfer("SoundForward", SoundForward, "");
+        persist.Transfer("SoundError", SoundError, "");
+        persist.Transfer("SoundExit", SoundExit, "");
+
         persist.Transfer("HeroDollTLX", HeroDollTL.x, 310.0f);
         persist.Transfer("HeroDollTLY", HeroDollTL.y, 33.0f);
         persist.Transfer("HeroDollBRX", HeroDollBR.x, 560.0f);
@@ -716,14 +804,16 @@ public:
         persist.Transfer("CountUpSound", CountUpSound, std::string(""));
         persist.Transfer("DigitCountTime", DigitCountTime, 3.0f);
         persist.Transfer("SaveHeroGraphicIndex", SaveHeroGraphicIndex, (uint32_t)0);
-        persist.TransferMap("MiniMapGraphics", MiniMapGraphics, std::string(""));
-        persist.Transfer("SoundKeyboardUp", SoundKeyboardUp, std::string(""));
-        persist.Transfer("SoundKeyboardDown", SoundKeyboardDown, std::string(""));
-        persist.Transfer("SoundKeyboardLeft", SoundKeyboardLeft, std::string(""));
-        persist.Transfer("SoundKeyboardRight", SoundKeyboardRight, std::string(""));
-        persist.Transfer("SoundKeyboardEnterCharacter", SoundKeyboardEnterCharacter, std::string(""));
-        persist.Transfer("SoundKeyboardDeleteCharacter", SoundKeyboardDeleteCharacter, std::string(""));
-        persist.Transfer("SoundKeyboardDone", SoundKeyboardDone, std::string(""));
+
+        persist.TransferMap("MiniMapGraphics", MiniMapGraphics, (uint32_t)0);
+        persist.Transfer("SoundKeyboardUp", SoundKeyboardUp, "");
+        persist.Transfer("SoundKeyboardDown", SoundKeyboardDown, "");
+        persist.Transfer("SoundKeyboardLeft", SoundKeyboardLeft, "");
+        persist.Transfer("SoundKeyboardRight", SoundKeyboardRight, "");
+        persist.Transfer("SoundKeyboardEnterCharacter", SoundKeyboardEnterCharacter, "");
+        persist.Transfer("SoundKeyboardDeleteCharacter", SoundKeyboardDeleteCharacter, "");
+        persist.Transfer("SoundKeyboardDone", SoundKeyboardDone, "");
+
         persist.Transfer("FrontEndMusic", FrontEndMusic, std::wstring(L""));
         persist.Transfer("KeyboardSmallKeyGraphic", KeyboardSmallKeyGraphic, (int32_t)0);
         persist.Transfer("KeyboardLargeKeyGraphic", KeyboardLargeKeyGraphic, (int32_t)0);
@@ -802,12 +892,6 @@ public:
     }
 };
 
-// ============================================================
-// TransferVector<CActionInputControl> template specialization
-// Must be defined here after CActionInputControl is in scope
-// Parses: VectorName.Add(CActionInputControl(action, ctrl_type, key[, C2DCoordF(x,y)]));
-// From: CPersistTraits<CActionInputControl>::TransferIn (ida_funcs.c line 1071-1197)
-// ============================================================
 template<>
 inline void CPersistContext::TransferVector<CActionInputControl>(
     const char* name, std::vector<CActionInputControl>& vec)
@@ -845,23 +929,28 @@ inline void CPersistContext::TransferVector<CActionInputControl>(
                     BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
                     vec.push_back(item);
                     pos = fieldStart; // re-scan from start (blanked, won't re-match)
-                } else if (cmd == "clear") {
+                }
+                else if (cmd == "clear") {
                     SkipChar(scanPos, '(');
                     SkipChar(scanPos, ')');
                     size_t sc = FindSemicolon(scanPos);
                     BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
                     vec.clear();
                     pos = fieldStart;
-                } else {
+                }
+                else {
                     pos = scanPos;
                 }
-            } else {
+            }
+            else {
                 pos = found + 1; // Not a vector command, skip
             }
         }
         return;
     }
     if (Mode == MODE_SAVE_BINARY) {
+        if (!m_ForceNoTags && vec.empty()) return; // SKIP EMPTY VECTORS
+
         WriteTag(name);
         PSaveStream->WriteSLONG((int32_t)vec.size());
         for (auto& item : vec) item.Transfer(*this);

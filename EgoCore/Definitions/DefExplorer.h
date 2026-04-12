@@ -153,9 +153,11 @@ static void DrawDefTab() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("EXPERIMENTAL: Generates frontend.bin and name.bin natively\n(Bypasses ego_r.exe).");
     ImGui::PopStyleColor(3);
+    
 
     ImGui::SameLine();
     */
+
     // --- OLD: STEALTH COMPILER BUTTON ---
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.3f, 0.3f, 1.0f));
     if (ImGui::Button("RECOMPILE", ImVec2(compileBtnWidth, 0))) {

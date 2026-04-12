@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <zlib.h>
+#include <filesystem>
 
 CDefStringTable* GDefStringTable = nullptr;
 
@@ -77,6 +78,21 @@ void CDefinitionManager::CreateSymbolsFromPathList() {
         }
         ParseStringForSymbols(rawContent, false);
     }
+
+    // --- HARDCODED OVERRIDES FOR BITSHIFT ENUMS ---
+    // Bypasses parser complexity for guaranteed vanilla parity
+    m_SymbolMap["UI_STATE_CHANGE_NO_UPDATE"] = 0;
+    m_SymbolMap["UI_STATE_CHANGE_UPDATE_MOVEMENT"] = 1;
+    m_SymbolMap["UI_STATE_CHANGE_UPDATE_COLOUR"] = 2;
+    m_SymbolMap["UI_STATE_CHANGE_UPDATE_ZOOM"] = 4;
+    m_SymbolMap["UI_STATE_CHANGE_UPDATE_GRAPHIC"] = 8;
+    m_SymbolMap["UI_STATE_CHANGE_USE_OWN_COLOUR"] = 16;
+    m_SymbolMap["UI_STATE_CHANGE_USE_OWN_POSITION"] = 32;
+    m_SymbolMap["UI_STATE_CHANGE_USE_OWN_ZOOM"] = 64;
+
+    m_SymbolMap["TABLE_EXPANSION_HORIZONTAL"] = 1;
+    m_SymbolMap["TABLE_EXPANSION_VERTICAL"] = 2;
+
     LogToFile("Symbol Map populated with " + std::to_string(m_SymbolMap.size()) + " entries.");
 }
 
@@ -98,63 +114,72 @@ void CDefinitionManager::ParseEnumForSymbols(CStringParser& parser) {
 
         std::string memberName = item.StringValue;
 
-        std::string symbol = "";
         if (parser.PeekNextItemType() == EParsedItemType::Symbol) {
-             parser.ReadAsSymbol(symbol);
-        }
+            CParsedItem peekSym;
+            parser.PeekNextItem(peekSym);
+            if (peekSym.StringValue == "=") {
+                parser.ReadNextItem(peekSym); // Consume '='
 
-        if (symbol == "=") {
-            // handle hex, negative, bitshifts, or identifiers
-            CParsedItem valItem;
-            if (parser.ReadNextItem(valItem)) {
-                 if (valItem.Type == EParsedItemType::Integer) {
-                     currentValue = valItem.IntValue;
-                 } else if (valItem.Type == EParsedItemType::Identifier) {
-                     auto it = m_SymbolMap.find(valItem.StringValue);
-                     if (it != m_SymbolMap.end()) currentValue = it->second;
-                     
-                     // Read away any trailing operations like `<< 8`
-                     while (true) {
-                         CParsedItem junk;
-                         if (!parser.PeekNextItem(junk)) break;
-                         if (junk.StringValue == "," || junk.StringValue == "}") break;
-                         
-                         parser.ReadNextItem(junk);
-                         if (junk.StringValue == "<<" || junk.StringValue == ">>") {
-                             CParsedItem shift;
-                             if (parser.ReadNextItem(shift) && shift.Type == EParsedItemType::Integer) {
-                                 if (junk.StringValue == "<<") currentValue <<= shift.IntValue;
-                                 else currentValue >>= shift.IntValue;
-                             }
-                         }
-                     }
-                 }
-            }
-            m_SymbolMap[memberName] = currentValue;
-            
-            if (parser.PeekNextItemType() == EParsedItemType::Symbol) {
-                parser.PeekNextItem(valItem);
-                if (valItem.StringValue == ",") {
-                    parser.ReadAsSymbol(symbol);
-                } else if (valItem.StringValue == "}") {
-                    // let loop handle }
+                currentValue = 0;
+                int currentOperand = 0;
+                std::string currentOp = "";
+
+                // Robust Expression Evaluator
+                while (true) {
+                    CParsedItem token;
+                    if (!parser.PeekNextItem(token)) break;
+                    if (token.StringValue == "," || token.StringValue == "}") break;
+
+                    parser.ReadNextItem(token);
+
+                    if (token.Type == EParsedItemType::Integer) {
+                        currentOperand = token.IntValue;
+                    }
+                    else if (token.Type == EParsedItemType::Identifier) {
+                        auto it = m_SymbolMap.find(token.StringValue);
+                        if (it != m_SymbolMap.end()) currentOperand = it->second;
+                        else currentOperand = 0;
+                    }
+                    else if (token.Type == EParsedItemType::Symbol) {
+                        if (token.StringValue == "<" || token.StringValue == ">") {
+                            CParsedItem token2;
+                            if (parser.PeekNextItem(token2) && token2.StringValue == token.StringValue) {
+                                parser.ReadNextItem(token2); // Consume second '<' or '>'
+                                currentOp = token.StringValue + token2.StringValue;
+                                continue;
+                            }
+                        }
+                        else if (token.StringValue == "|" || token.StringValue == "+" || token.StringValue == "-") {
+                            currentOp = token.StringValue;
+                            continue;
+                        }
+                    }
+
+                    // Apply operation
+                    if (currentOp == "<<") currentValue <<= currentOperand;
+                    else if (currentOp == ">>") currentValue >>= currentOperand;
+                    else if (currentOp == "|") currentValue |= currentOperand;
+                    else if (currentOp == "+") currentValue += currentOperand;
+                    else if (currentOp == "-") currentValue -= currentOperand;
+                    else currentValue = currentOperand; // First operand
+
+                    currentOp = "";
                 }
             }
-            currentValue++;
         }
-        else if (symbol == "," || symbol == "") {
-            m_SymbolMap[memberName] = currentValue;
-            currentValue++;
-        }
-        else if (symbol == "}") {
-            m_SymbolMap[memberName] = currentValue;
-            break;
-        }
-        else {
-            break;
-        }
-    }
 
+        m_SymbolMap[memberName] = currentValue;
+
+        // Gracefully consume trailing commas
+        if (parser.PeekNextItemType() == EParsedItemType::Symbol) {
+            CParsedItem valItem;
+            parser.PeekNextItem(valItem);
+            if (valItem.StringValue == ",") {
+                parser.ReadNextItem(valItem);
+            }
+        }
+        currentValue++;
+    }
 }
 
 void CDefinitionManager::ParseStringForSymbols(const std::string& script, bool parseDefs) {
@@ -270,15 +295,24 @@ void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::str
         if (it != m_Templates.end() && it->second->GetClassName() == defClass) {
             newDef = it->second;
         }
-    } else {
-        for (auto* existingDef : m_InstantiatedDefs) {
-            if (existingDef->GetInstantiationName() == defName && existingDef->GetClassName() == defClass) {
-                newDef = existingDef;
+    }
+    else {
+        for (size_t i = 0; i < m_InstantiatedDefs.size(); ++i) {
+            if (m_InstantiatedDefs[i]->GetInstantiationName() == defName && m_InstantiatedDefs[i]->GetClassName() == defClass) {
+                newDef = m_InstantiatedDefs[i];
+
+                // RESET the object to prevent cross-file pollution
+                // If it re-defines without 'specialises', Vanilla starts fresh.
+                IDefObject* fresh = classIt->second.AllocFunc();
+                fresh->SetInstantiationName(defName);
+                delete newDef;
+                m_InstantiatedDefs[i] = fresh;
+                newDef = fresh;
                 break;
             }
         }
     }
-    
+
     if (!newDef) {
         newDef = classIt->second.AllocFunc();
         if (!newDef) return;
@@ -328,33 +362,108 @@ void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::str
     }
     parser.SkipPastWholeString("#end_definition");
 
+    // --- NEW: Strip comments from defText to prevent raw text scanner bleeding ---
+    bool inQuotes = false;
+    for (size_t i = 0; i < defText.size(); ++i) {
+        if (defText[i] == '"') inQuotes = !inQuotes;
+
+        // If we hit a comment block outside of a quoted string
+        if (!inQuotes && defText[i] == '/' && i + 1 < defText.size()) {
+
+            // Single-line comment //
+            if (defText[i + 1] == '/') {
+                size_t j = i;
+                while (j < defText.size() && defText[j] != '\n') {
+                    defText[j] = ' ';
+                    j++;
+                }
+                i = j - 1; // Move iterator to end of this comment block
+            }
+            // Multi-line block comment /* */
+            else if (defText[i + 1] == '*') {
+                size_t j = i;
+                defText[j++] = ' ';
+                defText[j++] = ' ';
+                while (j < defText.size()) {
+                    if (j + 1 < defText.size() && defText[j] == '*' && defText[j + 1] == '/') {
+                        defText[j++] = ' ';
+                        defText[j++] = ' ';
+                        break;
+                    }
+                    // Blank everything except newlines to preserve line counting/offsets
+                    if (defText[j] != '\n' && defText[j] != '\r') {
+                        defText[j] = ' ';
+                    }
+                    j++;
+                }
+                i = j - 1; // Move iterator to end of this comment block
+            }
+        }
+    }
+    // ---------------------------------------------------------------------------
+
     CStringParser sandboxParser;
     sandboxParser.Init(defText, "Sandbox_" + defName);
 
-    while (sandboxParser.SkipPastString("<")) {
-        uint32_t startPos = sandboxParser.SaveState().Ptr - defText.data() - 1;
+    while (true) {
+        CParsedItem item;
+        // ReadNextItem safely steps over QuotedStrings, hiding false-positive '<' characters
+        if (!sandboxParser.ReadNextItem(item)) break;
 
-        std::string subDefClass;
-        sandboxParser.ReadAsIdentifierOrNumber(subDefClass);
+        if (item.Type == EParsedItemType::Symbol && item.StringValue == "<") {
 
-        std::string subDefName;
-        sandboxParser.ReadAsIdentifierOrNumber(subDefName);
+            // Ignore bitshifts '<<' or inequalities '<='
+            CParsedItem nextItem;
+            if (sandboxParser.PeekNextItem(nextItem) && nextItem.Type == EParsedItemType::Symbol &&
+                (nextItem.StringValue == "<" || nextItem.StringValue == "=")) {
+                continue;
+            }
 
-        std::string subDefText;
-        sandboxParser.ReadAsStringUntilString(">", subDefText);
-        sandboxParser.SkipPastString(">");
+            auto stateBeforeClass = sandboxParser.SaveState();
+            uint32_t startPos = stateBeforeClass.Ptr - defText.data() - 1;
 
-        uint32_t endPos = sandboxParser.SaveState().Ptr - defText.data();
+            std::string subDefClass;
+            if (!sandboxParser.ReadAsIdentifierOrNumber(subDefClass)) continue;
 
-        CStringParser subParser;
-        subParser.Init(subDefText, "SubDef_" + subDefName);
+            std::string subDefName;
+            if (!sandboxParser.ReadAsIdentifierOrNumber(subDefName)) {
+                sandboxParser.RestoreState(stateBeforeClass);
+                continue;
+            }
 
-        LogToFile("      + " + subDefClass + " [" + subDefName + "] (Inline Sub-Definition)");
+            // Scan forward for '>'
+            uint32_t contentStart = sandboxParser.SaveState().Ptr - defText.data();
+            bool foundEnd = false;
 
-        CompileDefinition(subParser, subDefClass, subDefName, false);
-        for (uint32_t i = startPos; i < endPos; ++i) {
-            if (defText[i] != '\n' && defText[i] != '\r') {
-                defText[i] = ' ';
+            while (sandboxParser.ReadNextItem(item)) {
+                if (item.Type == EParsedItemType::Symbol && item.StringValue == ">") {
+                    foundEnd = true;
+                    break;
+                }
+            }
+
+            if (!foundEnd) {
+                sandboxParser.RestoreState(stateBeforeClass);
+                continue;
+            }
+
+            uint32_t endPos = sandboxParser.SaveState().Ptr - defText.data();
+            uint32_t contentEnd = endPos - 1;
+
+            std::string subDefText = defText.substr(contentStart, contentEnd - contentStart);
+
+            CStringParser subParser;
+            subParser.Init(subDefText, "SubDef_" + subDefName);
+
+            LogToFile("      + " + subDefClass + " [" + subDefName + "] (Inline Sub-Definition)");
+
+            CompileDefinition(subParser, subDefClass, subDefName, false);
+
+            // Blank out the parsed region so the main CPersistContext scanner ignores it
+            for (uint32_t i = startPos; i < endPos; ++i) {
+                if (defText[i] != '\n' && defText[i] != '\r') {
+                    defText[i] = ' ';
+                }
             }
         }
     }
@@ -367,10 +476,12 @@ void CDefinitionManager::CompileDefinition(CStringParser& parser, const std::str
     newDef->Transfer(loadCtx);
 
     if (bIsNew) {
+        // Fable requires templates to be compiled into the binary 
+        // so the engine can use them as runtime prefabs!
+        m_InstantiatedDefs.push_back(newDef);
+
         if (isTemplate) {
             m_Templates[defName] = newDef;
-        } else {
-            m_InstantiatedDefs.push_back(newDef);
         }
     }
 }
@@ -384,7 +495,7 @@ void CDefinitionManager::SaveBinaryDefinitions() {
     }
 
     LogToFile(" -> Writing Global Header...");
-    bool useSafeBinary = true;
+    bool useSafeBinary = false;
     uint32_t dependencyCRC = 0xE86E4CDE;
     uint32_t randomID = m_StringTable ? m_StringTable->m_RandomID : 0xA8E36C34;
     uint32_t noDefs = (uint32_t)m_InstantiatedDefs.size();
@@ -456,6 +567,49 @@ void CDefinitionManager::SaveBinaryDefinitions() {
     LogToFile("Binary Sequence Complete. frontend.bin written to disk.");
 }
 
+void CDefinitionManager::DumpIndividualBinaries(const std::string& outDir) {
+    LogToFile("--- Starting Individual Binary Dump ---");
+
+    int dumpedCount = 0;
+    for (IDefObject* obj : m_InstantiatedDefs) {
+        if (!obj) continue;
+
+        std::string className = obj->GetClassName();
+        std::string instName = obj->GetInstantiationName();
+
+        // 1. Create the Class directory (e.g., DumpDir/CONTROL_SCHEME/)
+        std::filesystem::path dir = std::filesystem::path(outDir) / className;
+        std::filesystem::create_directories(dir);
+
+        // 2. Setup an isolated binary stream for this specific object
+        CMemoryDataOutputStream objStream;
+        CPersistContext persist(&objStream, CPersistContext::MODE_SAVE_BINARY);
+        persist.m_ForceNoTags = false;
+
+        // Add the missing header! (256 matches Vanilla's 00 01 00 00)
+        // To this dynamic check:
+        uint32_t objectVersion = (className == "UI") ? 257 : 256;
+        persist.TransferObjectHeader(objectVersion);
+
+        // 3. Serialize the object into the isolated stream
+        obj->Transfer(persist);
+
+        // 4. Write it to disk (e.g., DumpDir/CONTROL_SCHEME/FABLE_PC_CONTROL_SCHEME_GDD.bin)
+        std::filesystem::path filePath = dir / (instName + ".bin");
+        std::ofstream outFile(filePath, std::ios::binary);
+
+        if (outFile.is_open()) {
+            if (objStream.GetLength() > 0) {
+                outFile.write(reinterpret_cast<const char*>(objStream.PeekData()), objStream.GetLength());
+            }
+            outFile.close();
+            dumpedCount++;
+        }
+    }
+
+    LogToFile("Successfully dumped " + std::to_string(dumpedCount) + " individual binaries to: " + outDir);
+}
+
 void CDefinitionManager::CompressBlock(std::vector<uint8_t>& uncompressed, std::vector<uint16_t>& offsets,
     uint32_t firstDef, std::vector<std::pair<uint32_t, uint32_t>>& chunkMap,
     std::vector<uint8_t>& compressedStream) {
@@ -481,7 +635,6 @@ void CDefinitionManager::CompressBlock(std::vector<uint8_t>& uncompressed, std::
     c_stream.zfree = Z_NULL;
     c_stream.opaque = Z_NULL;
 
-    // Initialize with Level 1 (Z_BEST_SPEED)
     deflateInit(&c_stream, 1);
 
     c_stream.next_in = blockBuffer.data();

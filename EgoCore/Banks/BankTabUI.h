@@ -213,9 +213,15 @@ static void DrawBankTab() {
                 LoadedBank* b = &g_OpenBanks[g_ActiveBankIndex];
 
                 ETextureFormat fmt = ETextureFormat::DXT3;
-                if (g_ImportFormat == 0) fmt = ETextureFormat::DXT1;
-                else if (g_ImportFormat == 2) fmt = ETextureFormat::DXT5;
-                else if (g_ImportFormat == 3) fmt = ETextureFormat::ARGB8888;
+                if (g_ImportFormat == 0) {
+                    fmt = (g_ImportType == 2) ? ETextureFormat::NormalMap_DXT1 : ETextureFormat::DXT1;
+                }
+                else if (g_ImportFormat == 2) {
+                    fmt = (g_ImportType == 2) ? ETextureFormat::NormalMap_DXT5 : ETextureFormat::DXT5;
+                }
+                else if (g_ImportFormat == 3) {
+                    fmt = ETextureFormat::ARGB8888;
+                }
 
                 bool doGenerate = (g_ImportType == 2 && g_ImportGenerateBump);
                 CreateNewTextureEntry(b, g_PendingImportPath, fmt, g_ImportType, doGenerate);

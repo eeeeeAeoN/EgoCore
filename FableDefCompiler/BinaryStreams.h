@@ -27,13 +27,13 @@ public:
     CDefStringTable(uint32_t randomId = 0xDEADBEEF) : m_RandomID(randomId), m_StringCount(0) {}
 
     static uint32_t GetCRC(const std::string& str) {
-        uint32_t crc = 0;
+        uint32_t crc = 0xFFFFFFFF; // Initialize to standard CRC32 start
         for (char c : str) {
-            crc ^= static_cast<uint8_t>(c);
+            crc ^= static_cast<uint8_t>(std::tolower(c));
             for (int j = 0; j < 8; ++j)
                 crc = (crc >> 1) ^ (-(int32_t)(crc & 1) & 0xEDB88320);
         }
-        return crc;
+        return ~crc; // Return bitwise NOT
     }
 
     uint32_t AddString(const std::string& text) {
@@ -229,21 +229,17 @@ public:
 
     void WriteTag(const char* name) {
         if (Mode == MODE_SAVE_BINARY && PSaveStream && !m_ForceNoTags) {
-            uint32_t crc = UseFableCRC ? CDefStringTable::GetCRC(name) : CalculateStdCRC32(name);
+            // Case matters! Fable uses its custom CRC (starts at 0, no invert) for tags.
+            uint32_t crc = CalculateFableCRC32(name);
             PSaveStream->WriteSLONG((int32_t)crc);
         }
     }
 
     void TransferObjectHeader(uint32_t version, bool bForce = false) {
         if (Mode == MODE_SAVE_BINARY && PSaveStream) {
-            if (version == 0 && !bForce) {
-                // Vanilla frontend binaries often use a 5-byte zero header for Version 0
-                for(int i=0; i<5; ++i) { uint8_t zero = 0; PSaveStream->Write(&zero, 1); }
-            } else {
-                PSaveStream->WriteEBOOL(true); // IsObject
-                PSaveStream->WriteSLONG((int32_t)version);
-                PSaveStream->WriteEBOOL(bForce);
-            }
+            PSaveStream->WriteEBOOL(true); // Always tag it as a versioned object
+            PSaveStream->WriteSLONG((int32_t)version);
+            // PSaveStream->WriteEBOOL(bForce); <--- REMOVE THIS. Fable doesn't serialize it.
         }
     }
 
@@ -306,11 +302,18 @@ public:
         size_t nlen = std::strlen(name);
         size_t pos = startPos;
         while (pos + nlen <= text.size()) {
-            pos = text.find(name, pos);
-            if (pos == std::string::npos) return std::string::npos;
-            bool prevOk = (pos == 0) || IsWordBoundary(text[pos - 1]);
-            bool nextOk = (pos + nlen >= text.size()) || IsWordBoundary(text[pos + nlen]);
-            if (prevOk && nextOk) return pos + nlen;
+            bool match = true;
+            for (size_t i = 0; i < nlen; ++i) {
+                if (std::tolower((unsigned char)text[pos + i]) != std::tolower((unsigned char)name[i])) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                bool prevOk = (pos == 0) || IsWordBoundary(text[pos - 1]);
+                bool nextOk = (pos + nlen >= text.size()) || IsWordBoundary(text[pos + nlen]);
+                if (prevOk && nextOk) return pos + nlen;
+            }
             pos++;
         }
         return std::string::npos;
@@ -368,13 +371,18 @@ public:
             if (text[pos] == '\\' && pos + 1 < text.size()) {
                 pos++;
                 switch (text[pos]) {
-                    case 'n': result += '\n'; break;
-                    case 't': result += '\t'; break;
-                    case '"': result += '"'; break;
-                    case '\\': result += '\\'; break;
-                    default: result += text[pos]; break;
+                case 'n': result += '\n'; break;
+                case 't': result += '\t'; break;
+                case '"': result += '"'; break;
+                case '\\': result += '\\'; break;
+                default:
+                    // If it's an unknown escape (like \V), keep the backslash!
+                    result += '\\';
+                    result += text[pos];
+                    break;
                 }
-            } else {
+            }
+            else {
                 result += text[pos];
             }
             pos++;
@@ -519,7 +527,8 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
-            if (!m_ForceNoTags && val == defaultVal) return;
+            // DELETED: && val == defaultVal
+            if (m_ForceNoTags) { PSaveStream->WriteEBOOL(val); return; }
             WriteTag(name);
             PSaveStream->WriteEBOOL(val);
         }
@@ -537,7 +546,7 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
-            if (!m_ForceNoTags && val == defaultVal) return;
+            if (m_ForceNoTags) { PSaveStream->WriteSLONG(val); return; }
             WriteTag(name);
             PSaveStream->WriteSLONG(val);
         }
@@ -555,7 +564,7 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
-            if (!m_ForceNoTags && val == defaultVal) return;
+            if (m_ForceNoTags) { PSaveStream->WriteSLONG((int32_t)val); return; }
             WriteTag(name);
             PSaveStream->WriteSLONG((int32_t)val);
         }
@@ -573,7 +582,7 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
-            if (!m_ForceNoTags && val == defaultVal) return;
+            if (m_ForceNoTags) { PSaveStream->WriteFloat(val); return; }
             WriteTag(name);
             PSaveStream->WriteFloat(val);
         }
@@ -602,7 +611,7 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
-            if (!m_ForceNoTags && val == defaultVal) return;
+            if (m_ForceNoTags) { PSaveStream->WriteNullTerminatedWString(val); return; }
             WriteTag(name);
             PSaveStream->WriteNullTerminatedWString(val);
         }
@@ -628,7 +637,7 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
-            if (!m_ForceNoTags && val == defaultVal) return;
+            if (m_ForceNoTags) { PSaveStream->WriteCharString(val); return; }
             WriteTag(name);
             PSaveStream->WriteCharString(val);
         }
@@ -646,7 +655,7 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
-            if (!m_ForceNoTags && val == defaultVal) return;
+            if (m_ForceNoTags) { PSaveStream->Write(&val, 1); return; }
             WriteTag(name);
             PSaveStream->Write(&val, 1);
         }
@@ -709,13 +718,15 @@ public:
                         BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
                         vec.push_back(item);
                         pos = fieldStart; // re-scan (blanked region won't match again)
-                    } else if (cmd == "clear") {
+                    }
+                    else if (cmd == "clear") {
                         SkipChar(scanPos, '('); SkipChar(scanPos, ')');
                         size_t sc = FindSemicolon(scanPos);
                         BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
                         vec.clear();
                         pos = fieldStart;
-                    } else if (cmd == "resize") {
+                    }
+                    else if (cmd == "resize") {
                         SkipChar(scanPos, '(');
                         int32_t newSize = ReadIntExpr(scanPos);
                         SkipChar(scanPos, ')');
@@ -723,10 +734,12 @@ public:
                         BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
                         vec.resize((size_t)newSize);
                         pos = fieldStart;
-                    } else {
+                    }
+                    else {
                         pos = scanPos;
                     }
-                } else if (nextCh == '[') {
+                }
+                else if (nextCh == '[') {
                     scanPos++;
                     int32_t idx = ReadIntExpr(scanPos);
                     SkipChar(scanPos, ']');
@@ -737,13 +750,16 @@ public:
                     size_t sc = FindSemicolon(scanPos);
                     BlankRegion(fieldStart, sc != std::string::npos ? sc : scanPos);
                     pos = fieldStart;
-                } else {
+                }
+                else {
                     pos = found + 1; // Not a vector command, skip
                 }
             }
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
+            //if (!m_ForceNoTags && vec.empty()) return; // SKIP EMPTY VECTORS
+
             WriteTag(name);
             PSaveStream->WriteSLONG((int32_t)vec.size());
             for (auto& item : vec) WriteVecItem(item);
@@ -755,7 +771,7 @@ public:
         if (Mode == MODE_LOAD_TEXT) {
             if (!PDefText) return;
             std::string& text = *PDefText;
-            
+
             // Step 1: Discover all indices used for this vector prefix (e.g. States[X])
             size_t nlen = std::strlen(name);
             size_t pos = 0;
@@ -765,7 +781,7 @@ public:
             while (true) {
                 size_t found = FindLiteralWholeWord(text, name, pos);
                 if (found == std::string::npos) break;
-                
+
                 size_t scanPos = found;
                 SkipWS(scanPos);
                 if (scanPos < text.size() && text[scanPos] == '[') {
@@ -774,13 +790,14 @@ public:
                     if (idx >= 0) {
                         if (idx > maxIdx) maxIdx = idx;
                         bool exists = false;
-                        for(int32_t used : usedIndices) if(used == idx) exists = true;
-                        if(!exists) usedIndices.push_back(idx);
+                        for (int32_t used : usedIndices) if (used == idx) exists = true;
+                        if (!exists) usedIndices.push_back(idx);
                     }
                     SkipWS(scanPos);
                     if (scanPos < text.size() && text[scanPos] == ']') scanPos++;
                     pos = scanPos;
-                } else {
+                }
+                else {
                     pos = found;
                 }
             }
@@ -788,7 +805,7 @@ public:
             if (maxIdx == -1) return;
             // Sorting indices to match vanilla serialization order (usually 0, 1, 2...)
             std::sort(usedIndices.begin(), usedIndices.end());
-            
+
             if ((size_t)(maxIdx + 1) > vec.size()) vec.resize((size_t)maxIdx + 1);
 
             // Step 2: For each used index, call Transfer with a filter
@@ -802,17 +819,14 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
+            //if (!m_ForceNoTags && vec.empty()) return; // SKIP EMPTY VECTORS
+
             WriteTag(name);
             PSaveStream->WriteSLONG((int32_t)vec.size());
             for (auto& item : vec) item.Transfer(*this);
         }
     }
 
-    // --------------------------------------------------------
-    // TransferMap
-    // Text: scans for "name[key] value;" patterns
-    // Binary: GFSerialiseMapBinaryOut<K,V>
-    // --------------------------------------------------------
     template<typename K, typename V>
     void TransferMap(const char* name, std::map<K, V>& m, const V& defaultV) {
         if (Mode == MODE_LOAD_TEXT) {
@@ -848,12 +862,34 @@ public:
             return;
         }
         if (Mode == MODE_SAVE_BINARY) {
+            //if (!m_ForceNoTags && m.empty()) return; // SKIP EMPTY MAPS
+
             WriteTag(name);
             PSaveStream->WriteSLONG((int32_t)m.size());
             for (auto& pair : m) {
                 WriteMapKey(pair.first);
                 WriteMapVal(pair.second);
             }
+        }
+    }
+
+    template<typename T>
+    void TransferEnum(const char* name, T& val, const T& defaultVal) {
+        if (Mode == MODE_LOAD_TEXT) {
+            size_t after = FindWholeWord(name);
+            if (after == std::string::npos) return;
+            size_t fieldStart = after - std::strlen(name);
+            size_t pos = after;
+            val = (T)ReadIntExpr(pos);
+            size_t sc = FindSemicolon(pos);
+            BlankRegion(fieldStart, sc != std::string::npos ? sc : pos);
+            return;
+        }
+        if (Mode == MODE_SAVE_BINARY) {
+            // ENUM UNCONDITIONAL WRITE: We intentionally DO NOT check if val == defaultVal.
+            // Lionhead's engine always writes Enum tags and values to the binary.
+            WriteTag(name);
+            PSaveStream->WriteSLONG((int32_t)val);
         }
     }
 

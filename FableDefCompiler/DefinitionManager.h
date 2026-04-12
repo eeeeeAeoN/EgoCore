@@ -35,6 +35,7 @@ public:
     void AddDefClass(const std::string& name, DefAllocFunc allocFunc);
     void SetSymbolPaths(const std::vector<std::wstring>& paths);
     void SetCompilePaths(const std::vector<std::wstring>& paths);
+    void DumpIndividualBinaries(const std::string& outDir);
 
     void Compile();
 

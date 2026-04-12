@@ -40,8 +40,6 @@ namespace FableCompiler {
             defsRoot + L"RetailHeaders\\fonts.h",
             defsRoot + L"RetailHeaders\\pc\\front_end_bank.h",
             defsRoot + L"RetailHeaders\\pc\\particles_frontend.h",
-            defsRoot + L"ui.def",
-            defsRoot + L"pc_ui.def",
             defsRoot + L"FrontEndDefs\\engine.def",
             defsRoot + L"FrontEndDefs\\engine_video_options.def",
             defsRoot + L"FrontEndDefs\\front_end.def",
@@ -52,11 +50,11 @@ namespace FableCompiler {
             defsRoot + L"controller_def.h",
             defsRoot + L"keyboard_keys.h",
             defsRoot + L"pc_controls.def"
+            // REMOVED ui.def and pc_ui.def!
             });
 
         LogToFile("Queueing definition files...");
         defManager.SetCompilePaths({
-            defsRoot + L"ui.def",
             defsRoot + L"FrontEndDefs\\engine.def",
             defsRoot + L"FrontEndDefs\\engine_video_options.def",
             defsRoot + L"FrontEndDefs\\front_end.def",
@@ -64,9 +62,14 @@ namespace FableCompiler {
             defsRoot + L"FrontEndDefs\\pc_frontend.def",
             defsRoot + L"pc_controls.def",
             defsRoot + L"config_options_defaults.def"
+            // REMOVED ui.def!
             });
 
         defManager.Compile();
+
+        std::string dumpDirectory = fableRootPath + "\\Data\\CompiledDefs\\DebugDump";
+        defManager.DumpIndividualBinaries(dumpDirectory);
+        // ----------------------------------------
 
         LogToFile("--- Compilation Finished ---");
         if (g_LogFile.is_open()) g_LogFile.close();
