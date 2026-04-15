@@ -11,6 +11,9 @@
 #include <cstring>
 #include "MetParser.h"
 
+inline LugParser::ParsedLugEntry g_ActiveAudioEntry;
+inline int g_LastSelectedAudioIndex = -1;
+
 static bool InputString(const char* label, std::string & str, int maxLen = 255) {
     static char buf[1024];
     strncpy_s(buf, str.c_str(), _TRUNCATE);
@@ -34,7 +37,7 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
     if (!bank || !bank->LugParserPtr) return;
     auto& lug = bank->LugParserPtr;
 
-    ImGui::TextDisabled("LUG Script Bank (.lug)");
+    ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.6f, 1.0f), "Audio Player");
     ImGui::Separator();
 
     if (bank->SelectedEntryIndex == -1 || bank->SelectedEntryIndex >= lug->Entries.size()) {
@@ -42,7 +45,11 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
         return;
     }
 
-    auto& e = lug->Entries[bank->SelectedEntryIndex];
+    if (bank->SelectedEntryIndex != g_LastSelectedAudioIndex) {
+        g_ActiveAudioEntry = lug->Entries[bank->SelectedEntryIndex];
+        g_LastSelectedAudioIndex = bank->SelectedEntryIndex;
+    }
+    auto& e = g_ActiveAudioEntry;
 
     float currentT = player.GetCurrentTime();
     float totalT = player.GetTotalDuration();
@@ -95,6 +102,10 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
             if (lug->ImportWav(bank->SelectedEntryIndex, p)) {
                 player.Reset();
                 SyncUIList();
+
+                StagedEntry dummy;
+                bank->StagedEntries[bank->SelectedEntryIndex] = dummy;
+
                 g_SuccessMessage = "WAV file replaced successfully (Memory).\nRecompile to save to disk.";
                 g_ShowSuccessPopup = true;
             }
@@ -123,7 +134,7 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
     if (ImGui::DragFloat("Probability %%", &e.Probability, 0.5f, 0.0f, 100.0f, "%.1f")) lug->IsDirty = true;
 
     ImGui::Separator();
-    ImGui::Text("3D & Distances:");
+    ImGui::Text("Distances:");
     if (ImGui::DragFloat("Min Dist", &e.MinDist, 0.5f, 0.0f, 5000.0f)) { e.Flag_UseMinDist = true; lug->IsDirty = true; }
     if (ImGui::DragFloat("Max Dist", &e.MaxDist, 0.5f, 0.0f, 5000.0f)) { e.Flag_UseMaxDist = true; lug->IsDirty = true; }
 

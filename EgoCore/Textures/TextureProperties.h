@@ -458,14 +458,10 @@ inline void DrawTextureProperties() {
         ImGui::Separator();
 
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Bumpmap Settings:");
-        ImGui::Checkbox("Generate Normal Map from Image", &g_ImportOptions.IsBumpmap);
+        ImGui::Checkbox("Convert image to a bumpmap.", &g_ImportOptions.IsBumpmap);
 
         if (g_ImportOptions.IsBumpmap) {
             ImGui::SliderFloat("Bump Intensity", &g_ImportOptions.BumpFactor, 0.1f, 20.0f, "%.1f");
-            ImGui::TextDisabled("Auto-converts colors to a Fable normal map.");
-        }
-        else {
-            ImGui::TextDisabled("Imports the image as-is (must already be a normal map).");
         }
         ImGui::Dummy(ImVec2(0, 5));
 
@@ -478,10 +474,10 @@ inline void DrawTextureProperties() {
         else if (g_ImportOptions.Format == ETextureFormat::DXT5 || g_ImportOptions.Format == ETextureFormat::NormalMap_DXT5) formatRadio = 2;
         else if (g_ImportOptions.Format == ETextureFormat::ARGB8888) formatRadio = 3;
 
-        ImGui::RadioButton("DXT1 (Opaque/1-bit Alpha)", &formatRadio, 0);
-        ImGui::RadioButton("DXT3 (Sharp Alpha)", &formatRadio, 1);
-        ImGui::RadioButton("DXT5 (Smooth Alpha)", &formatRadio, 2);
-        ImGui::RadioButton("ARGB (Uncompressed)", &formatRadio, 3);
+        ImGui::RadioButton("DXT1", &formatRadio, 0);
+        ImGui::RadioButton("DXT3", &formatRadio, 1);
+        ImGui::RadioButton("DXT5", &formatRadio, 2);
+        ImGui::RadioButton("ARGB", &formatRadio, 3);
 
         if (formatRadio == 0) g_ImportOptions.Format = g_ImportOptions.IsBumpmap ? ETextureFormat::NormalMap_DXT1 : ETextureFormat::DXT1;
         else if (formatRadio == 1) g_ImportOptions.Format = ETextureFormat::DXT3;

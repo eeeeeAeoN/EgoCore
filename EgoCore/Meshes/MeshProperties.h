@@ -59,6 +59,7 @@ static bool g_ExportTextures = true;
 static bool g_ExportAnimation = true;
 static bool g_ShowExportPopup = false;
 static bool g_TriggerExportPopup = false;
+inline bool g_IsMeshViewportHovered = false;
 
 struct VolumeBoxState {
     bool IsBoxMode = false;
@@ -843,6 +844,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     }
 
     ImGui::BeginChild("MeshViewportChild", ImVec2(viewportWidth, avail.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    g_IsMeshViewportHovered = ImGui::IsWindowHovered();
 
     g_MeshRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
     if (g_ShowPhysicsOverlay) g_PhysicsOverlayRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);

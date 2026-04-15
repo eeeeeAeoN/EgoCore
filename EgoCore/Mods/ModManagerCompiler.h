@@ -75,7 +75,7 @@ inline std::string GetEntryTypeName(EBankType bankType, int32_t type, const std:
         switch (type) {
         case 0: return "Graphic Single"; case 1: return "Graphic Sequence";
         case 2: return "Bumpmap"; case 3: return "Bumpmap Sequence";
-        case 4: return "Volume Texture"; case 5: return "Flat Sequence";
+        case 4: return "Volume Texture"; case 5: return "Sprite Sheet";
         default: return "Tex " + std::to_string(type);
         }
     }

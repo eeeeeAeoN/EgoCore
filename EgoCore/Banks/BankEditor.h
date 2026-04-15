@@ -603,7 +603,7 @@ inline void CreateNewParticleEntry(LoadedBank* bank) {
     BankEntry be;
     be.ID = newID;
     be.Type = 0;
-    be.Name = "New_Particle_" + std::to_string(newID);
+    be.Name = "NEWPARTICLE_" + std::to_string(newID);
     be.FriendlyName = be.Name;
     be.Size = 0;
     be.InfoSize = 0;
@@ -611,7 +611,7 @@ inline void CreateNewParticleEntry(LoadedBank* bank) {
     be.Timestamp = 0;
 
     CParticleEmitter newEmitter;
-    newEmitter.Name = be.Name;
+    newEmitter.Name = "NewParticle_" + std::to_string(newID);
     newEmitter.Magic = 0x64;
 
     CParticleSystem sys;
@@ -631,6 +631,9 @@ inline void CreateNewParticleEntry(LoadedBank* bank) {
     StagedEntry staged;
     staged.Particle = std::make_shared<CParticleEmitter>(newEmitter);
     bank->StagedEntries[newIndex] = staged;
+
+    bank->ModifiedEntryData[newIndex] = ParticleCompiler::Compile(newEmitter);
+    bank->Entries[newIndex].Size = (uint32_t)bank->ModifiedEntryData[newIndex].size();
 
     bank->FilterText[0] = '\0';
     UpdateFilter(*bank);
@@ -749,6 +752,12 @@ inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {
 
 inline void DeleteBankEntry(LoadedBank* bank, int index) {
     if (!bank || index < 0 || index >= (int)bank->Entries.size()) return;
+
+    if (bank->Entries.size() <= 1) {
+        g_BankStatus = "Cannot delete the last remaining entry.";
+        return;
+    }
+
     uint32_t targetID = bank->Entries[index].ID;
 
     if (bank->Type == EBankType::Audio) {
@@ -1306,16 +1315,29 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         g_BankStatus = "Shader assembly staged for compilation.";
     }
     else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
+        bank->LugParserPtr->Entries[bank->SelectedEntryIndex] = g_ActiveAudioEntry;
+        
+        // --- Not an ideal implementation. I don't care bite me! I don't get paid to do this.
+
         bank->LugParserPtr->IsDirty = true;
         g_BankStatus = "Audio Metadata staged to RAM.";
+
+        StagedEntry dummy;
+        bank->StagedEntries[bank->SelectedEntryIndex] = dummy;
+
+        UpdateFilter(*bank);
         return;
     }
     else if (bank->Type == EBankType::Effects) {
         if (g_ActiveParticleEmitter.Magic != 0) {
             staged.Particle = std::make_shared<CParticleEmitter>(g_ActiveParticleEmitter);
+
+            bank->ModifiedEntryData[bank->SelectedEntryIndex] = ParticleCompiler::Compile(g_ActiveParticleEmitter);
+            e.Size = (uint32_t)bank->ModifiedEntryData[bank->SelectedEntryIndex].size();
+
             g_BankStatus = "Particle Emitter staged for compilation.";
         }
-    }
+        }
     if (!staged.MeshLODs.empty() || staged.Anim || staged.Physics || staged.Texture || staged.Text || staged.TextGroup || staged.NarratorList || staged.LipSync || staged.ShaderCode || staged.Particle) {
         bank->StagedEntries[bank->SelectedEntryIndex] = staged;
     }

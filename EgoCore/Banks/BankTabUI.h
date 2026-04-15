@@ -12,6 +12,7 @@
 #include "ModManagerCompiler.h"
 #include <thread>
 
+extern bool g_IsMeshViewportHovered;
 static int g_ContextEntryIndex = -1;
 static bool g_ShowDeleteBankEntryPopup = false;
 static bool g_ShowAddEntryPopup = false;
@@ -180,31 +181,27 @@ static void DrawBankTab() {
         ImGui::TextColored(ImVec4(0, 1, 1, 1), "Entry Type:");
         ImGui::RadioButton("Graphic Single (0)", &g_ImportType, 0);
         ImGui::RadioButton("Bumpmap (2)", &g_ImportType, 2);
-        ImGui::RadioButton("Flat Sequence / Sprite Sheet (5)", &g_ImportType, 5);
+        ImGui::RadioButton("Sprite Sheet (5)", &g_ImportType, 5);
 
         static bool g_ImportGenerateBump = true;
 
         if (g_ImportType == 2) {
             ImGui::Dummy(ImVec2(0, 5));
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "Bumpmap Settings:");
-            ImGui::Checkbox("Generate Normal Map from Image", &g_ImportGenerateBump);
+            ImGui::Checkbox("Convert image to a bumpmap.", &g_ImportGenerateBump);
 
             if (g_ImportGenerateBump) {
                 ImGui::SliderFloat("Bump Intensity", &g_ImportBumpFactor, 0.1f, 20.0f, "%.1f");
-                ImGui::TextDisabled("Auto-converts colors to a Fable normal map.");
-            }
-            else {
-                ImGui::TextDisabled("Imports the image as-is (must already be a normal map).");
             }
             ImGui::Dummy(ImVec2(0, 5));
         }
 
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::TextColored(ImVec4(1, 0, 1, 1), "Compression Format:");
-        ImGui::RadioButton("DXT1 (Opaque/1-bit Alpha)", &g_ImportFormat, 0);
-        ImGui::RadioButton("DXT3 (Sharp Alpha)", &g_ImportFormat, 1);
-        ImGui::RadioButton("DXT5 (Smooth Alpha)", &g_ImportFormat, 2);
-        ImGui::RadioButton("ARGB (Uncompressed)", &g_ImportFormat, 3);
+        ImGui::RadioButton("DXT1", &g_ImportFormat, 0);
+        ImGui::RadioButton("DXT3", &g_ImportFormat, 1);
+        ImGui::RadioButton("DXT5", &g_ImportFormat, 2);
+        ImGui::RadioButton("ARGB", &g_ImportFormat, 3);
 
         ImGui::Separator();
 
@@ -398,13 +395,18 @@ static void DrawBankTab() {
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
         if (g_Keybinds.DeleteEntry.IsPressed() && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
-            if (g_AppConfig.ShowBankDeleteConfirm) {
-                g_ContextEntryIndex = bank.SelectedEntryIndex;
-                g_ShowDeleteBankEntryPopup = true;
-                ImGui::OpenPopup("Delete Bank Entry?");
+            if (bank.Entries.size() > 1) {
+                if (g_AppConfig.ShowBankDeleteConfirm) {
+                    g_ContextEntryIndex = bank.SelectedEntryIndex;
+                    g_ShowDeleteBankEntryPopup = true;
+                    ImGui::OpenPopup("Delete Bank Entry?");
+                }
+                else {
+                    DeleteBankEntry(&bank, bank.SelectedEntryIndex);
+                }
             }
             else {
-                DeleteBankEntry(&bank, bank.SelectedEntryIndex);
+                g_BankStatus = "Cannot delete the last remaining entry.";
             }
         }
     }
@@ -414,7 +416,7 @@ static void DrawBankTab() {
 
         float searchAvail = ImGui::GetContentRegionAvail().x;
         bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Graphics || bank.Type == EBankType::XboxGraphics);
-        bool canAdd = (bank.Type == EBankType::Text || bank.Type == EBankType::Dialogue || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || bank.Type == EBankType::Graphics || (bank.Type == EBankType::Audio && bank.LugParserPtr));
+        bool canAdd = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || bank.Type == EBankType::Graphics || (bank.Type == EBankType::Audio && bank.LugParserPtr));
 
         float inputWidth = searchAvail;
         if (showFilterBtn) inputWidth -= (65.0f + ImGui::GetStyle().ItemSpacing.x);
@@ -428,7 +430,8 @@ static void DrawBankTab() {
             ImGui::SameLine();
             if (ImGui::Button("+", ImVec2(25, 0))) {
                 if (bank.Type == EBankType::Text) { g_ShowAddEntryPopup = true; ImGui::OpenPopup("Add Entry Type"); }
-                else if (bank.Type == EBankType::Dialogue) { CreateNewDialogueEntry(&bank); g_ScrollToSelected = true; }
+                // --- I'm removing this temporarily; the lipsync entry generation will be done only via Linked Media ---
+                //else if (bank.Type == EBankType::Dialogue) { CreateNewDialogueEntry(&bank); g_ScrollToSelected = true; }
                 else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) {
                     std::string path = OpenFileDialog("Images\0*.png;*.tga;*.jpg;*.bmp\0All Files\0*.*\0");
                     if (!path.empty()) {
@@ -466,6 +469,10 @@ static void DrawBankTab() {
                             }
                             UpdateFilter(bank);
                             bank.SelectedEntryIndex = (int)bank.Entries.size() - 1;
+
+                            StagedEntry dummy;
+                            bank.StagedEntries[bank.SelectedEntryIndex] = dummy;
+
                             g_ScrollToSelected = true;
                             g_SuccessMessage = "Entry created from WAV file.";
                             g_ShowSuccessPopup = true;
@@ -494,26 +501,26 @@ static void DrawBankTab() {
                 if (bank.Type == EBankType::Text) {
                     ImGui::TextColored(ImVec4(0, 1, 1, 1), "Entry Type:");
                     if (ImGui::RadioButton("Show All Types", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Text Entries (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Groups (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Narrator Lists (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Text Entries", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Groups", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Narrator List", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
                 }
                 if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank))) {
                     ImGui::TextColored(ImVec4(0, 1, 1, 1), "Texture Type:");
                     if (ImGui::RadioButton("Show All Types##Tex", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Graphic Single (Type 0)", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Graphic Sequence (Type 1)", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Bumpmap (Type 2)", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Bumpmap Sequence (Type 3)", bank.FilterTypeMask == 3)) { bank.FilterTypeMask = 3; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Volume Texture (Type 4)", bank.FilterTypeMask == 4)) { bank.FilterTypeMask = 4; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("Flat Sequence (Type 5)", bank.FilterTypeMask == 5)) { bank.FilterTypeMask = 5; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Graphic Single", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Graphic Sequence", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Bumpmap", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Bumpmap Sequence", bank.FilterTypeMask == 3)) { bank.FilterTypeMask = 3; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Volume Texture", bank.FilterTypeMask == 4)) { bank.FilterTypeMask = 4; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("Sprite Sheet", bank.FilterTypeMask == 5)) { bank.FilterTypeMask = 5; UpdateFilter(bank); }
 
                     ImGui::Separator();
                     ImGui::TextColored(ImVec4(1, 0, 1, 1), "Compression Format:");
                     if (ImGui::RadioButton("Show All Formats", bank.FilterTextureFormatMask == -1)) { bank.FilterTextureFormatMask = -1; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("DXT1 / Bump DXT1", bank.FilterTextureFormatMask == 0)) { bank.FilterTextureFormatMask = 0; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("DXT1", bank.FilterTextureFormatMask == 0)) { bank.FilterTextureFormatMask = 0; UpdateFilter(bank); }
                     if (ImGui::RadioButton("DXT3", bank.FilterTextureFormatMask == 1)) { bank.FilterTextureFormatMask = 1; UpdateFilter(bank); }
-                    if (ImGui::RadioButton("DXT5 / Bump DXT5", bank.FilterTextureFormatMask == 2)) { bank.FilterTextureFormatMask = 2; UpdateFilter(bank); }
+                    if (ImGui::RadioButton("DXT5", bank.FilterTextureFormatMask == 2)) { bank.FilterTextureFormatMask = 2; UpdateFilter(bank); }
                     if (ImGui::RadioButton("ARGB8888", bank.FilterTextureFormatMask == 3)) { bank.FilterTextureFormatMask = 3; UpdateFilter(bank); }
                 }
                 else if (bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) {
@@ -554,7 +561,6 @@ static void DrawBankTab() {
             }
 
             ImGui::Separator();
-            ImGui::TextDisabled("Type 2 (Narrator List) not supported.");
 
             if (ImGui::Button("Cancel", ImVec2(200, 0))) {
                 g_ShowAddEntryPopup = false;
@@ -566,7 +572,7 @@ static void DrawBankTab() {
         if (!bank.Entries.empty()) {
             ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
 
-            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !bank.FilteredIndices.empty()) {
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !bank.FilteredIndices.empty() && !g_IsMeshViewportHovered) {
                 if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
                     int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
                     int currentPos = -1;
@@ -643,7 +649,8 @@ static void DrawBankTab() {
                             DuplicateBankEntry(&bank, idx);
                             g_ScrollToSelected = true;
                         }
-                        if (ImGui::MenuItem("Delete Entry")) {
+                        bool canDelete = bank.Entries.size() > 1;
+                        if (ImGui::MenuItem("Delete Entry", NULL, false, canDelete)) {
                             if (g_AppConfig.ShowBankDeleteConfirm) {
                                 g_ContextEntryIndex = idx;
                                 g_ShowDeleteBankEntryPopup = true;
@@ -652,6 +659,9 @@ static void DrawBankTab() {
                             else {
                                 DeleteBankEntry(&bank, idx);
                             }
+                        }
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !canDelete) {
+                            ImGui::SetTooltip("Cannot delete the last remaining entry.");
                         }
                     }
                     ImGui::EndPopup();
@@ -709,7 +719,7 @@ static void DrawBankTab() {
             else if (e.Type == 0x2) { typeName = "Type 2 - Bumpmap"; typeColor = ImVec4(1.0f, 0.7f, 0.5f, 1.0f); }
             else if (e.Type == 0x3) { typeName = "Type 3 - Bumpmap Sequence"; typeColor = ImVec4(1.0f, 0.5f, 0.6f, 1.0f); }
             else if (e.Type == 0x4) { typeName = "Type 4 - Volume Texture"; typeColor = ImVec4(0.4f, 0.9f, 0.7f, 1.0f); }
-            else if (e.Type == 0x5) { typeName = "Type 5 - Flat Sequence"; typeColor = ImVec4(0.9f, 0.9f, 0.5f, 1.0f); }
+            else if (e.Type == 0x5) { typeName = "Type 5 - Sprite Sheet"; typeColor = ImVec4(0.9f, 0.9f, 0.5f, 1.0f); }
             else { typeName = "Type " + std::to_string(e.Type) + " - Texture"; typeColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); }
         }
         else if (bank.Type == EBankType::Effects) {
@@ -783,6 +793,10 @@ static void DrawBankTab() {
         if (bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+
+            bool canDelete = bank.Entries.size() > 1;
+            if (!canDelete) ImGui::BeginDisabled();
+
             if (ImGui::Button("Delete", ImVec2(60, 0))) {
                 if (g_AppConfig.ShowBankDeleteConfirm) {
                     g_ContextEntryIndex = bank.SelectedEntryIndex;
@@ -793,6 +807,12 @@ static void DrawBankTab() {
                     DeleteBankEntry(&bank, bank.SelectedEntryIndex);
                 }
             }
+
+            if (!canDelete) ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !canDelete) {
+                ImGui::SetTooltip("Cannot delete the last remaining entry.");
+            }
+
             ImGui::PopStyleColor();
         }
 

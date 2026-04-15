@@ -22,6 +22,9 @@ static float g_StandaloneTime = 0.0f;
 static bool g_StandalonePlaying = true;
 static std::vector<XMMATRIX> g_StandaloneBoneMats;
 static std::vector<XMMATRIX> g_StandaloneGlobalMats;
+static bool g_ShowStandaloneExportPopup = false;
+static bool g_StandaloneExportTextures = true;
+static bool g_StandaloneExportAnimation = true;
 
 inline void UpdateStandaloneBones(const C3DAnimationInfo& anim, const C3DMeshContent& mesh, float time, int animType) {
     int boneCount = mesh.BoneCount;
@@ -109,7 +112,7 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
     auto& anim = parser.Data;
 
     static int replaceAnimType = 6;
-    if (ImGui::Button("Import from glTF", ImVec2(150, 0))) {
+    if (ImGui::Button("Import", ImVec2(150, 0))) {
         replaceAnimType = (entryType == 7) ? 7 : 6;
         ImGui::OpenPopup("Import Over Existing");
     }
@@ -145,11 +148,12 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
     ImGui::SameLine();
 
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
-    if (ImGui::Button("Preview Animation (3D)", ImVec2(150, 0))) g_ShowStandaloneMeshPicker = true;
+    if (ImGui::Button("Preview", ImVec2(150, 0))) g_ShowStandaloneMeshPicker = true;
     ImGui::PopStyleColor();
 
     ImGui::SameLine();
 
+    /*
     if (ImGui::Button("Export Uncompressed Binary")) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
@@ -158,6 +162,7 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
             g_BankStatus = "Exported Uncompressed Binary!";
         }
     }
+    */
 
     if (g_ShowStandaloneMeshPicker) ImGui::OpenPopup("Select Mesh for Preview");
     if (ImGui::BeginPopupModal("Select Mesh for Preview", &g_ShowStandaloneMeshPicker, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -249,15 +254,12 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
             materials.resize(maxMat + 1);
 
             for (const auto& m : g_StandaloneMesh.Materials) {
-                // Carry over the self-illumination for the animation previewer
                 materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
 
-                // Seamlessly use the cache we set up in MeshProperties to handle Xbox/PC transparently!
                 if (m.DiffuseMapID > 0) {
                     materials[m.ID].Diffuse = LoadTextureForMesh(m.DiffuseMapID);
                 }
             }
-            // Use the new method name
             g_StandaloneRenderer.SetMaterials(materials);
             g_StandaloneTime = 0.0f; g_StandalonePlaying = true; g_StandaloneUploadNeeded = false;
         }
@@ -276,6 +278,47 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         if (ImGui::Button(g_StandalonePlaying ? "Pause" : "Play", ImVec2(80, 0))) g_StandalonePlaying = !g_StandalonePlaying;
         ImGui::SameLine(); if (ImGui::Button("Stop", ImVec2(80, 0))) { g_StandalonePlaying = false; g_StandaloneTime = 0.0f; }
 
+        ImGui::SameLine();
+        if (ImGui::Button("Export", ImVec2(100, 0))) {
+            g_ShowStandaloneExportPopup = true;
+        }
+        if (g_ShowStandaloneExportPopup) {
+            ImGui::OpenPopup("Export Standalone Options");
+        }
+
+        if (ImGui::BeginPopupModal("Export Standalone Options", &g_ShowStandaloneExportPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Checkbox("Export Textures", &g_StandaloneExportTextures);
+            ImGui::Checkbox("Export Animation", &g_StandaloneExportAnimation);
+
+            ImGui::Separator();
+
+            if (ImGui::Button("Export", ImVec2(120, 0))) {
+                std::string savePath = SaveFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                if (!savePath.empty()) {
+                    if (savePath.length() < 5 || savePath.substr(savePath.length() - 5) != ".gltf") savePath += ".gltf";
+                    std::string expDir = savePath.substr(0, savePath.find_last_of("\\/") + 1);
+
+                    std::function<std::string(int)> finalExtFunc = nullptr;
+                    if (g_StandaloneExportTextures) {
+                        finalExtFunc = [expDir](int id) { return ExtractTextureForGltf(id, expDir); };
+                    }
+                    const AnimParser* animToExport = g_StandaloneExportAnimation ? &parser : nullptr;
+                    int animTypeToExport = g_StandaloneExportAnimation ? entryType : 6;
+
+                    GltfExporter::Export(g_StandaloneMesh, savePath, animToExport, animTypeToExport, finalExtFunc);
+                }
+                g_ShowStandaloneExportPopup = false;
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                g_ShowStandaloneExportPopup = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
         float fps = anim.Tracks.empty() ? 30.0f : anim.Tracks[0].SamplesPerSecond;
         float d = anim.Duration > 0 ? anim.Duration : 1.0f;
         int maxFrames = (int)(d * fps);
@@ -288,6 +331,7 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
             g_StandaloneTime = (float)currentFrame / fps;
             g_StandalonePlaying = false;
         }
+
         ImGui::SameLine();
         ImGui::TextDisabled("FPS: %.1f", fps);
         ImGui::Separator();
