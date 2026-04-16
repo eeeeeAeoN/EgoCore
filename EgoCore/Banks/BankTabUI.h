@@ -855,9 +855,9 @@ static void DrawBankTab() {
                     g_AnimParser.Data.ObjectName = nameBuf;
                 }
 
-                if (bank.Type == EBankType::Effects) {
-                    g_ActiveParticleEmitter.Name = nameBuf;
-                }
+                //if (bank.Type == EBankType::Effects) {
+                //    g_ActiveParticleEmitter.Name = nameBuf;
+                //}
             }
 
             if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) {

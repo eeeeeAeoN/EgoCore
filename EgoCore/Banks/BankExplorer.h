@@ -86,17 +86,17 @@ static void DrawFrontendHub() {
         ImGui::Dummy(ImVec2(0, 10));
 
         if (ImGui::Button("Launch Fable", ImVec2(-1, 50))) {
-            g_LaunchState = 1; // Trigger the popup cascade
+            g_LaunchState = 1;
         }
         ImGui::Dummy(ImVec2(0, 5));
 
-        if (ImGui::Button("Mods Manager", ImVec2(-1, 50))) {
+        if (ImGui::Button("Mod Manager", ImVec2(-1, 50))) {
             ModManagerBackend::InitializeAndLoad();
             g_CurrentAppState = EAppState::ModsManager;
         }
         ImGui::Dummy(ImVec2(0, 5));
 
-        if (ImGui::Button("Mod Creator", ImVec2(-1, 50))) {
+        if (ImGui::Button("Editor", ImVec2(-1, 50))) {
             g_CurrentAppState = EAppState::ModCreator;
             PerformAutoLoad();
         }

@@ -603,6 +603,7 @@ inline void CreateNewParticleEntry(LoadedBank* bank) {
     BankEntry be;
     be.ID = newID;
     be.Type = 0;
+    // Format 1: ALL CAPS for the Bank Entry
     be.Name = "NEWPARTICLE_" + std::to_string(newID);
     be.FriendlyName = be.Name;
     be.Size = 0;
@@ -611,6 +612,7 @@ inline void CreateNewParticleEntry(LoadedBank* bank) {
     be.Timestamp = 0;
 
     CParticleEmitter newEmitter;
+    // Format 2: CamelCase for the Emitter Node
     newEmitter.Name = "NewParticle_" + std::to_string(newID);
     newEmitter.Magic = 0x64;
 
@@ -632,6 +634,7 @@ inline void CreateNewParticleEntry(LoadedBank* bank) {
     staged.Particle = std::make_shared<CParticleEmitter>(newEmitter);
     bank->StagedEntries[newIndex] = staged;
 
+    // CRITICAL FIX: Eagerly compile to RAM so SelectEntry doesn't fail and ghost old data!
     bank->ModifiedEntryData[newIndex] = ParticleCompiler::Compile(newEmitter);
     bank->Entries[newIndex].Size = (uint32_t)bank->ModifiedEntryData[newIndex].size();
 
@@ -827,7 +830,8 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 //lod->AutoCalculateBounds();
                 std::vector<uint8_t> lodBytes = MeshCompiler::CompileSingleLOD(*lod);
 
-                if ((e.Type == 2 || e.Type == 5) && i == staged.MeshLODs.size() - 1) {
+                // --- I have no idea why I didn't append a ghost LOD to static meshes before and it didn't crash. TO INVESTIGATE! ---
+                if ((e.Type == 2 || e.Type == 5 || e.Type == 1 || e.Type == 4) && i == staged.MeshLODs.size() - 1) {
                     C3DMeshContent ghostLOD = *lod;
 
                     ghostLOD.Materials.clear();
@@ -1337,7 +1341,7 @@ inline void SaveEntryChanges(LoadedBank* bank) {
 
             g_BankStatus = "Particle Emitter staged for compilation.";
         }
-        }
+    }
     if (!staged.MeshLODs.empty() || staged.Anim || staged.Physics || staged.Texture || staged.Text || staged.TextGroup || staged.NarratorList || staged.LipSync || staged.ShaderCode || staged.Particle) {
         bank->StagedEntries[bank->SelectedEntryIndex] = staged;
     }

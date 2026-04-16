@@ -148,7 +148,8 @@ struct ImportOptions {
         CGraphicHeader header = {};
         header.FrameWidth = physW; header.FrameHeight = physH;
         header.Width = physW; header.Height = physH;
-        header.Depth = 1; header.FrameCount = 1;
+        header.Depth = 0;
+        header.FrameCount = 1;
         header.PixelFormatIdx = opts.PreservePixelFormatIdx;
         header.Flags = opts.PreserveFlags;
 
@@ -156,35 +157,39 @@ struct ImportOptions {
 
         switch (opts.Format) {
         case ETextureFormat::DXT1:
-            header.TransparencyType = 0; pixelFmt.Type = 1; pixelFmt.ColourDepth = 4;
-            pixelFmt.RBits = 0; pixelFmt.GBits = 0; pixelFmt.BBits = 0; pixelFmt.ABits = 0;
-            if (header.PixelFormatIdx == 0) header.PixelFormatIdx = 14;
-            break;
         case ETextureFormat::NormalMap_DXT1:
-            header.TransparencyType = 0; pixelFmt.Type = 3; pixelFmt.ColourDepth = 4;
+            header.TransparencyType = 0;
+            pixelFmt.Type = 3;
+            pixelFmt.ColourDepth = 4;
             pixelFmt.RBits = 0; pixelFmt.GBits = 0; pixelFmt.BBits = 0; pixelFmt.ABits = 0;
             if (header.PixelFormatIdx == 0) header.PixelFormatIdx = 31;
             break;
+
         case ETextureFormat::DXT3:
-            header.TransparencyType = 1; pixelFmt.Type = 1; pixelFmt.ColourDepth = 8;
-            pixelFmt.RBits = 0; pixelFmt.GBits = 0; pixelFmt.BBits = 0; pixelFmt.ABits = 0;
-            if (header.PixelFormatIdx == 0) header.PixelFormatIdx = 15;
-            break;
-        case ETextureFormat::DXT5:
-            header.TransparencyType = 3; pixelFmt.Type = 1; pixelFmt.ColourDepth = 8;
-            pixelFmt.RBits = 0; pixelFmt.GBits = 0; pixelFmt.BBits = 0; pixelFmt.ABits = 0;
-            if (header.PixelFormatIdx == 0) header.PixelFormatIdx = 16;
-            break;
         case ETextureFormat::NormalMap_DXT5:
-            header.TransparencyType = 1; pixelFmt.Type = 3; pixelFmt.ColourDepth = 8;
+            header.TransparencyType = 1;
+            pixelFmt.Type = 2;
+            pixelFmt.ColourDepth = 8;
             pixelFmt.RBits = 0; pixelFmt.GBits = 0; pixelFmt.BBits = 0; pixelFmt.ABits = 0;
             if (header.PixelFormatIdx == 0) header.PixelFormatIdx = 32;
             break;
+
+        case ETextureFormat::DXT5:
+            header.TransparencyType = 3;
+            pixelFmt.Type = 5;
+            pixelFmt.ColourDepth = 8;
+            pixelFmt.RBits = 0; pixelFmt.GBits = 0; pixelFmt.BBits = 0; pixelFmt.ABits = 0;
+            if (header.PixelFormatIdx == 0) header.PixelFormatIdx = 35;
+            break;
+
         case ETextureFormat::ARGB8888:
-            header.TransparencyType = 255; pixelFmt.Type = 1; pixelFmt.ColourDepth = 32;
+            header.TransparencyType = 255;
+            pixelFmt.Type = 1;
+            pixelFmt.ColourDepth = 32;
             pixelFmt.RBits = 8; pixelFmt.GBits = 8; pixelFmt.BBits = 8; pixelFmt.ABits = 8;
             if (header.PixelFormatIdx == 0) header.PixelFormatIdx = 3;
             break;
+
         default:
             header.TransparencyType = 1; pixelFmt.Type = 1; pixelFmt.ColourDepth = 8;
             pixelFmt.RBits = 0; pixelFmt.GBits = 0; pixelFmt.BBits = 0; pixelFmt.ABits = 0;

@@ -797,7 +797,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     }
 
     ImGui::SameLine();
-    /*
+    
     if (ImGui::Button("Export Uncompressed Binary")) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
@@ -822,7 +822,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             }
         }
     }
-    */
+    
 
     ImGui::SameLine();
     float availToolW = ImGui::GetContentRegionAvail().x;
@@ -896,6 +896,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
     dl->PushClipRect(pMin, pMax, true);
 
     if (g_ShowSkeleton && !g_PreviewGlobalTransforms.empty()) {
+        ImVec2 mousePos = ImGui::GetMousePos();
         for (int i = 0; i < g_ActiveMeshContent.BoneCount; i++) {
             XMMATRIX globalMat = g_PreviewGlobalTransforms[i];
             XMFLOAT3 pos(XMVectorGetX(globalMat.r[3]), XMVectorGetY(globalMat.r[3]), XMVectorGetZ(globalMat.r[3]));
@@ -904,6 +905,13 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
                 scrPos.x += pMin.x; scrPos.y += pMin.y;
                 dl->AddCircleFilled(scrPos, 3.0f, IM_COL32(0, 255, 0, 255));
+
+                float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
+                if (dist < 8.0f) {
+                    dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
+                    std::string boneName = (i < g_ActiveMeshContent.BoneNames.size()) ? g_ActiveMeshContent.BoneNames[i] : "Bone " + std::to_string(i);
+                    ImGui::SetTooltip("%s", boneName.c_str());
+                }
 
                 int parentIdx = g_ActiveMeshContent.Bones[i].ParentIndex;
                 if (parentIdx != -1 && parentIdx < g_ActiveMeshContent.BoneCount) {
@@ -2001,8 +2009,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                 ImGui::EndTabItem();
             }
 
-            if (g_ActiveMeshContent.IsParsed && ImGui::BeginTabItem("Debug")) {
-                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Primitive Hardware & Memory Stats");
+            if (g_ActiveMeshContent.IsParsed && ImGui::BeginTabItem("Primitives")) {
+                //ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Primitive");
                 ImGui::Separator();
                 
                 ImGui::BeginChild("DebugPrimList", ImVec2(0, 0), true);
