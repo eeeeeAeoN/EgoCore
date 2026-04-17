@@ -270,7 +270,7 @@ static void DrawBankExplorer() {
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "EgoCore - Asset Bank Editor for Fable");
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 10));
-        ImGui::Text("Version: 9.4.26 [BETA]");
+        ImGui::Text("Version: 17.4.26 [BETA]");
         ImGui::Text("Author: AeoN (AlbionSecrets)");
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::TextWrapped("EgoCore is the culmination of over twenty years of obsession with the inner workings of Fable. What began as programming related curiosity has evolved into a six-month intensive development journey to provide the community with a modern, robust, and versatile modding framework.");
