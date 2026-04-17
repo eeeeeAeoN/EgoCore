@@ -608,7 +608,7 @@ inline void DrawModPackageWindow() {
             ImGui::EndDragDropTarget();
         }
 
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 65);
+        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 60);
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Warning: Building the package will automatically compile and save all staged entries to your active banks.");
 
         bool canBuild = !g_ModPackageEntries.empty() && strlen(g_ModNameBuffer) > 0;

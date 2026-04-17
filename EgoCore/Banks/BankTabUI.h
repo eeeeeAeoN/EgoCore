@@ -371,7 +371,7 @@ static void DrawBankTab() {
         }
     }
 
-    float compileBtnWidth = 180.0f;
+    float compileBtnWidth = 130.0f;
     ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
 
     if (bank.Type == EBankType::Text) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
@@ -1132,6 +1132,18 @@ static void DrawBankTab() {
         else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, nullptr, nullptr);
         else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && IsSupportedMesh(e.Type)) DrawMeshProperties(nullptr);
         else if (bank.Type == EBankType::Shaders) { DrawShaderProperties(e.ID); }
+        else if (bank.Type == EBankType::Effects) {
+            static int s_LastParticleEntryID = -1;
+
+            if (bank.SelectedEntryIndex != s_LastParticleEntryID) {
+                if (bank.StagedEntries.count(bank.SelectedEntryIndex) && bank.StagedEntries[bank.SelectedEntryIndex].Particle) {
+                    g_ActiveParticleEmitter = *bank.StagedEntries[bank.SelectedEntryIndex].Particle;
+                }
+                s_LastParticleEntryID = bank.SelectedEntryIndex;
+            }
+
+            DrawParticleProperties(g_ActiveParticleEmitter);
+        }
         else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
             DrawAnimProperties(bank.Entries[bank.SelectedEntryIndex].Name, e.ID, bank.Entries[bank.SelectedEntryIndex].Type, g_AnimParser, g_AnimUIState, bank.CurrentEntryRawData);
         }

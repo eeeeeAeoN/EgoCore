@@ -798,6 +798,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
 
     ImGui::SameLine();
     
+    /*
     if (ImGui::Button("Export Uncompressed Binary")) {
         std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
         if (!savePath.empty()) {
@@ -822,7 +823,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             }
         }
     }
-    
+    */
 
     ImGui::SameLine();
     float availToolW = ImGui::GetContentRegionAvail().x;
@@ -1037,8 +1038,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         if (ImGui::BeginTabBar("MeshTabs")) {
             if (ImGui::BeginTabItem("Overview")) {
                 if (g_BBMParser.IsParsed) {
-                    ImGui::Text("Version: %u", g_BBMParser.FileVersion);
-                    ImGui::Text("Comment: %s", g_BBMParser.FileComment.c_str());
+                    ImGui::Text("Physics Mesh (.bbm)");
+                    //ImGui::Text("Comment: %s", g_BBMParser.FileComment.c_str());
                     ImGui::Separator();
                     ImGui::Text("Vertices: %zu", g_BBMParser.ParsedVertices.size());
                     ImGui::Text("Indices:  %zu", g_BBMParser.ParsedIndices.size());
@@ -1437,7 +1438,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                             SortAndRepackGraphExtras();
                             if (saveCallback) saveCallback();
                         }
-                        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(Graphics Mesh)");
 
                         for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
                             auto& h = g_ActiveMeshContent.Helpers[i];

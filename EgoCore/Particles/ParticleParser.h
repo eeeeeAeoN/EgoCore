@@ -694,9 +694,13 @@ struct CParticleEmitter {
     std::vector<CParticleSystem> Systems;
 
     void Parse(CParticleStream& stream) {
+        Systems.clear(); // <--- ADD THIS FIX HERE
+
         Magic = stream.ReadULONG();
         Name = stream.ReadString();
-        Emitter2D = stream.ReadEBOOL(); PreWaterEffect = stream.ReadEBOOL(); WaterEffect = stream.ReadEBOOL();
+        Emitter2D = stream.ReadEBOOL(); 
+        PreWaterEffect = stream.ReadEBOOL(); 
+        WaterEffect = stream.ReadEBOOL();
         ZBufferWriteable = stream.ReadEBOOL(); ContinuousEmitter = stream.ReadEBOOL(); IsScreenDisplacement = stream.ReadEBOOL();
         ReadZBuffer = stream.ReadEBOOL();
         MaxSpawnDistance = stream.ReadFloat(); MaxDrawDistance = stream.ReadFloat();

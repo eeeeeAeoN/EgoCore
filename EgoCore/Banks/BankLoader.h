@@ -154,7 +154,9 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
             g_LipSyncParser.Data = *staged.LipSync;
             g_LipSyncParser.IsParsed = true;
         }
-
+        else if (staged.Particle) {
+            g_ActiveParticleEmitter = *staged.Particle;
+        }
         else if (staged.ShaderCode) {
             if (bank->ModifiedEntryData.count(idx)) bank->CurrentEntryRawData = bank->ModifiedEntryData[idx];
             else {
@@ -166,7 +168,6 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
             g_ShaderParser.Parse(bank->CurrentEntryRawData);
             g_ShaderParser.DecompiledText = *staged.ShaderCode;
         }
-
         return;
     }
 

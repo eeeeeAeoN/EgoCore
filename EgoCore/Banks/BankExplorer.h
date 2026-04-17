@@ -69,6 +69,11 @@ static void DrawLaunchPopup() {
             ImGui::CloseCurrentPopup();
         }
 
+        if (g_ShowFallbackLaunchPopup) {
+            g_LaunchState = 0;
+            ImGui::CloseCurrentPopup();
+        }
+
         ImGui::EndPopup();
     }
 }
@@ -155,21 +160,65 @@ static void DrawBankExplorer() {
             ImGui::CloseCurrentPopup();
             if (g_PendingGameLaunch) {
                 g_PendingGameLaunch = false;
-                std::string exePath = g_AppConfig.GameRootPath + "\\FableLauncher.exe";
-                ShellExecuteA(NULL, "open", exePath.c_str(), NULL, g_AppConfig.GameRootPath.c_str(), SW_SHOWDEFAULT);
-                exit(0);
+                ModManagerBackend::LaunchGame();
             }
             else {
                 g_TriggerCompileSuccess = true;
+                PerformAutoLoad();
             }
         }
         ImGui::EndPopup();
     }
 
-    if (g_TriggerCompileSuccess) { ImGui::OpenPopup("Compile Complete"); g_TriggerCompileSuccess = false; }
+    if (g_ShowFallbackLaunchPopup) {
+        ImGui::OpenPopup("Launcher Not Found");
+    }
+
+    if (ImGui::BeginPopupModal("Launcher Not Found", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("FableLauncher.exe was not found in your Fable directory.");
+        ImGui::Text("Make sure you have downloaded it or properly set it up.");
+        ImGui::Dummy(ImVec2(0, 10));
+
+        ImGui::Text("Do you want to run Fable.exe instead?");
+        ImGui::TextDisabled("(Note any .dll hook mods won't run in this mode)");
+        ImGui::Separator();
+
+        if (ImGui::Button("Launch", ImVec2(120, 0))) {
+            std::string fallbackPath = g_AppConfig.GameRootPath + "\\Fable.exe";
+            ShellExecuteA(NULL, "open", fallbackPath.c_str(), NULL, g_AppConfig.GameRootPath.c_str(), SW_SHOWDEFAULT);
+            exit(0);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowFallbackLaunchPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (g_TriggerCompileSuccess) {
+        if (g_DefCompileSuccess) {
+            ImGui::OpenPopup("Compile Complete");
+        }
+        else {
+            ImGui::OpenPopup("Compile Error");
+        }
+        g_TriggerCompileSuccess = false;
+    }
+
     if (ImGui::BeginPopupModal("Compile Complete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Successfully compiled definitions!");
-        ImGui::Text("Generated: frontend.bin & game.bin");
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Successfully compiled definitions!");
+        ImGui::Text("Generated: frontend.bin, game.bin, names.bin, script.bin");
+        ImGui::Separator();
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Compile Error", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error during def compilation.");
+        ImGui::Text("Please check your defs for syntax or linking errors.");
         ImGui::Separator();
         if (ImGui::Button("OK", ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();

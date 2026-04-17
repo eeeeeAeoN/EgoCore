@@ -15,6 +15,7 @@
 namespace fs = std::filesystem;
 
 inline int g_LaunchState = 0;
+inline bool g_ShowFallbackLaunchPopup = false;
 
 class ModManagerBackend {
 public:
@@ -820,13 +821,18 @@ public:
         }
     }
 
-private:
     static void LaunchGame() {
         std::string exePath = g_AppConfig.GameRootPath + "\\FableLauncher.exe";
-        ShellExecuteA(NULL, "open", exePath.c_str(), NULL, g_AppConfig.GameRootPath.c_str(), SW_SHOWDEFAULT);
-        exit(0);
+        if (fs::exists(exePath)) {
+            ShellExecuteA(NULL, "open", exePath.c_str(), NULL, g_AppConfig.GameRootPath.c_str(), SW_SHOWDEFAULT);
+            exit(0);
+        }
+        else {
+            g_ShowFallbackLaunchPopup = true;
+        }
     }
 
+private:
     static void CompileAudioBinFiles() {
         std::string defsDir = g_AppConfig.GameRootPath + "\\Data\\Defs";
         if (!fs::exists(defsDir)) return;

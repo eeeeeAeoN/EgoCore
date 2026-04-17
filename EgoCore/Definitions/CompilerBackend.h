@@ -21,6 +21,7 @@ namespace fs = std::filesystem;
 static std::atomic<bool> g_IsCompiling(false);
 static std::atomic<bool> g_StopWatchdog(false);
 inline bool g_TriggerCompileSuccess = false;
+inline bool g_DefCompileSuccess = false;
 inline bool g_PendingGameLaunch = false;
 static std::string g_CompileStatus = "";
 static std::string g_TargetIniPath = "";
@@ -232,12 +233,30 @@ static void CompileAllDefs_Stealth() {
         g_ActiveBankIndex = -1;
     }
 
+    for (auto& ctx : g_DefWorkspace.Contexts) {
+        ctx.IsLoaded = false;
+    }
+    g_DefWorkspace.IsLoaded = false;
+
+    g_DefWorkspace.CategorizedDefs.clear();
+    g_DefWorkspace.AllEnums.clear();
+    g_DefWorkspace.SelectedEntryIndex = -1;
+    g_DefWorkspace.SelectedType = "";
+    g_DefWorkspace.SelectedEnumIndex = -1;
+
     g_IsCompiling = true;
     g_StopWatchdog = false;
 
     std::thread watchdog(ErrorWatchdogThread);
 
     std::thread([watchdog = std::move(watchdog)]() mutable {
+
+        std::string compiledDefsDir = g_AppConfig.GameRootPath + "\\Data\\CompiledDefs\\";
+        std::error_code ec;
+        fs::remove(compiledDefsDir + "frontend.bin", ec);
+        fs::remove(compiledDefsDir + "game.bin", ec);
+        fs::remove(compiledDefsDir + "names.bin", ec);
+        fs::remove(compiledDefsDir + "script.bin", ec);
 
         g_CompileStatus = "Compiling Sound Binaries...";
         std::string log;
@@ -273,7 +292,22 @@ static void CompileAllDefs_Stealth() {
 
         RestoreIniFile();
 
-        g_CompileStatus = "Success! Definitions & Binaries Compiled.";
+        bool allFound = fs::exists(compiledDefsDir + "frontend.bin") &&
+            fs::exists(compiledDefsDir + "game.bin") &&
+            fs::exists(compiledDefsDir + "names.bin") &&
+            fs::exists(compiledDefsDir + "script.bin");
+
+        g_DefCompileSuccess = allFound;
+
+        if (allFound) {
+            g_CompileStatus = "Success! Definitions & Binaries Compiled.";
+        }
+        else {
+            g_CompileStatus = "Error during def compilation.";
+        }
+
+        LoadDefsFromFolder(g_AppConfig.GameRootPath, true);
+
         g_IsCompiling = false;
         }).detach();
 }

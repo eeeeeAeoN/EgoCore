@@ -479,26 +479,61 @@ inline void DeleteDefEntry(const DefEntry& entry) {
 
 inline void SaveDefEntry(DefEntry& entry) {
     std::string newContent = g_DefWorkspace.Editor.GetText();
+
+    std::string maskedNew = CreateCommentMaskedString(newContent);
+
+    size_t firstDef = maskedNew.find("#definition");
+    if (firstDef != std::string::npos) {
+        newContent = newContent.substr(firstDef);
+        maskedNew = maskedNew.substr(firstDef);
+    }
+    else {
+        std::string correctToken = "#definition";
+        if (g_DefWorkspace.OriginalContent.find("#definition_template") != std::string::npos) {
+            correctToken = "#definition_template";
+        }
+
+        newContent = correctToken + " " + entry.Type + " " + entry.Name + "\n" + newContent;
+        maskedNew = CreateCommentMaskedString(newContent);
+    }
+    size_t lastEnd = maskedNew.rfind("#end_definition");
+    if (lastEnd != std::string::npos) {
+        newContent = newContent.substr(0, lastEnd + 15);
+    }
+    else {
+        if (!newContent.empty() && newContent.back() != '\n') newContent += "\n";
+        newContent += "#end_definition";
+    }
+
     std::ifstream inFile(entry.SourceFile, std::ios::binary);
     std::string fileContent((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
     inFile.close();
+
     if (fileContent.size() < entry.EndOffset) return;
+
     std::string pre = fileContent.substr(0, entry.StartOffset);
     std::string post = fileContent.substr(entry.EndOffset);
     std::string finalContent = pre + newContent + post;
+
     std::ofstream outFile(entry.SourceFile, std::ios::binary);
-    outFile << finalContent; outFile.close();
+    outFile << finalContent;
+    outFile.close();
+
     long long sizeDiff = (long long)newContent.size() - (long long)(entry.EndOffset - entry.StartOffset);
+
     for (auto& [t, list] : g_DefWorkspace.CategorizedDefs) {
         for (auto& other : list) {
             if (other.SourceFile == entry.SourceFile && other.StartOffset > entry.StartOffset) {
-                other.StartOffset += sizeDiff; other.EndOffset += sizeDiff;
+                other.StartOffset += sizeDiff;
+                other.EndOffset += sizeDiff;
             }
         }
     }
     entry.EndOffset += sizeDiff;
+
     g_DefWorkspace.Editor.SetText(newContent);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
+
     std::stringstream ss(newContent);
     std::string line;
     while (std::getline(ss, line)) {
@@ -509,6 +544,8 @@ inline void SaveDefEntry(DefEntry& entry) {
             if (!name.empty()) { entry.Name = name; } break;
         }
     }
+
+    g_DefWorkspace.Contexts[g_DefWorkspace.ActiveContextIndex].CategorizedDefs = g_DefWorkspace.CategorizedDefs;
 }
 
 inline void SaveHeaderEntry(EnumEntry& entry) {
