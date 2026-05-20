@@ -371,6 +371,26 @@ static void DrawBankTab() {
         }
     }
 
+    if (bank.Type == EBankType::Shaders) {
+        ImGui::SameLine(0, 20);
+
+        if (ImGui::Button("Export All")) {
+            std::string folder = OpenFolderDialog("Select Base Folder for Shader Export");
+            if (!folder.empty()) {
+                ExportAllShaders(&bank, folder);
+            }
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Import All")) {
+            std::string folder = OpenFolderDialog("Select Base Folder to Import From");
+            if (!folder.empty()) {
+                ImportAllShaders(&bank, folder);
+            }
+        }
+    }
+
     float compileBtnWidth = 130.0f;
     ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
 

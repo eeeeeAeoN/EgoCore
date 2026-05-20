@@ -11,6 +11,7 @@
 #include "MeshCompiler.h"
 #include "ShaderProperties.h"
 #include "ShaderCompiler.h"
+#include <filesystem>
 
 extern float g_ImportBumpFactor;
 
@@ -61,8 +62,13 @@ inline void SyncBankEnums(LoadedBank* bank) {
                     return e.Type == 6 || e.Type == 7 || e.Type == 9;
                     });
                 RebuildEnum("EMeshType2", bank->Entries, [](const BankEntry& e) {
-                    return e.Type != 3 && e.Type != 6 && e.Type != 7 && e.Type != 9;
-                    });
+                    if (e.Type == 6 || e.Type == 7 || e.Type == 9) return false;
+                    // For Physics Meshes (Type 3), only include them if the name starts with "CMESH"
+                    if (e.Type == 3) {
+                        return StartsWith(e.Name, "CMESH");
+                    }
+                    return true;
+                });
             }
             else if (bank->SubBanks[i].Name == "MBANK_ENGINE" && bank->ActiveSubBankIndex == i) {
                 RebuildEnum("EEngineMeshType", bank->Entries, [](const BankEntry& e) { return true; });
@@ -644,6 +650,150 @@ inline void CreateNewParticleEntry(LoadedBank* bank) {
 
     g_ActiveParticleEmitter = newEmitter;
     g_BankStatus = "Added and Staged new Particle Emitter.";
+}
+
+namespace fs = std::filesystem;
+
+inline void ExportAllShaders(LoadedBank* bank, const std::string& baseDir) {
+    if (!bank || bank->Type != EBankType::Shaders || baseDir.empty()) return;
+
+    int originalSubBank = bank->ActiveSubBankIndex;
+    int exportCount = 0;
+
+    for (int s = 0; s < bank->SubBanks.size(); s++) {
+        LoadSubBankEntries(bank, s);
+
+        std::string currentDir = baseDir + "\\" + bank->SubBanks[s].Name;
+        fs::create_directories(currentDir);
+
+        for (int i = 0; i < bank->Entries.size(); i++) {
+            const auto& e = bank->Entries[i];
+
+            std::vector<uint8_t> rawData;
+            if (bank->ModifiedEntryData.count(i)) {
+                rawData = bank->ModifiedEntryData[i];
+            }
+            else {
+                bank->Stream->clear();
+                bank->Stream->seekg(e.Offset, std::ios::beg);
+                rawData.resize(e.Size);
+                bank->Stream->read((char*)rawData.data(), e.Size);
+            }
+
+            if (rawData.empty()) continue;
+
+            CShaderParser parser;
+            parser.Parse(rawData);
+
+            if (parser.IsParsed && !parser.DecompiledText.empty()) {
+                std::string safeName = e.Name;
+                std::replace(safeName.begin(), safeName.end(), '/', '_');
+                std::replace(safeName.begin(), safeName.end(), '\\', '_');
+
+                std::string filePath = currentDir + "\\" + std::to_string(e.ID) + "_" + safeName + ".txt";
+                std::ofstream out(filePath, std::ios::trunc | std::ios::binary);
+                if (out.is_open()) {
+                    out << parser.DecompiledText;
+                    out.close();
+                    exportCount++;
+                }
+            }
+        }
+    }
+
+    // Restore UI state
+    if (originalSubBank >= 0 && originalSubBank < bank->SubBanks.size()) {
+        LoadSubBankEntries(bank, originalSubBank);
+    }
+
+    g_BankStatus = "Exported " + std::to_string(exportCount) + " shaders.";
+    g_ShowSuccessPopup = true;
+    g_SuccessMessage = "Exported " + std::to_string(exportCount) + " shaders across all sub-banks.";
+}
+
+inline void ImportAllShaders(LoadedBank* bank, const std::string& baseDir) {
+    if (!bank || bank->Type != EBankType::Shaders || baseDir.empty()) return;
+
+    int originalSubBank = bank->ActiveSubBankIndex;
+    int importCount = 0;
+    int skipCount = 0;
+    bool needsFullReload = false;
+
+    for (int s = 0; s < bank->SubBanks.size(); s++) {
+        std::string currentDir = baseDir + "\\" + bank->SubBanks[s].Name;
+        if (!fs::exists(currentDir)) continue;
+
+        LoadSubBankEntries(bank, s);
+
+        // Clear maps to prevent cross-contamination between sub-banks
+        bank->ModifiedEntryData.clear();
+        bank->StagedEntries.clear();
+
+        bool subBankHasChanges = false;
+
+        for (const auto& entry : fs::directory_iterator(currentDir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".txt") {
+                std::string filename = entry.path().stem().string();
+                size_t underscorePos = filename.find('_');
+
+                if (underscorePos != std::string::npos) {
+                    try {
+                        uint32_t id = std::stoul(filename.substr(0, underscorePos));
+
+                        int targetIdx = -1;
+                        for (int i = 0; i < bank->Entries.size(); i++) {
+                            if (bank->Entries[i].ID == id) { targetIdx = i; break; }
+                        }
+
+                        if (targetIdx != -1) {
+                            std::ifstream in(entry.path(), std::ios::binary);
+                            std::string newText((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+                            std::vector<uint8_t> rawData;
+                            bank->Stream->clear();
+                            bank->Stream->seekg(bank->Entries[targetIdx].Offset, std::ios::beg);
+                            rawData.resize(bank->Entries[targetIdx].Size);
+                            bank->Stream->read((char*)rawData.data(), bank->Entries[targetIdx].Size);
+
+                            CShaderParser currentParser;
+                            currentParser.Parse(rawData);
+
+                            // Delta Check
+                            if (!currentParser.IsParsed || currentParser.DecompiledText != newText) {
+                                StagedEntry staged;
+                                staged.ShaderCode = std::make_shared<std::string>(newText);
+                                bank->StagedEntries[targetIdx] = staged;
+                                importCount++;
+                                subBankHasChanges = true;
+                            }
+                            else {
+                                skipCount++;
+                            }
+                        }
+                    }
+                    catch (...) {}
+                }
+            }
+        }
+
+        if (subBankHasChanges) {
+            // Flush and compile immediately to isolate the indices
+            FlushStagedEntries(bank);
+            BigBankCompiler::Compile(bank);
+            needsFullReload = true;
+        }
+    }
+
+    if (needsFullReload) {
+        ReloadBankInPlace(bank);
+    }
+    else if (originalSubBank >= 0 && originalSubBank < bank->SubBanks.size()) {
+        LoadSubBankEntries(bank, originalSubBank);
+    }
+
+    g_BankStatus = "Imported " + std::to_string(importCount) + " shaders.";
+    g_ShowSuccessPopup = true;
+    g_SuccessMessage = "Compiled " + std::to_string(importCount) + " modified shaders to the bank.\nSkipped " + std::to_string(skipCount) + " identical shaders.";
 }
 
 inline void DuplicateBankEntry(LoadedBank* bank, int sourceIndex) {

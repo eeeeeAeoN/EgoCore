@@ -18,10 +18,10 @@ static inline std::string OpenFileDialog(const char* filter = "Big Bank Files\0*
     return "";
 }
 
-static inline std::string OpenFolderDialog() {
+static inline std::string OpenFolderDialog(const char* title = "Select Game Data Folder") {
     char szDir[MAX_PATH] = { 0 };
     BROWSEINFOA bi = { 0 };
-    bi.lpszTitle = "Select Game Data Folder";
+    bi.lpszTitle = title; // Now it uses the passed title!
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
     if (pidl != 0) {
