@@ -302,8 +302,10 @@ public:
 
         size_t mCursor = 0;
         while (true) {
+            // Catches both "#definition" and "#definition_template"
             size_t defStart = maskedMContent.find("#definition", mCursor);
             if (defStart == std::string::npos) break;
+
             size_t defEnd = maskedMContent.find("#end_definition", defStart);
             if (defEnd == std::string::npos) break;
             defEnd += 15;
@@ -316,9 +318,9 @@ public:
             ss >> dummy >> type >> name;
 
             if (!type.empty() && !name.empty()) {
-                // Match any whitespace between the tokens instead of assuming spaces
+                // Make the regex catch both tags in the target file
                 std::regex defRegex(
-                    "#definition[ \\t]+" + type + "[ \\t]+" + name + "[ \\t\\r\\n]"
+                    "#definition(?:_template)?[ \\t]+" + type + "[ \\t]+" + name + "[ \\t\\r\\n]"
                 );
 
                 std::smatch defMatch;
