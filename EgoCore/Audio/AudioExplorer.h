@@ -14,6 +14,9 @@
 inline LugParser::ParsedLugEntry g_ActiveAudioEntry;
 inline int g_LastSelectedAudioIndex = -1;
 
+inline int g_LugExplorerMode = 0;
+inline int g_SelectedScriptIndex = -1;
+
 static bool InputString(const char* label, std::string & str, int maxLen = 255) {
     static char buf[1024];
     strncpy_s(buf, str.c_str(), _TRUNCATE);
@@ -150,6 +153,94 @@ static void DrawLugAudioProperties(LoadedBank* bank) {
     ImGui::TextDisabled("WAV Info:");
     ImGui::Text("Rate: %d Hz | Channels: %d", e.SampleRate, e.Channels);
     ImGui::Text("Size: %d bytes | Loops: %d - %d", e.Length, e.LoopStart, e.LoopEnd);
+}
+
+static void DrawLugScriptProperties(LoadedBank* bank) {
+    if (!bank || !bank->LugParserPtr) return;
+    auto& lug = bank->LugParserPtr;
+
+    ImGui::TextColored(ImVec4(0.8f, 0.6f, 1.0f, 1.0f), "Event Script Editor");
+    ImGui::Separator();
+
+    if (g_SelectedScriptIndex < 0 || g_SelectedScriptIndex >= lug->Scripts.size()) {
+        ImGui::Text("Select an Event Script to view its mapped sounds.");
+        return;
+    }
+
+    auto& script = lug->Scripts[g_SelectedScriptIndex];
+
+    if (InputString("Trigger Event", script.Name, 255)) {
+        lug->IsDirty = true;
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Mapped Sound IDs (%d)", script.SoundIDs.size());
+
+    auto GetSoundInfo = [&](uint32_t id, std::string& outName, int& outInternalIndex) {
+        outName = "Unknown Sound";
+        outInternalIndex = -1;
+        for (int i = 0; i < (int)lug->Entries.size(); i++) {
+            if (lug->Entries[i].SoundID == id) {
+                outName = lug->Entries[i].Name;
+                outInternalIndex = i;
+                break;
+            }
+        }
+        };
+
+    if (ImGui::BeginTable("ScriptSoundsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 300))) {
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("Sound Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 100);
+        ImGui::TableHeadersRow();
+
+        for (size_t i = 0; i < script.SoundIDs.size(); i++) {
+            ImGui::PushID((int)i);
+            ImGui::TableNextRow();
+
+            uint32_t currentID = script.SoundIDs[i];
+            std::string soundName;
+            int internalIdx;
+            GetSoundInfo(currentID, soundName, internalIdx);
+
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%d", currentID);
+
+            ImGui::TableSetColumnIndex(1);
+            if (internalIdx == -1) ImGui::TextColored(ImVec4(1, 0, 0, 1), "[Missing/Ghost] %d", currentID);
+            else ImGui::Text("%s", soundName.c_str());
+
+            ImGui::TableSetColumnIndex(2);
+            if (internalIdx != -1) {
+                if (ImGui::Button("Play", ImVec2(40, 0))) {
+                    auto blob = lug->GetAudioBlob(internalIdx);
+                    if (!blob.empty()) player.PlayWav(blob);
+                }
+                ImGui::SameLine();
+            }
+            else {
+                ImGui::Dummy(ImVec2(40, 0)); ImGui::SameLine();
+            }
+
+            if (ImGui::Button("X", ImVec2(24, 0))) {
+                script.SoundIDs.erase(script.SoundIDs.begin() + i);
+                lug->IsDirty = true;
+                i--;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Dummy(ImVec2(0, 5));
+    static int s_NewIDToAdd = 0;
+    ImGui::SetNextItemWidth(100);
+    ImGui::InputInt("##newID", &s_NewIDToAdd, 0);
+    ImGui::SameLine();
+    if (ImGui::Button("Add Sound ID to Pool") && s_NewIDToAdd > 0) {
+        script.SoundIDs.push_back((uint32_t)s_NewIDToAdd);
+        lug->IsDirty = true;
+    }
 }
 
 static void DrawAudioProperties(LoadedBank* bank) {

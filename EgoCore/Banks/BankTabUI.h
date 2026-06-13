@@ -414,7 +414,7 @@ static void DrawBankTab() {
     ImGui::PopStyleColor();
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
-        if (g_Keybinds.DeleteEntry.IsPressed() && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
+        if (g_Keybinds.DeleteEntry.IsPressed() && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts && g_LugExplorerMode == 0) {
             if (bank.Entries.size() > 1) {
                 if (g_AppConfig.ShowBankDeleteConfirm) {
                     g_ContextEntryIndex = bank.SelectedEntryIndex;
@@ -472,31 +472,45 @@ static void DrawBankTab() {
                     }
                 }
                 else if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
-                    std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
-                    if (!wavPath.empty()) {
-                        if (bank.LugParserPtr->AddEntryFromWav(wavPath)) {
-                            bank.Entries.clear();
-                            bank.FilteredIndices.clear();
-                            for (size_t k = 0; k < bank.LugParserPtr->Entries.size(); k++) {
-                                BankEntry be;
-                                be.ID = bank.LugParserPtr->Entries[k].SoundID;
-                                be.Name = bank.LugParserPtr->Entries[k].Name;
-                                be.FriendlyName = be.Name;
-                                be.Size = bank.LugParserPtr->Entries[k].Length;
-                                be.Offset = bank.LugParserPtr->Entries[k].Offset;
-                                bank.Entries.push_back(be);
-                                bank.FilteredIndices.push_back((int)k);
+                    if (g_LugExplorerMode == 0) {
+                        std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
+                        if (!wavPath.empty()) {
+                            if (bank.LugParserPtr->AddEntryFromWav(wavPath)) {
+                                bank.Entries.clear();
+                                bank.FilteredIndices.clear();
+                                for (size_t k = 0; k < bank.LugParserPtr->Entries.size(); k++) {
+                                    BankEntry be;
+                                    be.ID = bank.LugParserPtr->Entries[k].SoundID;
+                                    be.Name = bank.LugParserPtr->Entries[k].Name;
+                                    be.FriendlyName = be.Name;
+                                    be.Size = bank.LugParserPtr->Entries[k].Length;
+                                    be.Offset = bank.LugParserPtr->Entries[k].Offset;
+                                    bank.Entries.push_back(be);
+                                    bank.FilteredIndices.push_back((int)k);
+                                }
+                                UpdateFilter(bank);
+                                bank.SelectedEntryIndex = (int)bank.Entries.size() - 1;
+
+                                StagedEntry dummy;
+                                bank.StagedEntries[bank.SelectedEntryIndex] = dummy;
+
+                                g_ScrollToSelected = true;
+                                g_SuccessMessage = "Entry created from WAV file.";
+                                g_ShowSuccessPopup = true;
                             }
-                            UpdateFilter(bank);
-                            bank.SelectedEntryIndex = (int)bank.Entries.size() - 1;
-
-                            StagedEntry dummy;
-                            bank.StagedEntries[bank.SelectedEntryIndex] = dummy;
-
-                            g_ScrollToSelected = true;
-                            g_SuccessMessage = "Entry created from WAV file.";
-                            g_ShowSuccessPopup = true;
                         }
+                    }
+                    else if (g_LugExplorerMode == 1) {
+                        LugScript newScript;
+                        newScript.Name = "SI_NEW_SOUND;SE_NEW_EVENT;MATERIAL_NONE";
+
+                        bank.LugParserPtr->Scripts.push_back(newScript);
+                        bank.LugParserPtr->IsDirty = true;
+
+                        g_SelectedScriptIndex = (int)bank.LugParserPtr->Scripts.size() - 1;
+                        g_ScrollToSelected = true;
+
+                        g_BankStatus = "Added new Event Script template.";
                     }
                 }
             }
@@ -589,7 +603,105 @@ static void DrawBankTab() {
             ImGui::EndPopup();
         }
 
-        if (!bank.Entries.empty()) {
+        if (bank.Type == EBankType::Audio && bank.LugParserPtr) {
+            ImGui::Dummy(ImVec2(0, 2));
+            if (ImGui::RadioButton("Sounds", g_LugExplorerMode == 0)) g_LugExplorerMode = 0;
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Scripts/Triggers", g_LugExplorerMode == 1)) g_LugExplorerMode = 1;
+            ImGui::Separator();
+        }
+
+        if (g_LugExplorerMode == 1 && bank.Type == EBankType::Audio && bank.LugParserPtr) {
+            ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
+            auto& scripts = bank.LugParserPtr->Scripts;
+
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
+                if (g_Keybinds.DeleteEntry.IsPressed() && g_SelectedScriptIndex >= 0 && g_SelectedScriptIndex < scripts.size()) {
+                    scripts.erase(scripts.begin() + g_SelectedScriptIndex);
+                    bank.LugParserPtr->IsDirty = true;
+                    if (g_SelectedScriptIndex >= scripts.size()) {
+                        g_SelectedScriptIndex = (std::max)(0, (int)scripts.size() - 1);
+                    }
+                }
+            }
+
+            std::vector<int> visibleScripts;
+            std::string filterStr = bank.FilterText;
+            std::transform(filterStr.begin(), filterStr.end(), filterStr.begin(), ::tolower);
+
+            for (int i = 0; i < scripts.size(); i++) {
+                if (!filterStr.empty()) {
+                    std::string nameLower = scripts[i].Name;
+                    std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                    if (nameLower.find(filterStr) == std::string::npos) continue;
+                }
+                visibleScripts.push_back(i);
+            }
+
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !visibleScripts.empty()) {
+                if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+                    int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+
+                    int currentListIdx = -1;
+                    for (int k = 0; k < visibleScripts.size(); k++) {
+                        if (visibleScripts[k] == g_SelectedScriptIndex) { currentListIdx = k; break; }
+                    }
+
+                    if (currentListIdx == -1) currentListIdx = (direction == 1) ? -1 : (int)visibleScripts.size();
+                    int newListIdx = std::clamp(currentListIdx + direction, 0, (int)visibleScripts.size() - 1);
+
+                    g_SelectedScriptIndex = visibleScripts[newListIdx];
+                    g_ScrollToSelected = true;
+                }
+            }
+
+            for (int i : visibleScripts) {
+                ImGui::PushID(i);
+                std::string label = scripts[i].Name.empty() ? "[Empty String]" : scripts[i].Name;
+
+                if (ImGui::Selectable(label.c_str(), g_SelectedScriptIndex == i)) {
+                    g_SelectedScriptIndex = i;
+                }
+
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem("Duplicate Script")) {
+                        LugScript cloned = scripts[i];
+                        cloned.Name += "_COPY";
+                        scripts.push_back(cloned);
+                        bank.LugParserPtr->IsDirty = true;
+
+                        g_SelectedScriptIndex = (int)scripts.size() - 1;
+                        g_ScrollToSelected = true;
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Delete Script")) {
+                        scripts.erase(scripts.begin() + i);
+                        bank.LugParserPtr->IsDirty = true;
+
+                        if (g_SelectedScriptIndex == i) {
+                            g_SelectedScriptIndex = (std::max)(0, i - 1);
+                        }
+                        else if (g_SelectedScriptIndex > i) {
+                            g_SelectedScriptIndex--;
+                        }
+
+                        ImGui::EndPopup();
+                        ImGui::PopID();
+                        break;
+                    }
+                    ImGui::EndPopup();
+                }
+
+                if (g_SelectedScriptIndex == i && g_ScrollToSelected) {
+                    ImGui::SetScrollHereY(0.5f);
+                    g_ScrollToSelected = false;
+                }
+
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+        }
+        else if (!bank.Entries.empty()) {
             ImGui::BeginChild("ListScroll", ImVec2(0, 0), false);
 
             if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !bank.FilteredIndices.empty() && !g_IsMeshViewportHovered) {
@@ -651,12 +763,12 @@ static void DrawBankTab() {
                         staged.EntryName = e.Name;
                         staged.EntryType = e.Type;
                         staged.BankType = bank.Type;
-                        staged.TypeName = GetEntryTypeName(bank.Type, e.Type, bank.FileName); // This is in ModManagerCompiler.h now
+                        staged.TypeName = GetEntryTypeName(bank.Type, e.Type, bank.FileName);
                         staged.BankName = bank.FileName;
                         staged.SourceFullPath = bank.FullPath;
                         staged.SubBankName = (bank.ActiveSubBankIndex >= 0 && bank.ActiveSubBankIndex < bank.SubBanks.size()) ? bank.SubBanks[bank.ActiveSubBankIndex].Name : "N/A";
 
-                        ModPackageTracker::ToggleMark(staged); // This is in ModManagerCompiler.h now
+                        ModPackageTracker::ToggleMark(staged);
                     }
                     ImGui::Separator();
 
@@ -721,7 +833,10 @@ static void DrawBankTab() {
         }
     }
 
-    if (bank.SelectedEntryIndex != -1) {
+    if (bank.Type == EBankType::Audio && bank.LugParserPtr && g_LugExplorerMode == 1) {
+        DrawLugScriptProperties(&bank);
+    }
+    else if (bank.SelectedEntryIndex != -1) {
         const auto& e = bank.Entries[bank.SelectedEntryIndex];
 
         std::string typeName = "Unknown";

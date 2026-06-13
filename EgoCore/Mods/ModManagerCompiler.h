@@ -11,6 +11,8 @@
 #include "BigBankCompiler.h"
 #include "DefBackend.h"
 #include "BinaryParser.h"
+#include "MeshCompiler.h"
+#include "ParticleCompiler.h"
 
 namespace fs = std::filesystem;
 
@@ -45,6 +47,8 @@ struct ModEntry {
 struct ModAssetOverride {
     std::string ResourcePath;
     std::string HeaderPath;
+    std::string TexMapPath;
+    std::string ParticleMapPath;
     bool IsHandled = false;
 };
 
@@ -59,6 +63,8 @@ struct StagedModPackageEntry {
     std::string SubBankName;
     std::string SourceFullPath; 
 };
+
+inline std::map<std::string, uint32_t> g_LiveBankIDs;
 
 inline std::string GetEntryTypeName(EBankType bankType, int32_t type, const std::string& bankName) {
     if (bankType == EBankType::Graphics || bankType == EBankType::XboxGraphics) {
@@ -202,6 +208,13 @@ public:
                         ModAssetOverride asset;
                         asset.ResourcePath = resPath;
                         if (fs::exists(hdrPath)) asset.HeaderPath = hdrPath;
+
+                        std::string texMapPath = resPath.substr(0, resPath.find_last_of('.')) + ".texmap";
+                        if (fs::exists(texMapPath)) asset.TexMapPath = texMapPath;
+
+                        std::string pMapPath = resPath.substr(0, resPath.find_last_of('.')) + ".particlemap";
+                        if (fs::exists(pMapPath)) asset.ParticleMapPath = pMapPath;
+
                         g_ActiveModAssets[lookupKey] = asset;
                     }
                 }
@@ -307,14 +320,14 @@ public:
                         std::ifstream hdrIn(g_ActiveModAssets[key].HeaderPath, std::ios::binary);
                         hdrIn.read((char*)metaData.data(), entry.InfoSize);
 
-                        if (metaData.size() >= sizeof(CGraphicHeader)) {
-                            CGraphicHeader* hdr = (CGraphicHeader*)metaData.data();
-                            hdr->MipSize0 = 0;
+                    if (metaData.size() >= sizeof(CGraphicHeader)) {
+                            if (lowerBankName == "graphics.big" || lowerBankName == "xboxgraphics.big") {
+                                CGraphicHeader* hdr = (CGraphicHeader*)metaData.data();
+                                hdr->MipSize0 = 0;
+                            }
                         }
                     }
-                    else {
-                        entry.InfoSize = 0; metaData.clear();
-                    }
+                    else { entry.InfoSize = 0; metaData.clear(); }
                     g_ActiveModAssets[key].IsHandled = true;
                 }
                 psb.Entries.push_back(entry);
@@ -323,6 +336,7 @@ public:
                 psb.ModResPath.push_back(modResPath);
             }
         }
+
         for (auto& [key, asset] : g_ActiveModAssets) {
             if (asset.IsHandled) continue;
             size_t firstSlash = key.find('/'); size_t lastSlash = key.find_last_of('/');
@@ -360,6 +374,26 @@ public:
             asset.IsHandled = true;
         }
 
+        for (const auto& psb : subBanks) {
+            for (const auto& entry : psb.Entries) {
+                if (!entry.Name.empty()) {
+                    g_LiveBankIDs[entry.Name] = entry.ID;
+
+                    std::string upperName = entry.Name;
+                    std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
+                    g_LiveBankIDs[upperName] = entry.ID;
+
+                    std::string sanitized = entry.Name;
+                    for (char& c : sanitized) {
+                        if (!std::isalnum(c)) c = '_';
+                        else c = (char)std::toupper(c);
+                    }
+                    if (!sanitized.empty() && std::isdigit(sanitized[0])) sanitized = "_" + sanitized;
+                    g_LiveBankIDs[sanitized] = entry.ID;
+                }
+            }
+        }
+
         for (auto& psb : subBanks) {
             uint32_t sbAlign = (psb.Info.Align == 0) ? 1 : psb.Info.Align;
             for (size_t i = 0; i < psb.Entries.size(); ++i) {
@@ -373,17 +407,194 @@ public:
                 entry.Offset = currentDataOffset;
                 if (entry.Size > 0) {
                     if (psb.IsModded[i]) {
-                        std::ifstream resIn(psb.ModResPath[i], std::ios::binary);
-                        std::vector<char> buffer(entry.Size);
-                        resIn.read(buffer.data(), entry.Size);
-                        out.write(buffer.data(), entry.Size);
+                        std::string resPathStr = psb.ModResPath[i];
+                        std::ifstream resIn(resPathStr, std::ios::binary);
+                        std::vector<uint8_t> buffer(entry.Size);
+                        resIn.read((char*)buffer.data(), entry.Size);
+
+                        // --- APPLY .TEXMAP TO MESHES ---
+                        if ((lowerBankName == "graphics.big" || lowerBankName == "xboxgraphics.big") &&
+                            (entry.Type == 1 || entry.Type == 2 || entry.Type == 4 || entry.Type == 5)) {
+
+                            std::string texMapPath = resPathStr.substr(0, resPathStr.find_last_of('.')) + ".texmap";
+                            if (fs::exists(texMapPath)) {
+                                C3DMeshContent meshContext;
+                                meshContext.ParseEntryMetadata(psb.MetaList[i]);
+
+                                if (meshContext.EntryMeta.HasData && meshContext.EntryMeta.LODCount > 0) {
+                                    std::map<std::string, std::string> textureMap;
+                                    std::ifstream tIn(texMapPath);
+                                    std::string line;
+
+
+                                    while (std::getline(tIn, line)) {
+                                        line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+                                        line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
+
+                                        size_t eqPos = line.find('=');
+                                        if (eqPos != std::string::npos) {
+                                            std::string key = line.substr(0, eqPos);
+                                            std::string val = line.substr(eqPos + 1);
+
+                                            val.erase(val.find_last_not_of(" \t") + 1);
+                                            val.erase(0, val.find_first_not_of(" \t"));
+
+                                            std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+
+                                            textureMap[key] = val;
+                                        }
+                                    }
+
+                                    std::vector<uint8_t> newPayload;
+                                    size_t offset = 0;
+                                    bool meshChanged = false;
+
+                                    for (uint32_t lod = 0; lod < meshContext.EntryMeta.LODCount; lod++) {
+                                        uint32_t sz = meshContext.EntryMeta.LODSizes[lod];
+                                        if (offset + sz <= buffer.size()) {
+                                            std::vector<uint8_t> slice(buffer.begin() + offset, buffer.begin() + offset + sz);
+                                            C3DMeshContent lodMesh;
+
+                                            if (lodMesh.Parse(slice, entry.Type)) {
+                                                for (size_t mIdx = 0; mIdx < lodMesh.Materials.size(); mIdx++) {
+                                                    auto& mat = lodMesh.Materials[mIdx];
+                                                    std::string baseKey = std::to_string(lod) + "," + std::to_string(mIdx) + ",";
+
+                                                    auto applyTex = [&](const std::string& type, int32_t& outID) {
+                                                        std::string lookup = baseKey + type;
+                                                        if (textureMap.count(lookup)) {
+                                                            std::string targetTex = textureMap[lookup];
+
+                                                            if (g_LiveBankIDs.count(targetTex)) {
+                                                                outID = g_LiveBankIDs[targetTex];
+                                                                mat.UseFilenames = false;
+                                                                meshChanged = true;
+                                                            }
+
+                                                        }
+                                                    };
+
+                                                    applyTex("Diffuse", mat.DiffuseMapID);
+                                                    applyTex("Bump", mat.BumpMapID);
+                                                    applyTex("Reflect", mat.ReflectionMapID);
+                                                    applyTex("Illum", mat.IlluminationMapID);
+                                                    applyTex("Decal", mat.DecalID);
+                                                }
+
+                                                if (meshChanged) {
+                                                    std::vector<uint8_t> compiled = MeshCompiler::CompileSingleLOD(lodMesh);
+                                                    meshContext.EntryMeta.LODSizes[lod] = (uint32_t)compiled.size();
+                                                    newPayload.insert(newPayload.end(), compiled.begin(), compiled.end());
+                                                }
+                                                else { newPayload.insert(newPayload.end(), slice.begin(), slice.end()); }
+                                            }
+                                            else { newPayload.insert(newPayload.end(), slice.begin(), slice.end()); }
+                                        }
+                                        offset += sz;
+                                    }
+
+                                    if (meshChanged && !newPayload.empty()) {
+                                        meshContext.EntryMeta.TextureIDs.clear();
+                                        C3DMeshContent lod0;
+                                        if (lod0.Parse(std::vector<uint8_t>(newPayload.begin(), newPayload.begin() + meshContext.EntryMeta.LODSizes[0]), entry.Type)) {
+                                            for (const auto& mat : lod0.Materials) {
+                                                auto addTex = [&](int32_t id) {
+                                                    if (id > 0 && std::find(meshContext.EntryMeta.TextureIDs.begin(), meshContext.EntryMeta.TextureIDs.end(), id) == meshContext.EntryMeta.TextureIDs.end()) {
+                                                        meshContext.EntryMeta.TextureIDs.push_back(id);
+                                                    }
+                                                    };
+                                                addTex(mat.DiffuseMapID); addTex(mat.BumpMapID); addTex(mat.ReflectionMapID); addTex(mat.IlluminationMapID); addTex(mat.DecalID);
+                                            }
+                                        }
+                                        buffer = newPayload;
+                                        entry.Size = (uint32_t)buffer.size();
+                                        psb.MetaList[i] = meshContext.SerializeEntryMetadata();
+                                        entry.InfoSize = (uint32_t)psb.MetaList[i].size();
+                                    }
+                                }
+                            }
+                        }
+                       // --- APPLY .PARTICLEMAP TO EFFECTS ---
+                        if (lowerBankName == "effects.big") {
+                            std::string pMapPath = resPathStr.substr(0, resPathStr.find_last_of('.')) + ".particlemap";
+                            if (fs::exists(pMapPath)) {
+                                CParticleEmitter emitter;
+                                CParticleStream pStream(buffer);
+                                emitter.Parse(pStream);
+
+                                std::map<std::string, std::string> particleMap;
+                                std::ifstream pIn(pMapPath);
+                                std::string line;
+
+
+                                while (std::getline(pIn, line)) {
+                                    line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+                                    line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
+
+                                    size_t eqPos = line.find('=');
+                                    if (eqPos != std::string::npos) {
+                                        std::string key = line.substr(0, eqPos);
+                                        std::string val = line.substr(eqPos + 1);
+
+                                        val.erase(val.find_last_not_of(" \t") + 1);
+                                        val.erase(0, val.find_first_not_of(" \t"));
+
+                                        std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+
+                                        particleMap[key] = val;
+                                    }
+                                }
+
+                                bool emitterChanged = false;
+
+                                for (size_t sIdx = 0; sIdx < emitter.Systems.size(); ++sIdx) {
+                                    auto& sys = emitter.Systems[sIdx];
+                                    for (size_t cIdx = 0; cIdx < sys.Components.size(); ++cIdx) {
+                                        auto& comp = sys.Components[cIdx];
+                                        std::string baseKey = std::to_string(sIdx) + "," + std::to_string(cIdx) + ",";
+
+                                        auto applyID = [&](const std::string& type, int32_t& outID) {
+                                            std::string lookup = baseKey + type;
+                                            if (particleMap.count(lookup)) {
+                                                std::string targetName = particleMap[lookup];
+
+                                                if (g_LiveBankIDs.count(targetName)) {
+                                                    outID = g_LiveBankIDs[targetName];
+                                                    emitterChanged = true;
+                                                }
+
+                                            }
+                                        };
+
+                                        if (auto* rs = dynamic_cast<CPSCRenderSprite*>(comp.get())) {
+                                            applyID("SpriteBank", rs->SpriteBankIndex); applyID("TrailBank", rs->TrailBankIndex);
+                                        }
+                                        else if (auto* rm = dynamic_cast<CPSCRenderMesh*>(comp.get())) {
+                                            applyID("MeshBank", rm->BankIndex); applyID("TrailBank", rm->TrailBankIndex);
+                                        }
+                                        else if (auto* dr = dynamic_cast<CPSCDecalRenderer*>(comp.get())) {
+                                            applyID("DecalBank", dr->DecalBankIndex);
+                                        }
+                                        else if (auto* ss = dynamic_cast<CPSCSingleSprite*>(comp.get())) {
+                                            applyID("SpriteBank", ss->SpriteBankIndex); applyID("TrailBank", ss->TrailBankIndex);
+                                        }
+                                    }
+                                }
+
+                                if (emitterChanged) {
+                                    buffer = ParticleCompiler::Compile(emitter);
+                                    entry.Size = (uint32_t)buffer.size();
+                                }
+                            }
+                        }
+                        out.write((const char*)buffer.data(), entry.Size);
                     }
                     else {
                         std::streampos returnPos = in.tellg();
                         in.seekg(savedOriginalOffset, std::ios::beg);
-                        std::vector<char> buffer(entry.Size);
-                        in.read(buffer.data(), entry.Size);
-                        out.write(buffer.data(), entry.Size);
+                        std::vector<char> rawBuffer(entry.Size);
+                        in.read(rawBuffer.data(), entry.Size);
+                        out.write(rawBuffer.data(), entry.Size);
                         in.seekg(returnPos, std::ios::beg);
                     }
                 }
@@ -558,11 +769,31 @@ public:
         for (const auto& [filePath, enumsMap] : filesToGenerate) {
             std::ofstream outFile(filePath);
             if (!outFile.is_open()) continue;
+
             outFile << "#pragma once\n\n";
+
             for (const auto& [name, enumEntries] : enumsMap) {
                 outFile << "enum " << name << "\n{\n";
                 bool isLipSync = (name.find("LipSync") != std::string::npos);
-                for (const auto& e : enumEntries) outFile << "    " << SanitizeForEnum(e.EntryName, !isLipSync) << " = " << e.EntryID << ",\n";
+
+                for (const auto& e : enumEntries) {
+
+                    uint32_t trueId = e.EntryID;
+
+                    for (const auto& b : g_OpenBanks) {
+                        if (b.FileName == e.BankName) {
+                            for (size_t i = 0; i < b.Entries.size(); i++) {
+                                if (b.Entries[i].Name == e.EntryName) {
+                                    trueId = b.Entries[i].ID;
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+
+                    outFile << "    " << SanitizeForEnum(e.EntryName, !isLipSync) << " = " << trueId << ",\n";
+                }
                 outFile << "};\n\n";
             }
             outFile.close();
@@ -703,7 +934,6 @@ public:
                             for (const auto& [type, defList] : mapToSearch) {
                                 for (const auto& def : defList) {
                                     if (def.Name == entry.EntryName) {
-                                        // Strict Case-Insensitive Path Match prevents grabbing GameDefs instead of ScriptDefs
                                         std::string defSrc = def.SourceFile;
                                         std::string entSrc = entry.SourceFullPath;
                                         std::transform(defSrc.begin(), defSrc.end(), defSrc.begin(), ::tolower);
@@ -776,30 +1006,186 @@ public:
 
             const auto& bankEntry = targetBank->Entries[entryIndex];
             std::string resourcePath = targetDir + "\\" + entry.EntryName + ".resource";
-            std::ofstream resFile(resourcePath, std::ios::binary);
 
-            if (resFile.is_open()) {
-                if (targetBank->ModifiedEntryData.count(entryIndex)) {
-                    const auto& data = targetBank->ModifiedEntryData[entryIndex];
-                    resFile.write((const char*)data.data(), data.size());
+            std::vector<uint8_t> finalResourceData;
+
+            if (targetBank->ModifiedEntryData.count(entryIndex)) {
+                finalResourceData = targetBank->ModifiedEntryData[entryIndex];
+            }
+            else if (bankEntry.Size > 0) {
+                std::ifstream diskStream;
+                std::istream* activeStream = nullptr;
+
+                if (targetBank->Stream && targetBank->Stream->is_open()) activeStream = targetBank->Stream.get();
+                else { diskStream.open(targetBank->FullPath, std::ios::binary); if (diskStream.is_open()) activeStream = &diskStream; }
+
+                if (activeStream) {
+                    activeStream->clear();
+                    activeStream->seekg(bankEntry.Offset, std::ios::beg);
+                    finalResourceData.resize(bankEntry.Size);
+                    activeStream->read((char*)finalResourceData.data(), bankEntry.Size);
                 }
-                else if (bankEntry.Size > 0) {
-                    std::ifstream diskStream;
-                    std::istream* activeStream = nullptr;
+                if (diskStream.is_open()) diskStream.close();
+            }
 
-                    if (targetBank->Stream && targetBank->Stream->is_open()) activeStream = targetBank->Stream.get();
-                    else { diskStream.open(targetBank->FullPath, std::ios::binary); if (diskStream.is_open()) activeStream = &diskStream; }
+            if (!finalResourceData.empty()) {
+                if ((targetBank->Type == EBankType::Graphics || targetBank->Type == EBankType::XboxGraphics) &&
+                    (bankEntry.Type == 1 || bankEntry.Type == 2 || bankEntry.Type == 4 || bankEntry.Type == 5)) {
 
-                    if (activeStream) {
-                        activeStream->clear();
-                        activeStream->seekg(bankEntry.Offset, std::ios::beg);
-                        std::vector<char> buffer(bankEntry.Size);
-                        activeStream->read(buffer.data(), bankEntry.Size);
-                        resFile.write(buffer.data(), bankEntry.Size);
+                    C3DMeshContent meshContext;
+                    if (targetBank->SubheaderCache.count(entryIndex)) {
+                        meshContext.ParseEntryMetadata(targetBank->SubheaderCache[entryIndex]);
                     }
-                    if (diskStream.is_open()) diskStream.close();
+
+                    if (meshContext.EntryMeta.HasData && meshContext.EntryMeta.LODCount > 0) {
+                        auto nameMap = BuildFriendlyNameMap("textures.h");
+                        std::vector<uint8_t> finalPayload;
+                        size_t offset = 0;
+                        bool success = true;
+
+                        for (uint32_t lod = 0; lod < meshContext.EntryMeta.LODCount; lod++) {
+                            uint32_t sz = meshContext.EntryMeta.LODSizes[lod];
+                            if (offset + sz <= finalResourceData.size()) {
+                                std::vector<uint8_t> slice(finalResourceData.begin() + offset, finalResourceData.begin() + offset + sz);
+                                C3DMeshContent lodMesh;
+
+                                if (lodMesh.Parse(slice, bankEntry.Type)) {
+                                    for (auto& mat : lodMesh.Materials) {
+                                        mat.TextureFileNames.assign(4, "");
+                                        if (nameMap.count(mat.DiffuseMapID)) mat.TextureFileNames[0] = nameMap[mat.DiffuseMapID];
+                                        if (nameMap.count(mat.BumpMapID)) mat.TextureFileNames[1] = nameMap[mat.BumpMapID];
+                                        if (nameMap.count(mat.ReflectionMapID)) mat.TextureFileNames[2] = nameMap[mat.ReflectionMapID];
+                                        if (nameMap.count(mat.IlluminationMapID)) mat.TextureFileNames[3] = nameMap[mat.IlluminationMapID];
+
+                                        mat.UseFilenames = false;
+                                        for (const auto& s : mat.TextureFileNames) { if (!s.empty()) mat.UseFilenames = true; }
+                                    }
+
+                                    std::vector<uint8_t> compiled = MeshCompiler::CompileSingleLOD(lodMesh);
+                                    meshContext.EntryMeta.LODSizes[lod] = (uint32_t)compiled.size();
+                                    finalPayload.insert(finalPayload.end(), compiled.begin(), compiled.end());
+                                }
+                                else { success = false; break; }
+                            }
+                            else { success = false; break; }
+                            offset += sz;
+                        }
+
+                        if (success && !finalPayload.empty()) {
+                            finalResourceData = finalPayload;
+                            targetBank->SubheaderCache[entryIndex] = meshContext.SerializeEntryMetadata();
+                        }
+                    }
                 }
-                resFile.close();
+
+                std::ofstream resFile(resourcePath, std::ios::binary);
+                if (resFile.is_open()) {
+                    resFile.write((const char*)finalResourceData.data(), finalResourceData.size());
+                    resFile.close();
+                }
+
+                if (!finalResourceData.empty() &&
+                    (targetBank->Type == EBankType::Graphics || targetBank->Type == EBankType::XboxGraphics) &&
+                    (bankEntry.Type == 1 || bankEntry.Type == 2 || bankEntry.Type == 4 || bankEntry.Type == 5)) {
+
+                    C3DMeshContent meshContext;
+                    if (targetBank->SubheaderCache.count(entryIndex)) {
+                        meshContext.ParseEntryMetadata(targetBank->SubheaderCache[entryIndex]);
+                    }
+
+                    if (meshContext.EntryMeta.HasData && meshContext.EntryMeta.LODCount > 0) {
+                        auto nameMap = BuildFriendlyNameMap("textures.h");
+                        std::string texMapContent = "";
+                        size_t offset = 0;
+
+                        for (uint32_t lod = 0; lod < meshContext.EntryMeta.LODCount; lod++) {
+                            uint32_t sz = meshContext.EntryMeta.LODSizes[lod];
+                            if (offset + sz <= finalResourceData.size()) {
+                                std::vector<uint8_t> slice(finalResourceData.begin() + offset, finalResourceData.begin() + offset + sz);
+                                C3DMeshContent lodMesh;
+
+                                if (lodMesh.Parse(slice, bankEntry.Type)) {
+                                    for (size_t mIdx = 0; mIdx < lodMesh.Materials.size(); mIdx++) {
+                                        const auto& mat = lodMesh.Materials[mIdx];
+
+                                        auto writeMap = [&](const std::string& type, int32_t id) {
+                                            if (id > 0 && nameMap.count(id)) {
+                                                texMapContent += std::to_string(lod) + "," + std::to_string(mIdx) + "," + type + "=" + nameMap[id] + "\n";
+                                            }
+                                            };
+
+                                        writeMap("Diffuse", mat.DiffuseMapID);
+                                        writeMap("Bump", mat.BumpMapID);
+                                        writeMap("Reflect", mat.ReflectionMapID);
+                                        writeMap("Illum", mat.IlluminationMapID);
+                                        writeMap("Decal", mat.DecalID);
+                                    }
+                                }
+                            }
+                            offset += sz;
+                        }
+
+                        if (!texMapContent.empty()) {
+                            std::string texMapPath = targetDir + "\\" + entry.EntryName + ".texmap";
+                            std::ofstream tFile(texMapPath);
+                            if (tFile.is_open()) {
+                                tFile << texMapContent;
+                                tFile.close();
+                            }
+                        }
+
+                        if (!finalResourceData.empty() && targetBank->Type == EBankType::Effects) {
+                            CParticleEmitter emitter;
+                            CParticleStream pStream(finalResourceData);
+                            emitter.Parse(pStream);
+
+                            auto texNameMap = BuildFriendlyNameMap("textures.h");
+                            auto meshNameMap = BuildFriendlyNameMap("meshdata.h");
+                            std::string pMapContent = "";
+
+                            for (size_t sIdx = 0; sIdx < emitter.Systems.size(); ++sIdx) {
+                                const auto& sys = emitter.Systems[sIdx];
+                                for (size_t cIdx = 0; cIdx < sys.Components.size(); ++cIdx) {
+                                    const auto& comp = sys.Components[cIdx];
+                                    std::string baseKey = std::to_string(sIdx) + "," + std::to_string(cIdx) + ",";
+
+                                    auto writeMap = [&](const std::string& type, int32_t id, bool isMesh) {
+                                        if (id > 0) {
+                                            if (isMesh && meshNameMap.count(id)) {
+                                                pMapContent += baseKey + type + "=" + meshNameMap[id] + "\n";
+                                            }
+                                            else if (!isMesh && texNameMap.count(id)) {
+                                                pMapContent += baseKey + type + "=" + texNameMap[id] + "\n";
+                                            }
+                                        }
+                                        };
+
+                                    if (auto* rs = dynamic_cast<CPSCRenderSprite*>(comp.get())) {
+                                        writeMap("SpriteBank", rs->SpriteBankIndex, false);
+                                        writeMap("TrailBank", rs->TrailBankIndex, false);
+                                    }
+                                    else if (auto* rm = dynamic_cast<CPSCRenderMesh*>(comp.get())) {
+                                        writeMap("MeshBank", rm->BankIndex, true);
+                                        writeMap("TrailBank", rm->TrailBankIndex, false);
+                                    }
+                                    else if (auto* dr = dynamic_cast<CPSCDecalRenderer*>(comp.get())) {
+                                        writeMap("DecalBank", dr->DecalBankIndex, false);
+                                    }
+                                    else if (auto* ss = dynamic_cast<CPSCSingleSprite*>(comp.get())) {
+                                        writeMap("SpriteBank", ss->SpriteBankIndex, false);
+                                        writeMap("TrailBank", ss->TrailBankIndex, false);
+                                    }
+                                }
+                            }
+
+                            if (!pMapContent.empty()) {
+                                std::string pMapPath = targetDir + "\\" + entry.EntryName + ".particlemap";
+                                std::ofstream pFile(pMapPath);
+                                if (pFile.is_open()) { pFile << pMapContent; pFile.close(); }
+                            }
+                        }
+                    }
+                }
             }
 
             if (bankEntry.InfoSize > 0 && targetBank->SubheaderCache.count(entryIndex)) {
@@ -807,9 +1193,12 @@ public:
                 std::ofstream hdrFile(headerPath, std::ios::binary);
                 if (hdrFile.is_open()) {
                     std::vector<uint8_t> metaData = targetBank->SubheaderCache[entryIndex];
+
                     if (metaData.size() >= sizeof(CGraphicHeader)) {
-                        CGraphicHeader* hdr = (CGraphicHeader*)metaData.data();
-                        hdr->MipSize0 = 0;
+                        if (targetBank->Type == EBankType::Graphics || targetBank->Type == EBankType::XboxGraphics) {
+                            CGraphicHeader* hdr = (CGraphicHeader*)metaData.data();
+                            hdr->MipSize0 = 0;
+                        }
                     }
 
                     hdrFile.write((const char*)metaData.data(), metaData.size());

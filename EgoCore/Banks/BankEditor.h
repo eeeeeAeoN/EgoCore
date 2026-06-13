@@ -26,7 +26,11 @@ inline std::string SanitizeEnumName(std::string name) {
 }
 
 inline void SyncBankEnums(LoadedBank* bank) {
-    if (!bank || bank->SubBanks.empty()) return;
+    if (!bank) return;
+
+    if (g_DefWorkspace.AllEnums.empty() && !g_AppConfig.GameRootPath.empty()) {
+        LoadHeadersFromDir(g_AppConfig.GameRootPath);
+    }
 
     auto RebuildEnum = [&](const std::string& enumName, const std::vector<BankEntry>& entries, std::function<bool(const BankEntry&)> filter) {
         std::string body;
@@ -38,78 +42,68 @@ inline void SyncBankEnums(LoadedBank* bank) {
         ReplaceAndSaveEnum(enumName, body);
         };
 
-    if (bank->Type == EBankType::Textures) {
-        for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-            if (bank->SubBanks[i].Name == "GBANK_MAIN_PC" && bank->ActiveSubBankIndex == i) {
-                RebuildEnum("EEngineGraphic", bank->Entries, [](const BankEntry& e) {
-                    return !e.Name.empty() && e.Name[0] != '[';
-                    });
-            }
-            else if (bank->SubBanks[i].Name == "GBANK_GUI_PC" && bank->ActiveSubBankIndex == i) {
-                RebuildEnum("EGuiGraphicBank", bank->Entries, [](const BankEntry& e) { return true; });
-            }
-        }
-    }
-    else if (bank->Type == EBankType::Frontend) {
-        if (bank->ActiveSubBankIndex >= 0) {
-            RebuildEnum("EFrontEndGraphicBank", bank->Entries, [](const BankEntry& e) { return true; });
-        }
-    }
-    else if (bank->Type == EBankType::Graphics) {
-        for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-            if (bank->SubBanks[i].Name == "MBANK_ALLMESHES" && bank->ActiveSubBankIndex == i) {
-                RebuildEnum("EAnimType2", bank->Entries, [](const BankEntry& e) {
-                    return e.Type == 6 || e.Type == 7 || e.Type == 9;
-                    });
-                RebuildEnum("EMeshType2", bank->Entries, [](const BankEntry& e) {
-                    if (e.Type == 6 || e.Type == 7 || e.Type == 9) return false;
-                    // For Physics Meshes (Type 3), only include them if the name starts with "CMESH"
-                    if (e.Type == 3) {
-                        return StartsWith(e.Name, "CMESH");
-                    }
-                    return true;
-                });
-            }
-            else if (bank->SubBanks[i].Name == "MBANK_ENGINE" && bank->ActiveSubBankIndex == i) {
-                RebuildEnum("EEngineMeshType", bank->Entries, [](const BankEntry& e) { return true; });
+    if (!bank->SubBanks.empty()) {
+        if (bank->Type == EBankType::Textures) {
+            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
+                if (bank->SubBanks[i].Name == "GBANK_MAIN_PC" && bank->ActiveSubBankIndex == i) {
+                    RebuildEnum("EEngineGraphic", bank->Entries, [](const BankEntry& e) { return !e.Name.empty() && e.Name[0] != '['; });
+                }
+                else if (bank->SubBanks[i].Name == "GBANK_GUI_PC" && bank->ActiveSubBankIndex == i) {
+                    RebuildEnum("EGuiGraphicBank", bank->Entries, [](const BankEntry& e) { return true; });
+                }
             }
         }
-    }
-    else if (bank->Type == EBankType::Text) {
-        for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-            if (bank->ActiveSubBankIndex == i) {
-                std::string sbName = bank->SubBanks[i].Name;
-                std::transform(sbName.begin(), sbName.end(), sbName.begin(), ::toupper);
-
-                if (sbName.find("TEXT_") == 0 && sbName.find("_MAIN") != std::string::npos) {
-                    RebuildEnum("EGameText", bank->Entries, [](const BankEntry& e) {
-                        return e.Type != 2;
+        else if (bank->Type == EBankType::Frontend) {
+            if (bank->ActiveSubBankIndex >= 0) RebuildEnum("EFrontEndGraphicBank", bank->Entries, [](const BankEntry& e) { return true; });
+        }
+        else if (bank->Type == EBankType::Graphics) {
+            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
+                if (bank->SubBanks[i].Name == "MBANK_ALLMESHES" && bank->ActiveSubBankIndex == i) {
+                    RebuildEnum("EAnimType2", bank->Entries, [](const BankEntry& e) { return e.Type == 6 || e.Type == 7 || e.Type == 9; });
+                    RebuildEnum("EMeshType2", bank->Entries, [](const BankEntry& e) {
+                        if (e.Type == 6 || e.Type == 7 || e.Type == 9) return false;
+                        if (e.Type == 3) return StartsWith(e.Name, "CMESH");
+                        return true;
                         });
                 }
-            }
-        }
-    }
-    else if (bank->Type == EBankType::Dialogue) {
-        for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-            if (bank->ActiveSubBankIndex == i) {
-                std::string sbName = bank->SubBanks[i].Name;
-                std::transform(sbName.begin(), sbName.end(), sbName.begin(), ::toupper);
-
-                std::string targetEnum = "";
-                if (sbName.find("LIPSYNC_") == 0) {
-                    if (sbName.find("_MAIN_2") != std::string::npos) targetEnum = "ELipSync3";
-                    else if (sbName.find("_MAIN") != std::string::npos) targetEnum = "ELipSync";
-                    else if (sbName.find("_SCRIPT_2") != std::string::npos) targetEnum = "ELipSync4";
-                    else if (sbName.find("_SCRIPT") != std::string::npos) targetEnum = "ELipSync2";
-                }
-
-                if (!targetEnum.empty()) {
-                    RebuildEnum(targetEnum, bank->Entries, [](const BankEntry& e) { return true; });
+                else if (bank->SubBanks[i].Name == "MBANK_ENGINE" && bank->ActiveSubBankIndex == i) {
+                    RebuildEnum("EEngineMeshType", bank->Entries, [](const BankEntry& e) { return true; });
                 }
             }
         }
+        else if (bank->Type == EBankType::Text) {
+            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
+                if (bank->ActiveSubBankIndex == i) {
+                    std::string sbName = bank->SubBanks[i].Name;
+                    std::transform(sbName.begin(), sbName.end(), sbName.begin(), ::toupper);
+                    if (sbName.find("TEXT_") == 0 && sbName.find("_MAIN") != std::string::npos) {
+                        RebuildEnum("EGameText", bank->Entries, [](const BankEntry& e) { return e.Type != 2; });
+                    }
+                }
+            }
+        }
+        else if (bank->Type == EBankType::Dialogue) {
+            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
+                if (bank->ActiveSubBankIndex == i) {
+                    std::string sbName = bank->SubBanks[i].Name;
+                    std::transform(sbName.begin(), sbName.end(), sbName.begin(), ::toupper);
+                    std::string targetEnum = "";
+                    if (sbName.find("LIPSYNC_") == 0) {
+                        if (sbName.find("_MAIN_2") != std::string::npos) targetEnum = "ELipSync3";
+                        else if (sbName.find("_MAIN") != std::string::npos) targetEnum = "ELipSync";
+                        else if (sbName.find("_SCRIPT_2") != std::string::npos) targetEnum = "ELipSync4";
+                        else if (sbName.find("_SCRIPT") != std::string::npos) targetEnum = "ELipSync2";
+                    }
+                    if (!targetEnum.empty()) RebuildEnum(targetEnum, bank->Entries, [](const BankEntry& e) { return true; });
+                }
+            }
+        }
+        else if (bank->Type == EBankType::Effects) {
+            if (bank->ActiveSubBankIndex >= 0) RebuildEnum("EParticleEmitter", bank->Entries, [](const BankEntry& e) { return true; });
+        }
     }
-    else if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
+
+    if (bank->Type == EBankType::Audio && bank->LugParserPtr) {
         std::string fname = bank->FileName;
         std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
 
@@ -120,28 +114,29 @@ inline void SyncBankEnums(LoadedBank* bank) {
                 });
 
             std::string body;
+            uint32_t maxID = 0;
+
             for (size_t i = 0; i < sortedEntries.size(); i++) {
                 std::string s = sortedEntries[i].Name;
 
                 size_t dot = s.find_last_of('.');
                 if (dot != std::string::npos) s = s.substr(0, dot);
                 std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+
                 std::string formattedName = "SND_";
                 for (size_t j = 0; j < s.length(); j++) {
                     if (std::isdigit((unsigned char)s[j]) && j > 0 && std::isalpha((unsigned char)s[j - 1])) {
                         formattedName += '_';
                     }
+                    formattedName += s[j];
                 }
+
                 body += "\t" + formattedName + " = " + std::to_string(sortedEntries[i].SoundID) + ",\n";
+                if (sortedEntries[i].SoundID > maxID) maxID = sortedEntries[i].SoundID;
             }
-            body += "\tSND_LAST\n";
+            body += "\tSND_LAST = " + std::to_string(maxID + 1) + "\n";
 
             ReplaceAndSaveEnum("SND", body);
-        }
-    }
-    else if (bank->Type == EBankType::Effects) {
-        if (bank->ActiveSubBankIndex >= 0) {
-            RebuildEnum("EParticleEmitter", bank->Entries, [](const BankEntry& e) { return true; });
         }
     }
 }
@@ -265,6 +260,20 @@ inline void SaveAudioBank(LoadedBank* bank) {
             else {
                 g_SuccessMessage = "Bank (.LUG) saved, but .MET generation failed!";
             }
+
+            std::string safeName = lug->FileName;
+            std::transform(safeName.begin(), safeName.end(), safeName.begin(), ::tolower);
+
+            if (safeName.find("ingame.lug") != std::string::npos) {
+                SyncBankEnums(bank);
+
+                std::string log;
+                std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
+                BinaryParser::CompileSoundBinaries(defsPath, log);
+
+                g_SuccessMessage += "\nEnum Updated and Sound Binaries Recompiled.";
+            }
+
             g_BankStatus = "Script Bank and Metadata Recompiled.";
             g_ShowSuccessPopup = true;
             ReloadBankInPlace(bank);
@@ -342,22 +351,40 @@ inline void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& f
     stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
     if (!pixels) { g_BankStatus = "Error loading frame."; return; }
 
-    int physW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
-    int physH = stagedTex->Header.Height ? stagedTex->Header.Height : stagedTex->Header.FrameHeight;
+    int physW = opts.ResizeToPowerOfTwo ? TextureBuilder::RoundToPow2(x) : x;
+    int physH = opts.ResizeToPowerOfTwo ? TextureBuilder::RoundToPow2(y) : y;
+
+    int oldW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
+    int oldH = stagedTex->Header.Height ? stagedTex->Header.Height : stagedTex->Header.FrameHeight;
+
+    if (oldW != physW || oldH != physH) {
+        for (auto& frame : stagedTex->RawFrames) {
+            std::vector<uint8_t> resized(physW * physH * 4);
+            stbir_resize_uint8(frame.data(), oldW, oldH, 0, resized.data(), physW, physH, 0, 4);
+            frame = resized;
+        }
+
+        stagedTex->Header.Width = physW;
+        stagedTex->Header.FrameWidth = physW;
+        stagedTex->Header.Height = physH;
+        stagedTex->Header.FrameHeight = physH;
+    }
 
     std::vector<uint8_t> rgba(physW * physH * 4);
-    stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4);
+    if (physW != x || physH != y) {
+        stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4);
+    }
+    else {
+        memcpy(rgba.data(), pixels, physW * physH * 4);
+    }
     stbi_image_free(pixels);
 
-    // 1. Use the modal's options for bump map conversion
     if (opts.IsBumpmap) {
         TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, opts.BumpFactor);
     }
 
     stagedTex->RawFrames.push_back(rgba);
     stagedTex->Header.FrameCount = (uint16_t)stagedTex->RawFrames.size();
-
-    // 2. CRITICAL FIX: Sync the staged texture's format to what was selected in the UI!
     stagedTex->TargetFormat = opts.Format;
 
     SelectEntry(bank, entryIdx);
@@ -386,23 +413,40 @@ inline void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, co
     stbi_uc* pixels = stbi_load(filePath.c_str(), &x, &y, &c, 4);
     if (!pixels) { g_BankStatus = "Error loading frame."; return; }
 
-    int physW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
-    int physH = stagedTex->Header.Height ? stagedTex->Header.Height : stagedTex->Header.FrameHeight;
+    int physW = opts.ResizeToPowerOfTwo ? TextureBuilder::RoundToPow2(x) : x;
+    int physH = opts.ResizeToPowerOfTwo ? TextureBuilder::RoundToPow2(y) : y;
+
+    int oldW = stagedTex->Header.Width ? stagedTex->Header.Width : stagedTex->Header.FrameWidth;
+    int oldH = stagedTex->Header.Height ? stagedTex->Header.Height : stagedTex->Header.FrameHeight;
+
+    if (oldW != physW || oldH != physH) {
+        for (auto& frame : stagedTex->RawFrames) {
+            std::vector<uint8_t> resized(physW * physH * 4);
+            stbir_resize_uint8(frame.data(), oldW, oldH, 0, resized.data(), physW, physH, 0, 4);
+            frame = resized;
+        }
+
+        stagedTex->Header.Width = physW;
+        stagedTex->Header.FrameWidth = physW;
+        stagedTex->Header.Height = physH;
+        stagedTex->Header.FrameHeight = physH;
+    }
 
     std::vector<uint8_t> rgba(physW * physH * 4);
-    stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4);
+    if (physW != x || physH != y) {
+        stbir_resize_uint8(pixels, x, y, 0, rgba.data(), physW, physH, 0, 4);
+    }
+    else {
+        memcpy(rgba.data(), pixels, physW * physH * 4);
+    }
     stbi_image_free(pixels);
 
-    // 1. Use our new options to determine bump map conversion
     if (opts.IsBumpmap) {
         TextureBuilder::ConvertRGBAToFableNormalMap(rgba, physW, physH, opts.BumpFactor);
     }
 
     if (frameIdx < stagedTex->RawFrames.size()) {
         stagedTex->RawFrames[frameIdx] = rgba;
-
-        // 2. CRITICAL FIX: Update the staged texture's format!
-        // This ensures the compiler uses the format you selected in the UI.
         stagedTex->TargetFormat = opts.Format;
 
         SelectEntry(bank, entryIdx);
@@ -1053,6 +1097,11 @@ inline void FlushStagedEntries(LoadedBank* bank) {
                 newInfo.resize(sizeof(CGraphicHeader) + sizeof(CPixelFormatInit));
             }
             CGraphicHeader* headerToPatch = (CGraphicHeader*)newInfo.data();
+
+            headerToPatch->Width = w;
+            headerToPatch->Height = h;
+            headerToPatch->FrameWidth = w;
+            headerToPatch->FrameHeight = h;
 
             for (size_t i = 0; i < staged.Texture->RawFrames.size(); i++) {
                 auto result = TextureBuilder::CompileFromRGBA(staged.Texture->RawFrames[i], w, h, opts);

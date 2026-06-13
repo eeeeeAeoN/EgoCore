@@ -313,12 +313,13 @@ public:
             std::string modBlock = mContent.substr(defStart, defEnd - defStart);
             std::string headerLine = mContent.substr(defStart, mContent.find('\n', defStart) - defStart);
 
+            headerLine.erase(std::remove(headerLine.begin(), headerLine.end(), '\r'), headerLine.end());
+
             std::stringstream ss(headerLine);
             std::string dummy, type, name;
             ss >> dummy >> type >> name;
 
             if (!type.empty() && !name.empty()) {
-                // Make the regex catch both tags in the target file
                 std::regex defRegex(
                     "#definition(?:_template)?[ \\t]+" + type + "[ \\t]+" + name + "[ \\t\\r\\n]"
                 );
@@ -354,7 +355,6 @@ public:
         std::regex enumRegex(R"(enum\s+(\w+)\s*\{([\s\S]*?)\};)");
         std::regex wordRegex(R"(([A-Za-z0-9_]+))");
 
-        // Scan Mod file for Enums (Skips commented ones)
         auto mBegin = std::sregex_iterator(maskedMContent.begin(), maskedMContent.end(), enumRegex);
         auto mEnd = std::sregex_iterator();
 
@@ -379,7 +379,6 @@ public:
 
                 std::stringstream ss(mBodyOriginal); std::string line; std::string toAppend = "";
                 while (std::getline(ss, line)) {
-                    // Ghost line check prevents injecting commented-out members
                     std::string maskedLine = CreateCommentMaskedString(line);
                     std::smatch lineMatch;
 
@@ -387,8 +386,32 @@ public:
                         std::string word = lineMatch[1].str();
                         if (word != "force_dword" && word != "FORCE_DWORD") {
                             if (existingMembers.find(word) == existingMembers.end()) {
-                                line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
-                                toAppend += "    " + line + "\n";
+
+                                uint32_t finalID = 0;
+                                bool useLiveID = false;
+
+                                std::string upperWord = word;
+                                std::transform(upperWord.begin(), upperWord.end(), upperWord.begin(), ::toupper);
+
+                                if (g_LiveBankIDs.count(word)) {
+                                    finalID = g_LiveBankIDs[word];
+                                    useLiveID = true;
+                                }
+                                else if (g_LiveBankIDs.count(upperWord)) {
+                                    finalID = g_LiveBankIDs[upperWord];
+                                    useLiveID = true;
+                                }
+
+                                if (useLiveID) {
+                                    // Override the modder's text with the true dynamic ID
+                                    toAppend += "    " + word + " = " + std::to_string(finalID) + ",\n";
+                                }
+                                else {
+                                    // Fallback for non-bank enums (like animation events)
+                                    line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+                                    toAppend += "    " + line + "\n";
+                                }
+
                                 existingMembers.insert(word);
                             }
                         }
@@ -432,7 +455,6 @@ public:
             if (!name.empty()) {
                 std::string searchStr = "BEGIN_EVENTS: " + name;
 
-                // Exact word-boundary matching for events
                 size_t tStart = 0;
                 bool found = false;
                 while ((tStart = tContent.find(searchStr, tStart)) != std::string::npos) {
@@ -462,6 +484,10 @@ public:
     }
 
     static void ProcessModsAndLaunch() {
+        for (auto& bank : g_OpenBanks) {
+            if (bank.Stream && bank.Stream->is_open()) bank.Stream->close();
+        }
+
         bool hasActiveAssetMods = false;
         bool hasActiveDefMods = false;
         bool hasActiveTngMods = false;
@@ -508,10 +534,6 @@ public:
             return;
         }
 
-        for (auto& bank : g_OpenBanks) {
-            if (bank.Stream && bank.Stream->is_open()) bank.Stream->close();
-        }
-
         ModBankPatcher::BuildMasterModIndex(g_LoadedMods);
 
         RestoreVanillaFiles(g_AppConfig.ModSystemDirty, g_AppConfig.DefSystemDirty, g_AppConfig.TngSystemDirty);
@@ -521,8 +543,40 @@ public:
         if (g_AppConfig.TngSystemDirty) BackupAffectedTngFiles();
 
         if (g_AppConfig.ModSystemDirty && hasActiveAssetMods) {
+
+            if (neededBankFiles.count("effects.big")) {
+                neededBankFiles.insert("graphics.big");
+                neededBankFiles.insert("textures.big");
+            }
+            if (neededBankFiles.count("graphics.big")) {
+                neededBankFiles.insert("textures.big");
+            }
+            if (neededBankFiles.count("xboxeffects.big")) {
+                neededBankFiles.insert("xboxgraphics.big");
+            }
+            if (neededBankFiles.count("xboxgraphics.big")) {
+                neededBankFiles.insert("textures.big");
+            }
+
             EnsureNeededBanksAreLoaded(neededBankFiles);
             LoadHeadersFromDir(g_AppConfig.GameRootPath);
+
+            // 2. SORT BANKS: Force Textures -> Graphics -> Effects
+            std::sort(g_OpenBanks.begin(), g_OpenBanks.end(), [](const LoadedBank& a, const LoadedBank& b) {
+                auto getOrder = [](const std::string& name) {
+                    std::string n = name; std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                    if (n.find("textures") != std::string::npos) return 0;
+                    if (n.find("graphics") != std::string::npos) return 1;
+                    if (n.find("effects") != std::string::npos) return 2;
+                    return 3;
+                    };
+                int orderA = getOrder(a.FileName);
+                int orderB = getOrder(b.FileName);
+                if (orderA != orderB) return orderA < orderB;
+                return a.FileName < b.FileName;
+                });
+
+            g_LiveBankIDs.clear();
 
             for (auto& bank : g_OpenBanks) {
                 std::string bankFileName = fs::path(bank.FullPath).filename().string();
