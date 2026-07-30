@@ -129,47 +129,21 @@ static void DrawDefTab() {
     }
 
     float compileBtnWidth = 130.0f;
-    float nativeBtnWidth = 170.0f;
-    float totalBtnSpacing = ImGui::GetStyle().ItemSpacing.x;
-    float totalWidth = compileBtnWidth + nativeBtnWidth + totalBtnSpacing;
 
     ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
 
-    /*
-    //NATIVE COMPILER BUTTON ---
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 1.0f)); // Green to distinguish
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.4f, 0.15f, 1.0f));
-
-    if (ImGui::Button("NATIVE FRONTEND", ImVec2(nativeBtnWidth, 0))) {
-        if (!g_IsCompiling) {
-            g_IsCompiling = true;
-            std::thread([]() {
-                NativeCompileFrontend();
-                g_IsCompiling = false;
-                g_CompileStatus = "Native Frontend Compilation Finished!";
-                }).detach();
-        }
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("EXPERIMENTAL: Generates frontend.bin and name.bin natively\n(Bypasses ego_r.exe).");
-    ImGui::PopStyleColor(3);
-    
-
-    ImGui::SameLine();
-    */
-
-    // --- OLD: STEALTH COMPILER BUTTON ---
+    // --- RECOMPILE BUTTON ---
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.3f, 0.3f, 1.0f));
     if (ImGui::Button("RECOMPILE", ImVec2(compileBtnWidth, 0))) {
         if (!g_IsCompiling) {
-            CompileAllDefs_Stealth();
+            CompileAllDefs_Native();
         }
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles game definitions, sound headers and the star_chart.tga into their respective binaries.\n(Requires ego_r.exe in the Fable directory.)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles game definitions and sound binaries into their respective .bin files.\n(Does not require ego_r.exe.)");
     ImGui::PopStyleColor();
 
-    if (g_CurrentMode == EAppMode::Defs && g_Keybinds.Compile.IsPressed() && !ImGui::GetIO().WantTextInput) {
-        CompileAllDefs_Stealth();
+    if (g_CurrentMode == EAppMode::Defs && !g_IsCompiling && g_Keybinds.Compile.IsPressed() && !ImGui::GetIO().WantTextInput) {
+        CompileAllDefs_Native();
     }
 
     ImGui::EndChild();

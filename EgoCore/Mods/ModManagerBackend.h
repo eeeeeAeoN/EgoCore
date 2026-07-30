@@ -521,7 +521,7 @@ public:
 
             if (wasDefDirty) {
                 g_PendingGameLaunch = true;
-                CompileAllDefs_Stealth();
+                CompileAllDefs_Native();
                 return;
             }
 
@@ -672,7 +672,7 @@ public:
             SaveConfig();
 
             g_PendingGameLaunch = true;
-            CompileAllDefs_Stealth();
+            CompileAllDefs_Native();
             return;
         }
 

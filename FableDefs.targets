@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Builds and links the native def compiler from extern/fable-defs.
+
+  The compiler is a Rust crate (`def-compiler-sys`) that exposes a small C API.
+  It is built from source as a static library and linked into EgoCore, so there
+  is no DLL to ship and no prebuilt binary committed to this repository.
+
+  Requirements:
+    * The extern/fable-defs submodule (this file initializes it if missing).
+    * A Rust toolchain — https://rustup.rs. The MSVC target is the default on
+      Windows, so a stock `rustup-init` install is enough.
+
+  To build against a working checkout of fable-defs instead of the submodule,
+  set FableDefsDir, either as an environment variable or:
+      msbuild /p:FableDefsDir=C:\src\fable-defs
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <FableDefsDir Condition="'$(FableDefsDir)' == ''">$(MSBuildThisFileDirectory)extern\fable-defs</FableDefsDir>
+    <FableDefsManifest>$(FableDefsDir)\Cargo.toml</FableDefsManifest>
+
+    <!-- The compiler does real work, so it is always built optimized: a debug
+         Rust build is an order of magnitude slower and it is opaque to the C++
+         debugger either way. -->
+    <FableDefsRustTarget Condition="'$(Platform)' == 'x64'">x86_64-pc-windows-msvc</FableDefsRustTarget>
+    <FableDefsRustTarget Condition="'$(Platform)' == 'Win32'">i686-pc-windows-msvc</FableDefsRustTarget>
+    <FableDefsLibDir>$(FableDefsDir)\target\$(FableDefsRustTarget)\release</FableDefsLibDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(FableDefsDir)\packages\def-compiler-sys\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <!-- ntdll/userenv/ws2_32/dbghelp are what the Rust standard library needs.
+           This is the set cargo reports via its native-static-libs print. -->
+      <AdditionalLibraryDirectories>$(FableDefsLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>def_compiler_sys.lib;ntdll.lib;userenv.lib;ws2_32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Target Name="FableDefsEnsureSources" BeforeTargets="ClCompile">
+    <Exec Condition="!Exists('$(FableDefsManifest)')"
+          Command="git submodule update --init --recursive -- &quot;extern/fable-defs&quot;"
+          WorkingDirectory="$(MSBuildThisFileDirectory)"
+          ContinueOnError="true" />
+    <Error Condition="!Exists('$(FableDefsManifest)')"
+           Text="fable-defs sources not found at $(FableDefsDir). Run: git submodule update --init --recursive" />
+    <Error Condition="'$(FableDefsRustTarget)' == ''"
+           Text="The native def compiler supports x64 and Win32; Platform was '$(Platform)'." />
+  </Target>
+
+  <!-- Before Link rather than before ClCompile: only the header is needed to
+       compile, and cargo is the slow part of this build. -->
+  <Target Name="FableDefsBuild" BeforeTargets="Link" DependsOnTargets="FableDefsEnsureSources">
+    <Exec Command="cargo --version" ContinueOnError="true" StandardOutputImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="FableDefsCargoExitCode" />
+    </Exec>
+    <Error Condition="'$(FableDefsCargoExitCode)' != '0'"
+           Text="cargo was not found on PATH. The native def compiler is built from source; install a Rust toolchain from https://rustup.rs and reopen your shell." />
+
+    <Message Importance="high" Text="Building native def compiler ($(FableDefsRustTarget))..." />
+    <!-- The target directory is passed explicitly so that a machine-wide
+         CARGO_TARGET_DIR cannot move the .lib out from under
+         AdditionalLibraryDirectories. -->
+    <Exec Command="cargo build --locked --release --package def-compiler-sys --target $(FableDefsRustTarget) --target-dir &quot;$(FableDefsDir)\target&quot;"
+          WorkingDirectory="$(FableDefsDir)"
+          ContinueOnError="true">
+      <Output TaskParameter="ExitCode" PropertyName="FableDefsBuildExitCode" />
+    </Exec>
+    <!-- x86_64-pc-windows-msvc is rustup's default target on Windows, so an x64
+         build needs no extra setup. Other targets have to be added once. -->
+    <Error Condition="'$(FableDefsBuildExitCode)' != '0'"
+           Text="Failed to build the native def compiler. If rustc reported a missing target, run: rustup target add $(FableDefsRustTarget). If it reported an unstable feature or unknown edition, update Rust: rustup update stable (1.88 or newer is required)." />
+  </Target>
+
+</Project>

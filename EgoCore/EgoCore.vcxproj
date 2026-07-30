@@ -39,6 +39,7 @@
     <ClInclude Include="Definitions\DefBackend.h" />
     <ClInclude Include="Definitions\DefExplorer.h" />
     <ClInclude Include="Definitions\EventBackend.h" />
+    <ClInclude Include="Definitions\NativeDefCompiler.h" />
     <ClInclude Include="Fonts\FontBuilder.h" />
     <ClInclude Include="Fonts\FontParser.h" />
     <ClInclude Include="Fonts\FontProperties.h" />
@@ -117,11 +118,10 @@
   <ItemGroup>
     <ResourceCompile Include="EgoCore.rc" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\FableDefCompiler\FableDefCompiler.vcxproj">
-      <Project>{4982f328-7c3a-488e-9991-13aa3de920f8}</Project>
-    </ProjectReference>
-  </ItemGroup>
+  <!-- The FableDefCompiler static library is superseded by the native def
+       compiler (extern/fable-defs) and is no longer referenced. It also required
+       a vcpkg zlib, which EgoCore no longer needs. The project itself is still
+       in the solution if you want it back. -->
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -237,6 +237,7 @@
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
+  <Import Project="$(MSBuildProjectDirectory)\..\FableDefs.targets" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
