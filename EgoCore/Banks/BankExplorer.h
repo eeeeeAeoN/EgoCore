@@ -158,8 +158,12 @@ static void DrawBankExplorer() {
 
         if (!g_IsCompiling) {
             ImGui::CloseCurrentPopup();
-            if (g_PendingGameLaunch) {
-                g_PendingGameLaunch = false;
+            // Only launch once the defs actually compiled. A failed compile leaves
+            // the previous binaries in place, so launching anyway would start the
+            // game on stale defs and discard the diagnostics without showing them.
+            const bool launch = g_PendingGameLaunch && g_DefCompileSuccess;
+            g_PendingGameLaunch = false;
+            if (launch) {
                 ModManagerBackend::LaunchGame();
             }
             else {
@@ -218,8 +222,27 @@ static void DrawBankExplorer() {
 
     if (ImGui::BeginPopupModal("Compile Error", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error during def compilation.");
-        ImGui::Text("Please check your defs for syntax or linking errors.");
-        ImGui::Separator();
+
+        // The native compiler reports each bad def with a source excerpt and a
+        // caret under the offending span, so show its output rather than a
+        // generic "check your defs" message. The box is sized for that format
+        // (~100 columns) and scrolls both ways; the excerpt's caret alignment
+        // assumes a monospace Font.ttf.
+        if (!g_DefCompileLog.empty()) {
+            ImGui::Text("The def compiler reported:");
+            ImGui::InputTextMultiline("##defcompilelog", g_DefCompileLog.data(),
+                g_DefCompileLog.size() + 1, ImVec2(860, 320),
+                ImGuiInputTextFlags_ReadOnly);
+            if (ImGui::Button("Copy to Clipboard", ImVec2(160, 0))) {
+                ImGui::SetClipboardText(g_DefCompileLog.c_str());
+            }
+            ImGui::SameLine();
+        }
+        else {
+            ImGui::Text("Please check your defs for syntax or linking errors.");
+            ImGui::Separator();
+        }
+
         if (ImGui::Button("OK", ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();
         }
