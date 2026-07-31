@@ -35,8 +35,6 @@ Developing a tool of this scale involves hundreds of hours of reverse engineerin
 
 If EgoCore has saved you time or helped you bring a new vision to life, please consider supporting the project or joining the community:
 
-* ☕ **Support the Project:** [Ko-fi](https://ko-fi.com/aeon5798)
-* 🐛 **Report Bugs & View Source:** [GitHub Repository](https://github.com/eeeeeAeoN/EgoCore)
 * 💬 **Join the Conversation:** [Fable Modding Discord](https://discord.gg/Rw4as5ar3S)
 * 
 ## 📄 License
