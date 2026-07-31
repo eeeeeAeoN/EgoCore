@@ -558,9 +558,27 @@ inline void ReloadBankInPlace(LoadedBank* bank) {
 
 static void PerformAutoLoad() {
     if (!g_AppConfig.IsConfigured) return;
+
     LoadDefsFromFolder(g_AppConfig.GameRootPath);
-    for (const auto& relativePath : g_AppConfig.AutoLoadBanks) {
-        std::string fullPath = g_AppConfig.GameRootPath + relativePath; if (fs::exists(fullPath)) LoadBank(fullPath);
+
+    for (const auto& entryPath : g_AppConfig.AutoLoadBanks) {
+        fs::path p(entryPath);
+        fs::path fullPath;
+
+        if (p.is_absolute()) {
+            fullPath = p;
+        }
+        else {
+            std::string cleanRel = entryPath;
+            while (!cleanRel.empty() && (cleanRel[0] == '\\' || cleanRel[0] == '/')) {
+                cleanRel.erase(0, 1);
+            }
+            fullPath = fs::path(g_AppConfig.GameRootPath) / cleanRel;
+        }
+
+        if (fs::exists(fullPath)) {
+            LoadBank(fullPath.string());
+        }
     }
 }
 

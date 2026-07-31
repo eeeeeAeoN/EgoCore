@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AnimationEventCompiler.h" />
     <ClInclude Include="Animations\AnimCompiler.h" />
     <ClInclude Include="Animations\AnimParser.h" />
     <ClInclude Include="Animations\AnimProperties.h" />
@@ -175,7 +176,7 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Definitions;C:\Users\Emi\source\repos\EgoCore\EgoCore\TextEditor;C:\Users\Emi\source\repos\EgoCore\EgoCore\Text;C:\Users\Emi\source\repos\EgoCore\EgoCore\Textures;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
+    <IncludePath>C:\Users\Emi\source\repos\EgoCore\extern\fable-defs\packages\def-compiler-sys\include;C:\Users\Emi\source\repos\EgoCore\EgoCore\Definitions;C:\Users\Emi\source\repos\EgoCore\EgoCore\TextEditor;C:\Users\Emi\source\repos\EgoCore\EgoCore\Text;C:\Users\Emi\source\repos\EgoCore\EgoCore\Textures;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Lipsync;C:\Users\Emi\source\repos\EgoCore\EgoCore\Audio;C:\Users\Emi\source\repos\EgoCore\EgoCore\Definitions;C:\Users\Emi\source\repos\EgoCore\EgoCore\TextEditor;C:\Users\Emi\source\repos\EgoCore\EgoCore\Text;C:\Users\Emi\source\repos\EgoCore\EgoCore\Textures;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>

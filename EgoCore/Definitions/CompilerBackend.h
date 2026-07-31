@@ -8,6 +8,7 @@
 #include <atomic>
 #include <string>
 #include "NativeDefCompiler.h"
+#include "AnimationEventCompiler.h"
 
 namespace fs = std::filesystem;
 
@@ -44,21 +45,27 @@ static void ResetWorkspaceForCompile() {
 // in-process by the native compiler (see NativeDefCompiler.h), so this needs no
 // ego_r.exe, no ini patching and no error-dialog watchdog.
 static void CompileAllDefs_Native() {
-    // On the UI thread, before the worker starts: the def tree is still drawn
-    // each frame while the "Compiling..." modal is up, so clearing it from the
-    // worker would race the UI's iteration of it.
-    ResetWorkspaceForCompile();
-
     g_IsCompiling = true;
 
     std::thread([]() {
+        // 1. Sound binaries first, while g_DefWorkspace is still populated —
+        //    CompileSoundBinaries reads CategorizedDefs/AllEnums to figure out
+        //    what to compile, so this must happen before the reset below.
         g_CompileStatus = "Compiling Sound Binaries...";
         std::string soundLog;
         BinaryParser::CompileSoundBinaries(g_AppConfig.GameRootPath + "\\Data\\Defs", soundLog);
 
-        g_CompileStatus = "Compiling Definitions...";
         g_DefCompileLog.clear();
-        const bool ok = NativeDefs::CompileAllDefs(g_AppConfig.GameRootPath, g_DefCompileLog);
+        g_DefCompileLog += "--- Sound Binaries ---\n" + soundLog;
+
+        // 2. Now safe to clear workspace state ahead of the def recompile.
+        ResetWorkspaceForCompile();
+
+        // 3. Def compilation via the native (Rust) compiler.
+        g_CompileStatus = "Compiling Definitions...";
+        std::string defLog;
+        const bool ok = NativeDefs::CompileAllDefs(g_AppConfig.GameRootPath, defLog);
+        g_DefCompileLog += "\n--- Definitions ---\n" + defLog;
 
         // Trust the compiler's own status, but confirm the artifacts landed.
         const std::string compiledDefsDir = g_AppConfig.GameRootPath + "\\Data\\CompiledDefs\\";
@@ -73,11 +80,14 @@ static void CompileAllDefs_Native() {
             g_CompileStatus = "Success! Definitions & Binaries Compiled.";
         }
         else {
-            const std::string first = NativeDefs::FirstError(g_DefCompileLog);
+            const std::string first = NativeDefs::FirstError(defLog);
             g_CompileStatus = first.empty() ? "Error during def compilation." : first;
         }
 
         LoadDefsFromFolder(g_AppConfig.GameRootPath, true);
+
+        NAnimationEvents::CBinaryCompiler eventCompiler;
+        eventCompiler.CompileAnimationEvents(g_DefWorkspace.RootPath);
 
         g_IsCompiling = false;
         }).detach();

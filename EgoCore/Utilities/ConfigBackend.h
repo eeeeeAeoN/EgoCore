@@ -22,7 +22,11 @@ struct AppConfig {
     bool EnableLookupGeneration = false;
     bool EnableAutosuggest = true;
     bool DisableWadPrompt = false;
+    bool ModEnvironmentSetup = false;
+    bool FseSetup = false;
+    bool EnableMusic = true;
 };
+
 inline AppConfig g_AppConfig;
 static const std::string CONFIG_FILENAME = "egocore_config.ini";
 
@@ -78,6 +82,9 @@ inline void SaveConfig() {
         file << "EnableLookupGeneration=" << (g_AppConfig.EnableLookupGeneration ? "1" : "0") << "\n";
         file << "EnableAutosuggest=" << (g_AppConfig.EnableAutosuggest ? "1" : "0") << "\n";
         file << "DisableWadPrompt=" << (g_AppConfig.DisableWadPrompt ? "1" : "0") << "\n";
+        file << "ModEnvironmentSetup=" << (g_AppConfig.ModEnvironmentSetup ? "1" : "0") << "\n";
+        file << "FseSetup=" << (g_AppConfig.FseSetup ? "1" : "0") << "\n";
+        file << "EnableMusic=" << (g_AppConfig.EnableMusic ? "1" : "0") << "\n";
 
         auto SaveKey = [&](const std::string& name, const ShortcutKey& k) {
             file << name << "=" << (int)k.Key << "," << k.Ctrl << "," << k.Shift << "," << k.Alt << "\n";
@@ -127,6 +134,8 @@ inline void LoadConfig() {
     g_AppConfig.TngSystemDirty = false;
     g_AppConfig.EnableLookupGeneration = false;
     g_AppConfig.DisableWadPrompt = false;
+    g_AppConfig.ModEnvironmentSetup = false;
+    g_AppConfig.EnableMusic = true;
     g_SavedModOrder.clear();
     g_SavedMarkedEntries.clear();
 
@@ -198,6 +207,9 @@ inline void LoadConfig() {
             else if (line.find("EnableLookupGeneration=") == 0) g_AppConfig.EnableLookupGeneration = (line.substr(23) == "1");
             else if (line.find("EnableAutosuggest=") == 0) g_AppConfig.EnableAutosuggest = (line.substr(18) == "1");
             else if (line.find("DisableWadPrompt=") == 0) g_AppConfig.DisableWadPrompt = (line.substr(17) == "1");
+            else if (line.find("ModEnvironmentSetup=") == 0) g_AppConfig.ModEnvironmentSetup = (line.substr(20) == "1");
+            else if (line.find("FseSetup=") == 0) g_AppConfig.FseSetup = (line.substr(9) == "1");
+            else if (line.find("EnableMusic=") == 0) g_AppConfig.EnableMusic = (line.substr(12) == "1");
             else if (line.find("Key_SwitchBankMode=") == 0) ParseKey(line.substr(19), g_Keybinds.SwitchBankMode);
             else if (line.find("Key_SwitchDefMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchDefMode);
             else if (line.find("Key_SwitchFSEMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchFSEMode);

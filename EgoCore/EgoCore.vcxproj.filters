@@ -312,6 +312,12 @@
     <ClInclude Include="Levels\WADBackend.h">
       <Filter>Source Files\Levels</Filter>
     </ClInclude>
+    <ClInclude Include="Definitions\NativeDefCompiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AnimationEventCompiler.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

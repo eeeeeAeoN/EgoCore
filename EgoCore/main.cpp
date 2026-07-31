@@ -22,11 +22,61 @@ IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
 ImFont* g_EditorFont = nullptr;
 
+MainMenuAudio g_MenuAudio;
+ImTextureID g_MusicOnTexture = 0;
+ImTextureID g_MusicOffTexture = 0;
+
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+ID3D11ShaderResourceView* g_BackgroundTexture = nullptr;
+int g_BgWidth = 0;
+int g_BgHeight = 0;
+ImFont* g_TitleFont = nullptr;
+
+bool LoadTextureFromFile(const char* filename, ID3D11Device* d3dDevice, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height) {
+    int image_width = 0;
+    int image_height = 0;
+    unsigned char* image_data = stbi_load(filename, &image_width, &image_height, NULL, 4);
+    if (image_data == NULL) return false;
+
+    D3D11_TEXTURE2D_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Width = image_width;
+    desc.Height = image_height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+
+    ID3D11Texture2D* pTexture = NULL;
+    D3D11_SUBRESOURCE_DATA subResource;
+    subResource.pSysMem = image_data;
+    subResource.SysMemPitch = desc.Width * 4;
+    subResource.SysMemSlicePitch = 0;
+    d3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+    ZeroMemory(&srvDesc, sizeof(srvDesc));
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = desc.MipLevels;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    d3dDevice->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
+    pTexture->Release();
+
+    *out_width = image_width;
+    *out_height = image_height;
+    stbi_image_free(image_data);
+
+    return true;
+}
 
 int main(int, char**) {
     //InitDebugConsole();
@@ -39,7 +89,7 @@ int main(int, char**) {
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"EgoCore", WS_OVERLAPPEDWINDOW, 100, 100, 1000, 800, nullptr, nullptr, wc.hInstance, nullptr);
 
     if (!CreateDeviceD3D(hwnd)) { CleanupDeviceD3D(); ::UnregisterClassW(wc.lpszClassName, wc.hInstance); return 1; }
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::ShowWindow(hwnd, SW_SHOWMAXIMIZED);
     ::UpdateWindow(hwnd);
 
     IMGUI_CHECKVERSION();
@@ -50,11 +100,35 @@ int main(int, char**) {
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    if (std::filesystem::exists("Font.ttf")) {
-        g_EditorFont = io.Fonts->AddFontFromFileTTF("Font.ttf", 18.0f);
+    if (std::filesystem::exists("Assets/Font.ttf")) {
+        g_EditorFont = io.Fonts->AddFontFromFileTTF("Assets/Font.ttf", 18.0f);
     }
     else {
         g_EditorFont = io.Fonts->AddFontDefault();
+    }
+
+    if (std::filesystem::exists("Assets/TitleFont.ttf")) {
+        g_TitleFont = io.Fonts->AddFontFromFileTTF("Assets/TitleFont.ttf", 32.0f);
+    }
+
+    if (std::filesystem::exists("Assets/WorldMap.png")) {
+        LoadTextureFromFile("Assets/WorldMap.png", g_pd3dDevice, &g_BackgroundTexture, &g_BgWidth, &g_BgHeight);
+    }
+
+    int iconWidth = 0, iconHeight = 0;
+    ID3D11ShaderResourceView* srvMusicOn = nullptr;
+    ID3D11ShaderResourceView* srvMusicOff = nullptr;
+
+    if (std::filesystem::exists("Assets/MusicOn.png")) {
+        if (LoadTextureFromFile("Assets/MusicOn.png", g_pd3dDevice, &srvMusicOn, &iconWidth, &iconHeight)) {
+            g_MusicOnTexture = (ImTextureID)srvMusicOn;
+        }
+    }
+
+    if (std::filesystem::exists("Assets/MusicOff.png")) {
+        if (LoadTextureFromFile("Assets/MusicOff.png", g_pd3dDevice, &srvMusicOff, &iconWidth, &iconHeight)) {
+            g_MusicOffTexture = (ImTextureID)srvMusicOff;
+        }
     }
 
     bool done = false;
@@ -73,8 +147,12 @@ int main(int, char**) {
 
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus);
-
+        ImGui::Begin("Main", nullptr,
+            ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoBackground);
         DrawBankExplorer();
 
         ImGui::End();
@@ -86,6 +164,9 @@ int main(int, char**) {
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         g_pSwapChain->Present(1, 0);
     }
+
+    if (srvMusicOn) { srvMusicOn->Release();  srvMusicOn = nullptr; }
+    if (srvMusicOff) { srvMusicOff->Release(); srvMusicOff = nullptr; }
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

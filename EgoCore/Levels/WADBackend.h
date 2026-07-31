@@ -10,6 +10,7 @@
 #include "imgui.h"
 
 namespace fs = std::filesystem;
+extern ImFont* g_TitleFont;
 
 namespace WADBackend {
     inline bool g_ShowWadPrompt = false;
@@ -187,54 +188,163 @@ namespace WADBackend {
             g_TriggerManualWadModal = false;
         }
 
-        if (ImGui::BeginPopupModal("Decompile WAD", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        // Modal Styling (Matches EgoCore Suite Theme)
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+        ImGui::SetNextWindowSize(ImVec2(540, 270), ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+        if (ImGui::BeginPopupModal("Decompile WAD", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            ImVec2 winPos = ImGui::GetWindowPos();
+            ImVec2 winSize = ImGui::GetWindowSize();
+            ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
+
+            // 1. Outer Gold Glow Aura
+            for (int i = 3; i >= 1; i--) {
+                float expand = (float)i * 1.8f;
+                float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
+                ImU32 glowCol = IM_COL32(242, 193, 78, (uint32_t)(glowAlpha * 255.0f));
+                drawList->AddRect(
+                    ImVec2(winPos.x - expand, winPos.y - expand),
+                    ImVec2(winMax.x + expand, winMax.y + expand),
+                    glowCol, 10.0f + expand, 0, 1.2f
+                );
+            }
+
+            // 2. Arcane Header Gradient Banner
+            ImVec2 headerMin = winPos;
+            ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
+            drawList->AddRectFilledMultiColor(
+                headerMin, headerMax,
+                IM_COL32(242, 193, 78, 30),  // Top-Left Gold
+                IM_COL32(110, 140, 175, 15), // Top-Right Slate Blue
+                IM_COL32(0, 0, 0, 0),        // Bottom-Right Clear
+                IM_COL32(0, 0, 0, 0)         // Bottom-Left Clear
+            );
+
+            // Custom Header Title
+            if (g_TitleFont) ImGui::PushFont(g_TitleFont);
+            ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Decompile WAD Archive");
+            if (g_TitleFont) ImGui::PopFont();
+
+            ImGui::Dummy(ImVec2(0, 4));
+
+            // Separator Line with Gold Fade
+            drawList->AddLine(
+                ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
+                ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
+                IM_COL32(242, 193, 78, 110), 1.2f
+            );
+            ImGui::Dummy(ImVec2(0, 12));
+
+            // --- STATE 1: DECOMPILE PROMPT ---
             if (!g_IsUnpacking && !g_UnpackFinished && !g_IsManualUnpack) {
-                ImGui::Text("The FinalAlbion level folder is missing.");
-                ImGui::Text("EgoCore needs to decompile 'FinalAlbion.wad' into its raw .lev and .tng components.");
-                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "This will also delete the original WAD (you don't need it) and patch userst.ini.");
-                ImGui::Dummy(ImVec2(0, 5));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
+                ImGui::TextWrapped("The FinalAlbion level folder is missing from your game installation.");
+                ImGui::TextWrapped("EgoCore needs to decompile 'FinalAlbion.wad' into raw .lev and .tng components.");
+                ImGui::Dummy(ImVec2(0, 2));
+                ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "This will delete the redundant WAD file and automatically patch userst.ini.");
+                ImGui::PopStyleColor();
+
+                ImGui::Dummy(ImVec2(0, 8));
 
                 static bool dontAskAgain = false;
+                ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
                 ImGui::Checkbox("Don't ask me again", &dontAskAgain);
-                ImGui::Dummy(ImVec2(0, 10));
+                ImGui::PopStyleColor();
 
-                if (ImGui::Button("Decompile Now", ImVec2(120, 0))) {
+                ImGui::Dummy(ImVec2(0, 12));
+
+                // Upgraded Primary Action Button (Gold)
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+                if (ImGui::Button("Decompile Now", ImVec2(140, 28))) {
                     if (dontAskAgain) {
                         g_AppConfig.DisableWadPrompt = true;
                         SaveConfig();
                     }
                     StartSystemUnpack(g_TargetGameRoot);
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("Skip", ImVec2(120, 0))) {
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(4);
+
+                ImGui::SameLine(0, 12.0f);
+
+                // Upgraded Secondary Action Button (Slate Dark)
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.18f, 0.24f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.32f, 0.42f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.14f, 0.18f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+                if (ImGui::Button("Skip", ImVec2(100, 28))) {
                     if (dontAskAgain) {
                         g_AppConfig.DisableWadPrompt = true;
                         SaveConfig();
                     }
                     ImGui::CloseCurrentPopup();
                 }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(4);
             }
+            // --- STATE 2: IN PROGRESS ---
             else if (g_IsUnpacking) {
-                ImGui::Text("Decompiling...");
-                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", g_UnpackStatus.c_str());
-            }
-            else if (g_UnpackFinished) {
-                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Decompilation Complete!");
+                ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Decompiling WAD Archive...");
+                ImGui::Dummy(ImVec2(0, 4));
+                ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.50f, 1.0f), "%s", g_UnpackStatus.c_str());
+                ImGui::Dummy(ImVec2(0, 10));
 
+                static int dots = 0;
+                if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
+                std::string spinner = "Extracting levels";
+                for (int i = 0; i < dots; i++) spinner += ".";
+                ImGui::TextDisabled("%s", spinner.c_str());
+            }
+            // --- STATE 3: COMPLETE ---
+            else if (g_UnpackFinished) {
+                ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.50f, 1.0f), "Decompilation Complete!");
+                ImGui::Dummy(ImVec2(0, 4));
+
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
                 if (!g_IsManualUnpack) {
-                    ImGui::Text("Original WAD removed and userst.ini patched.");
+                    ImGui::TextWrapped("Original WAD removed and userst.ini successfully patched.");
                 }
                 else {
-                    ImGui::Text("Files extracted successfully to the WAD's directory.");
+                    ImGui::TextWrapped("Files extracted successfully to the WAD's target directory.");
                 }
+                ImGui::PopStyleColor();
 
-                ImGui::Dummy(ImVec2(0, 10));
-                if (ImGui::Button("OK", ImVec2(120, 0))) {
+                ImGui::Dummy(ImVec2(0, 16));
+
+                float closeBtnWidth = 120.0f;
+                ImGui::SetCursorPosX((winSize.x - closeBtnWidth) * 0.5f);
+
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+                if (ImGui::Button("OK", ImVec2(closeBtnWidth, 28))) {
                     g_UnpackFinished = false;
                     ImGui::CloseCurrentPopup();
                 }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(4);
             }
+
             ImGui::EndPopup();
         }
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(3);
     }
 }

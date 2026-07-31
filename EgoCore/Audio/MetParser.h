@@ -115,7 +115,7 @@ public:
                     if (e.RawMeta.Driver.Flags & 2) flags |= 0x02;
                 }
 
-                if (e.RawMeta.Driver.FlagCheck2 != 0) {
+                if (e.Flag_Check2) {
                     flags |= 0x04;
                 }
 
@@ -134,7 +134,7 @@ public:
             else {
                 if (e.Flag_Reverb) flags |= 0x01;
                 if (e.Flag_Occlusion) flags |= 0x02;
-                flags |= 0x04;
+                if (e.Flag_Check2) flags |= 0x04;
                 if (e.Flag_Interrupt) flags |= 0x08;
                 if (e.Flag_UseMinDist) flags |= 0x10;
                 if (e.Flag_UseMaxDist) flags |= 0x20;

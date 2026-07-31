@@ -107,6 +107,8 @@ public:
         bool Flag_Reverb = false, Flag_Occlusion = false, Flag_Interrupt = false;
         bool Flag_UseMinDist = false, Flag_UseMaxDist = false;
 
+        bool Flag_Check2 = true;
+
         bool ExplicitVolume = false;
         bool ExplicitPitch = false;
 
@@ -129,6 +131,9 @@ public:
         e.GroupName = "Default";
         e.Priority = 1; e.Volume = 1.0f; e.Pitch = 1.0f; e.Probability = 100.0f;
         e.LoopCount = 0;
+
+        e.Flag_Check2 = true;
+        e.RawMeta.Driver.FlagCheck2 = 1;
 
         Entries.push_back(e);
         int idx = (int)Entries.size() - 1;
@@ -296,6 +301,7 @@ public:
                         if (m & MASK_FLAGS) { e.Flag_Reverb = (raw.Driver.Flags & 0x01) != 0; e.Flag_Occlusion = (raw.Driver.Flags & 0x02) != 0; }
                         e.Flag_Interrupt = ((m & MASK_NON_INTERRUPT) == 0);
                         e.Flag_UseMinDist = (m & MASK_MINDIST) != 0; e.Flag_UseMaxDist = (m & MASK_MAXDIST) != 0;
+                        e.Flag_Check2 = (raw.Driver.FlagCheck2 != 0);
 
                         size_t lastSlash = e.FullPath.find_last_of("\\/");
                         e.Name = (lastSlash != std::string::npos) ? e.FullPath.substr(lastSlash + 1) : e.FullPath;
@@ -449,6 +455,11 @@ public:
             else r.Driver.MinDist = 0;
             if (e.Flag_UseMaxDist) { memcpy(&r.Driver.MaxDist, &e.MaxDist, 4); m |= MASK_MAXDIST; }
             else r.Driver.MaxDist = 0;
+
+            r.Driver.FlagCheck2 = e.Flag_Check2 ? 1u : 0u;
+            if (e.OriginalIndex != -1) {
+                r.Driver.FlagCheck1 = e.RawMeta.Driver.FlagCheck1;
+            }
 
             uint32_t flagBits = 0;
             if (e.OriginalIndex != -1) flagBits = e.RawMeta.Driver.Flags & ~0x03;

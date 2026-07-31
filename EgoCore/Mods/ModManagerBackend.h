@@ -158,7 +158,7 @@ public:
     }
 
     static void SyncWithGlobalModsIni(std::vector<ModEntry>& modsList) {
-        std::string modsIniPath = g_AppConfig.GameRootPath + "\\mods.ini";
+        std::string modsIniPath = g_AppConfig.GameRootPath + "\\Mods.ini";
         if (!fs::exists(modsIniPath)) return;
 
         std::ifstream file(modsIniPath);
@@ -189,7 +189,7 @@ public:
     }
 
     static void UpdateGlobalModsIni() {
-        std::string modsIniPath = g_AppConfig.GameRootPath + "\\mods.ini";
+        std::string modsIniPath = g_AppConfig.GameRootPath + "\\Mods.ini";
         std::vector<std::string> newIniLines;
         bool inMods = false;
         bool sectionFound = false;
@@ -484,6 +484,11 @@ public:
     }
 
     static void ProcessModsAndLaunch() {
+        // FIX: Force mod state loading from disk before processing.
+        // If launching directly from cold boot, g_LoadedMods is empty and would 
+        // otherwise trigger RestoreAllTmpBackups() and wipe active asset mods.
+        ModManagerBackend::InitializeAndLoad();
+
         for (auto& bank : g_OpenBanks) {
             if (bank.Stream && bank.Stream->is_open()) bank.Stream->close();
         }
@@ -636,8 +641,8 @@ public:
 
                 for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
                     const auto& mod = *it;
-                    if (!mod.IsEnabled)  continue;
-                    if (!mod.IsDefMod)   continue;
+                    if (!mod.IsEnabled)   continue;
+                    if (!mod.IsDefMod)    continue;
 
                     std::string modDataPath = mod.ModFolderPath + "\\Data";
                     if (!fs::exists(modDataPath)) continue;
@@ -878,7 +883,7 @@ public:
     }
 
     static void LaunchGame() {
-        std::string exePath = g_AppConfig.GameRootPath + "\\FableLauncher.exe";
+        std::string exePath = g_AppConfig.GameRootPath + "\\Fable.exe";
         if (fs::exists(exePath)) {
             ShellExecuteA(NULL, "open", exePath.c_str(), NULL, g_AppConfig.GameRootPath.c_str(), SW_SHOWDEFAULT);
             exit(0);
