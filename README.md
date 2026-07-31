@@ -16,12 +16,11 @@ I believe the tools to keep this game alive should be accessible to everyone. Th
 
 ## 🚀 Getting Started
 
-0. **Set up the Unified Build of Fable (Optional but recommended):** Weather you're a modder or user it's highly recommended to get the Unified Build of Fable. Without it the .def editing, compilation and mods that use plan text definitions won't work. Download link:
-https://www.nexusmods.com/fablethelostchapters/mods/592?tab=files
 1. **Extract the Archive:** Unpack the EgoCore folder anywhere on your PC. 
 2. **Launch:** Run `EgoCore.exe`.
 3. **Setup:** On your first launch, EgoCore will ask for your Fable installation directory (the folder containing `Fable.exe` and the `Data` folder).
 4. **Decompile FinalAlbion (Recommended):** If prompted, allow EgoCore to decompile the master WAD file. This is crucial for seamless map editing.
+5. **Fix modding environment and install FableScriptExtender (Recommended):** If prompted, allow EgoCore to fix your modding environment and install FableScriptExtender into your game. This will enable definition editing and compilation and also quest script editing.
 
 *Fun fact: You can change the EgoCore font, by replacing the Font.ttf file with a .ttf true type font file of your own.
 
@@ -39,8 +38,7 @@ If EgoCore has saved you time or helped you bring a new vision to life, please c
 * ☕ **Support the Project:** [Ko-fi](https://ko-fi.com/aeon5798)
 * 🐛 **Report Bugs & View Source:** [GitHub Repository](https://github.com/eeeeeAeoN/EgoCore)
 * 💬 **Join the Conversation:** [Fable Modding Discord](https://discord.gg/Rw4as5ar3S)
-* 📚 **Learn to Mod:** [Official EgoCore Wiki](Coming Soon - Hopefully)
-
+* 
 ## 📄 License
 
 This software is provided as-is, free and open-source. Please see the `LICENSE` file for more details. 
