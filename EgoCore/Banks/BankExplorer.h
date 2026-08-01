@@ -6,7 +6,6 @@
 #include "FSEBackend.h"
 #include "FSETabUI.h"
 #include "InputManager.h"
-#include "ModManagerUI.h"
 #include "WADBackend.h"
 #include <windows.h>
 #include <shellapi.h>
@@ -24,6 +23,7 @@ inline bool g_TriggerModEnvModal = false;
 inline bool g_TriggerFSEModal = false;
 inline fs::path g_AppBaseDir;
 inline float g_UIScale = 1.0f;
+inline bool g_TriggerAssetChangesExitPopup = false;
 
 extern ID3D11ShaderResourceView* g_BackgroundTexture;
 extern int g_BgWidth;
@@ -102,6 +102,11 @@ enum class EAppState {
     ModCreator,
     ModsManager
 };
+
+// Must come after EAppState (full definition) and g_TitleFont (extern above) —
+// DrawModManagerWindow() references EAppState::Frontend and g_TitleFont directly,
+// and as an inline function its body is type-checked at this point in the include chain.
+#include "ModManagerUI.h"
 
 inline EAppState g_CurrentAppState = EAppState::Setup;
 
@@ -851,7 +856,7 @@ static void DrawFrontendHub() {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 0.90f), "AlbionSecrets");
         if (g_TitleFont) ImGui::PopFont();
 
-        const char* verStr = "31.7.26";
+        const char* verStr = "1.8.26";
         float verWidth = ImGui::CalcTextSize(verStr).x;
         float winWidth = ImGui::GetWindowWidth();
 
@@ -934,7 +939,12 @@ static void DrawFrontendHub() {
 
         // Exit Card (Crimson Accent)
         if (DrawCardButton("##BtnExit", "Exit", "Close EgoCore", halfCardSize, IM_COL32(220, 65, 65, 255))) {
-            exit(0);
+            if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty) {
+                g_TriggerAssetChangesExitPopup = true;
+            }
+            else {
+                exit(0);
+            }
         }
     }
     ImGui::End();
@@ -1301,14 +1311,18 @@ static void DrawBankExplorer() {
         if (g_TitleFont) ImGui::PopFont();
 
         //ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor for Fable");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
         // Version & Author Sub-bar
-        ImGui::TextDisabled("Version: 31.7.26");
+        ImGui::TextDisabled("Version: 1.8.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 0.8f), "Author: AlbionSecrets");
+        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 0.8f), "Creator: AlbionSecrets");
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 0.8f), "Co-developer: Jamen");
 
         ImGui::Dummy(ImVec2(0, 6));
 
@@ -1334,7 +1348,7 @@ static void DrawBankExplorer() {
         ImGui::TextWrapped("I believe the tools to keep this game alive should be accessible to everyone. That is why EgoCore is, and will always be, Free and Open Source.");
         ImGui::Dummy(ImVec2(0, 8));
 
-        ImGui::TextWrapped("Developing a tool of this scale involves hundreds of hours of reverse engineering, debugging, and refinement. I don't believe in paywalling progress, so I rely entirely on the generosity of the community to keep this project sustainable. If EgoCore has saved you time or helped you bring a new vision to life, please consider supporting the project.");
+        ImGui::TextWrapped("Developing a tool of this scale involves hundreds of hours of reverse engineering, debugging, and refinement. If EgoCore has saved you time or helped you bring a new vision to life, please consider supporting the project.");
 
         ImGui::Dummy(ImVec2(0, 12));
 
@@ -1429,6 +1443,108 @@ static void DrawBankExplorer() {
     }
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
+
+
+    if (g_TriggerAssetChangesExitPopup) {
+        ImGui::OpenPopup("AssetChangesPending");
+        g_TriggerAssetChangesExitPopup = false;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+    ImGui::SetNextWindowSize(ImVec2(550, 220), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("AssetChangesPending", NULL,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar))
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 winPos = ImGui::GetWindowPos();
+        ImVec2 winSize = ImGui::GetWindowSize();
+        ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
+
+        // Outer gold glow
+        for (int i = 3; i >= 1; i--) {
+            float expand = (float)i * 1.8f;
+            float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
+            ImU32 glowCol = IM_COL32(242, 193, 78, (uint32_t)(glowAlpha * 255.0f));
+            drawList->AddRect(
+                ImVec2(winPos.x - expand, winPos.y - expand),
+                ImVec2(winMax.x + expand, winMax.y + expand),
+                glowCol, 10.0f + expand, 0, 1.2f
+            );
+        }
+
+        // Header banner
+        ImVec2 headerMin = winPos;
+        ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
+        drawList->AddRectFilledMultiColor(
+            headerMin, headerMax,
+            IM_COL32(242, 193, 78, 30),
+            IM_COL32(110, 140, 175, 15),
+            IM_COL32(0, 0, 0, 0),
+            IM_COL32(0, 0, 0, 0)
+        );
+
+        if (g_TitleFont) ImGui::PushFont(g_TitleFont);
+        ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Pending Asset Changes");
+        if (g_TitleFont) ImGui::PopFont();
+
+        ImGui::Dummy(ImVec2(0, 4));
+        drawList->AddLine(
+            ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
+            ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
+            IM_COL32(242, 193, 78, 110), 1.2f
+        );
+        ImGui::Dummy(ImVec2(0, 12));
+
+        // Message
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
+        ImGui::TextWrapped("You have pending changes to asset mods (reordered, enabled/disabled, or added).");
+        ImGui::TextWrapped("These changes will only take effect after you launch the game through EgoCore.");
+        ImGui::TextWrapped("If you exit now, the changes will not be applied.");
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy(ImVec2(0, 12));
+
+        // Buttons
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+        if (ImGui::Button("Launch Game", ImVec2(160, 28))) {
+            ImGui::CloseCurrentPopup();
+            g_LaunchState = 1;          // triggers the normal launch sequence
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(4);
+
+        ImGui::SameLine(0, 12.0f);
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.18f, 0.24f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.32f, 0.42f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.14f, 0.18f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 1.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+        if (ImGui::Button("Exit", ImVec2(100, 28))) {
+            ImGui::CloseCurrentPopup();
+            exit(0);                    // simply exit – flags stay dirty
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(4);
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
+
 
     if (g_CurrentAppState == EAppState::Setup) {
         // Render background image & aggressive backdrop contrast

@@ -25,6 +25,7 @@ ImFont* g_EditorFont = nullptr;
 MainMenuAudio g_MenuAudio;
 ImTextureID g_MusicOnTexture = 0;
 ImTextureID g_MusicOffTexture = 0;
+ImTextureID g_SearchTexture = 0;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
@@ -36,6 +37,10 @@ ID3D11ShaderResourceView* g_BackgroundTexture = nullptr;
 int g_BgWidth = 0;
 int g_BgHeight = 0;
 ImFont* g_TitleFont = nullptr;
+
+ID3D11ShaderResourceView* g_ModManagerBgTexture = nullptr;
+int g_ModManagerBgWidth = 0;
+int g_ModManagerBgHeight = 0;
 
 bool LoadTextureFromFile(const char* filename, ID3D11Device* d3dDevice, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height) {
     int image_width = 0;
@@ -115,6 +120,10 @@ int main(int, char**) {
         LoadTextureFromFile("Assets/WorldMap.png", g_pd3dDevice, &g_BackgroundTexture, &g_BgWidth, &g_BgHeight);
     }
 
+    if (std::filesystem::exists("Assets/ModManagerBackground.png")) {
+        LoadTextureFromFile("Assets/ModManagerBackground.png", g_pd3dDevice, &g_ModManagerBgTexture, &g_ModManagerBgWidth, &g_ModManagerBgHeight);
+    }
+
     int iconWidth = 0, iconHeight = 0;
     ID3D11ShaderResourceView* srvMusicOn = nullptr;
     ID3D11ShaderResourceView* srvMusicOff = nullptr;
@@ -128,6 +137,13 @@ int main(int, char**) {
     if (std::filesystem::exists("Assets/MusicOff.png")) {
         if (LoadTextureFromFile("Assets/MusicOff.png", g_pd3dDevice, &srvMusicOff, &iconWidth, &iconHeight)) {
             g_MusicOffTexture = (ImTextureID)srvMusicOff;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvSearch = nullptr;
+    if (std::filesystem::exists("Assets/Search.png")) {
+        if (LoadTextureFromFile("Assets/Search.png", g_pd3dDevice, &srvSearch, &iconWidth, &iconHeight)) {
+            g_SearchTexture = (ImTextureID)srvSearch;
         }
     }
 
@@ -167,6 +183,7 @@ int main(int, char**) {
 
     if (srvMusicOn) { srvMusicOn->Release();  srvMusicOn = nullptr; }
     if (srvMusicOff) { srvMusicOff->Release(); srvMusicOff = nullptr; }
+    if (srvSearch) { srvSearch->Release(); srvSearch = nullptr; }
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
@@ -213,14 +230,27 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         break;
 
     case WM_CLOSE:
+    {
+        // 1. Always check for unsaved definitions/banks first (this takes priority)
         if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
             g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
             g_DefWorkspace.TriggerUnsavedPopup = true;
-            return 0;
+            return 0; // don't close yet – the popup will handle it
         }
+
+        // 2. If we are in the Frontend or ModsManager, and there are pending asset changes,
+        //    show the asset changes popup instead of closing immediately.
+        if ((g_CurrentAppState == EAppState::Frontend || g_CurrentAppState == EAppState::ModsManager) &&
+            (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty))
+        {
+            g_TriggerAssetChangesExitPopup = true;
+            return 0; // don't destroy yet – popup will decide
+        }
+
+        // 3. Otherwise, close normally.
         ::DestroyWindow(hWnd);
         return 0;
-
+    }
     case WM_DESTROY:
         ::PostQuitMessage(0);
         return 0;
