@@ -87,8 +87,8 @@ inline void DrawShaderProperties(int currentEntryID) {
         g_ShaderEditorFontScale = std::clamp(g_ShaderEditorFontScale + step, 0.5f, 3.0f);
     }
 
-    extern ImFont* g_EditorFont;
-    ImFont* fontToUse = g_EditorFont ? g_EditorFont : ImGui::GetFont();
+    extern ImFont* g_CodeFont;
+    ImFont* fontToUse = g_CodeFont ? g_CodeFont : ImGui::GetFont();
     float oldScale = fontToUse->Scale;
     fontToUse->Scale = g_ShaderEditorFontScale;
 

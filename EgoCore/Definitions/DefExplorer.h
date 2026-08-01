@@ -320,8 +320,8 @@ static void DrawDefTab() {
                     float step = (io.MouseWheel > 0) ? 0.2f : -0.2f;
                     g_DefWorkspace.EditorFontScale = std::clamp(g_DefWorkspace.EditorFontScale + step, 0.5f, 3.0f);
                 }
-                extern ImFont* g_EditorFont;
-                ImFont* fontToUse = g_EditorFont ? g_EditorFont : ImGui::GetFont();
+                extern ImFont* g_CodeFont;
+                ImFont* fontToUse = g_CodeFont ? g_CodeFont : ImGui::GetFont();
                 float oldScale = fontToUse->Scale;
                 fontToUse->Scale = g_DefWorkspace.EditorFontScale;
                 ImGui::PushFont(fontToUse);
@@ -480,8 +480,8 @@ static void DrawDefTab() {
                 float step = (io.MouseWheel > 0) ? 0.2f : -0.2f;
                 g_DefWorkspace.EditorFontScale = std::clamp(g_DefWorkspace.EditorFontScale + step, 0.5f, 3.0f);
             }
-            extern ImFont* g_EditorFont;
-            ImFont* fontToUse = g_EditorFont ? g_EditorFont : ImGui::GetFont();
+            extern ImFont* g_CodeFont;
+            ImFont* fontToUse = g_CodeFont ? g_CodeFont : ImGui::GetFont();
             float oldScale = fontToUse->Scale;
             fontToUse->Scale = g_DefWorkspace.EditorFontScale;
             ImGui::PushFont(fontToUse);
@@ -668,7 +668,12 @@ static void DrawDefTab() {
             }
 
             ImGui::Separator();
+
+            extern ImFont* g_CodeFont;
+            ImFont* eventFontToUse = g_CodeFont ? g_CodeFont : ImGui::GetFont();
+            ImGui::PushFont(eventFontToUse);
             g_EventWorkspace.Editor.Render("EventEditor");
+            ImGui::PopFont();
 
             if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl && g_Keybinds.SaveEntry.IsPressed()) {
                 ev.Content = g_EventWorkspace.Editor.GetText();

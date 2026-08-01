@@ -180,8 +180,8 @@ static void DrawFSETab() {
             g_FSEWorkspace.EditorFontScale = std::clamp(g_FSEWorkspace.EditorFontScale + step, 0.5f, 3.0f);
         }
 
-        extern ImFont* g_EditorFont;
-        ImFont* fontToUse = g_EditorFont ? g_EditorFont : ImGui::GetFont();
+        extern ImFont* g_CodeFont;
+        ImFont* fontToUse = g_CodeFont ? g_CodeFont : ImGui::GetFont();
         float oldScale = fontToUse->Scale;
         fontToUse->Scale = g_FSEWorkspace.EditorFontScale;
         ImGui::PushFont(fontToUse);

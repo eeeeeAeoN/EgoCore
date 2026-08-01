@@ -21,6 +21,7 @@ ID3D11DeviceContext* g_pd3dDeviceContext = nullptr;
 IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
 ImFont* g_EditorFont = nullptr;
+ImFont* g_CodeFont = nullptr;
 
 MainMenuAudio g_MenuAudio;
 ImTextureID g_MusicOnTexture = 0;
@@ -42,11 +43,27 @@ ID3D11ShaderResourceView* g_ModManagerBgTexture = nullptr;
 int g_ModManagerBgWidth = 0;
 int g_ModManagerBgHeight = 0;
 
-bool LoadTextureFromFile(const char* filename, ID3D11Device* d3dDevice, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height) {
+ID3D11ShaderResourceView* g_CloudTexture = nullptr;
+int g_CloudWidth = 0;
+int g_CloudHeight = 0;
+
+bool LoadTextureFromFile(const char* filename, ID3D11Device* d3dDevice, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height, float alphaBoost = 1.0f) {
     int image_width = 0;
     int image_height = 0;
     unsigned char* image_data = stbi_load(filename, &image_width, &image_height, NULL, 4);
     if (image_data == NULL) return false;
+
+    // Optionally amplify the alpha channel in-place. Useful for sprites (like soft fog/cloud
+    // art) whose peak alpha is low by design - a tint color alone can only make AddImage()
+    // draws MORE transparent, never less, since tint multiplies against the source alpha.
+    if (alphaBoost != 1.0f) {
+        int pixelCount = image_width * image_height;
+        for (int i = 0; i < pixelCount; i++) {
+            unsigned char* a = &image_data[i * 4 + 3];
+            float boosted = (float)(*a) * alphaBoost;
+            *a = (unsigned char)(boosted > 255.0f ? 255.0f : boosted);
+        }
+    }
 
     D3D11_TEXTURE2D_DESC desc;
     ZeroMemory(&desc, sizeof(desc));
@@ -116,12 +133,20 @@ int main(int, char**) {
         g_TitleFont = io.Fonts->AddFontFromFileTTF("Assets/TitleFont.ttf", 32.0f);
     }
 
+    if (std::filesystem::exists("Assets/CodeFont.ttf")) {
+        g_CodeFont = io.Fonts->AddFontFromFileTTF("Assets/CodeFont.ttf", 18.0f);
+    }
+
     if (std::filesystem::exists("Assets/WorldMap.png")) {
         LoadTextureFromFile("Assets/WorldMap.png", g_pd3dDevice, &g_BackgroundTexture, &g_BgWidth, &g_BgHeight);
     }
 
     if (std::filesystem::exists("Assets/ModManagerBackground.png")) {
         LoadTextureFromFile("Assets/ModManagerBackground.png", g_pd3dDevice, &g_ModManagerBgTexture, &g_ModManagerBgWidth, &g_ModManagerBgHeight);
+    }
+
+    if (std::filesystem::exists("Assets/Cloud.png")) {
+        LoadTextureFromFile("Assets/Cloud.png", g_pd3dDevice, &g_CloudTexture, &g_CloudWidth, &g_CloudHeight, 4.0f);
     }
 
     int iconWidth = 0, iconHeight = 0;
@@ -235,7 +260,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
             g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
             g_DefWorkspace.TriggerUnsavedPopup = true;
-            return 0; // don't close yet – the popup will handle it
+            return 0; // don't close yet - the popup will handle it
         }
 
         // 2. If we are in the Frontend or ModsManager, and there are pending asset changes,
@@ -244,7 +269,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty))
         {
             g_TriggerAssetChangesExitPopup = true;
-            return 0; // don't destroy yet – popup will decide
+            return 0; // don't destroy yet - popup will decide
         }
 
         // 3. Otherwise, close normally.

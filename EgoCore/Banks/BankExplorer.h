@@ -30,6 +30,10 @@ extern int g_BgWidth;
 extern int g_BgHeight;
 extern ImFont* g_TitleFont;
 
+extern ID3D11ShaderResourceView* g_CloudTexture;
+extern int g_CloudWidth;
+extern int g_CloudHeight;
+
 struct MainMenuAudio {
     ma_engine engine;
     ma_sound sound;
@@ -103,7 +107,7 @@ enum class EAppState {
     ModsManager
 };
 
-// Must come after EAppState (full definition) and g_TitleFont (extern above) —
+// Must come after EAppState (full definition) and g_TitleFont (extern above) -
 // DrawModManagerWindow() references EAppState::Frontend and g_TitleFont directly,
 // and as an inline function its body is type-checked at this point in the include chain.
 #include "ModManagerUI.h"
@@ -673,6 +677,42 @@ static void DrawFrontendHub() {
 
         bgDrawList->AddImage((ImTextureID)g_BackgroundTexture, pMin, pMax);
 
+        // --- Drifting Cloud / Fog Layer ---
+        if (g_CloudTexture && g_CloudWidth > 0 && g_CloudHeight > 0) {
+            static float s_CloudTime = 0.0f;
+            s_CloudTime += ImGui::GetIO().DeltaTime;
+
+            // radius = half-width of the drawn sprite. flip mirrors the sprite
+            // horizontally so five puffs from one 64x64 texture don't read as obvious repeats.
+            struct CloudPuff { float xFrac, yFrac, radius, speed, alpha; bool flip; };
+            static const CloudPuff puffs[] = {
+                { 0.05f, 0.15f, 260.0f, 6.0f, 235.0f, false },
+                { 0.50f, 0.08f, 340.0f, 4.0f, 190.0f, true  },
+                { 0.80f, 0.30f, 220.0f, 8.0f, 210.0f, false },
+                { 0.25f, 0.50f, 300.0f, 5.0f, 170.0f, true  },
+                { 0.65f, 0.62f, 240.0f, 7.0f, 200.0f, false },
+            };
+
+            for (const auto& p : puffs) {
+                float period = scaledWidth + p.radius * 2.0f;
+                float baseX = p.xFrac * scaledWidth;
+                float x = fmodf(baseX + s_CloudTime * p.speed, period) - p.radius;
+                float y = p.yFrac * scaledHeight - s_ScrollY;
+
+                // Slightly squashed so it reads as a fog bank rather than a round blob
+                float halfW = p.radius;
+                float halfH = p.radius * 0.55f;
+                ImVec2 spriteMin(x - halfW, y - halfH);
+                ImVec2 spriteMax(x + halfW, y + halfH);
+
+                ImVec2 uv0 = p.flip ? ImVec2(1.0f, 0.0f) : ImVec2(0.0f, 0.0f);
+                ImVec2 uv1 = p.flip ? ImVec2(0.0f, 1.0f) : ImVec2(1.0f, 1.0f);
+
+                ImU32 tint = IM_COL32(255, 255, 255, (int)p.alpha);
+                bgDrawList->AddImage((ImTextureID)g_CloudTexture, spriteMin, spriteMax, uv0, uv1, tint);
+            }
+        }
+
         // Soft Edge Vignette
         float vignetteSize = 120.0f;
         ImU32 colDark = IM_COL32(0, 0, 0, 200);
@@ -880,7 +920,7 @@ static void DrawFrontendHub() {
 
         if (g_TitleFont) ImGui::PushFont(g_TitleFont);
 
-        ImGui::SetWindowFontScale(1.30f);
+        ImGui::SetWindowFontScale(2.0f);
 
         float titleWidth = ImGui::CalcTextSize("EgoCore").x;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - titleWidth) * 0.5f);
@@ -1182,9 +1222,12 @@ static void DrawBankExplorer() {
             ImGui::Dummy(ImVec2(0, 4));
 
             ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.04f, 0.05f, 0.07f, 0.80f));
+            extern ImFont* g_CodeFont;
+            if (g_CodeFont) ImGui::PushFont(g_CodeFont);
             ImGui::InputTextMultiline("##defcompilelog", g_DefCompileLog.data(),
                 g_DefCompileLog.size() + 1, ImVec2(ImGui::GetContentRegionAvail().x, 300),
                 ImGuiInputTextFlags_ReadOnly);
+            if (g_CodeFont) ImGui::PopFont();
             ImGui::PopStyleColor();
 
             ImGui::Dummy(ImVec2(0, 10));
@@ -1535,7 +1578,7 @@ static void DrawBankExplorer() {
 
         if (ImGui::Button("Exit", ImVec2(100, 28))) {
             ImGui::CloseCurrentPopup();
-            exit(0);                    // simply exit – flags stay dirty
+            exit(0);                    // simply exit - flags stay dirty
         }
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(4);

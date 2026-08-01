@@ -238,17 +238,10 @@ inline void DrawModManagerWindow() {
         float aspect = (float)g_ModManagerBgHeight / (float)g_ModManagerBgWidth;
         float scaledHeight = scaledWidth * aspect;
 
-        // Render static background image (night forest concept art)
         bgDrawList->AddImage((ImTextureID)g_ModManagerBgTexture, ImVec2(0.0f, 0.0f), ImVec2(scaledWidth, scaledHeight));
-
-        // Background Dark Dimming
         bgDrawList->AddRectFilled(ImVec2(0, 0), displaySize, IM_COL32(10, 12, 16, 130));
-
-        // Moonlit god rays, top-right toward bottom-left, drawn on top of the dim
-        // layer but underneath the vignette so the frame edges still darken cleanly.
         DrawGodRays(displaySize);
 
-        // Soft Static Vignette Edge Fades
         float vignetteSize = 220.0f;
         ImU32 colDark = IM_COL32(0, 0, 0, 240);
         ImU32 colClear = IM_COL32(0, 0, 0, 0);
@@ -260,10 +253,10 @@ inline void DrawModManagerWindow() {
     }
 
     // --- 2. MAIN WINDOW CONTAINER ---
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.00f, 0.00f, 0.00f, 0.00f)); // Fully transparent base
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
     if (ImGui::Begin("Mod Manager UI", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 
-        // HEADER BAR
+        // HEADER BAR (unchanged)
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.08f, 0.11f, 0.85f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
         ImGui::BeginChild("##ModManagerHeader", ImVec2(0, 56.0f), true);
@@ -272,7 +265,6 @@ inline void DrawModManagerWindow() {
         ImVec2 headerPos = ImGui::GetWindowPos();
         ImVec2 headerSize = ImGui::GetWindowSize();
 
-        // Arcane gradient line at top
         drawList->AddRectFilledMultiColor(
             headerPos, ImVec2(headerPos.x + headerSize.x, headerPos.y + 3.0f),
             IM_COL32(242, 193, 78, 255), IM_COL32(138, 79, 255, 255),
@@ -282,7 +274,6 @@ inline void DrawModManagerWindow() {
         ImGui::SetCursorPosY(12.0f);
         ImGui::Indent(16.0f);
 
-        // Title
         if (g_TitleFont) ImGui::PushFont(g_TitleFont);
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "MOD MANAGER");
         if (g_TitleFont) ImGui::PopFont();
@@ -305,10 +296,9 @@ inline void DrawModManagerWindow() {
         }
 
         float returnBtnWidth = 140.0f;
-        float returnBtnX = headerSize.x - returnBtnWidth - 16.0f; 
-
-        float searchAreaX = returnBtnX - searchAreaWidth - 8.0f; 
-        if (searchAreaX < 20.0f) searchAreaX = 20.0f; 
+        float returnBtnX = headerSize.x - returnBtnWidth - 16.0f;
+        float searchAreaX = returnBtnX - searchAreaWidth - 8.0f;
+        if (searchAreaX < 20.0f) searchAreaX = 20.0f;
 
         ImGui::SameLine(searchAreaX);
 
@@ -316,21 +306,16 @@ inline void DrawModManagerWindow() {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.15f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.30f));
-
             if (ImGui::ImageButton("##SearchBtn", g_SearchTexture, ImVec2(btnSize, btnSize))) {
                 s_SearchActive = !s_SearchActive;
-                if (!s_SearchActive) {
-                    s_SearchText[0] = '\0';
-                }
+                if (!s_SearchActive) s_SearchText[0] = '\0';
             }
             ImGui::PopStyleColor(3);
         }
         else {
             if (ImGui::Button("Search")) {
                 s_SearchActive = !s_SearchActive;
-                if (!s_SearchActive) {
-                    s_SearchText[0] = '\0';
-                }
+                if (!s_SearchActive) s_SearchText[0] = '\0';
             }
         }
         if (ImGui::IsItemHovered()) {
@@ -339,20 +324,16 @@ inline void DrawModManagerWindow() {
 
         if (s_SearchActive) {
             ImGui::SameLine(0, spacing);
-
             ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.13f, 0.16f, 0.80f));
             ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.18f, 0.19f, 0.23f, 0.85f));
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.22f, 0.23f, 0.28f, 0.90f));
             ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.20f, 0.22f, 0.28f, 0.50f));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
-
             ImGui::SetNextItemWidth(inputWidth);
             ImGui::InputText("##SearchInput", s_SearchText, sizeof(s_SearchText));
-
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(4);
-
             if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 s_SearchActive = false;
                 s_SearchText[0] = '\0';
@@ -401,8 +382,15 @@ inline void DrawModManagerWindow() {
 
         // --- 3. TWO-COLUMN LAYOUT (LEFT: MOD CARDS, RIGHT: INSPECTOR) ---
         float availWidth = ImGui::GetContentRegionAvail().x;
-        float leftWidth = (s_SelectedModIndex >= 0 && s_SelectedModIndex < (int)ModManagerBackend::g_LoadedMods.size())
-            ? availWidth * 0.58f : availWidth;
+
+        // Determine left width and margin based on current selection state.
+        // We recompute each frame; if selection changes during the frame, layout might be off,
+        // but that's fine as next frame will correct it.
+        bool hasSelection = (s_SelectedModIndex >= 0 && s_SelectedModIndex < (int)ModManagerBackend::g_LoadedMods.size());
+        float leftWidth = hasSelection ? (availWidth * 0.58f) : (availWidth * 0.70f);
+        float leftMargin = hasSelection ? 0.0f : ((availWidth - leftWidth) * 0.5f);
+
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + leftMargin);
 
         // --- LEFT COLUMN: CARD-BASED LOAD ORDER LIST ---
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.05f, 0.06f, 0.08f, 0.85f));
@@ -412,6 +400,7 @@ inline void DrawModManagerWindow() {
         ImGui::BeginChild("##ModCardsList", ImVec2(leftWidth, 0), true);
 
         if (ModManagerBackend::g_LoadedMods.empty()) {
+            // empty state drawing (unchanged)
             ImVec2 emptyPos = ImGui::GetCursorScreenPos();
             ImVec2 emptySize(ImGui::GetContentRegionAvail().x, 70.0f);
             ImGui::SetCursorScreenPos(ImVec2(emptyPos.x, emptyPos.y + ImGui::GetWindowHeight() * 0.35f));
@@ -437,13 +426,6 @@ inline void DrawModManagerWindow() {
             ImVec2 txtSize = ImGui::CalcTextSize(msg);
             ImGui::SetCursorScreenPos(ImVec2(pMin.x + (emptySize.x - txtSize.x) * 0.5f, pMin.y + (emptySize.y - txtSize.y) * 0.5f));
             ImGui::TextDisabled("%s", msg);
-        }
-
-        int draggedIdx = -1;
-        if (const ImGuiPayload* activePayload = ImGui::GetDragDropPayload()) {
-            if (activePayload->IsDataType("DND_MOD_ORDER")) {
-                draggedIdx = *(const int*)activePayload->Data;
-            }
         }
 
         std::string searchLower = s_SearchText;
@@ -488,9 +470,11 @@ inline void DrawModManagerWindow() {
             }
 
             if (clicked) {
+                // Toggle selection: if already selected, deselect; else select this one.
                 s_SelectedModIndex = (s_SelectedModIndex == i) ? -1 : i;
             }
 
+            // Drag & drop (unchanged)
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                 isBeingDragged = true;
                 ImGui::SetDragDropPayload("DND_MOD_ORDER", &i, sizeof(int));
@@ -514,7 +498,6 @@ inline void DrawModManagerWindow() {
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_MOD_ORDER")) {
                     int sourceIdx = *(const int*)payload->Data;
                     if (sourceIdx != i && sourceIdx >= 0 && sourceIdx < (int)ModManagerBackend::g_LoadedMods.size()) {
-
                         bool wasAsset = ModManagerBackend::g_LoadedMods[sourceIdx].IsAssetMod;
                         bool wasDef = ModManagerBackend::g_LoadedMods[sourceIdx].IsDefMod;
                         bool wasTng = ModManagerBackend::g_LoadedMods[sourceIdx].IsTngMod;
@@ -533,6 +516,7 @@ inline void DrawModManagerWindow() {
                 ImGui::EndDragDropTarget();
             }
 
+            // Drawing of card (unchanged)
             float offsetY = (hovered && !held && !isBeingDragged) ? -2.0f : (held ? 1.0f : 0.0f);
             ImVec2 pMin = ImVec2(cardPos.x, cardPos.y + offsetY);
             ImVec2 pMax = ImVec2(cardPos.x + cardSize.x, cardPos.y + cardSize.y + offsetY);
@@ -606,7 +590,6 @@ inline void DrawModManagerWindow() {
             if (DrawModToggle("##ActiveToggle", &mod.IsEnabled, GetModTypeColor(mod)) && wasEnabled != mod.IsEnabled) {
                 ModManagerBackend::UpdateGlobalModsIni();
                 ModManagerBackend::SaveLoadOrder();
-
                 if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true;
                 if (mod.IsDefMod)   g_AppConfig.DefSystemDirty = true;
                 if (mod.IsTngMod)   g_AppConfig.TngSystemDirty = true;
@@ -628,33 +611,27 @@ inline void DrawModManagerWindow() {
             displayedIndex++;
         }
 
-        if (s_SelectedModIndex != -1) {
-            bool visible = false;
-            if (s_SelectedModIndex < (int)ModManagerBackend::g_LoadedMods.size()) {
-                auto& mod = ModManagerBackend::g_LoadedMods[s_SelectedModIndex];
-                std::string modNameLower = mod.Name;
-                std::transform(modNameLower.begin(), modNameLower.end(), modNameLower.begin(), ::tolower);
-                if (searchLower.empty() || modNameLower.find(searchLower) != std::string::npos) {
-                    visible = true;
-                }
-            }
-            if (!visible) {
-                s_SelectedModIndex = -1;
-            }
+        // If selection is out of bounds (e.g., mod deleted), reset it.
+        if (s_SelectedModIndex != -1 && s_SelectedModIndex >= (int)ModManagerBackend::g_LoadedMods.size()) {
+            s_SelectedModIndex = -1;
         }
 
         ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
 
         // --- RIGHT COLUMN: MOD SETTINGS INSPECTOR ("detail card") ---
+        // **FIX:** Re-evaluate selection here instead of using cached `hasSelection`.
         if (s_SelectedModIndex >= 0 && s_SelectedModIndex < (int)ModManagerBackend::g_LoadedMods.size()) {
             ImGui::SameLine(0, 10.0f);
 
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.06f, 0.07f, 0.10f, 0.90f));
             ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
             ImGui::BeginChild("##ModInspector", ImVec2(0, 0), true);
+
             auto& mod = ModManagerBackend::g_LoadedMods[s_SelectedModIndex];
 
-            // Gradient header strip, matching the main header bar
+            // Gradient header strip
             ImDrawList* inspDraw = ImGui::GetWindowDrawList();
             ImVec2 inspPos = ImGui::GetWindowPos();
             ImVec2 inspSize = ImGui::GetWindowSize();
@@ -665,7 +642,7 @@ inline void DrawModManagerWindow() {
             );
             ImGui::Dummy(ImVec2(0, 4.0f));
 
-            // Inspector Header
+            // Inspector contents (unchanged)
             ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "MOD DETAILS");
             ImGui::Separator();
             ImGui::Dummy(ImVec2(0, 6.0f));
@@ -819,7 +796,6 @@ inline void DrawModManagerWindow() {
                     std::ofstream file(mod.SettingsIniPath);
                     if (file) {
                         file << newContent;
-
                         if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true;
                         if (mod.IsDefMod)   g_AppConfig.DefSystemDirty = true;
                         if (mod.IsTngMod)   g_AppConfig.TngSystemDirty = true;
@@ -847,18 +823,14 @@ inline void DrawModManagerWindow() {
             ImGui::PopStyleVar();
             ImGui::PopStyleColor();
         }
+    } // end ImGui::Begin
 
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor();
-    }
-
-    // --- DELETE CONFIRMATION ---
+    // --- DELETE CONFIRMATION (unchanged) ---
     if (g_TriggerDeleteModPopup) {
         ImGui::OpenPopup("ConfirmDeleteMod");
         g_TriggerDeleteModPopup = false;
     }
 
-    // Modal Styling matched to Frontend
     ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.95f, 0.76f, 0.31f, 0.35f));
@@ -876,7 +848,6 @@ inline void DrawModManagerWindow() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // Outer Gold Glow Aura
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -888,15 +859,14 @@ inline void DrawModManagerWindow() {
             );
         }
 
-        // Danger/Arcane Header Gradient Banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
         modalDraw->AddRectFilledMultiColor(
             headerMin, headerMax,
-            IM_COL32(219, 68, 68, 40),   // Top-Left Red
-            IM_COL32(242, 193, 78, 20),  // Top-Right Gold
-            IM_COL32(0, 0, 0, 0),        // Bottom-Right
-            IM_COL32(0, 0, 0, 0)         // Bottom-Left
+            IM_COL32(219, 68, 68, 40),
+            IM_COL32(242, 193, 78, 20),
+            IM_COL32(0, 0, 0, 0),
+            IM_COL32(0, 0, 0, 0)
         );
 
         if (g_TitleFont) ImGui::PushFont(g_TitleFont);
@@ -905,7 +875,6 @@ inline void DrawModManagerWindow() {
 
         ImGui::Dummy(ImVec2(0, 4.0f));
 
-        // Gold Accent Separator Line
         modalDraw->AddLine(
             ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
             ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
@@ -926,11 +895,8 @@ inline void DrawModManagerWindow() {
 
         ImGui::BeginDisabled(!validTarget);
         if (DrawAccentButton("Delete", ImVec2(150, 32), ImVec4(0.55f, 0.14f, 0.14f, 0.85f), ImVec4(0.80f, 0.22f, 0.22f, 1.00f))) {
-            // ... (keep original deletion and compile trigger logic) ...
-
             bool wasDef = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsDefMod;
             ModManagerBackend::DeleteMod(g_ModToDeleteIndex);
-
             g_AppConfig.ModSystemDirty = true;
             if (wasDef) g_AppConfig.DefSystemDirty = true;
             SaveConfig();
@@ -955,7 +921,7 @@ inline void DrawModManagerWindow() {
     ImGui::PopStyleColor(3);
 
     ImGui::End();
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(); // pop initial WindowBg
 }
 
 inline void DrawModPackageWindow() {
