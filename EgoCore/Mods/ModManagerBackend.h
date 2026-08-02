@@ -5,6 +5,8 @@
 #include <fstream>
 #include <algorithm>
 #include <set>
+#include <atomic>
+#include <mutex>
 #include <windows.h>
 #include <shellapi.h>
 #include "ModManagerCompiler.h"
@@ -16,6 +18,24 @@ namespace fs = std::filesystem;
 
 inline int g_LaunchState = 0;
 inline bool g_ShowFallbackLaunchPopup = false;
+
+// --- Launch (ProcessModsAndLaunch) background state ---
+// Patching banks, merging defs, and restoring/backing up files can take a
+// noticeable moment on disk. This runs on a worker thread so the "Launching
+// Fable" popup can keep animating instead of freezing the UI.
+inline std::atomic<bool> g_IsProcessingLaunch = false;
+inline std::mutex g_LaunchStatusMutex;
+inline std::string g_LaunchStatus = "Preparing to launch Fable...";
+
+inline void SetLaunchStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(g_LaunchStatusMutex);
+    g_LaunchStatus = status;
+}
+
+inline std::string GetLaunchStatus() {
+    std::lock_guard<std::mutex> lock(g_LaunchStatusMutex);
+    return g_LaunchStatus;
+}
 
 class ModManagerBackend {
 public:
@@ -484,6 +504,8 @@ public:
     }
 
     static void ProcessModsAndLaunch() {
+        SetLaunchStatus("Reading mod load order...");
+
         // FIX: Force mod state loading from disk before processing.
         // If launching directly from cold boot, g_LoadedMods is empty and would 
         // otherwise trigger RestoreAllTmpBackups() and wipe active asset mods.
@@ -541,13 +563,16 @@ public:
 
         ModBankPatcher::BuildMasterModIndex(g_LoadedMods);
 
+        SetLaunchStatus("Restoring vanilla files...");
         RestoreVanillaFiles(g_AppConfig.ModSystemDirty, g_AppConfig.DefSystemDirty, g_AppConfig.TngSystemDirty);
 
+        SetLaunchStatus("Backing up affected files...");
         if (g_AppConfig.ModSystemDirty) BackupNeededBankFiles(neededBankFiles);
         if (g_AppConfig.DefSystemDirty) BackupAffectedDefFiles();
         if (g_AppConfig.TngSystemDirty) BackupAffectedTngFiles();
 
         if (g_AppConfig.ModSystemDirty && hasActiveAssetMods) {
+            SetLaunchStatus("Patching banks...");
 
             if (neededBankFiles.count("effects.big")) {
                 neededBankFiles.insert("graphics.big");
@@ -601,12 +626,14 @@ public:
                     ReloadBankInPlace(&bank);
                 }
             }
+            SetLaunchStatus("Deploying loose asset mods...");
             DeployLooseAssetMods();
         }
         g_AppConfig.ModSystemDirty = false;
 
         if (g_AppConfig.TngSystemDirty) {
             if (hasActiveTngMods) {
+                SetLaunchStatus("Merging level (.tng) mods...");
                 std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
 
                 for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
@@ -637,6 +664,7 @@ public:
 
         if (g_AppConfig.DefSystemDirty) {
             if (hasActiveDefMods) {
+                SetLaunchStatus("Merging definition mods...");
                 std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
 
                 for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
@@ -676,6 +704,7 @@ public:
             g_AppConfig.DefSystemDirty = false;
             SaveConfig();
 
+            SetLaunchStatus("Compiling definitions...");
             g_PendingGameLaunch = true;
             CompileAllDefs_Native();
             return;
@@ -683,6 +712,7 @@ public:
 
         g_AppConfig.DefSystemDirty = false;
         SaveConfig();
+        SetLaunchStatus("Launching game...");
         LaunchGame();
     }
 

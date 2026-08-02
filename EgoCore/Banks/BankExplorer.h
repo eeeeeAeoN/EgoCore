@@ -12,6 +12,9 @@
 #include <filesystem>
 #include <algorithm>
 #include <unordered_map>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 namespace fs = std::filesystem;
 static bool g_HasInitialized = false;
@@ -24,6 +27,33 @@ inline bool g_TriggerFSEModal = false;
 inline fs::path g_AppBaseDir;
 inline float g_UIScale = 1.0f;
 inline bool g_TriggerAssetChangesExitPopup = false;
+
+// Set when "Run Fable" is used from inside the Editor (ModCreator). Unlike the
+// Frontend/Mod Manager launch flow, this skips ProcessModsAndLaunch() entirely -
+// the Editor works directly against the game's live files, so re-running the
+// mod patching pipeline on top of that is what was crashing the game. Editor
+// launches should just close the tool and start Fable.exe, same as if you'd
+// launched it yourself outside the tool.
+inline bool g_PendingRunFableLaunch = false;
+
+// --- Editor (Mod Creator) background load state ---
+// The Editor card kicks off PerformAutoLoad() (bank/def parsing) on a worker
+// thread instead of on the UI thread, so the app can keep drawing frames
+// (and show a loading popup) instead of freezing while it loads.
+inline std::atomic<bool> g_IsEditorLoading = false;
+inline std::atomic<bool> g_EditorLoadRequested = false;
+inline std::mutex g_EditorLoadStatusMutex;
+inline std::string g_EditorLoadStatus = "Loading Editor...";
+
+inline void SetEditorLoadStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(g_EditorLoadStatusMutex);
+    g_EditorLoadStatus = status;
+}
+
+inline std::string GetEditorLoadStatus() {
+    std::lock_guard<std::mutex> lock(g_EditorLoadStatusMutex);
+    return g_EditorLoadStatus;
+}
 
 extern ID3D11ShaderResourceView* g_BackgroundTexture;
 extern int g_BgWidth;
@@ -517,7 +547,14 @@ static void DrawLaunchPopup() {
         ImGui::TextWrapped("Preparing to launch Fable...");
         ImGui::Dummy(ImVec2(0, 4));
 
-        if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty) {
+        if (g_IsProcessingLaunch) {
+            ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "%s", GetLaunchStatus().c_str());
+
+            static int dots = 0; if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
+            std::string spinner = "Please wait"; for (int i = 0; i < dots; i++) spinner += ".";
+            ImGui::TextDisabled("%s", spinner.c_str());
+        }
+        else if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty) {
             ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Compiling modified banks and applying load order...");
             ImGui::TextDisabled("Please wait. EgoCore will process mods and launch automatically.");
         }
@@ -532,10 +569,20 @@ static void DrawLaunchPopup() {
         }
         else if (g_LaunchState == 6) {
             g_LaunchState = 7;
-            ModManagerBackend::ProcessModsAndLaunch();
+
+            // ProcessModsAndLaunch() patches banks, restores/backs up files, and
+            // merges def mods on disk - slow enough to freeze a frame if run
+            // here directly. Run it on a worker thread instead; the popup stays
+            // open and animated (via g_IsProcessingLaunch) until it's done.
+            SetLaunchStatus("Patching banks and applying load order...");
+            g_IsProcessingLaunch = true;
+            std::thread([]() {
+                ModManagerBackend::ProcessModsAndLaunch();
+                g_IsProcessingLaunch = false;
+                }).detach();
         }
 
-        if (g_IsCompiling || g_ShowFallbackLaunchPopup) {
+        if (!g_IsProcessingLaunch && (g_IsCompiling || g_ShowFallbackLaunchPopup)) {
             g_LaunchState = 0;
             ImGui::CloseCurrentPopup();
         }
@@ -953,13 +1000,32 @@ static void DrawFrontendHub() {
         ImGui::Dummy(ImVec2(0, 6));
 
         // 3. Editor Card (Teal Accent)
-        if (DrawCardButton("##BtnEditor", "Editor", "Decompile banks, edit defs & assets", fullCardSize, IM_COL32(32, 178, 170, 255))) {
-            if (!g_MenuAudio.isMuted) {
-                g_MenuAudio.Toggle();
-            }
+        if (!g_IsEditorLoading) {
+            if (DrawCardButton("##BtnEditor", "Editor", "Decompile banks, edit defs & assets", fullCardSize, IM_COL32(32, 178, 170, 255))) {
+                if (!g_MenuAudio.isMuted) {
+                    g_MenuAudio.Toggle();
+                }
 
-            g_CurrentAppState = EAppState::ModCreator;
-            PerformAutoLoad();
+                // Don't call PerformAutoLoad() here directly - it walks the defs
+                // folder and parses every auto-load bank from disk, which is slow
+                // enough to freeze the UI for a visible moment. Kick it off on a
+                // worker thread and only switch to ModCreator once it's done, so
+                // we can show a loading popup in the meantime instead of freezing.
+                SetEditorLoadStatus("Loading definitions and banks...");
+                g_EditorLoadRequested = true;
+                g_IsEditorLoading = true;
+
+                std::thread([]() {
+                    PerformAutoLoad();
+                    g_IsEditorLoading = false;
+                    }).detach();
+            }
+        }
+        else {
+            // Keep layout stable while the load is in progress.
+            ImGui::BeginDisabled();
+            DrawCardButton("##BtnEditor", "Editor", "Loading...", fullCardSize, IM_COL32(32, 178, 170, 255));
+            ImGui::EndDisabled();
         }
 
         ImGui::Dummy(ImVec2(0, 14));
@@ -991,6 +1057,80 @@ static void DrawFrontendHub() {
 
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+
+    // --- Editor Loading Popup ---
+    if (g_IsEditorLoading) { ImGui::OpenPopup("Loading Editor..."); }
+
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.32f, 0.70f, 0.67f, 0.35f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+    ImGui::SetNextWindowSize(ImVec2(480, 190), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("Loading Editor...", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 winPos = ImGui::GetWindowPos();
+        ImVec2 winSize = ImGui::GetWindowSize();
+        ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
+
+        // Teal Glow Aura (matches the Editor card accent color)
+        for (int i = 3; i >= 1; i--) {
+            float expand = (float)i * 1.8f;
+            float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
+            ImU32 glowCol = IM_COL32(32, 178, 170, (uint32_t)(glowAlpha * 255.0f));
+            drawList->AddRect(
+                ImVec2(winPos.x - expand, winPos.y - expand),
+                ImVec2(winMax.x + expand, winMax.y + expand),
+                glowCol, 10.0f + expand, 0, 1.2f
+            );
+        }
+
+        // Header Banner
+        ImVec2 headerMin = winPos;
+        ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
+        drawList->AddRectFilledMultiColor(
+            headerMin, headerMax,
+            IM_COL32(32, 178, 170, 30), IM_COL32(110, 140, 175, 15),
+            IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0)
+        );
+
+        if (g_TitleFont) ImGui::PushFont(g_TitleFont);
+        ImGui::TextColored(ImVec4(0.35f, 0.78f, 0.75f, 1.0f), "Loading Editor");
+        if (g_TitleFont) ImGui::PopFont();
+
+        ImGui::Dummy(ImVec2(0, 4));
+        drawList->AddLine(
+            ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
+            ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
+            IM_COL32(32, 178, 170, 110), 1.2f
+        );
+        ImGui::Dummy(ImVec2(0, 12));
+
+        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 1.0f), "%s", GetEditorLoadStatus().c_str());
+        ImGui::Dummy(ImVec2(0, 6));
+
+        static int dots = 0; if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
+        std::string spinner = "Please wait"; for (int i = 0; i < dots; i++) spinner += ".";
+        ImGui::TextDisabled("%s", spinner.c_str());
+
+        if (!g_IsEditorLoading) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
+
+    // Only hand off to the ModCreator screen once the background load has
+    // actually finished, so it never reads workspace data mid-load.
+    if (g_EditorLoadRequested && !g_IsEditorLoading) {
+        g_EditorLoadRequested = false;
+        g_CurrentAppState = EAppState::ModCreator;
+    }
 }
 
 static void DrawBankExplorer() {
@@ -1881,7 +2021,17 @@ static void DrawBankExplorer() {
                 g_ShowModPackageWindow = true;
             }
             if (ImGui::MenuItem("Run Fable")) {
-                g_LaunchState = 1;
+                // This is a direct launch from the Editor, not the Frontend/Mod
+                // Manager flow - skip g_LaunchState / ProcessModsAndLaunch()
+                // entirely and just start the game, same as launching it
+                // outside the tool. At most, warn about unsaved changes first.
+                if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
+                    g_PendingRunFableLaunch = true;
+                    g_DefWorkspace.TriggerUnsavedPopup = true;
+                }
+                else {
+                    ModManagerBackend::LaunchGame();
+                }
             }
             if (ImGui::MenuItem("Change Game Folder")) {
                 std::string root = OpenFolderDialog();
@@ -2105,7 +2255,11 @@ static void DrawBankExplorer() {
                 SaveConfig();
             }
 
-            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
+            if (g_PendingRunFableLaunch) {
+                g_PendingRunFableLaunch = false;
+                ModManagerBackend::LaunchGame();
+            }
+            else if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
             ImGui::CloseCurrentPopup();
         }
 
@@ -2116,13 +2270,19 @@ static void DrawBankExplorer() {
                 g_AppConfig.ShowUnsavedChangesWarning = false;
                 SaveConfig();
             }
-            if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
+
+            if (g_PendingRunFableLaunch) {
+                g_PendingRunFableLaunch = false;
+                ModManagerBackend::LaunchGame();
+            }
+            else if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
             ImGui::CloseCurrentPopup();
         }
 
         ImGui::SameLine();
 
         if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+            g_PendingRunFableLaunch = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
