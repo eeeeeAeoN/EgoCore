@@ -153,6 +153,53 @@ static void UpdateUIScale(float scale) {
     style.ScaleAllSizes(scale);
 }
 
+// Shared header treatment - outer gold glow aura, gradient banner, title-font
+// heading, and a center-fading divider line - matching the look used by the
+// "About EgoCore" and "Pending Asset Changes" modals. Pulled out here so the
+// smaller utility modals (Settings/Keybindings/Scaling/Unsaved Changes) can
+// get the same finished look without re-deriving the drawlist math each time.
+static void DrawGoldModalHeader(const char* title, float headerHeight = 58.0f) {
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImVec2 winPos = ImGui::GetWindowPos();
+    ImVec2 winSize = ImGui::GetWindowSize();
+    ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
+
+    // Outer Gold Glow Aura
+    for (int i = 3; i >= 1; i--) {
+        float expand = (float)i * 1.8f;
+        float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
+        ImU32 glowCol = IM_COL32(242, 193, 78, (uint32_t)(glowAlpha * 255.0f));
+        drawList->AddRect(
+            ImVec2(winPos.x - expand, winPos.y - expand),
+            ImVec2(winMax.x + expand, winMax.y + expand),
+            glowCol, 10.0f + expand, 0, 1.2f
+        );
+    }
+
+    // Gradient Header Banner
+    ImVec2 headerMin = winPos;
+    ImVec2 headerMax = ImVec2(winMax.x, winPos.y + headerHeight);
+    drawList->AddRectFilledMultiColor(
+        headerMin, headerMax,
+        IM_COL32(242, 193, 78, 30),  // Top-Left Gold
+        IM_COL32(110, 140, 175, 15), // Top-Right Slate Blue
+        IM_COL32(0, 0, 0, 0),        // Bottom-Right Clear
+        IM_COL32(0, 0, 0, 0)         // Bottom-Left Clear
+    );
+
+    if (g_TitleFont) ImGui::PushFont(g_TitleFont);
+    ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "%s", title);
+    if (g_TitleFont) ImGui::PopFont();
+
+    ImGui::Dummy(ImVec2(0, 4));
+    drawList->AddLine(
+        ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
+        ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
+        IM_COL32(242, 193, 78, 110), 1.2f
+    );
+    ImGui::Dummy(ImVec2(0, 12));
+}
+
 inline void ApplyModEnvironmentFix(const std::string& gameRoot) {
     fs::path rootPath(gameRoot);
     fs::path resourcesDir = (g_AppBaseDir.empty() ? fs::current_path() : g_AppBaseDir) / "Resources";
@@ -1411,38 +1458,6 @@ static void DrawBankExplorer() {
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
 
-    if (g_TriggerGeneralSettingsPopup) {
-        ImGui::OpenPopup("General Settings");
-        g_TriggerGeneralSettingsPopup = false;
-    }
-
-    if (ImGui::BeginPopupModal("General Settings", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("General Application Settings");
-        ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 5));
-
-        if (ImGui::Checkbox("Skip Frontend Menu", &g_AppConfig.SkipFrontend)) {
-            SaveConfig();
-        }
-
-        if (ImGui::Checkbox("Generate Lookup Dictionary", &g_AppConfig.EnableLookupGeneration)) {
-            SaveConfig();
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enables the 'Ctrl+Click' Go to Definition feature.\nChanges will take effect the next time you load.");
-
-        if (ImGui::Checkbox("Enable Autosuggest", &g_AppConfig.EnableAutosuggest)) {
-            SaveConfig();
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the smart dropdown list when typing functions in FSE.");
-
-        ImGui::Dummy(ImVec2(0, 10));
-        ImGui::Separator();
-        if (ImGui::Button("Close", ImVec2(120, 0))) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
     if (g_ShowAboutPopup) {
         ImGui::OpenPopup("About EgoCore");
         g_ShowAboutPopup = false;
@@ -1849,6 +1864,42 @@ static void DrawBankExplorer() {
         return;
     }
 
+    // --- EDITOR (MOD CREATOR) THEME ---
+    // The Frontend Hub has its own dark navy / gold look (see DrawFrontendHub),
+    // but the Editor below was still drawing on stock ImGui defaults - blue
+    // frames/buttons, square corners. This pushes a matching gray-and-gold
+    // theme once for the whole Editor (fields, buttons, checkboxes, sliders,
+    // headers) so every call site below - including everything in
+    // BankTabUI.h/DefExplorer.h/FSETabUI.h - picks it up for free. Popped at
+    // the very end of this function, right before the closing brace.
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.12f, 0.16f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.22f, 0.20f, 0.18f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.30f, 0.27f, 0.18f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.18f, 0.22f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.30f, 0.20f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.38f, 0.20f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.90f, 0.75f, 0.35f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.70f, 0.58f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.90f, 0.75f, 0.35f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.20f, 0.20f, 0.26f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.32f, 0.28f, 0.20f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.42f, 0.36f, 0.20f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.25f));
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.85f, 0.70f, 0.30f, 0.30f));
+    // ----- Tab colors (new) -----
+    ImGui::PushStyleColor(ImGuiCol_Tab, ImVec4(0.18f, 0.18f, 0.22f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_TabHovered, ImVec4(0.35f, 0.30f, 0.20f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_TabActive, ImVec4(0.60f, 0.48f, 0.22f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_TabUnfocused, ImVec4(0.15f, 0.15f, 0.18f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_TabUnfocusedActive, ImVec4(0.40f, 0.35f, 0.20f, 1.00f));
+    // ----- style vars (same) -----
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.2f);
+
     if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
 
         if (g_Keybinds.SwitchBankMode.IsPressed()) g_CurrentMode = EAppMode::Banks;
@@ -2115,27 +2166,106 @@ static void DrawBankExplorer() {
     ImGui::EndChild();
     ImGui::PopStyleColor();
 
+    if (g_TriggerGeneralSettingsPopup) {
+        ImGui::OpenPopup("General Settings");
+        g_TriggerGeneralSettingsPopup = false;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+    ImGui::SetNextWindowSize(ImVec2(480, 320), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("General Settings", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
+        ImVec2 winSize = ImGui::GetWindowSize();
+        DrawGoldModalHeader("General Settings");
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
+        ImGui::TextWrapped("Options that apply across all of EgoCore's Frontend, Editor, and Mod Manager screens.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 10));
+
+        if (ImGui::Checkbox("Skip Frontend Menu", &g_AppConfig.SkipFrontend)) {
+            SaveConfig();
+        }
+        ImGui::Dummy(ImVec2(0, 4));
+
+        if (ImGui::Checkbox("Generate Lookup Dictionary", &g_AppConfig.EnableLookupGeneration)) {
+            SaveConfig();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enables the 'Ctrl+Click' Go to Definition feature.\nChanges will take effect the next time you load.");
+        ImGui::Dummy(ImVec2(0, 4));
+
+        if (ImGui::Checkbox("Enable Autosuggest", &g_AppConfig.EnableAutosuggest)) {
+            SaveConfig();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the smart dropdown list when typing functions in FSE.");
+
+        ImGui::Dummy(ImVec2(0, 14));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 8));
+
+        float closeBtnWidth = 140.0f;
+        ImGui::SetCursorPosX((winSize.x - closeBtnWidth) * 0.5f);
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+        if (ImGui::Button("Close", ImVec2(closeBtnWidth, 26.0f))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(4);
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
+
     if (g_TriggerKeybindPopup) {
         ImGui::OpenPopup("KeybindingsConfig");
         g_TriggerKeybindPopup = false;
     }
 
     static ShortcutKey* g_ListeningForRebind = nullptr;
-    if (ImGui::BeginPopupModal("KeybindingsConfig", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Configure Shortcuts");
-        ImGui::Separator();
+
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+    ImGui::SetNextWindowSize(ImVec2(560, 640), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("KeybindingsConfig", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
+        ImVec2 winSize = ImGui::GetWindowSize();
+        DrawGoldModalHeader("Configure Shortcuts");
 
         auto DrawBindRow = [](const char* label, ShortcutKey& shortcut) {
             ImGui::AlignTextToFramePadding();
             ImGui::Text("%s", label);
-            ImGui::SameLine(150);
+            ImGui::SameLine(170);
             std::string btnLabel = shortcut.ToString() + "##" + label;
             if (g_ListeningForRebind == &shortcut) btnLabel = "[ Press any key... ]";
 
-            if (ImGui::Button(btnLabel.c_str(), ImVec2(180, 0))) {
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.70f, 0.30f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.50f, 0.20f, 1.00f));
+            if (ImGui::Button(btnLabel.c_str(), ImVec2(200, 0))) {
                 g_ListeningForRebind = &shortcut;
             }
+            ImGui::PopStyleColor(2);
             };
+
+        // Scrollable Content Area (mirrors the About modal's content child so
+        // this stays robust if the row list grows or the UI is scaled up)
+        float footerHeight = 52.0f;
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0.04f, 0.05f, 0.07f, 0.50f));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.30f, 0.35f, 0.45f, 0.60f));
+        ImGui::BeginChild("##keybind_scroll_content", ImVec2(0, -footerHeight), false);
 
         DrawBindRow("Switch to Banks", g_Keybinds.SwitchBankMode);
         DrawBindRow("Switch to Defs", g_Keybinds.SwitchDefMode);
@@ -2149,7 +2279,8 @@ static void DrawBankExplorer() {
         DrawBindRow("Lookup Definition", g_Keybinds.LookupDefinition);
 
         if (g_ListeningForRebind) {
-            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Press desired key combination. Press ESC to cancel.");
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Press desired key combination. Press ESC to cancel.");
             ImGuiIO& io = ImGui::GetIO();
             for (int i = ImGuiKey_NamedKey_BEGIN; i < ImGuiKey_NamedKey_END; i++) {
                 ImGuiKey key = (ImGuiKey)i;
@@ -2174,22 +2305,46 @@ static void DrawBankExplorer() {
             }
         }
 
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+
         ImGui::Separator();
-        if (ImGui::Button("Close", ImVec2(120, 0))) {
+        ImGui::Dummy(ImVec2(0, 6));
+
+        float closeBtnWidth = 140.0f;
+        ImGui::SetCursorPosX((winSize.x - closeBtnWidth) * 0.5f);
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+        if (ImGui::Button("Close", ImVec2(closeBtnWidth, 26.0f))) {
             g_ListeningForRebind = nullptr;
             ImGui::CloseCurrentPopup();
         }
+        ImGui::PopStyleColor(4);
         ImGui::EndPopup();
     }
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
 
     if (g_TriggerScalingPopup) {
         ImGui::OpenPopup("ScalingConfig");
         g_TriggerScalingPopup = false;
     }
 
-    if (ImGui::BeginPopupModal("ScalingConfig", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Interface Scaling");
-        ImGui::Separator();
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+    ImGui::SetNextWindowSize(ImVec2(480, 250), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("ScalingConfig", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
+        ImVec2 winSize = ImGui::GetWindowSize();
+        DrawGoldModalHeader("Interface Scaling");
 
         ImGui::AlignTextToFramePadding();
         ImGui::Text("Global Scale");
@@ -2204,12 +2359,25 @@ static void DrawBankExplorer() {
             ImGui::SetTooltip("Adjusts font size and UI padding. Default is 1.00.");
         }
 
+        ImGui::Dummy(ImVec2(0, 10));
         ImGui::Separator();
-        if (ImGui::Button("Close", ImVec2(120, 0))) {
+        ImGui::Dummy(ImVec2(0, 8));
+
+        float closeBtnWidth = 140.0f;
+        ImGui::SetCursorPosX((winSize.x - closeBtnWidth) * 0.5f);
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+        if (ImGui::Button("Close", ImVec2(closeBtnWidth, 26.0f))) {
             ImGui::CloseCurrentPopup();
         }
+        ImGui::PopStyleColor(4);
         ImGui::EndPopup();
     }
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
 
     if (g_CurrentMode == EAppMode::Banks) {
         DrawBankTab();
@@ -2226,15 +2394,31 @@ static void DrawBankExplorer() {
         g_DefWorkspace.TriggerUnsavedPopup = false;
     }
 
-    if (ImGui::BeginPopupModal("UnsavedChangesGlobal", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("You have unsaved changes in your Definitions or Banks.");
-        ImGui::Text("What would you like to do?");
-        ImGui::Separator();
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+    ImGui::SetNextWindowSize(ImVec2(520, 240), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("UnsavedChangesGlobal", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
+        DrawGoldModalHeader("Unsaved Changes");
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
+        ImGui::TextWrapped("You have unsaved changes in your Definitions or Banks. What would you like to do?");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 8));
 
         static bool dontShowUnsaved = false;
         ImGui::Checkbox("Don't show this message again", &dontShowUnsaved);
         ImGui::Dummy(ImVec2(0, 10));
 
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
         if (ImGui::Button("Save & Continue", ImVec2(140, 0))) {
             if (g_DefWorkspace.ShowDefsMode) {
                 if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1)
@@ -2262,9 +2446,13 @@ static void DrawBankExplorer() {
             else if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
             ImGui::CloseCurrentPopup();
         }
+        ImGui::PopStyleColor(4);
 
         ImGui::SameLine();
 
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.20f, 0.18f, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.62f, 0.28f, 0.24f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.15f, 0.13f, 1.00f));
         if (ImGui::Button("Discard & Continue", ImVec2(140, 0))) {
             if (dontShowUnsaved) {
                 g_AppConfig.ShowUnsavedChangesWarning = false;
@@ -2278,17 +2466,28 @@ static void DrawBankExplorer() {
             else if (g_DefWorkspace.PendingNav.Action == DefAction::ExitProgram) exit(0);
             ImGui::CloseCurrentPopup();
         }
+        ImGui::PopStyleColor(3);
 
         ImGui::SameLine();
 
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.20f, 0.23f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.34f, 0.31f, 0.22f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.42f, 0.36f, 0.20f, 1.00f));
         if (ImGui::Button("Cancel", ImVec2(80, 0))) {
             g_PendingRunFableLaunch = false;
             ImGui::CloseCurrentPopup();
         }
+        ImGui::PopStyleColor(3);
         ImGui::EndPopup();
     }
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
 
     if (g_CurrentAppState == EAppState::ModCreator) {
         DrawModPackageWindow();
     }
+
+    // Matches the editor theme pushed near the top of this function.
+    ImGui::PopStyleColor(19);   // now 14 + 5 tab colors
+    ImGui::PopStyleVar(6);
 }

@@ -394,21 +394,23 @@ static void DrawBankTab() {
     float compileBtnWidth = 130.0f;
     ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
 
-    if (bank.Type == EBankType::Text) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-    else if (bank.Type == EBankType::Dialogue) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.2f, 0.8f, 1.0f));
-    else if (bank.Type == EBankType::Audio) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.4f, 0.0f, 1.0f));
-    else ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.0f, 0.5f, 1.0f));
-
     std::string compileText = "RECOMPILE";
     if (bank.Type == EBankType::Text) compileText = "RECOMPILE";
     else if (bank.Type == EBankType::Dialogue) compileText = "RECOMPILE";
     else if (bank.Type == EBankType::Audio) compileText = bank.LugParserPtr ? "RECOMPILE" : "RECOMPILE";
 
-    if (ImGui::Button(compileText.c_str(), ImVec2(compileBtnWidth, 0))) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+
+    if (ImGui::Button(compileText.c_str(), ImVec2(compileBtnWidth, 28))) {
         if (bank.Type == EBankType::Audio) SaveAudioBank(&bank);
         else SaveBigBank(&bank);
     }
-    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
 
     ImGui::EndChild();
     ImGui::PopStyleColor();
@@ -843,52 +845,52 @@ static void DrawBankTab() {
         ImVec4 typeColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
 
         if (bank.Type == EBankType::Text) {
-            if (e.Type == 0) { typeName = "Type 0 - Text Entry"; typeColor = ImVec4(0.6f, 0.8f, 1.0f, 1.0f); }
-            else if (e.Type == 1) { typeName = "Type 1 - Text Group"; typeColor = ImVec4(1.0f, 0.8f, 0.6f, 1.0f); }
-            else if (e.Type == 2) { typeName = "Type 2 - Narrator List"; typeColor = ImVec4(0.8f, 0.6f, 1.0f, 1.0f); }
+            if (e.Type == 0) { typeName = "Text Entry"; typeColor = ImVec4(0.6f, 0.8f, 1.0f, 1.0f); }
+            else if (e.Type == 1) { typeName = "Text Group"; typeColor = ImVec4(1.0f, 0.8f, 0.6f, 1.0f); }
+            else if (e.Type == 2) { typeName = "Narrator List"; typeColor = ImVec4(0.8f, 0.6f, 1.0f, 1.0f); }
             else typeName = "Type " + std::to_string(e.Type);
         }
         else if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) {
-            if (e.Type == 0x0) { typeName = "Type 0 - Graphic Single"; typeColor = ImVec4(0.5f, 0.8f, 1.0f, 1.0f); }
-            else if (e.Type == 0x1) { typeName = "Type 1 - Graphic Sequence"; typeColor = ImVec4(0.6f, 0.6f, 1.0f, 1.0f); }
-            else if (e.Type == 0x2) { typeName = "Type 2 - Bumpmap"; typeColor = ImVec4(1.0f, 0.7f, 0.5f, 1.0f); }
-            else if (e.Type == 0x3) { typeName = "Type 3 - Bumpmap Sequence"; typeColor = ImVec4(1.0f, 0.5f, 0.6f, 1.0f); }
-            else if (e.Type == 0x4) { typeName = "Type 4 - Volume Texture"; typeColor = ImVec4(0.4f, 0.9f, 0.7f, 1.0f); }
-            else if (e.Type == 0x5) { typeName = "Type 5 - Sprite Sheet"; typeColor = ImVec4(0.9f, 0.9f, 0.5f, 1.0f); }
+            if (e.Type == 0x0) { typeName = "Graphic Single"; typeColor = ImVec4(0.5f, 0.8f, 1.0f, 1.0f); }
+            else if (e.Type == 0x1) { typeName = "Graphic Sequence"; typeColor = ImVec4(0.6f, 0.6f, 1.0f, 1.0f); }
+            else if (e.Type == 0x2) { typeName = "Bumpmap"; typeColor = ImVec4(1.0f, 0.7f, 0.5f, 1.0f); }
+            else if (e.Type == 0x3) { typeName = "Bumpmap Sequence"; typeColor = ImVec4(1.0f, 0.5f, 0.6f, 1.0f); }
+            else if (e.Type == 0x4) { typeName = "Volume Texture"; typeColor = ImVec4(0.4f, 0.9f, 0.7f, 1.0f); }
+            else if (e.Type == 0x5) { typeName = "Sprite Sheet"; typeColor = ImVec4(0.9f, 0.9f, 0.5f, 1.0f); }
             else { typeName = "Type " + std::to_string(e.Type) + " - Texture"; typeColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); }
         }
         else if (bank.Type == EBankType::Effects) {
-            if (e.Type == 0) { typeName = "Type 0 - Particle Entry"; typeColor = ImVec4(1.0f, 0.9f, 0.6f, 1.0f); }
+            if (e.Type == 0) { typeName = "Particle Entry"; typeColor = ImVec4(1.0f, 0.9f, 0.6f, 1.0f); }
             else typeName = "Type " + std::to_string(e.Type) + " - Particle";
         }
         else if (bank.Type == EBankType::Graphics) {
             switch (e.Type) {
-            case 1: typeName = "Type 1 - Static Mesh"; typeColor = ImVec4(0.7f, 0.9f, 0.7f, 1.0f); break;
-            case 2: typeName = "Type 2 - Repeated Mesh"; typeColor = ImVec4(0.5f, 0.8f, 0.5f, 1.0f); break;
-            case 3: typeName = "Type 3 - Physics Mesh (BBM)"; typeColor = ImVec4(0.9f, 0.5f, 0.5f, 1.0f); break;
-            case 4: typeName = "Type 4 - Particle Mesh"; typeColor = ImVec4(1.0f, 0.9f, 0.6f, 1.0f); break;
-            case 5: typeName = "Type 5 - Animated Mesh"; typeColor = ImVec4(0.6f, 0.9f, 1.0f, 1.0f); break;
-            case 6: typeName = "Type 6 - Animation"; typeColor = ImVec4(0.8f, 0.7f, 1.0f, 1.0f); break;
-            case 7: typeName = "Type 7 - Delta Animation"; typeColor = ImVec4(0.9f, 0.7f, 1.0f, 1.0f); break;
-            case 8: typeName = "Type 8 - Lipsync Animation"; typeColor = ImVec4(1.0f, 0.7f, 0.8f, 1.0f); break;
-            case 9: typeName = "Type 9 - Partial Animation"; typeColor = ImVec4(0.7f, 0.7f, 0.9f, 1.0f); break;
-            case 10: typeName = "Type 10 - Relative Animation"; typeColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); break;
+            case 1: typeName = "Static Mesh"; typeColor = ImVec4(0.7f, 0.9f, 0.7f, 1.0f); break;
+            case 2: typeName = "Repeated Mesh"; typeColor = ImVec4(0.5f, 0.8f, 0.5f, 1.0f); break;
+            case 3: typeName = "Physics Mesh (BBM)"; typeColor = ImVec4(0.9f, 0.5f, 0.5f, 1.0f); break;
+            case 4: typeName = "Particle Mesh"; typeColor = ImVec4(1.0f, 0.9f, 0.6f, 1.0f); break;
+            case 5: typeName = "Animated Mesh"; typeColor = ImVec4(0.6f, 0.9f, 1.0f, 1.0f); break;
+            case 6: typeName = "Animation"; typeColor = ImVec4(0.8f, 0.7f, 1.0f, 1.0f); break;
+            case 7: typeName = "Delta Animation"; typeColor = ImVec4(0.9f, 0.7f, 1.0f, 1.0f); break;
+            case 8: typeName = "Lipsync Animation"; typeColor = ImVec4(1.0f, 0.7f, 0.8f, 1.0f); break;
+            case 9: typeName = "Partial Animation"; typeColor = ImVec4(0.7f, 0.7f, 0.9f, 1.0f); break;
+            case 10: typeName = "Relative Animation"; typeColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f); break;
             default: typeName = "Type " + std::to_string(e.Type) + " - Unknown Mesh"; break;
             }
         }
         else if (bank.Type == EBankType::Shaders) {
-            if (e.Type == 0) { typeName = "Type 0 - Vertex Shader"; typeColor = ImVec4(1.0f, 0.6f, 0.8f, 1.0f); }
-            else if (e.Type == 1) { typeName = "Type 1 - Pixel Shader"; typeColor = ImVec4(0.6f, 1.0f, 0.8f, 1.0f); }
+            if (e.Type == 0) { typeName = "Vertex Shader"; typeColor = ImVec4(1.0f, 0.6f, 0.8f, 1.0f); }
+            else if (e.Type == 1) { typeName = "Pixel Shader"; typeColor = ImVec4(0.6f, 1.0f, 0.8f, 1.0f); }
             else typeName = "Type " + std::to_string(e.Type) + " - Shader";
         }
         else if (bank.Type == EBankType::Fonts) {
-            if (e.Type == 0) { typeName = "Type 0 - PC Font Entry"; typeColor = ImVec4(0.6f, 0.8f, 1.0f, 1.0f); }
-            else if (e.Type == 1) { typeName = "Type 1 - Xbox Font Entry"; typeColor = ImVec4(0.7f, 0.9f, 0.5f, 1.0f); }
-            else if (e.Type == 2) { typeName = "Type 2 - Glyph Data"; typeColor = ImVec4(1.0f, 0.8f, 0.6f, 1.0f); }
+            if (e.Type == 0) { typeName = "PC Font Entry"; typeColor = ImVec4(0.6f, 0.8f, 1.0f, 1.0f); }
+            else if (e.Type == 1) { typeName = "Xbox Font Entry"; typeColor = ImVec4(0.7f, 0.9f, 0.5f, 1.0f); }
+            else if (e.Type == 2) { typeName = "Glyph Data"; typeColor = ImVec4(1.0f, 0.8f, 0.6f, 1.0f); }
             else typeName = "Type " + std::to_string(e.Type) + " - Font";
         }
         else if (bank.Type == EBankType::Dialogue) {
-            if (e.Type == 1) { typeName = "Type 1 - Lipsync Entry"; typeColor = ImVec4(0.8f, 0.7f, 1.0f, 1.0f); }
+            if (e.Type == 1) { typeName = "Lipsync Entry"; typeColor = ImVec4(0.8f, 0.7f, 1.0f, 1.0f); }
             else typeName = "Type " + std::to_string(e.Type) + " - Dialogue";
         }
         else if (bank.Type == EBankType::Audio) typeName = "Audio Clip";

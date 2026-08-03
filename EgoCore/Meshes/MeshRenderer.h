@@ -611,7 +611,7 @@ public:
         ID3D11DepthStencilView* activeDSV = overrideDSV ? overrideDSV : DSV;
 
         if (clearTarget) {
-            float bgColor[4] = { isPhysics ? 0.15f : 0.1f, 0.12f, isPhysics ? 0.1f : 0.15f, 1.0f };
+            float bgColor[4] = { 0.13f, 0.13f, 0.13f, 1.0f };
             ctx->ClearRenderTargetView(activeRTV, bgColor);
             ctx->ClearDepthStencilView(activeDSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
         }
