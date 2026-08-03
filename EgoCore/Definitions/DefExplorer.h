@@ -12,6 +12,9 @@ struct DefDragPayload { int ContextIndex; char Category[64]; int EntryIndex; };
 struct HeaderDragPayload { int EnumIndex; };
 struct EventDragPayload { int FileType; int EventIndex; };
 
+extern ImTextureID g_SaveTexture;
+extern ImTextureID g_DeleteTexture;
+
 static void DrawDefTab() {
     static float leftPaneWidth = 350.0f;
     if (leftPaneWidth < 50.0f) leftPaneWidth = 50.0f;
@@ -289,10 +292,27 @@ static void DrawDefTab() {
                 ImGui::SameLine(); ImGui::TextDisabled("| %s", entry.SourceFile.c_str());
 
                 if (g_DefWorkspace.IsDirty()) {
-                    ImGui::SameLine();
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-                    if (ImGui::Button("SAVE CHANGES")) SaveDefEntry(entry);
-                    ImGui::PopStyleColor();
+                    float btnSize = 20.0f;
+                    float marginRight = 10.0f;
+                    float contentRight = ImGui::GetContentRegionMax().x;
+                    float rightPos = contentRight - marginRight - btnSize;
+                    float cursorX = ImGui::GetCursorPosX();
+                    if (rightPos > cursorX) {
+                        ImGui::SameLine(rightPos - cursorX);
+                    }
+                    else {
+                        ImGui::SameLine();
+                    }
+
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.82f, 0.45f, 0.3f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.82f, 0.45f, 0.5f));
+                    ImVec4 saveTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
+                    if (ImGui::ImageButton("##SaveDefBtn", g_SaveTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), saveTint)) {
+                        SaveDefEntry(entry);
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save changes to this definition");
+                    ImGui::PopStyleColor(3);
                 }
                 ImGui::Separator();
 
@@ -449,10 +469,27 @@ static void DrawDefTab() {
             ImGui::SameLine(); ImGui::TextDisabled("| %s", entry.FilePath.c_str());
 
             if (g_DefWorkspace.IsDirty()) {
-                ImGui::SameLine();
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-                if (ImGui::Button("SAVE CHANGES")) SaveHeaderEntry(entry);
-                ImGui::PopStyleColor();
+                float btnSize = 20.0f;
+                float marginRight = 10.0f;
+                float contentRight = ImGui::GetContentRegionMax().x;
+                float rightPos = contentRight - marginRight - btnSize;
+                float cursorX = ImGui::GetCursorPosX();
+                if (rightPos > cursorX) {
+                    ImGui::SameLine(rightPos - cursorX);
+                }
+                else {
+                    ImGui::SameLine();
+                }
+
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.82f, 0.45f, 0.3f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.82f, 0.45f, 0.5f));
+                ImVec4 saveTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
+                if (ImGui::ImageButton("##SaveHeaderBtn", g_SaveTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), saveTint)) {
+                    SaveHeaderEntry(entry);
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save changes to this header");
+                ImGui::PopStyleColor(3);
             }
             ImGui::Separator();
 
@@ -650,22 +687,33 @@ static void DrawDefTab() {
                 ev.AnimName = animNameBuf;
             }
 
-            ImGui::SameLine();
-            if (g_EventWorkspace.IsDirty() || std::string(animNameBuf) != ev.AnimName) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-                if (ImGui::Button("SAVE CHANGES")) {
-                    ev.Content = g_EventWorkspace.Editor.GetText();
-                    g_EventWorkspace.OriginalContent = ev.Content;
-                    activeFile->Save();
-                }
-                ImGui::PopStyleColor();
+            float btnSize = 20.0f;
+            float marginRight = 10.0f;
+            float contentRight = ImGui::GetContentRegionMax().x;
+            float rightPos = contentRight - marginRight - btnSize;
+            float cursorX = ImGui::GetCursorPosX();
+            if (rightPos > cursorX) {
+                ImGui::SameLine(rightPos - cursorX);
             }
             else {
-                if (ImGui::Button("SAVE FILE")) {
-                    ev.Content = g_EventWorkspace.Editor.GetText();
-                    activeFile->Save();
-                }
+                ImGui::SameLine();
             }
+
+            bool isDirty = g_EventWorkspace.IsDirty() || std::string(animNameBuf) != ev.AnimName;
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.82f, 0.45f, 0.3f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.82f, 0.45f, 0.5f));
+            ImVec4 saveTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
+            if (ImGui::ImageButton("##SaveEventBtn", g_SaveTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), saveTint)) {
+                ev.Content = g_EventWorkspace.Editor.GetText();
+                g_EventWorkspace.OriginalContent = ev.Content;
+                activeFile->Save();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(isDirty ? "Save changes to this event" : "Save file");
+            }
+            ImGui::PopStyleColor(3);
 
             ImGui::Separator();
 

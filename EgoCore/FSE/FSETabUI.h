@@ -4,6 +4,9 @@
 #include "FSEAutosuggest.h"
 #include <algorithm> 
 
+extern ImTextureID g_SaveTexture;
+extern ImTextureID g_DeleteTexture;
+
 static void DrawFSETab() {
     static float leftPaneWidth = 250.0f;
     if (leftPaneWidth < 50.0f) leftPaneWidth = 50.0f;
@@ -136,22 +139,45 @@ static void DrawFSETab() {
     if (!g_FSEWorkspace.ActiveFilePath.empty()) {
         ImGui::TextDisabled("Editing: %s", g_FSEWorkspace.ActiveFilePath.c_str());
 
-        if (g_FSEWorkspace.IsDirty()) {
+        float btnSize = 20.0f;
+        float marginRight = 10.0f;
+        bool saveVisible = g_FSEWorkspace.IsDirty();
+        float spacing = ImGui::GetStyle().ItemSpacing.x;
+        float totalWidth = btnSize + (saveVisible ? btnSize + spacing : 0.0f);
+        float availWidth = ImGui::GetContentRegionAvail().x;
+        float cursorX = ImGui::GetCursorPosX();
+        float targetX = availWidth - marginRight - totalWidth;
+        if (targetX > cursorX) {
+            ImGui::SameLine(targetX - cursorX);
+        }
+        else {
             ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.7f, 0.0f, 1.0f));
-            if (ImGui::Button("SAVE")) {
-                SaveActiveFSEScript();
-            }
-            ImGui::PopStyleColor();
         }
 
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-        std::string deleteLabel = (g_FSEWorkspace.ActiveItemType == EFSEItemType::QuestMain) ? "DELETE QUEST" : "DELETE";
-        if (ImGui::Button(deleteLabel.c_str())) {
+        if (saveVisible) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.82f, 0.45f, 0.3f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.82f, 0.45f, 0.5f));
+            ImVec4 saveTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
+            if (ImGui::ImageButton("##SaveFSEBtn", g_SaveTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), saveTint)) {
+                SaveActiveFSEScript();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save changes to this script");
+            ImGui::PopStyleColor(3);
+            ImGui::SameLine();
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 0.3f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.2f, 0.2f, 0.5f));
+        ImVec4 deleteTint = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);
+        if (ImGui::ImageButton("##DeleteFSEBtn", g_DeleteTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), deleteTint)) {
             showDeleteConfirm = true;
         }
-        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(g_FSEWorkspace.ActiveItemType == EFSEItemType::QuestMain ? "Delete entire quest" : "Delete this script");
+        }
+        ImGui::PopStyleColor(3);
 
         ImGui::Separator();
 

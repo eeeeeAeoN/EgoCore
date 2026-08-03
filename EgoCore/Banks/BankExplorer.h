@@ -1899,6 +1899,10 @@ static void DrawBankExplorer() {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.2f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.10f, 0.11f, 0.15f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.15f, 0.16f, 0.22f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
 
     if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
 
@@ -2486,8 +2490,6 @@ static void DrawBankExplorer() {
     if (g_CurrentAppState == EAppState::ModCreator) {
         DrawModPackageWindow();
     }
-
-    // Matches the editor theme pushed near the top of this function.
-    ImGui::PopStyleColor(19);   // now 14 + 5 tab colors
-    ImGui::PopStyleVar(6);
+    ImGui::PopStyleColor(22); 
+    ImGui::PopStyleVar(7);
 }

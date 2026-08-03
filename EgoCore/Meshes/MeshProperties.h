@@ -605,7 +605,7 @@ static ImVec4 UnpackBGRA(uint32_t bgra) {
     return ImVec4(r, g, b, a);
 }
 
-inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
+inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std::function<void()> lodControlsCallback = nullptr) {
     CheckMeshUpload(g_pd3dDevice);
 
     bool hasTextureBank = false;
@@ -643,86 +643,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         UpdateAnimationBones();
     }
 
-    if (!g_BBMParser.IsParsed && !hasTextureBank) {
-        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[!] Textures not loaded.");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open 'textures.big' (GBANK_MAIN_PC) in a new tab.");
-        ImGui::SameLine();
-    }
-
-    ImGui::Checkbox("Wireframe", &g_ShowWireframe);
-    ImGui::SameLine();
-    ImGui::Checkbox("Helpers", &g_ShowHelpers);
-    ImGui::SameLine();
-    ImGui::Checkbox("Bounds", &g_ShowBounds);
-
-    if (g_ActiveMeshContent.ClothFlag) {
-        ImGui::SameLine();
-        ImGui::Checkbox("Cloth", &g_ShowCloth);
-    }
-
-    if (g_ActiveMeshContent.BoneCount > 0) {
-        ImGui::SameLine();
-        ImGui::Checkbox("Skeleton", &g_ShowSkeleton);
-    }
-
-    if (g_ActiveMeshContent.IsParsed) {
-        if (g_ActiveMeshContent.EntryMeta.PhysicsIndex <= 0) {
-            g_ShowPhysicsOverlay = false;
-            g_LoadedOverlayID = -1;
-        }
-        else {
-            ImGui::SameLine();
-            ImGui::Checkbox("Physics", &g_ShowPhysicsOverlay);
-
-            if (g_ShowPhysicsOverlay && g_LoadedOverlayID != g_ActiveMeshContent.EntryMeta.PhysicsIndex) {
-                g_LoadedOverlayID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
-                bool loaded = false;
-
-                bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
-
-                auto LoadOverlayFromBank = [&](LoadedBank& bank) {
-                    for (int i = 0; i < bank.Entries.size(); ++i) {
-                        if (bank.Entries[i].ID == g_LoadedOverlayID) {
-                            std::vector<uint8_t> rawData;
-                            if (bank.ModifiedEntryData.count(i)) rawData = bank.ModifiedEntryData[i];
-                            else {
-                                bank.Stream->clear();
-                                bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
-                                rawData.resize(bank.Entries[i].Size);
-                                bank.Stream->read((char*)rawData.data(), bank.Entries[i].Size);
-                            }
-                            g_OverlayBBMParser.Parse(rawData);
-                            g_PhysicsOverlayRenderer.Initialize(g_pd3dDevice);
-                            g_PhysicsOverlayRenderer.UploadBBM(g_pd3dDevice, g_OverlayBBMParser);
-                            return true;
-                        }
-                    }
-                    return false;
-                    };
-
-                if (isXboxActive) {
-                    loaded = LoadOverlayFromBank(g_OpenBanks[g_ActiveBankIndex]);
-                }
-                else {
-                    for (auto& bank : g_OpenBanks) {
-                        if (bank.Type == EBankType::Graphics) {
-                            if (LoadOverlayFromBank(bank)) {
-                                loaded = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (!loaded) g_ShowPhysicsOverlay = false;
-            }
-        }
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Export")) {
-        g_TriggerExportPopup = true;
-    }
+    bool showTextureWarning = !g_BBMParser.IsParsed && !hasTextureBank;
 
     if (g_TriggerExportPopup) {
         ImGui::OpenPopup("Export Options");
@@ -795,45 +716,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         }
         ImGui::EndPopup();
     }
-
-    ImGui::SameLine();
-    
-    /*
-    if (ImGui::Button("Export Uncompressed Binary")) {
-        std::string savePath = SaveFileDialog("Binary Files\0*.bin\0All Files\0*.*\0");
-        if (!savePath.empty()) {
-            if (g_BBMParser.IsParsed) {
-                std::vector<uint8_t> outData = MeshCompiler::CompilePhysicsUncompressed(g_BBMParser);
-                std::ofstream out(savePath, std::ios::binary);
-                out.write((char*)outData.data(), outData.size());
-                g_BankStatus = "Exported Uncompressed Physics Mesh (BBM)!";
-                g_ShowSuccessPopup = true;
-                g_SuccessMessage = "Physics Binary dumped correctly!";
-            }
-            else if (g_ActiveMeshContent.IsParsed) {
-                std::vector<uint8_t> outData = MeshCompiler::CompileForExport(g_ActiveMeshContent, true);
-                std::ofstream out(savePath, std::ios::binary);
-                out.write((char*)outData.data(), outData.size());
-                g_BankStatus = "Exported Uncompressed Mesh Binary (LZO Bypassed)!";
-                g_ShowSuccessPopup = true;
-                g_SuccessMessage = "Binary dumped correctly (LZO Bypassed)!";
-            }
-            else {
-                g_BankStatus = "Error: No active parsed mesh available to export.";
-            }
-        }
-    }
-    */
-
-    ImGui::SameLine();
-    float availToolW = ImGui::GetContentRegionAvail().x;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availToolW - 30);
-    if (ImGui::Button(g_ShowRightPanel ? ">>##RightToggle" : "<<##RightToggle", ImVec2(28, 24))) {
-        g_ShowRightPanel = !g_ShowRightPanel;
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowRightPanel ? "Collapse Info Panel" : "Expand Info Panel");
-
-    ImGui::Separator();
 
     static float rightPanelWidth = 450.0f;
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -1018,6 +900,118 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
         }
     }
     dl->PopClipRect();
+
+    // --- Top-left overlay: wireframe / helpers / bounds / cloth / skeleton / physics toggles ---
+    ImGui::SetCursorScreenPos(ImVec2(pMin.x + 10, pMin.y + 10));
+    ImGui::BeginGroup();
+
+    if (showTextureWarning) {
+        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[!] Textures not loaded.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open 'textures.big' (GBANK_MAIN_PC) in a new tab.");
+    }
+
+    ImGui::Checkbox("Wireframe", &g_ShowWireframe);
+    ImGui::SameLine();
+    ImGui::Checkbox("Helpers", &g_ShowHelpers);
+    ImGui::SameLine();
+    ImGui::Checkbox("Bounds", &g_ShowBounds);
+
+    if (g_ActiveMeshContent.ClothFlag) {
+        ImGui::SameLine();
+        ImGui::Checkbox("Cloth", &g_ShowCloth);
+    }
+
+    if (g_ActiveMeshContent.BoneCount > 0) {
+        ImGui::SameLine();
+        ImGui::Checkbox("Skeleton", &g_ShowSkeleton);
+    }
+
+    if (g_ActiveMeshContent.IsParsed) {
+        if (g_ActiveMeshContent.EntryMeta.PhysicsIndex <= 0) {
+            g_ShowPhysicsOverlay = false;
+            g_LoadedOverlayID = -1;
+        }
+        else {
+            ImGui::SameLine();
+            ImGui::Checkbox("Physics", &g_ShowPhysicsOverlay);
+
+            if (g_ShowPhysicsOverlay && g_LoadedOverlayID != g_ActiveMeshContent.EntryMeta.PhysicsIndex) {
+                g_LoadedOverlayID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
+                bool loaded = false;
+
+                bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
+
+                auto LoadOverlayFromBank = [&](LoadedBank& bank) {
+                    for (int i = 0; i < bank.Entries.size(); ++i) {
+                        if (bank.Entries[i].ID == g_LoadedOverlayID) {
+                            std::vector<uint8_t> rawData;
+                            if (bank.ModifiedEntryData.count(i)) rawData = bank.ModifiedEntryData[i];
+                            else {
+                                bank.Stream->clear();
+                                bank.Stream->seekg(bank.Entries[i].Offset, std::ios::beg);
+                                rawData.resize(bank.Entries[i].Size);
+                                bank.Stream->read((char*)rawData.data(), bank.Entries[i].Size);
+                            }
+                            g_OverlayBBMParser.Parse(rawData);
+                            g_PhysicsOverlayRenderer.Initialize(g_pd3dDevice);
+                            g_PhysicsOverlayRenderer.UploadBBM(g_pd3dDevice, g_OverlayBBMParser);
+                            return true;
+                        }
+                    }
+                    return false;
+                    };
+
+                if (isXboxActive) {
+                    loaded = LoadOverlayFromBank(g_OpenBanks[g_ActiveBankIndex]);
+                }
+                else {
+                    for (auto& bank : g_OpenBanks) {
+                        if (bank.Type == EBankType::Graphics) {
+                            if (LoadOverlayFromBank(bank)) {
+                                loaded = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!loaded) g_ShowPhysicsOverlay = false;
+            }
+        }
+    }
+
+    ImGui::EndGroup();
+
+    // --- Top-right overlay: collapse/expand info panel toggle ---
+    ImGui::SetCursorScreenPos(ImVec2(pMax.x - 28 - 10, pMin.y + 10));
+    if (ImGui::Button(g_ShowRightPanel ? ">>##RightToggle" : "<<##RightToggle", ImVec2(28, 24))) {
+        g_ShowRightPanel = !g_ShowRightPanel;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowRightPanel ? "Collapse Info Panel" : "Expand Info Panel");
+
+    // --- Bottom-right overlay: LOD / Replace LOD / Export controls ---
+    {
+        static float s_BottomRightOverlayW = 260.0f;
+        static float s_BottomRightOverlayH = 30.0f;
+
+        ImGui::SetCursorScreenPos(ImVec2(pMax.x - s_BottomRightOverlayW - 10, pMax.y - s_BottomRightOverlayH - 10));
+        ImGui::BeginGroup();
+
+        if (lodControlsCallback) {
+            lodControlsCallback();
+            ImGui::SameLine();
+        }
+        if (ImGui::Button("Export")) {
+            g_TriggerExportPopup = true;
+        }
+
+        ImGui::EndGroup();
+        ImVec2 brMin = ImGui::GetItemRectMin();
+        ImVec2 brMax = ImGui::GetItemRectMax();
+        s_BottomRightOverlayW = brMax.x - brMin.x;
+        s_BottomRightOverlayH = brMax.y - brMin.y;
+    }
+
     ImGui::EndChild();
 
     if (g_ShowRightPanel) {
@@ -1740,7 +1734,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
                         }
                     }
                 }
-            ImGui::EndTabItem();
+                ImGui::EndTabItem();
             }
 
             if (g_TriggerBonePopup) {
@@ -2012,41 +2006,41 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr) {
             if (g_ActiveMeshContent.IsParsed && ImGui::BeginTabItem("Primitives")) {
                 //ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Primitive");
                 ImGui::Separator();
-                
+
                 ImGui::BeginChild("DebugPrimList", ImVec2(0, 0), true);
                 for (size_t i = 0; i < g_ActiveMeshContent.Primitives.size(); i++) {
                     auto& prim = g_ActiveMeshContent.Primitives[i];
                     std::string headerName = "Primitive " + std::to_string(i);
-                    
+
                     if (prim.ClothPrimitives.size() > 0) {
                         headerName += " [CLOTH]";
                     }
 
                     if (ImGui::CollapsingHeader(headerName.c_str())) {
                         ImGui::Indent(15.0f);
-                        
+
                         ImGui::Text("InitFlags:         0x%08X", prim.InitFlags);
                         ImGui::Text("RepeatingMeshReps: %d", prim.RepeatingMeshReps);
                         ImGui::Text("Vertex Stride:     %d bytes", prim.VertexStride);
                         ImGui::Text("Buffer Type:       %u", prim.BufferType);
                         ImGui::Text("Is Compressed:     %s", prim.IsCompressed ? "True" : "False");
-                        
+
                         ImGui::Dummy(ImVec2(0, 5));
                         ImGui::Text("Vertex Count:      %u", prim.VertexCount);
                         ImGui::Text("Index Count:       %u", prim.IndexCount);
                         ImGui::Text("Triangle Count:    %u", prim.TriangleCount);
-                        
+
                         ImGui::Dummy(ImVec2(0, 5));
                         ImGui::Text("Static Blocks:     %u", prim.StaticBlockCount);
                         ImGui::Text("Animated Blocks:   %u", prim.AnimatedBlockCount);
                         ImGui::Text("Cloth Primitives:  %zu", prim.ClothPrimitives.size());
-                        
+
                         ImGui::Unindent(15.0f);
                         ImGui::Separator();
                     }
                 }
                 ImGui::EndChild();
-                
+
                 ImGui::EndTabItem();
             }
 

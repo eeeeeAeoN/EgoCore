@@ -27,6 +27,8 @@ MainMenuAudio g_MenuAudio;
 ImTextureID g_MusicOnTexture = 0;
 ImTextureID g_MusicOffTexture = 0;
 ImTextureID g_SearchTexture = 0;
+ImTextureID g_SaveTexture = 0;
+ImTextureID g_DeleteTexture = 0;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
@@ -172,6 +174,20 @@ int main(int, char**) {
         }
     }
 
+    ID3D11ShaderResourceView* srvSave = nullptr;
+    if (std::filesystem::exists("Assets/Save.png")) {
+        if (LoadTextureFromFile("Assets/Save.png", g_pd3dDevice, &srvSave, &iconWidth, &iconHeight)) {
+            g_SaveTexture = (ImTextureID)srvSave;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvDelete = nullptr;
+    if (std::filesystem::exists("Assets/Delete.png")) {
+        if (LoadTextureFromFile("Assets/Delete.png", g_pd3dDevice, &srvDelete, &iconWidth, &iconHeight)) {
+            g_DeleteTexture = (ImTextureID)srvDelete;
+        }
+    }
+
     bool done = false;
     while (!done) {
         MSG msg;
@@ -209,6 +225,8 @@ int main(int, char**) {
     if (srvMusicOn) { srvMusicOn->Release();  srvMusicOn = nullptr; }
     if (srvMusicOff) { srvMusicOff->Release(); srvMusicOff = nullptr; }
     if (srvSearch) { srvSearch->Release(); srvSearch = nullptr; }
+    if (srvSave) { srvSave->Release(); srvSave = nullptr; }
+    if (srvDelete) { srvDelete->Release(); srvDelete = nullptr; }
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

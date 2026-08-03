@@ -35,6 +35,8 @@ static bool g_ForceRecalculateBounds = false;
 static bool g_ShowAnimImportPopup = false;
 static int g_ImportAnimType = 6;
 static bool g_ShowLeftPanel = true;
+extern ImTextureID g_SaveTexture;
+extern ImTextureID g_DeleteTexture;
 
 static void DrawBinaryTab() {
     static bool isCompilingBins = false;
@@ -898,76 +900,27 @@ static void DrawBankTab() {
 
         ImGui::AlignTextToFramePadding();
 
-        bool isCurrentlyStaged = bank.StagedEntries.count(bank.SelectedEntryIndex) > 0;
-        if (isCurrentlyStaged && e.Size == 0) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "ID: %d | ", e.ID);
-        }
-        else {
-            ImGui::Text("ID: %d | ", e.ID);
-        }
+        float avail = ImGui::GetContentRegionAvail().x;
+        float buttonWidth = 60.0f + 60.0f + ImGui::GetStyle().ItemSpacing.x;
+        float labelSpacing = ImGui::GetStyle().ItemSpacing.x;
 
-        ImGui::SameLine(0, 0);
-        ImGui::TextColored(typeColor, "%s", typeName.c_str());
-        ImGui::SameLine(0, 0);
-        if (isCurrentlyStaged && e.Size == 0) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), " | Size: [Displayed after compilation]");
-        }
-        else {
-            ImGui::Text(" | Size: %d bytes", e.Size);
-        }
+        float nameInputWidth = 300.0f;
 
+        std::string idStr = "ID: " + std::to_string(e.ID);
+        std::string typeStr = "Type: " + typeName;
+
+        ImGui::Text("%s", idStr.c_str());
         ImGui::SameLine();
-        float availRight = ImGui::GetContentRegionAvail().x;
-        float buttonsWidth = 140.0f;
-        if (availRight > buttonsWidth) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availRight - buttonsWidth);
-        }
+        ImGui::Text("|");
+        ImGui::SameLine();
+        ImGui::TextColored(typeColor, "%s", typeStr.c_str());
+        ImGui::SameLine();
+        ImGui::Text("|");
+        ImGui::SameLine();
 
-        if (ImGui::Button("Save", ImVec2(60, 0))) {
-            SaveEntryChanges(&bank);
-        }
-
-        if (bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts) {
-            ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-
-            bool canDelete = bank.Entries.size() > 1;
-            if (!canDelete) ImGui::BeginDisabled();
-
-            if (ImGui::Button("Delete", ImVec2(60, 0))) {
-                if (g_AppConfig.ShowBankDeleteConfirm) {
-                    g_ContextEntryIndex = bank.SelectedEntryIndex;
-                    g_ShowDeleteBankEntryPopup = true;
-                    ImGui::OpenPopup("Delete Bank Entry?");
-                }
-                else {
-                    DeleteBankEntry(&bank, bank.SelectedEntryIndex);
-                }
-            }
-
-            if (!canDelete) ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !canDelete) {
-                ImGui::SetTooltip("Cannot delete the last remaining entry.");
-            }
-
-            ImGui::PopStyleColor();
-        }
-
-        ImGui::Separator();
-
-        if (bank.Type == EBankType::Audio) {
-            if (bank.LugParserPtr) DrawLugAudioProperties(&bank);
-            else DrawAudioProperties(&bank);
-        }
-        else if (bank.Type == EBankType::Dialogue || bank.Type == EBankType::Text) {
-            if (e.Name != e.FriendlyName) {
-                ImGui::TextDisabled("Internal File Name: %s", e.Name.c_str());
-            }
-        }
-        else {
-            ImGui::AlignTextToFramePadding();
-            ImGui::Text("Name:");
-            ImGui::SameLine();
+        if (bank.Type != EBankType::Audio) {
+            ImGui::Text("Name:"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(nameInputWidth);
 
             static char nameBuf[256];
             static int lastEditID = -1;
@@ -977,68 +930,101 @@ static void DrawBankTab() {
                 lastEditID = e.ID;
                 lastBankID = g_ActiveBankIndex;
             }
-
-            ImGui::SetNextItemWidth(300);
             if (ImGui::InputText("##globalNameEdit", nameBuf, 256)) {
                 bank.Entries[bank.SelectedEntryIndex].Name = nameBuf;
                 bank.Entries[bank.SelectedEntryIndex].FriendlyName = nameBuf;
-
-                // Sync changes dynamically to whichever internal struct is currently loaded
-                if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type) && e.Type != 3) g_ActiveMeshContent.MeshName = nameBuf;
-                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+                if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type) && e.Type != 3)
+                    g_ActiveMeshContent.MeshName = nameBuf;
+                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects)
                     g_TextureParser.PendingName = nameBuf;
-                }
-                if (e.Type == 6 || e.Type == 7 || e.Type == 9) {
+                if (e.Type == 6 || e.Type == 7 || e.Type == 9)
                     g_AnimParser.Data.ObjectName = nameBuf;
-                }
-
-                //if (bank.Type == EBankType::Effects) {
-                //    g_ActiveParticleEmitter.Name = nameBuf;
-                //}
             }
+            ImGui::SameLine();
+        }
+        else {
+        }
+        float btnSize = 20.0f;
+        float marginRight = 20.0f;
+        bool canDelete = (bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts && bank.Entries.size() > 1);
+        float totalWidth = btnSize + (canDelete ? btnSize + ImGui::GetStyle().ItemSpacing.x : 0.0f);
 
-            if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) {
-                if (e.Type == 3) {
-                    ImGui::SameLine();
-                    if (ImGui::Button("Replace Physics Mesh")) {
-                        std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
-                        if (!gltfPath.empty()) {
-                            CBBMParser newBBM;
-                            std::string err = GltfMeshImporter::ImportType3(gltfPath, e.Name, newBBM);
-                            if (err.empty()) {
-                                if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
-                                bank.StagedEntries[bank.SelectedEntryIndex].Physics = std::make_shared<CBBMParser>(newBBM);
+        float availRight = ImGui::GetContentRegionAvail().x;
+        if (availRight > totalWidth + marginRight) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availRight - totalWidth - marginRight);
+        }
 
-                                g_BBMParser = newBBM;
-                                g_MeshUploadNeeded = true;
-                                g_BankStatus = "Physics Mesh Replaced (Staged).";
-                            }
-                            else {
-                                g_BankStatus = "Import Error: " + err;
-                            }
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.82f, 0.45f, 0.3f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.82f, 0.45f, 0.5f));
+        ImVec4 saveTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
+        if (ImGui::ImageButton("##SaveBtn", g_SaveTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), saveTint)) {
+            SaveEntryChanges(&bank);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save this entry");
+        ImGui::PopStyleColor(3);
+
+        if (canDelete) {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 0.3f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.2f, 0.2f, 0.5f));
+            ImVec4 deleteTint = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);
+            if (ImGui::ImageButton("##DeleteBtn", g_DeleteTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), deleteTint)) {
+                if (g_AppConfig.ShowBankDeleteConfirm) {
+                    g_ContextEntryIndex = bank.SelectedEntryIndex;
+                    g_ShowDeleteBankEntryPopup = true;
+                    ImGui::OpenPopup("Delete Bank Entry?");
+                }
+                else {
+                    DeleteBankEntry(&bank, bank.SelectedEntryIndex);
+                }
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete this entry");
+            ImGui::PopStyleColor(3);
+        }
+
+
+        std::function<void()> drawLODControls = nullptr;
+
+        if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type)) {
+            ImGui::Dummy(ImVec2(0, 2));
+
+            if (e.Type == 3) {
+                if (ImGui::Button("Replace Physics Mesh")) {
+                    std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                    if (!gltfPath.empty()) {
+                        CBBMParser newBBM;
+                        std::string err = GltfMeshImporter::ImportType3(gltfPath, e.Name, newBBM);
+                        if (err.empty()) {
+                            if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
+                            bank.StagedEntries[bank.SelectedEntryIndex].Physics = std::make_shared<CBBMParser>(newBBM);
+                            g_BBMParser = newBBM;
+                            g_MeshUploadNeeded = true;
+                            g_BankStatus = "Physics Mesh Replaced (Staged).";
+                        }
+                        else {
+                            g_BankStatus = "Import Error: " + err;
                         }
                     }
                 }
-                else {
-                    ImGui::SameLine();
-                    ImGui::Text("LOD:");
-                    ImGui::SameLine();
+            }
+            else {
+                // Drawn inside the mesh renderer viewport (bottom-right overlay) via DrawMeshProperties().
+                drawLODControls = [&]() {
+                    ImGui::Text("LOD:"); ImGui::SameLine();
                     ImGui::SetNextItemWidth(100);
                     std::string lodPreview = std::to_string(bank.SelectedLOD);
-
                     uint32_t displayLODCount = g_ActiveMeshContent.EntryMeta.LODCount > 0 ? g_ActiveMeshContent.EntryMeta.LODCount : 1;
-
                     if (ImGui::BeginCombo("##lod", lodPreview.c_str())) {
                         for (uint32_t l = 0; l < displayLODCount; l++) {
                             ImGui::PushID(l);
                             float availW = ImGui::GetContentRegionAvail().x;
                             bool is_selected = (bank.SelectedLOD == l);
-
                             if (ImGui::Selectable((std::to_string(l) + "##sel").c_str(), is_selected, 0, ImVec2(availW - 30, 0))) {
                                 bank.SelectedLOD = l;
                                 if (g_ActiveMeshContent.EntryMeta.LODCount > 0) ParseSelectedLOD(&bank);
                             }
-
                             ImGui::SameLine(availW - 20);
                             if (ImGui::Button("X", ImVec2(20, 0))) {
                                 g_PendingLODActionIndex = l;
@@ -1053,61 +1039,169 @@ static void DrawBankTab() {
                         }
                         ImGui::EndCombo();
                     }
-
                     ImGui::SameLine();
                     if (ImGui::Button("Replace LOD")) {
                         g_PendingLODActionIndex = bank.SelectedLOD;
                         g_LODImportType = e.Type;
                         g_ShowReplaceLODPopup = true;
                     }
+                    };
+            }
+
+            if (g_ShowAddLODPopup) { ImGui::OpenPopup("Add LOD?"); }
+            if (g_ShowDeleteLODPopup) { ImGui::OpenPopup("Delete LOD?"); }
+            if (g_ShowReplaceLODPopup) { ImGui::OpenPopup("Replace LOD?"); }
+
+            auto getLODOffsetAndSize = [&](int lodIndex, size_t& outOffset, size_t& outSize) {
+                outOffset = 0; outSize = 0;
+                if (lodIndex < 0 || lodIndex >= g_ActiveMeshContent.EntryMeta.LODCount) return;
+                for (int i = 0; i < lodIndex; i++) outOffset += g_ActiveMeshContent.EntryMeta.LODSizes[i];
+                outSize = g_ActiveMeshContent.EntryMeta.LODSizes[lodIndex];
+                };
+
+            if (ImGui::BeginPopupModal("Add LOD?", &g_ShowAddLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("Select import format for the new LOD:");
+                ImGui::RadioButton("Type 1 (Static)", &g_LODImportType, 1);
+                ImGui::SameLine();
+                ImGui::RadioButton("Type 2 (Repeated)", &g_LODImportType, 2);
+                ImGui::SameLine();
+                ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4);
+                ImGui::SameLine();
+                ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
+
+                if (g_LODImportType == 1 || g_LODImportType == 5) {
+                    ImGui::Separator();
+                    ImGui::Checkbox("Recalculate Bounds & Scale", &g_ForceRecalculateBounds);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick this if you enlarged the mesh. Untick for Lossless.");
                 }
 
-                if (g_ShowAddLODPopup) { ImGui::OpenPopup("Add LOD?"); }
-                if (g_ShowDeleteLODPopup) { ImGui::OpenPopup("Delete LOD?"); }
-                if (g_ShowReplaceLODPopup) { ImGui::OpenPopup("Replace LOD?"); }
-
-                auto getLODOffsetAndSize = [&](int lodIndex, size_t& outOffset, size_t& outSize) {
-                    outOffset = 0; outSize = 0;
-                    if (lodIndex < 0 || lodIndex >= g_ActiveMeshContent.EntryMeta.LODCount) return;
-                    for (int i = 0; i < lodIndex; i++) outOffset += g_ActiveMeshContent.EntryMeta.LODSizes[i];
-                    outSize = g_ActiveMeshContent.EntryMeta.LODSizes[lodIndex];
-                    };
-
-                if (ImGui::BeginPopupModal("Add LOD?", &g_ShowAddLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-
-                    ImGui::Text("Select import format for the new LOD:");
-                    ImGui::RadioButton("Type 1 (Static)", &g_LODImportType, 1);
-                    ImGui::SameLine();
-                    ImGui::RadioButton("Type 2 (Repeated)", &g_LODImportType, 2);
-                    ImGui::SameLine();
-                    ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4);
-                    ImGui::SameLine();
-                    ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
-
-                    if (g_LODImportType == 1 || g_LODImportType == 5) {
-                        ImGui::Separator();
-                        ImGui::Checkbox("Recalculate Bounds & Scale", &g_ForceRecalculateBounds);
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick this if you enlarged the mesh. Untick for Lossless.");
+                if (g_LODImportType == 2) {
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Settings:");
+                    const int allowedReps[] = { 4, 8, 16, 32, 64 };
+                    int currentIdx = 0;
+                    for (int i = 0; i < 5; i++) { if (g_ImportReps == allowedReps[i]) currentIdx = i; }
+                    if (ImGui::SliderInt("Repetitions", &currentIdx, 0, 4, std::to_string(allowedReps[currentIdx]).c_str())) {
+                        g_ImportReps = allowedReps[currentIdx];
                     }
+                }
 
-                    if (g_LODImportType == 2) {
-                        ImGui::Separator();
-                        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Settings:");
-                        const int allowedReps[] = { 4, 8, 16, 32, 64 };
-                        int currentIdx = 0;
-                        for (int i = 0; i < 5; i++) { if (g_ImportReps == allowedReps[i]) currentIdx = i; }
-                        if (ImGui::SliderInt("Repetitions", &currentIdx, 0, 4, std::to_string(allowedReps[currentIdx]).c_str())) {
-                            g_ImportReps = allowedReps[currentIdx];
+                ImGui::Separator();
+                if (ImGui::Button("Browse & Add", ImVec2(120, 0))) {
+                    std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                    if (!gltfPath.empty()) {
+                        C3DMeshContent newMesh;
+                        std::string err;
+                        if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
+                        else if (g_LODImportType == 2) err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, g_ImportReps);
+                        else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh);
+                        else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
+
+                        if (err.empty()) {
+                            if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
+                            auto& staged = bank.StagedEntries[bank.SelectedEntryIndex];
+                            staged.MeshLODs.push_back(std::make_shared<C3DMeshContent>(newMesh));
+                            staged.MeshMeta.LODCount = (uint32_t)staged.MeshLODs.size();
+                            staged.MeshMeta.LODSizes.push_back(0);
+                            staged.MeshMeta.LODErrors.push_back(0.01f);
+                            g_ActiveMeshContent.EntryMeta = staged.MeshMeta;
+                            g_BankStatus = "LOD Added (Staged for Compilation).";
+                            g_ShowAddLODPopup = false;
+                            ImGui::CloseCurrentPopup();
+                        }
+                        else {
+                            g_BankStatus = "Import Error: " + err;
                         }
                     }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                    g_ShowAddLODPopup = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
 
+            if (ImGui::BeginPopupModal("Delete LOD?", &g_ShowDeleteLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("Are you sure you want to delete LOD %d?", g_PendingLODActionIndex);
+                ImGui::Separator();
+                if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
+                    if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
+                    auto& staged = bank.StagedEntries[bank.SelectedEntryIndex];
+                    if (staged.MeshLODs.size() > 1 && g_PendingLODActionIndex < staged.MeshLODs.size()) {
+                        staged.MeshLODs.erase(staged.MeshLODs.begin() + g_PendingLODActionIndex);
+                        staged.MeshMeta.LODSizes.erase(staged.MeshMeta.LODSizes.begin() + g_PendingLODActionIndex);
+                        if (!staged.MeshMeta.LODErrors.empty()) {
+                            int eIdx = (std::min)((int)g_PendingLODActionIndex, (int)staged.MeshMeta.LODErrors.size() - 1);
+                            staged.MeshMeta.LODErrors.erase(staged.MeshMeta.LODErrors.begin() + eIdx);
+                        }
+                        staged.MeshMeta.LODCount = (uint32_t)staged.MeshLODs.size();
+                        bank.SelectedLOD = 0;
+                        ParseSelectedLOD(&bank);
+                        g_BankStatus = "LOD deleted (Staged for Compilation).";
+                    }
+                    g_ShowDeleteLODPopup = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                    g_ShowDeleteLODPopup = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            if (ImGui::BeginPopupModal("Replace LOD?", &g_ShowReplaceLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextColored(ImVec4(1, 1, 0, 1), "Warning: Replacing an LOD will auto-compile the mesh.");
+                ImGui::Text("Select import format to replace LOD %d:", g_PendingLODActionIndex);
+                ImGui::RadioButton("Type 1 (Static)", &g_LODImportType, 1);
+                ImGui::SameLine();
+                ImGui::RadioButton("Type 2 (Repeated)", &g_LODImportType, 2);
+                ImGui::SameLine();
+                ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4);
+                ImGui::SameLine();
+                ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
+
+                if (g_LODImportType == 1 || g_LODImportType == 5) {
                     ImGui::Separator();
-                    if (ImGui::Button("Browse & Add", ImVec2(120, 0))) {
-                        std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
-                        if (!gltfPath.empty()) {
-                            C3DMeshContent newMesh;
-                            std::string err;
+                    ImGui::Checkbox("Recalculate Bounds & Scale", &g_ForceRecalculateBounds);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick this if you enlarged the mesh. Untick for Lossless.");
+                }
 
+                if (g_LODImportType == 2) {
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Settings:");
+                    const int allowedReps[] = { 4, 8, 16, 32, 64 };
+                    int currentIdx = 0;
+                    for (int i = 0; i < 5; i++) { if (g_ImportReps == allowedReps[i]) currentIdx = i; }
+                    if (ImGui::SliderInt("Repetitions", &currentIdx, 0, 4, std::to_string(allowedReps[currentIdx]).c_str())) {
+                        g_ImportReps = allowedReps[currentIdx];
+                    }
+                }
+
+                ImGui::Separator();
+                if (ImGui::Button("Browse & Replace", ImVec2(120, 0))) {
+                    std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                    if (!gltfPath.empty()) {
+                        std::string err;
+                        if (g_LODImportType == 3) {
+                            CBBMParser newBBM;
+                            err = GltfMeshImporter::ImportType3(gltfPath, e.Name, newBBM);
+                            if (err.empty()) {
+                                if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
+                                bank.StagedEntries[bank.SelectedEntryIndex].Physics = std::make_shared<CBBMParser>(newBBM);
+                                g_BBMParser = newBBM;
+                                g_MeshUploadNeeded = true;
+                                g_BankStatus = "Physics Mesh Replaced (Staged).";
+                                g_ShowReplaceLODPopup = false;
+                                ImGui::CloseCurrentPopup();
+                            }
+                            else {
+                                g_BankStatus = "Import Error: " + err;
+                            }
+                        }
+                        else {
+                            C3DMeshContent newMesh;
                             if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
                             else if (g_LODImportType == 2) err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, g_ImportReps);
                             else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh);
@@ -1116,17 +1210,12 @@ static void DrawBankTab() {
                             if (err.empty()) {
                                 if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
                                 auto& staged = bank.StagedEntries[bank.SelectedEntryIndex];
-
-                                staged.MeshLODs.push_back(std::make_shared<C3DMeshContent>(newMesh));
-
-                                staged.MeshMeta.LODCount = (uint32_t)staged.MeshLODs.size();
-                                staged.MeshMeta.LODSizes.push_back(0);
-                                staged.MeshMeta.LODErrors.push_back(0.01f);
-
-                                g_ActiveMeshContent.EntryMeta = staged.MeshMeta;
-
-                                g_BankStatus = "LOD Added (Staged for Compilation).";
-                                g_ShowAddLODPopup = false;
+                                if (g_PendingLODActionIndex < staged.MeshLODs.size()) {
+                                    staged.MeshLODs[g_PendingLODActionIndex] = std::make_shared<C3DMeshContent>(newMesh);
+                                }
+                                ParseSelectedLOD(&bank);
+                                g_BankStatus = "LOD Replaced (Staged).";
+                                g_ShowReplaceLODPopup = false;
                                 ImGui::CloseCurrentPopup();
                             }
                             else {
@@ -1134,130 +1223,13 @@ static void DrawBankTab() {
                             }
                         }
                     }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                        g_ShowAddLODPopup = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
                 }
-
-                if (ImGui::BeginPopupModal("Delete LOD?", &g_ShowDeleteLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::Text("Are you sure you want to delete LOD %d?", g_PendingLODActionIndex);
-                    ImGui::Separator();
-                    if (ImGui::Button("Yes, Delete", ImVec2(120, 0))) {
-                        if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
-                        auto& staged = bank.StagedEntries[bank.SelectedEntryIndex];
-
-                        if (staged.MeshLODs.size() > 1 && g_PendingLODActionIndex < staged.MeshLODs.size()) {
-                            staged.MeshLODs.erase(staged.MeshLODs.begin() + g_PendingLODActionIndex);
-
-                            staged.MeshMeta.LODSizes.erase(staged.MeshMeta.LODSizes.begin() + g_PendingLODActionIndex);
-                            if (!staged.MeshMeta.LODErrors.empty()) {
-                                int eIdx = (std::min)((int)g_PendingLODActionIndex, (int)staged.MeshMeta.LODErrors.size() - 1);
-                                staged.MeshMeta.LODErrors.erase(staged.MeshMeta.LODErrors.begin() + eIdx);
-                            }
-                            staged.MeshMeta.LODCount = (uint32_t)staged.MeshLODs.size();
-
-                            bank.SelectedLOD = 0;
-                            ParseSelectedLOD(&bank);
-                            g_BankStatus = "LOD deleted (Staged for Compilation).";
-                        }
-                        g_ShowDeleteLODPopup = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                        g_ShowDeleteLODPopup = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                    g_ShowReplaceLODPopup = false;
+                    ImGui::CloseCurrentPopup();
                 }
-
-                if (ImGui::BeginPopupModal("Replace LOD?", &g_ShowReplaceLODPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Warning: Replacing an LOD will auto-compile the mesh.");
-                    ImGui::Text("Select import format to replace LOD %d:", g_PendingLODActionIndex);
-                    ImGui::RadioButton("Type 1 (Static)", &g_LODImportType, 1);
-                    ImGui::SameLine();
-                    ImGui::RadioButton("Type 2 (Repeated)", &g_LODImportType, 2);
-                    ImGui::SameLine();
-                    ImGui::RadioButton("Type 4 (Particle)", &g_LODImportType, 4);
-                    ImGui::SameLine();
-                    ImGui::RadioButton("Type 5 (Animated)", &g_LODImportType, 5);
-
-                    if (g_LODImportType == 1 || g_LODImportType == 5) {
-                        ImGui::Separator();
-                        ImGui::Checkbox("Recalculate Bounds & Scale", &g_ForceRecalculateBounds);
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick this if you enlarged the mesh. Untick for Lossless.");
-                    }
-
-                    if (g_LODImportType == 2) {
-                        ImGui::Separator();
-                        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Type 2 Settings:");
-                        const int allowedReps[] = { 4, 8, 16, 32, 64 };
-                        int currentIdx = 0;
-                        for (int i = 0; i < 5; i++) { if (g_ImportReps == allowedReps[i]) currentIdx = i; }
-                        if (ImGui::SliderInt("Repetitions", &currentIdx, 0, 4, std::to_string(allowedReps[currentIdx]).c_str())) {
-                            g_ImportReps = allowedReps[currentIdx];
-                        }
-                    }
-
-                    ImGui::Separator();
-                    if (ImGui::Button("Browse & Replace", ImVec2(120, 0))) {
-                        std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
-                        if (!gltfPath.empty()) {
-                            std::string err;
-
-                            if (g_LODImportType == 3) {
-                                CBBMParser newBBM;
-                                err = GltfMeshImporter::ImportType3(gltfPath, e.Name, newBBM);
-                                if (err.empty()) {
-                                    if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
-                                    bank.StagedEntries[bank.SelectedEntryIndex].Physics = std::make_shared<CBBMParser>(newBBM);
-
-                                    g_BBMParser = newBBM;
-                                    g_MeshUploadNeeded = true;
-                                    g_BankStatus = "Physics Mesh Replaced (Staged).";
-                                    g_ShowReplaceLODPopup = false;
-                                    ImGui::CloseCurrentPopup();
-                                }
-                                else {
-                                    g_BankStatus = "Import Error: " + err;
-                                }
-                            }
-                            else {
-                                C3DMeshContent newMesh;
-                                if (g_LODImportType == 1) err = GltfMeshImporter::ImportType1(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
-                                else if (g_LODImportType == 2) err = GltfMeshImporter::ImportType2(gltfPath, e.Name, newMesh, g_ImportReps);
-                                else if (g_LODImportType == 4) err = GltfMeshImporter::ImportType4(gltfPath, e.Name, newMesh);
-                                else if (g_LODImportType == 5) err = GltfMeshImporter::ImportType5(gltfPath, e.Name, newMesh, g_ForceRecalculateBounds);
-
-                                if (err.empty()) {
-                                    if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
-                                    auto& staged = bank.StagedEntries[bank.SelectedEntryIndex];
-
-                                    if (g_PendingLODActionIndex < staged.MeshLODs.size()) {
-                                        staged.MeshLODs[g_PendingLODActionIndex] = std::make_shared<C3DMeshContent>(newMesh);
-                                    }
-
-                                    ParseSelectedLOD(&bank);
-                                    g_BankStatus = "LOD Replaced (Staged).";
-                                    g_ShowReplaceLODPopup = false;
-                                    ImGui::CloseCurrentPopup();
-                                }
-                                else {
-                                    g_BankStatus = "Import Error: " + err;
-                                }
-                            }
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                        g_ShowReplaceLODPopup = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
-                }
+                ImGui::EndPopup();
             }
         }
 
@@ -1267,7 +1239,7 @@ static void DrawBankTab() {
         else if (bank.Type == EBankType::Effects) { DrawParticleProperties(g_ActiveParticleEmitter); }
         else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, nullptr, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
         else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, nullptr, nullptr);
-        else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && IsSupportedMesh(e.Type)) DrawMeshProperties(nullptr);
+        else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && IsSupportedMesh(e.Type)) DrawMeshProperties(nullptr, drawLODControls);
         else if (bank.Type == EBankType::Shaders) { DrawShaderProperties(e.ID); }
         else if (bank.Type == EBankType::Effects) {
             static int s_LastParticleEntryID = -1;
