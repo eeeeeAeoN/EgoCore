@@ -49,6 +49,7 @@ public:
         ID3D11ShaderResourceView* Bump = nullptr;
         ID3D11ShaderResourceView* Specular = nullptr;
         float SelfIllumination = 0.0f;
+        bool Visible = true;
     };
 
 private:
@@ -659,6 +660,8 @@ public:
         float blendFactor[4] = { 0,0,0,0 }; ctx->OMSetBlendState(BlendState, blendFactor, 0xffffffff);
 
         for (const auto& batch : Batches) {
+            if (batch.MaterialIndex >= 0 && batch.MaterialIndex < Materials.size() && !Materials[batch.MaterialIndex].Visible) continue;
+
             ID3D11ShaderResourceView* srvs[3] = { DefaultWhiteSRV, DefaultNormalSRV, DefaultSpecSRV };
             float matIllum = 0.0f;
 
@@ -696,7 +699,10 @@ public:
             cb.Color = XMFLOAT4(0.0f, 0.0f, 0.0f, alpha);
             cb.SelfIllum = 0.0f;
             ctx->UpdateSubresource(ConstantBuffer, 0, nullptr, &cb, 0, 0);
-            for (const auto& batch : Batches) ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
+            for (const auto& batch : Batches) {
+                if (batch.MaterialIndex >= 0 && batch.MaterialIndex < Materials.size() && !Materials[batch.MaterialIndex].Visible) continue;
+                ctx->DrawIndexed(batch.IndexCount, batch.IndexStart, 0);
+            }
         }
 
         if (showCloth && ClothVBuffer && ClothIndexCount > 0) {

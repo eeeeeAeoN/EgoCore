@@ -990,7 +990,7 @@ static void DrawFrontendHub() {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 0.90f), "AlbionSecrets");
         if (g_TitleFont) ImGui::PopFont();
 
-        const char* verStr = "1.8.26";
+        const char* verStr = "4.8.26";
         float verWidth = ImGui::CalcTextSize(verStr).x;
         float winWidth = ImGui::GetWindowWidth();
 
@@ -1512,7 +1512,7 @@ static void DrawBankExplorer() {
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
         // Version & Author Sub-bar
-        ImGui::TextDisabled("Version: 1.8.26");
+        ImGui::TextDisabled("Version: 4.8.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -1520,7 +1520,7 @@ static void DrawBankExplorer() {
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 0.8f), "Co-developer: Jamen");
+        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 0.8f), "Co-developer: jamen");
 
         ImGui::Dummy(ImVec2(0, 6));
 
@@ -1602,7 +1602,7 @@ static void DrawBankExplorer() {
             ImGui::Separator();
             ImGui::Dummy(ImVec2(0, 4));
 
-            ImGui::TextColored(ImVec4(0.70f, 0.85f, 1.0f, 1.0f), "Jamen");
+            ImGui::TextColored(ImVec4(0.70f, 0.85f, 1.0f, 1.0f), "jamen");
             ImGui::SameLine(); ImGui::TextDisabled("- created the Fable Definition Compiler, used by EgoCore.");
 
             ImGui::TextColored(ImVec4(0.70f, 0.85f, 1.0f, 1.0f), "Odarenkoas");

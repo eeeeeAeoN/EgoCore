@@ -97,6 +97,7 @@ inline void SelectEntry(LoadedBank* bank, int idx) {
 
     g_TextureParser.DecodedPixels.clear(); g_TextureParser.IsParsed = false; g_TextureParser.IsStagedRaw = false;
     g_BBMParser.IsParsed = false; g_ActiveMeshContent = C3DMeshContent();
+    g_MaterialVisible.clear();
     g_AnimParser.Data = C3DAnimationInfo();
     g_TextParser.IsParsed = false; g_TextParser.TextData = CTextEntry(); g_TextParser.GroupData = CTextGroup(); g_TextParser.NarratorStrings.clear(); g_TextParser.RawData.clear();
     g_LipSyncParser.Data = CLipSyncData();

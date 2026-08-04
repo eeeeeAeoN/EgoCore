@@ -991,7 +991,7 @@ static void DrawBankTab() {
             ImGui::Dummy(ImVec2(0, 2));
 
             if (e.Type == 3) {
-                if (ImGui::Button("Replace Physics Mesh")) {
+                if (ImGui::Button("Import")) {
                     std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
                     if (!gltfPath.empty()) {
                         CBBMParser newBBM;
@@ -1040,7 +1040,7 @@ static void DrawBankTab() {
                         ImGui::EndCombo();
                     }
                     ImGui::SameLine();
-                    if (ImGui::Button("Replace LOD")) {
+                    if (ImGui::Button("Import")) {
                         g_PendingLODActionIndex = bank.SelectedLOD;
                         g_LODImportType = e.Type;
                         g_ShowReplaceLODPopup = true;

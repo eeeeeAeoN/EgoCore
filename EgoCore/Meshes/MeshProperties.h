@@ -37,6 +37,7 @@ static bool g_TriggerTexPopup = false;
 static bool g_ShowTextureSelectPopup = false;
 static int g_EditingMaterialIndex = -1;
 static int g_EditingTextureType = 0;
+static std::map<int, bool> g_MaterialVisible;
 static char g_TextureSearchBuf[128] = "";
 static int g_SelectedTextureID = -1;
 static bool g_PreviewAnimPlaying = false;
@@ -409,6 +410,7 @@ inline void CheckMeshUpload(ID3D11Device* device) {
                 if (m.DiffuseBank > 0) materials[m.Index].Diffuse = LoadTextureForMesh(m.DiffuseBank);
                 if (m.BumpBank > 0) materials[m.Index].Bump = LoadTextureForMesh(m.BumpBank);
                 if (m.ReflectBank > 0) materials[m.Index].Specular = LoadTextureForMesh(m.ReflectBank);
+                materials[m.Index].Visible = !g_MaterialVisible.count(m.Index) || g_MaterialVisible[m.Index];
             }
             g_MeshRenderer.SetMaterials(materials);
         }
@@ -428,6 +430,7 @@ inline void CheckMeshUpload(ID3D11Device* device) {
                 if (m.BumpMapID > 0) materials[m.ID].Bump = LoadTextureForMesh(m.BumpMapID);
                 if (m.ReflectionMapID > 0) materials[m.ID].Specular = LoadTextureForMesh(m.ReflectionMapID);
                 materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
+                materials[m.ID].Visible = !g_MaterialVisible.count(m.ID) || g_MaterialVisible[m.ID];
             }
 
             // PASS 2: Load REAL materials (These will overwrite the dummy data!)
@@ -438,6 +441,7 @@ inline void CheckMeshUpload(ID3D11Device* device) {
                 if (m.BumpMapID > 0) materials[m.ID].Bump = LoadTextureForMesh(m.BumpMapID);
                 if (m.ReflectionMapID > 0) materials[m.ID].Specular = LoadTextureForMesh(m.ReflectionMapID);
                 materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
+                materials[m.ID].Visible = !g_MaterialVisible.count(m.ID) || g_MaterialVisible[m.ID];
             }
 
             g_MeshRenderer.SetMaterials(materials);
@@ -1039,75 +1043,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     ImGui::Text("Indices:  %zu", g_BBMParser.ParsedIndices.size());
                 }
                 else {
-                    ImGui::Text("Materials: %d", g_ActiveMeshContent.MaterialCount);
-                    ImGui::Text("Primitives: %d", g_ActiveMeshContent.PrimitiveCount);
-                    ImGui::Text("Bones: %d", g_ActiveMeshContent.BoneCount);
-
-                    ImGui::Dummy(ImVec2(0, 5));
-                    if (g_ActiveMeshContent.ClothFlag) {
-                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.8f, 1.0f), "Cloth: YES");
-                        ImGui::SameLine();
-                        /*
-                        if (ImGui::Button("Export Raw Cloth Data")) {
-                            std::string savePath = SaveFileDialog("Binary Data\0*.bin\0All Files\0*.*\0");
-                            if (!savePath.empty()) {
-                                std::ofstream out(savePath, std::ios::binary);
-                                for (const auto& p : g_ActiveMeshContent.Primitives) {
-                                    for (const auto& cp : p.ClothPrimitives) {
-                                        uint32_t pIdx = cp.PrimitiveIndex;
-                                        uint32_t mIdx = cp.MaterialIndex;
-                                        uint32_t sz = (uint32_t)cp.ParticleProgramData.size();
-                                        out.write((char*)&pIdx, 4);
-                                        out.write((char*)&mIdx, 4);
-                                        out.write((char*)&sz, 4);
-                                        if (sz > 0) {
-                                            out.write((char*)cp.ParticleProgramData.data(), sz);
-                                        }
-                                    }
-                                }
-                                g_BankStatus = "Exported raw cloth data!";
-                            }
-                        }
-                    */
-                    }
-                    else {
-                        ImGui::TextDisabled("Cloth: NO");
-                    }
-                    ImGui::Dummy(ImVec2(0, 5));
-
-                    ImGui::Dummy(ImVec2(0, 5));
-                    if (ImGui::BeginTable("PrimTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30);
-                        ImGui::TableSetupColumn("MatIdx", ImGuiTableColumnFlags_WidthFixed, 40);
-                        ImGui::TableSetupColumn("Verts", ImGuiTableColumnFlags_WidthFixed, 50);
-                        ImGui::TableSetupColumn("Tris", ImGuiTableColumnFlags_WidthFixed, 50);
-                        ImGui::TableSetupColumn("Avg Stretch");
-                        ImGui::TableHeadersRow();
-
-                        for (int p = 0; p < g_ActiveMeshContent.Primitives.size(); p++) {
-                            ImGui::TableNextRow();
-                            ImGui::TableSetColumnIndex(0); ImGui::Text("%d", p);
-                            ImGui::TableSetColumnIndex(1); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].MaterialIndex);
-                            ImGui::TableSetColumnIndex(2); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].VertexCount);
-                            ImGui::TableSetColumnIndex(3); ImGui::Text("%d", g_ActiveMeshContent.Primitives[p].TriangleCount);
-
-                            ImGui::TableSetColumnIndex(4);
-                            ImGui::PushID(p);
-                            ImGui::SetNextItemWidth(-1);
-                            if (ImGui::DragFloat("##Stretch", &g_ActiveMeshContent.Primitives[p].AvgTextureStretch, 0.005f, 0.0f, 10.0f, "%.4f")) {
-                                if (saveCallback) saveCallback();
-                            }
-                            ImGui::PopID();
-                        }
-                        ImGui::EndTable();
-                    }
+                    bool tocChanged = false;
+                    const ImVec4 sectionAccent(1.0f, 1.0f, 0.0f, 1.0f);
 
                     if (g_ActiveMeshContent.EntryMeta.HasData) {
-                        ImGui::Separator();
-                        ImGui::TextColored(ImVec4(0.6f, 1.0f, 1.0f, 1.0f), "TOC Metadata");
-
-                        bool tocChanged = false;
-
                         ImGui::AlignTextToFramePadding();
                         ImGui::Text("Physics Index");
                         ImGui::SameLine(130);
@@ -1119,60 +1058,45 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             g_PhysicsSearchBuf[0] = '\0';
                             g_TriggerPhysicsPopup = true;
                         }
-
-                        //ImGui::AlignTextToFramePadding();
-                        //ImGui::Text("Safe Radius");
-                        //ImGui::SameLine(130);
-                        //ImGui::SetNextItemWidth(80);
-                        //if (ImGui::InputFloat("##safe_rad", &g_ActiveMeshContent.EntryMeta.SafeBoundingRadius, 0.0f, 0.0f, "%.3f")) tocChanged = true;
-
-                        if (g_ActiveMeshContent.EntryMeta.LODCount > 0) {
-                            ImGui::Dummy(ImVec2(0, 5));
-                            if (ImGui::BeginTable("LODTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 60);
-                                ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 80);
-                                ImGui::TableSetupColumn("Error");
-                                ImGui::TableHeadersRow();
-                                for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
-                                    ImGui::TableNextRow();
-                                    ImGui::TableSetColumnIndex(0); ImGui::Text("LOD %d", i);
-                                    ImGui::TableSetColumnIndex(1);
-                                    if (i < g_ActiveMeshContent.EntryMeta.LODSizes.size()) ImGui::Text("%d", g_ActiveMeshContent.EntryMeta.LODSizes[i]);
-
-                                    ImGui::TableSetColumnIndex(2);
-                                    if (i < g_ActiveMeshContent.EntryMeta.LODErrors.size()) {
-                                        ImGui::PushID(i);
-                                        ImGui::SetNextItemWidth(-1);
-                                        if (ImGui::InputFloat("##lod_err", &g_ActiveMeshContent.EntryMeta.LODErrors[i], 0.0f, 0.0f, "%.4f")) tocChanged = true;
-                                        ImGui::PopID();
-                                    }
-                                    else {
-                                        ImGui::TextDisabled("-");
-                                    }
-                                }
-                                ImGui::EndTable();
-                            }
-                        }
-                        if (tocChanged && saveCallback) saveCallback();
                     }
 
                     ImGui::Separator();
-                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Bounding Box");
+                    ImGui::TextColored(sectionAccent, "Bounding Box");
                     bool changed = false;
                     changed |= ImGui::InputFloat3("Min", g_ActiveMeshContent.BoundingBoxMin);
                     changed |= ImGui::InputFloat3("Max", g_ActiveMeshContent.BoundingBoxMax);
 
-                    ImGui::Dummy(ImVec2(0, 5));
-                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Bounding Sphere");
+                    ImGui::Separator();
+                    ImGui::TextColored(sectionAccent, "Bounding Sphere");
                     changed |= ImGui::InputFloat3("Center", g_ActiveMeshContent.BoundingSphereCenter);
                     changed |= ImGui::InputFloat("Radius", &g_ActiveMeshContent.BoundingSphereRadius);
 
                     ImGui::Dummy(ImVec2(0, 5));
-                    if (ImGui::Button("Auto-Calculate Bounds From Mesh", ImVec2(-1, 0))) {
+                    if (ImGui::Button("Auto-Calculate Bounds", ImVec2(160, 0))) {
                         g_ActiveMeshContent.AutoCalculateBounds();
                         changed = true;
                     }
                     if (changed && saveCallback) saveCallback();
+
+                    if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
+                        ImGui::Separator();
+                        ImGui::TextColored(sectionAccent, "LOD Error Thresholds");
+                        for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
+                            ImGui::PushID(i);
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::Text("LOD %d", i);
+                            ImGui::SameLine(80);
+                            ImGui::SetNextItemWidth(70);
+                            if (i < g_ActiveMeshContent.EntryMeta.LODErrors.size()) {
+                                if (ImGui::InputFloat("##lod_err", &g_ActiveMeshContent.EntryMeta.LODErrors[i], 0.0f, 0.0f, "%.4f")) tocChanged = true;
+                            }
+                            else {
+                                ImGui::TextDisabled("-");
+                            }
+                            ImGui::PopID();
+                        }
+                    }
+                    if (tocChanged && saveCallback) saveCallback();
                 }
                 ImGui::EndTabItem();
             }
@@ -1232,8 +1156,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     ImGui::Separator();
                 }
                 else {
-                    ImGui::TextDisabled("Select an animation below to load it.");
-                    ImGui::Separator();
+                    //ImGui::TextDisabled("Select an animation below to load it.");
+                    //ImGui::Separator();
                 }
 
                 ImGui::InputTextWithHint("##AnimSearch", "Search Animations...", g_AnimSearchBuf, 128);
@@ -1280,7 +1204,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                 ImGui::EndTabItem();
             }
 
-            if (g_ActiveMeshContent.ClothFlag && ImGui::BeginTabItem("Cloth Physics")) {
+            if (g_ActiveMeshContent.ClothFlag && ImGui::BeginTabItem("Cloth")) {
                 int cGlobalIdx = 0;
                 for (size_t pIdx = 0; pIdx < g_ActiveMeshContent.Primitives.size(); pIdx++) {
                     auto& prim = g_ActiveMeshContent.Primitives[pIdx];
@@ -1300,8 +1224,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         if (ImGui::CollapsingHeader(headerName.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                             ImGui::PushID(cGlobalIdx);
 
-                            ImGui::TextDisabled("Particles: %d | Springs: %d", sim.Size, springCount);
-                            ImGui::Dummy(ImVec2(0, 5));
+                            //ImGui::TextDisabled("Particles: %d | Springs: %d", sim.Size, springCount);
+                            //ImGui::Dummy(ImVec2(0, 5));
 
                             bool changed = false;
 
@@ -1351,7 +1275,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 ImGui::TreePop();
 
                                 if (ImGui::TreeNodeEx("Collision Boundary (Sphere)", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                    ImGui::TextDisabled("Prevents cloth from clipping into the body.");
+                                    //ImGui::TextDisabled("Prevents cloth from clipping into the body.");
 
                                     ImGui::SetNextItemWidth(200);
                                     if (ImGui::DragFloat3("Sphere Center", prim.SphereCenter, 0.05f)) changed = true;
@@ -1734,7 +1658,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         }
                     }
                 }
-                ImGui::EndTabItem();
+            ImGui::EndTabItem();
             }
 
             if (g_TriggerBonePopup) {
@@ -1803,21 +1727,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                 ImGui::EndPopup();
             }
 
-            if (!g_BBMParser.IsParsed && ImGui::BeginTabItem("Bones")) {
-                if (ImGui::BeginTable("BoneHier", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
-                    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30); ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Parent"); ImGui::TableSetupColumn("Children"); ImGui::TableHeadersRow();
-                    for (int i = 0; i < g_ActiveMeshContent.Bones.size(); i++) {
-                        const auto& b = g_ActiveMeshContent.Bones[i];
-                        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%d", i);
-                        ImGui::TableSetColumnIndex(1); std::string name = (i < g_ActiveMeshContent.BoneNames.size() ? g_ActiveMeshContent.BoneNames[i] : "???"); ImGui::Text("%s", name.c_str());
-                        ImGui::TableSetColumnIndex(2); if (b.ParentIndex == -1) ImGui::TextDisabled("ROOT (-1)"); else ImGui::Text("%d", b.ParentIndex);
-                        ImGui::TableSetColumnIndex(3); ImGui::Text("%d", b.OriginalNoChildren);
-                    }
-                    ImGui::EndTable();
-                }
-                ImGui::EndTabItem();
-            }
-
             if (ImGui::BeginTabItem("Materials")) {
                 if (g_BBMParser.IsParsed) {
                     auto PackBGRA = [](const ImVec4& c) -> uint32_t {
@@ -1858,8 +1767,20 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     ImGui::BeginChild("BBMMatList", ImVec2(0, 0), true);
                     for (int i = 0; i < g_BBMParser.ParsedMaterials.size(); i++) {
                         auto& m = g_BBMParser.ParsedMaterials[i];
-                        if (ImGui::CollapsingHeader(("Material " + std::to_string(m.Index) + " - " + m.Name).c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                            ImGui::PushID(i);
+                        ImGui::PushID(i);
+
+                        if (!g_MaterialVisible.count(m.Index)) g_MaterialVisible[m.Index] = true;
+                        bool& visible = g_MaterialVisible[m.Index];
+
+                        ImGui::SetNextItemAllowOverlap();
+                        bool headerOpen = ImGui::CollapsingHeader(("Material " + std::to_string(m.Index) + " - " + m.Name).c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+                        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
+                        if (ImGui::Checkbox("##visible", &visible)) {
+                            g_MeshUploadNeeded = true;
+                        }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip(visible ? "Hide this material" : "Show this material");
+
+                        if (headerOpen) {
                             ImGui::AlignTextToFramePadding(); ImGui::Text("Name"); ImGui::SameLine(130);
                             char nameBuf[128]; strncpy_s(nameBuf, m.Name.c_str(), 127); ImGui::SetNextItemWidth(200);
                             if (ImGui::InputText("##Name", nameBuf, 128)) { m.Name = nameBuf; if (saveCallback) saveCallback(); }
@@ -1894,9 +1815,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             if (ImGui::Checkbox("Boolean Alpha", &m.BooleanAlpha)) { if (saveCallback) saveCallback(); } ImGui::SameLine();
                             if (ImGui::Checkbox("Degenerate Tris", &m.DegenerateTriangles)) { if (saveCallback) saveCallback(); }
 
-                            ImGui::PopID();
                             ImGui::Separator();
                         }
+
+                        ImGui::PopID();
                     }
                     ImGui::EndChild();
                 }
@@ -1950,10 +1872,20 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     ImGui::BeginChild("MatList", ImVec2(0, 0), true);
                     for (int i = 0; i < g_ActiveMeshContent.Materials.size(); i++) {
                         auto& m = g_ActiveMeshContent.Materials[i];
+                        ImGui::PushID(i);
 
-                        if (ImGui::CollapsingHeader(("Material " + std::to_string(m.ID) + " - " + m.Name).c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                            ImGui::PushID(i);
+                        if (!g_MaterialVisible.count(m.ID)) g_MaterialVisible[m.ID] = true;
+                        bool& visible = g_MaterialVisible[m.ID];
 
+                        ImGui::SetNextItemAllowOverlap();
+                        bool headerOpen = ImGui::CollapsingHeader(("Material " + std::to_string(m.ID) + " - " + m.Name).c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+                        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
+                        if (ImGui::Checkbox("##visible", &visible)) {
+                            g_MeshUploadNeeded = true;
+                        }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip(visible ? "Hide this material" : "Show this material");
+
+                        if (headerOpen) {
                             ImGui::AlignTextToFramePadding();
                             ImGui::Text("Name");
                             ImGui::SameLine(130);
@@ -1994,9 +1926,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             ImGui::Checkbox("Degenerate Triangles", &m.DegenerateTriangles);
                             ImGui::Checkbox("Use Filenames", &m.UseFilenames);
 
-                            ImGui::PopID();
                             ImGui::Separator();
                         }
+
+                        ImGui::PopID();
                     }
                     ImGui::EndChild();
                 }
@@ -2004,43 +1937,64 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
             }
 
             if (g_ActiveMeshContent.IsParsed && ImGui::BeginTabItem("Primitives")) {
-                //ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Primitive");
-                ImGui::Separator();
+                if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
+                    uint32_t totalEntrySize = 0;
+                    for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODSizes.size(); i++) totalEntrySize += g_ActiveMeshContent.EntryMeta.LODSizes[i];
+
+                    for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
+                        if (i < g_ActiveMeshContent.EntryMeta.LODSizes.size()) ImGui::Text("LOD %d Size: %d bytes", i, g_ActiveMeshContent.EntryMeta.LODSizes[i]);
+                        else ImGui::Text("LOD %d Size: -", i);
+                    }
+                    ImGui::Text("Total Entry Size: %u bytes", totalEntrySize);
+                    ImGui::Separator();
+                }
 
                 ImGui::BeginChild("DebugPrimList", ImVec2(0, 0), true);
+
                 for (size_t i = 0; i < g_ActiveMeshContent.Primitives.size(); i++) {
                     auto& prim = g_ActiveMeshContent.Primitives[i];
                     std::string headerName = "Primitive " + std::to_string(i);
-
+                    
                     if (prim.ClothPrimitives.size() > 0) {
                         headerName += " [CLOTH]";
                     }
 
                     if (ImGui::CollapsingHeader(headerName.c_str())) {
                         ImGui::Indent(15.0f);
-
+                        
                         ImGui::Text("InitFlags:         0x%08X", prim.InitFlags);
                         ImGui::Text("RepeatingMeshReps: %d", prim.RepeatingMeshReps);
                         ImGui::Text("Vertex Stride:     %d bytes", prim.VertexStride);
                         ImGui::Text("Buffer Type:       %u", prim.BufferType);
                         ImGui::Text("Is Compressed:     %s", prim.IsCompressed ? "True" : "False");
-
+                        ImGui::Text("Material Index:    %d", prim.MaterialIndex);
+                        
                         ImGui::Dummy(ImVec2(0, 5));
                         ImGui::Text("Vertex Count:      %u", prim.VertexCount);
                         ImGui::Text("Index Count:       %u", prim.IndexCount);
                         ImGui::Text("Triangle Count:    %u", prim.TriangleCount);
-
+                        
                         ImGui::Dummy(ImVec2(0, 5));
                         ImGui::Text("Static Blocks:     %u", prim.StaticBlockCount);
                         ImGui::Text("Animated Blocks:   %u", prim.AnimatedBlockCount);
                         ImGui::Text("Cloth Primitives:  %zu", prim.ClothPrimitives.size());
 
+                        ImGui::Dummy(ImVec2(0, 5));
+                        ImGui::PushID((int)i);
+                        ImGui::Text("Avg Texture Stretch:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(120);
+                        if (ImGui::DragFloat("##Stretch", &prim.AvgTextureStretch, 0.005f, 0.0f, 10.0f, "%.4f")) {
+                            if (saveCallback) saveCallback();
+                        }
+                        ImGui::PopID();
+                        
                         ImGui::Unindent(15.0f);
                         ImGui::Separator();
                     }
                 }
                 ImGui::EndChild();
-
+                
                 ImGui::EndTabItem();
             }
 
