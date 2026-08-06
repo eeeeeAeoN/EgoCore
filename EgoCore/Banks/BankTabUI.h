@@ -991,23 +991,27 @@ static void DrawBankTab() {
             ImGui::Dummy(ImVec2(0, 2));
 
             if (e.Type == 3) {
-                if (ImGui::Button("Import")) {
-                    std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
-                    if (!gltfPath.empty()) {
-                        CBBMParser newBBM;
-                        std::string err = GltfMeshImporter::ImportType3(gltfPath, e.Name, newBBM);
-                        if (err.empty()) {
-                            if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
-                            bank.StagedEntries[bank.SelectedEntryIndex].Physics = std::make_shared<CBBMParser>(newBBM);
-                            g_BBMParser = newBBM;
-                            g_MeshUploadNeeded = true;
-                            g_BankStatus = "Physics Mesh Replaced (Staged).";
-                        }
-                        else {
-                            g_BankStatus = "Import Error: " + err;
+                // Drawn inside the mesh renderer viewport (bottom-right overlay) via DrawMeshProperties(),
+                // same as the regular mesh Import button below.
+                drawLODControls = [&]() {
+                    if (ImGui::Button("Import")) {
+                        std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
+                        if (!gltfPath.empty()) {
+                            CBBMParser newBBM;
+                            std::string err = GltfMeshImporter::ImportType3(gltfPath, e.Name, newBBM);
+                            if (err.empty()) {
+                                if (!bank.StagedEntries.count(bank.SelectedEntryIndex)) SaveEntryChanges(&bank);
+                                bank.StagedEntries[bank.SelectedEntryIndex].Physics = std::make_shared<CBBMParser>(newBBM);
+                                g_BBMParser = newBBM;
+                                g_MeshUploadNeeded = true;
+                                g_BankStatus = "Physics Mesh Replaced (Staged).";
+                            }
+                            else {
+                                g_BankStatus = "Import Error: " + err;
+                            }
                         }
                     }
-                }
+                    };
             }
             else {
                 // Drawn inside the mesh renderer viewport (bottom-right overlay) via DrawMeshProperties().

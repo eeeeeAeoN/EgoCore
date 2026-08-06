@@ -17,6 +17,10 @@
 #include "TextureBuilder.h"
 
 extern ID3D11Device* g_pd3dDevice;
+extern ImTextureID g_PlayTexture;
+extern ImTextureID g_PauseTexture;
+extern ImTextureID g_StopTexture;
+extern ImTextureID g_LoopTexture;
 
 static MeshRenderer g_MeshRenderer;
 static bool g_ShowWireframe = false;
@@ -42,6 +46,7 @@ static char g_TextureSearchBuf[128] = "";
 static int g_SelectedTextureID = -1;
 static bool g_PreviewAnimPlaying = false;
 static float g_PreviewAnimTime = 0.0f;
+static bool g_PreviewAnimLoop = true;
 static int g_SelectedAnimBankIndex = -1;
 static int g_SelectedAnimEntryIndex = -1;
 static int g_SelectedAnimType = -1;
@@ -633,7 +638,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         float duration = g_PreviewAnimParser.Data.Duration > 0 ? g_PreviewAnimParser.Data.Duration : 1.0f;
 
         if (g_PreviewAnimTime >= duration) {
-            if (g_PreviewAnimParser.Data.IsCyclic) {
+            if (g_PreviewAnimParser.Data.IsCyclic || g_PreviewAnimLoop) {
                 g_PreviewAnimTime = fmod(g_PreviewAnimTime, duration);
             }
             else {
@@ -721,7 +726,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         ImGui::EndPopup();
     }
 
-    static float rightPanelWidth = 450.0f;
+    // Reduced default inspector width from 450.0f to 310.0f
+    static float rightPanelWidth = 373.0f;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float splitterWidth = 4.0f;
 
@@ -905,7 +911,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
     }
     dl->PopClipRect();
 
-    // --- Top-left overlay: wireframe / helpers / bounds / cloth / skeleton / physics toggles ---
+    // Top-left overlay
     ImGui::SetCursorScreenPos(ImVec2(pMin.x + 10, pMin.y + 10));
     ImGui::BeginGroup();
 
@@ -986,14 +992,14 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
     ImGui::EndGroup();
 
-    // --- Top-right overlay: collapse/expand info panel toggle ---
+    // Top-right overlay: collapse/expand info panel toggle
     ImGui::SetCursorScreenPos(ImVec2(pMax.x - 28 - 10, pMin.y + 10));
     if (ImGui::Button(g_ShowRightPanel ? ">>##RightToggle" : "<<##RightToggle", ImVec2(28, 24))) {
         g_ShowRightPanel = !g_ShowRightPanel;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowRightPanel ? "Collapse Info Panel" : "Expand Info Panel");
 
-    // --- Bottom-right overlay: LOD / Replace LOD / Export controls ---
+    // Bottom-right overlay
     {
         static float s_BottomRightOverlayW = 260.0f;
         static float s_BottomRightOverlayH = 30.0f;
@@ -1025,7 +1031,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         if (ImGui::IsItemActive()) {
             rightPanelWidth -= ImGui::GetIO().MouseDelta.x;
-            if (rightPanelWidth < 250.0f) rightPanelWidth = 250.0f;
+            if (rightPanelWidth < 220.0f) rightPanelWidth = 220.0f;
             if (rightPanelWidth > avail.x - 200.0f) rightPanelWidth = avail.x - 200.0f;
         }
 
@@ -1034,70 +1040,61 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         ImGui::BeginChild("MeshInfoRightPanel", ImVec2(rightPanelWidth, avail.y), false);
 
         if (ImGui::BeginTabBar("MeshTabs")) {
-            if (ImGui::BeginTabItem("Overview")) {
-                if (g_BBMParser.IsParsed) {
-                    ImGui::Text("Physics Mesh (.bbm)");
-                    //ImGui::Text("Comment: %s", g_BBMParser.FileComment.c_str());
-                    ImGui::Separator();
-                    ImGui::Text("Vertices: %zu", g_BBMParser.ParsedVertices.size());
-                    ImGui::Text("Indices:  %zu", g_BBMParser.ParsedIndices.size());
-                }
-                else {
-                    bool tocChanged = false;
-                    const ImVec4 sectionAccent(1.0f, 1.0f, 0.0f, 1.0f);
+            if (!g_BBMParser.IsParsed && ImGui::BeginTabItem("Overview")) {
+                bool tocChanged = false;
+                const ImVec4 sectionAccent(1.0f, 1.0f, 0.0f, 1.0f);
 
-                    if (g_ActiveMeshContent.EntryMeta.HasData) {
+                if (g_ActiveMeshContent.EntryMeta.HasData) {
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("Physics Index");
+                    ImGui::SameLine(110);
+                    ImGui::SetNextItemWidth(70);
+                    if (ImGui::InputInt("##phys_idx", &g_ActiveMeshContent.EntryMeta.PhysicsIndex, 0, 0)) tocChanged = true;
+                    ImGui::SameLine();
+                    if (ImGui::Button("+##phys_btn", ImVec2(24, 0))) {
+                        g_SelectedPhysicsID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
+                        g_PhysicsSearchBuf[0] = '\0';
+                        g_TriggerPhysicsPopup = true;
+                    }
+                }
+
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Bounding Box");
+                bool changed = false;
+                changed |= ImGui::InputFloat3("Min", g_ActiveMeshContent.BoundingBoxMin);
+                changed |= ImGui::InputFloat3("Max", g_ActiveMeshContent.BoundingBoxMax);
+
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Bounding Sphere");
+                changed |= ImGui::InputFloat3("Center", g_ActiveMeshContent.BoundingSphereCenter);
+                changed |= ImGui::InputFloat("Radius", &g_ActiveMeshContent.BoundingSphereRadius);
+
+                ImGui::Dummy(ImVec2(0, 5));
+                if (ImGui::Button("Auto-Calculate Bounds", ImVec2(160, 0))) {
+                    g_ActiveMeshContent.AutoCalculateBounds();
+                    changed = true;
+                }
+                if (changed && saveCallback) saveCallback();
+
+                if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "LOD Error Thresholds");
+                    for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
+                        ImGui::PushID(i);
                         ImGui::AlignTextToFramePadding();
-                        ImGui::Text("Physics Index");
-                        ImGui::SameLine(130);
-                        ImGui::SetNextItemWidth(80);
-                        if (ImGui::InputInt("##phys_idx", &g_ActiveMeshContent.EntryMeta.PhysicsIndex, 0, 0)) tocChanged = true;
-                        ImGui::SameLine();
-                        if (ImGui::Button("+##phys_btn", ImVec2(24, 0))) {
-                            g_SelectedPhysicsID = g_ActiveMeshContent.EntryMeta.PhysicsIndex;
-                            g_PhysicsSearchBuf[0] = '\0';
-                            g_TriggerPhysicsPopup = true;
+                        ImGui::Text("LOD %d", i);
+                        ImGui::SameLine(70);
+                        ImGui::SetNextItemWidth(70);
+                        if (i < g_ActiveMeshContent.EntryMeta.LODErrors.size()) {
+                            if (ImGui::InputFloat("##lod_err", &g_ActiveMeshContent.EntryMeta.LODErrors[i], 0.0f, 0.0f, "%.4f")) tocChanged = true;
                         }
-                    }
-
-                    ImGui::Separator();
-                    ImGui::TextColored(sectionAccent, "Bounding Box");
-                    bool changed = false;
-                    changed |= ImGui::InputFloat3("Min", g_ActiveMeshContent.BoundingBoxMin);
-                    changed |= ImGui::InputFloat3("Max", g_ActiveMeshContent.BoundingBoxMax);
-
-                    ImGui::Separator();
-                    ImGui::TextColored(sectionAccent, "Bounding Sphere");
-                    changed |= ImGui::InputFloat3("Center", g_ActiveMeshContent.BoundingSphereCenter);
-                    changed |= ImGui::InputFloat("Radius", &g_ActiveMeshContent.BoundingSphereRadius);
-
-                    ImGui::Dummy(ImVec2(0, 5));
-                    if (ImGui::Button("Auto-Calculate Bounds", ImVec2(160, 0))) {
-                        g_ActiveMeshContent.AutoCalculateBounds();
-                        changed = true;
-                    }
-                    if (changed && saveCallback) saveCallback();
-
-                    if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
-                        ImGui::Separator();
-                        ImGui::TextColored(sectionAccent, "LOD Error Thresholds");
-                        for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
-                            ImGui::PushID(i);
-                            ImGui::AlignTextToFramePadding();
-                            ImGui::Text("LOD %d", i);
-                            ImGui::SameLine(80);
-                            ImGui::SetNextItemWidth(70);
-                            if (i < g_ActiveMeshContent.EntryMeta.LODErrors.size()) {
-                                if (ImGui::InputFloat("##lod_err", &g_ActiveMeshContent.EntryMeta.LODErrors[i], 0.0f, 0.0f, "%.4f")) tocChanged = true;
-                            }
-                            else {
-                                ImGui::TextDisabled("-");
-                            }
-                            ImGui::PopID();
+                        else {
+                            ImGui::TextDisabled("-");
                         }
+                        ImGui::PopID();
                     }
-                    if (tocChanged && saveCallback) saveCallback();
                 }
+                if (tocChanged && saveCallback) saveCallback();
                 ImGui::EndTabItem();
             }
 
@@ -1130,34 +1127,64 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                 }
 
                 if (g_PreviewAnimParser.Data.IsParsed) {
-                    ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded: %s", anims.empty() ? "Anim" : g_OpenBanks[g_SelectedAnimBankIndex].Entries[g_SelectedAnimEntryIndex].FriendlyName.c_str());
+                    ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Loaded: %s", anims.empty() ? "Anim" : g_OpenBanks[g_SelectedAnimBankIndex].Entries[g_SelectedAnimEntryIndex].FriendlyName.c_str());
                     float duration = g_PreviewAnimParser.Data.Duration > 0 ? g_PreviewAnimParser.Data.Duration : 1.0f;
 
-                    if (ImGui::Button(g_PreviewAnimPlaying ? "Pause" : "Play", ImVec2(80, 0))) g_PreviewAnimPlaying = !g_PreviewAnimPlaying;
+                    float animBtnSize = 24.0f;
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.82f, 0.45f, 0.3f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.82f, 0.45f, 0.5f));
+                    ImVec4 animIconTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
+
+                    ImTextureID playPauseTex = g_PreviewAnimPlaying ? g_PauseTexture : g_PlayTexture;
+                    if (playPauseTex) {
+                        if (ImGui::ImageButton("##PlayPauseBtn", playPauseTex, ImVec2(animBtnSize, animBtnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), animIconTint)) {
+                            g_PreviewAnimPlaying = !g_PreviewAnimPlaying;
+                        }
+                    }
+                    else if (ImGui::Button(g_PreviewAnimPlaying ? "Pause" : "Play", ImVec2(60, 0))) {
+                        g_PreviewAnimPlaying = !g_PreviewAnimPlaying;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_PreviewAnimPlaying ? "Pause" : "Play");
+
                     ImGui::SameLine();
-                    if (ImGui::Button("Stop", ImVec2(80, 0))) {
+                    if (g_StopTexture) {
+                        if (ImGui::ImageButton("##StopBtn", g_StopTexture, ImVec2(animBtnSize, animBtnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), animIconTint)) {
+                            g_PreviewAnimPlaying = false; g_PreviewAnimTime = 0.0f;
+                            g_PreviewAnimParser.Data.IsParsed = false; g_SelectedAnimBankIndex = -1; g_SelectedAnimEntryIndex = -1; g_SelectedAnimType = -1;
+                        }
+                    }
+                    else if (ImGui::Button("Stop", ImVec2(60, 0))) {
                         g_PreviewAnimPlaying = false; g_PreviewAnimTime = 0.0f;
                         g_PreviewAnimParser.Data.IsParsed = false; g_SelectedAnimBankIndex = -1; g_SelectedAnimEntryIndex = -1; g_SelectedAnimType = -1;
                     }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop");
 
+                    ImGui::SameLine();
+                    ImVec4 loopTint = g_PreviewAnimLoop ? animIconTint : ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+                    if (g_LoopTexture) {
+                        if (ImGui::ImageButton("##LoopBtn", g_LoopTexture, ImVec2(animBtnSize, animBtnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), loopTint)) {
+                            g_PreviewAnimLoop = !g_PreviewAnimLoop;
+                        }
+                    }
+                    else if (ImGui::Button(g_PreviewAnimLoop ? "Loop: On" : "Loop: Off", ImVec2(70, 0))) {
+                        g_PreviewAnimLoop = !g_PreviewAnimLoop;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_PreviewAnimLoop ? "Looping enabled" : "Looping disabled");
+
+                    ImGui::PopStyleColor(3);
                     float fps = g_PreviewAnimParser.Data.Tracks.empty() ? 30.0f : g_PreviewAnimParser.Data.Tracks[0].SamplesPerSecond;
                     int maxFrames = (int)(duration * fps);
                     if (maxFrames < 1) maxFrames = 1;
                     int currentFrame = (int)(g_PreviewAnimTime * fps);
 
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(150);
+                    ImGui::SetNextItemWidth(160);
                     if (ImGui::SliderInt("##FrameScrub", &currentFrame, 0, maxFrames, "%d")) {
                         g_PreviewAnimTime = (float)currentFrame / fps;
                         g_PreviewAnimPlaying = false;
                     }
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("FPS: %.1f", fps);
                     ImGui::Separator();
-                }
-                else {
-                    //ImGui::TextDisabled("Select an animation below to load it.");
-                    //ImGui::Separator();
                 }
 
                 ImGui::InputTextWithHint("##AnimSearch", "Search Animations...", g_AnimSearchBuf, 128);
@@ -1197,6 +1224,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             g_PreviewAnimParser.Parse(rawData);
                             g_PreviewAnimTime = 0.0f;
                             g_PreviewAnimPlaying = true;
+                            g_PreviewAnimLoop = g_PreviewAnimParser.Data.IsCyclic;
                         }
                     }
                 }
@@ -1223,26 +1251,22 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         std::string headerName = "Cloth Block " + std::to_string(cGlobalIdx) + " (Primitive " + std::to_string(pIdx) + ")";
                         if (ImGui::CollapsingHeader(headerName.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
                             ImGui::PushID(cGlobalIdx);
-
-                            //ImGui::TextDisabled("Particles: %d | Springs: %d", sim.Size, springCount);
-                            //ImGui::Dummy(ImVec2(0, 5));
-
                             bool changed = false;
 
                             if (ImGui::TreeNodeEx("Simulation Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                ImGui::SetNextItemWidth(150);
+                                ImGui::SetNextItemWidth(120);
                                 if (ImGui::DragFloat("Timestep", &sim.Timestep, 0.0001f, 0.0f, 1.0f, "%.4f")) changed = true;
 
-                                ImGui::SetNextItemWidth(150);
+                                ImGui::SetNextItemWidth(120);
                                 if (ImGui::DragFloat("Timestep Multiplier", &sim.TimestepMultiplier, 0.01f, 0.0f, 10.0f)) changed = true;
 
-                                ImGui::SetNextItemWidth(150);
+                                ImGui::SetNextItemWidth(120);
                                 if (ImGui::DragFloat("Gravity Strength", &sim.GravityStrength, 0.01f)) changed = true;
 
-                                ImGui::SetNextItemWidth(150);
+                                ImGui::SetNextItemWidth(120);
                                 if (ImGui::DragFloat("Wind Strength", &sim.WindStrength, 0.01f)) changed = true;
 
-                                ImGui::SetNextItemWidth(150);
+                                ImGui::SetNextItemWidth(120);
                                 if (ImGui::DragFloat("Global Damping", &sim.GlobalDamping, 0.001f, 0.0f, 1.0f)) changed = true;
 
                                 ImGui::TreePop();
@@ -1256,7 +1280,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 bool dragRot = sim.DraggingRotational != 0;
                                 if (ImGui::Checkbox("Rotational Drag", &dragRot)) { sim.DraggingRotational = dragRot ? 1 : 0; changed = true; }
 
-                                ImGui::SetNextItemWidth(150);
+                                ImGui::SetNextItemWidth(120);
                                 if (ImGui::DragFloat("Drag Strength", &sim.DraggingStrength, 0.01f)) changed = true;
 
                                 bool accelEn = sim.AccelerationEnable != 0;
@@ -1266,7 +1290,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             }
 
                             if (ImGui::TreeNodeEx("Rendering Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                ImGui::SetNextItemWidth(150);
+                                ImGui::SetNextItemWidth(120);
                                 if (ImGui::DragFloat("Avg Patch Size", &prog.AveragePatchSize, 0.01f)) changed = true;
 
                                 bool bezierEn = prog.BezierEnable != 0;
@@ -1275,12 +1299,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 ImGui::TreePop();
 
                                 if (ImGui::TreeNodeEx("Collision Boundary (Sphere)", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                    //ImGui::TextDisabled("Prevents cloth from clipping into the body.");
-
-                                    ImGui::SetNextItemWidth(200);
+                                    ImGui::SetNextItemWidth(160);
                                     if (ImGui::DragFloat3("Sphere Center", prim.SphereCenter, 0.05f)) changed = true;
 
-                                    ImGui::SetNextItemWidth(150);
+                                    ImGui::SetNextItemWidth(120);
                                     if (ImGui::DragFloat("Sphere Radius", &prim.SphereRadius, 0.05f, 0.0f, 100.0f)) changed = true;
 
                                     ImGui::TreePop();
@@ -1316,54 +1338,60 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     g_ActiveMeshContent.UnpackNames();
                     };
 
-                if (ImGui::CollapsingHeader("Helper Points", ImGuiTreeNodeFlags_DefaultOpen)) {
+                // --- Helper Points ---
+                ImGui::SetNextItemAllowOverlap();
+                bool openHelpers = ImGui::CollapsingHeader("Helper Points", ImGuiTreeNodeFlags_DefaultOpen);
+                ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
+                if (ImGui::Button("+##AddHelper", ImVec2(20, 0))) {
                     if (g_BBMParser.IsParsed) {
-                        if (ImGui::Button("+ Add Helper##BBM")) {
-                            CBBMParser::HelperPoint h = { "NewHelper", {0,0,0}, -1, 0 };
-                            g_BBMParser.Helpers.push_back(h);
-                            if (saveCallback) saveCallback();
-                        }
-                        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(Physics Mesh)");
+                        CBBMParser::HelperPoint h = { "NewHelper", {0,0,0}, -1, 0 };
+                        g_BBMParser.Helpers.push_back(h);
+                        if (saveCallback) saveCallback();
+                    }
+                    else if (g_ActiveMeshContent.IsParsed) {
+                        CHelperPoint h = { CalculateFableCRC("NewHelper"), {0,0,0}, -1 };
+                        g_ActiveMeshContent.CRCNameMap[h.NameCRC] = "NewHelper";
+                        g_ActiveMeshContent.Helpers.push_back(h);
+                        g_ActiveMeshContent.HelperPointCount = (uint16_t)g_ActiveMeshContent.Helpers.size();
+                        SortAndRepackGraphExtras();
+                        if (saveCallback) saveCallback();
+                    }
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Helper Point");
 
+                if (openHelpers) {
+                    if (g_BBMParser.IsParsed) {
                         for (int i = 0; i < g_BBMParser.Helpers.size(); i++) {
                             auto& h = g_BBMParser.Helpers[i];
                             ImGui::PushID(("BBM_H_" + std::to_string(i)).c_str());
 
                             char nameBuf[128]; strncpy_s(nameBuf, h.Name.c_str(), 127);
-                            ImGui::SetNextItemWidth(150);
+                            ImGui::SetNextItemWidth(130);
                             if (ImGui::InputText("##Name", nameBuf, 128)) { h.Name = nameBuf; }
                             if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
 
-                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(140);
                             if (ImGui::DragFloat3("##Pos", &h.Position.x, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
-                            if (ImGui::Button((h.BoneIndex >= 0 ? "Bone: " + std::to_string(h.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                            if (ImGui::Button((h.BoneIndex >= 0 ? "B:" + std::to_string(h.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
                                 g_EditingTargetType = 0; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
                             }
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Assign bone to helper point");
 
                             ImGui::SameLine();
-                            if (ImGui::Button("X")) { g_BBMParser.Helpers.erase(g_BBMParser.Helpers.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::Button("X", ImVec2(20, 0))) { g_BBMParser.Helpers.erase(g_BBMParser.Helpers.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
                             ImGui::PopID();
                         }
                     }
                     else if (g_ActiveMeshContent.IsParsed) {
-                        if (ImGui::Button("+ Add Helper##Graph")) {
-                            CHelperPoint h = { CalculateFableCRC("NewHelper"), {0,0,0}, -1 };
-                            g_ActiveMeshContent.CRCNameMap[h.NameCRC] = "NewHelper";
-                            g_ActiveMeshContent.Helpers.push_back(h);
-                            g_ActiveMeshContent.HelperPointCount = (uint16_t)g_ActiveMeshContent.Helpers.size();
-                            SortAndRepackGraphExtras();
-                            if (saveCallback) saveCallback();
-                        }
-
                         for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
                             auto& h = g_ActiveMeshContent.Helpers[i];
                             ImGui::PushID(("Graph_H_" + std::to_string(i)).c_str());
 
                             std::string sName = GetGraphString(h.NameCRC);
                             char nameBuf[128]; strncpy_s(nameBuf, sName.c_str(), 127);
-                            ImGui::SetNextItemWidth(150);
+                            ImGui::SetNextItemWidth(130);
 
                             if (ImGui::InputText("##Name", nameBuf, 128)) {
                                 std::string newStr = nameBuf;
@@ -1376,16 +1404,17 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 if (saveCallback) saveCallback();
                             }
 
-                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(140);
                             if (ImGui::DragFloat3("##Pos", h.Pos, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
-                            if (ImGui::Button((h.BoneIndex >= 0 ? "Bone: " + std::to_string(h.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                            if (ImGui::Button((h.BoneIndex >= 0 ? "B:" + std::to_string(h.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
                                 g_EditingTargetType = 0; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
                             }
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Assign bone to helper point");
 
                             ImGui::SameLine();
-                            if (ImGui::Button("X")) {
+                            if (ImGui::Button("X", ImVec2(20, 0))) {
                                 g_ActiveMeshContent.Helpers.erase(g_ActiveMeshContent.Helpers.begin() + i);
                                 g_ActiveMeshContent.HelperPointCount = (uint16_t)g_ActiveMeshContent.Helpers.size();
                                 SortAndRepackGraphExtras();
@@ -1396,56 +1425,63 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     }
                 }
 
-                if (ImGui::CollapsingHeader("Dummy Objects", ImGuiTreeNodeFlags_DefaultOpen)) {
+                // --- Dummy Objects ---
+                ImGui::SetNextItemAllowOverlap();
+                bool openDummies = ImGui::CollapsingHeader("Dummy Objects", ImGuiTreeNodeFlags_DefaultOpen);
+                ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
+                if (ImGui::Button("+##AddDummy", ImVec2(20, 0))) {
                     if (g_BBMParser.IsParsed) {
-                        if (ImGui::Button("+ Add Dummy##BBM")) {
-                            CBBMParser::DummyObject d; d.Name = "NewDummy"; d.BoneIndex = -1; d.SubMeshIndex = 0; d.UseLocalOrigin = false;
-                            d.Position = { 0,0,0 }; d.Direction = { 0,0,1 };
-                            memset(d.Transform, 0, 48); d.Transform[0] = 1; d.Transform[4] = 1; d.Transform[8] = 1;
-                            g_BBMParser.Dummies.push_back(d);
-                            if (saveCallback) saveCallback();
-                        }
+                        CBBMParser::DummyObject d; d.Name = "NewDummy"; d.BoneIndex = -1; d.SubMeshIndex = 0; d.UseLocalOrigin = false;
+                        d.Position = { 0,0,0 }; d.Direction = { 0,0,1 };
+                        memset(d.Transform, 0, 48); d.Transform[0] = 1; d.Transform[4] = 1; d.Transform[8] = 1;
+                        g_BBMParser.Dummies.push_back(d);
+                        if (saveCallback) saveCallback();
+                    }
+                    else if (g_ActiveMeshContent.IsParsed) {
+                        CDummyObject d; d.NameCRC = CalculateFableCRC("NewDummy"); d.BoneIndex = -1;
+                        memset(d.Transform, 0, 48); d.Transform[0] = 1; d.Transform[4] = 1; d.Transform[8] = 1;
+                        g_ActiveMeshContent.CRCNameMap[d.NameCRC] = "NewDummy";
+                        g_ActiveMeshContent.Dummies.push_back(d);
+                        g_ActiveMeshContent.DummyObjectCount = (uint16_t)g_ActiveMeshContent.Dummies.size();
+                        SortAndRepackGraphExtras();
+                        if (saveCallback) saveCallback();
+                    }
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Dummy Object");
 
+                if (openDummies) {
+                    if (g_BBMParser.IsParsed) {
                         for (int i = 0; i < g_BBMParser.Dummies.size(); i++) {
                             auto& d = g_BBMParser.Dummies[i];
                             ImGui::PushID(("BBM_D_" + std::to_string(i)).c_str());
 
                             char nameBuf[128]; strncpy_s(nameBuf, d.Name.c_str(), 127);
-                            ImGui::SetNextItemWidth(150);
+                            ImGui::SetNextItemWidth(130);
                             if (ImGui::InputText("##Name", nameBuf, 128)) { d.Name = nameBuf; }
                             if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
 
-                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(140);
                             if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
-                            if (ImGui::Button((d.BoneIndex >= 0 ? "Bone: " + std::to_string(d.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                            if (ImGui::Button((d.BoneIndex >= 0 ? "B:" + std::to_string(d.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
                                 g_EditingTargetType = 1; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
                             }
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Assign bone to dummy object");
 
                             ImGui::SameLine();
-                            if (ImGui::Button("X")) { g_BBMParser.Dummies.erase(g_BBMParser.Dummies.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::Button("X", ImVec2(20, 0))) { g_BBMParser.Dummies.erase(g_BBMParser.Dummies.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
                             ImGui::PopID();
                         }
                     }
                     else if (g_ActiveMeshContent.IsParsed) {
-                        if (ImGui::Button("+ Add Dummy##Graph")) {
-                            CDummyObject d; d.NameCRC = CalculateFableCRC("NewDummy"); d.BoneIndex = -1;
-                            memset(d.Transform, 0, 48); d.Transform[0] = 1; d.Transform[4] = 1; d.Transform[8] = 1;
-                            g_ActiveMeshContent.CRCNameMap[d.NameCRC] = "NewDummy";
-                            g_ActiveMeshContent.Dummies.push_back(d);
-                            g_ActiveMeshContent.DummyObjectCount = (uint16_t)g_ActiveMeshContent.Dummies.size();
-                            SortAndRepackGraphExtras();
-                            if (saveCallback) saveCallback();
-                        }
-
                         for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
                             auto& d = g_ActiveMeshContent.Dummies[i];
                             ImGui::PushID(("Graph_D_" + std::to_string(i)).c_str());
 
                             std::string sName = GetGraphString(d.NameCRC);
                             char nameBuf[128]; strncpy_s(nameBuf, sName.c_str(), 127);
-                            ImGui::SetNextItemWidth(150);
+                            ImGui::SetNextItemWidth(130);
                             if (ImGui::InputText("##Name", nameBuf, 128)) {
                                 std::string newStr = nameBuf;
                                 d.NameCRC = CalculateFableCRC(newStr);
@@ -1457,16 +1493,17 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 if (saveCallback) saveCallback();
                             }
 
-                            ImGui::SameLine(); ImGui::SetNextItemWidth(200);
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(140);
                             if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
-                            if (ImGui::Button((d.BoneIndex >= 0 ? "Bone: " + std::to_string(d.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
+                            if (ImGui::Button((d.BoneIndex >= 0 ? "B:" + std::to_string(d.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
                                 g_EditingTargetType = 1; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
                             }
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Assign bone to dummy object");
 
                             ImGui::SameLine();
-                            if (ImGui::Button("X")) {
+                            if (ImGui::Button("X", ImVec2(20, 0))) {
                                 g_ActiveMeshContent.Dummies.erase(g_ActiveMeshContent.Dummies.begin() + i);
                                 g_ActiveMeshContent.DummyObjectCount = (uint16_t)g_ActiveMeshContent.Dummies.size();
                                 SortAndRepackGraphExtras();
@@ -1477,8 +1514,12 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     }
                 }
 
-                if (!g_BBMParser.IsParsed && g_ActiveMeshContent.IsParsed && ImGui::CollapsingHeader("Generators", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::Button("+ Add Generator")) {
+                // --- Generators ---
+                if (!g_BBMParser.IsParsed && g_ActiveMeshContent.IsParsed) {
+                    ImGui::SetNextItemAllowOverlap();
+                    bool openGenerators = ImGui::CollapsingHeader("Generators", ImGuiTreeNodeFlags_DefaultOpen);
+                    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
+                    if (ImGui::Button("+##AddGen", ImVec2(20, 0))) {
                         CMeshGenerator g; g.ObjectName = "NewGenerator"; g.BoneIndex = -1; g.BankIndex = 0; g.UseLocalOrigin = false;
                         memset(g.Transform, 0, 48); g.Transform[0] = 1; g.Transform[4] = 1; g.Transform[8] = 1;
                         g_ActiveMeshContent.Generators.push_back(g);
@@ -1486,179 +1527,188 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         SortAndRepackGraphExtras();
                         if (saveCallback) saveCallback();
                     }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Generator");
 
-                    for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
-                        auto& gen = g_ActiveMeshContent.Generators[i];
-                        ImGui::PushID(("Graph_G_" + std::to_string(i)).c_str());
+                    if (openGenerators) {
+                        for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
+                            auto& gen = g_ActiveMeshContent.Generators[i];
+                            ImGui::PushID(("Graph_G_" + std::to_string(i)).c_str());
 
-                        char nameBuf[128]; strncpy_s(nameBuf, gen.ObjectName.c_str(), 127);
-                        ImGui::SetNextItemWidth(120);
-                        if (ImGui::InputText("##Name", nameBuf, 128)) { gen.ObjectName = nameBuf; }
-                        if (ImGui::IsItemDeactivatedAfterEdit()) {
-                            SortAndRepackGraphExtras();
-                            if (saveCallback) saveCallback();
+                            char nameBuf[128]; strncpy_s(nameBuf, gen.ObjectName.c_str(), 127);
+                            ImGui::SetNextItemWidth(110);
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { gen.ObjectName = nameBuf; }
+                            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                SortAndRepackGraphExtras();
+                                if (saveCallback) saveCallback();
+                            }
+
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(120);
+                            if (ImGui::DragFloat3("##Pos", &gen.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(45);
+                            int tempBank = (int)gen.BankIndex;
+                            if (ImGui::InputInt("##Bank", &tempBank, 0)) {
+                                gen.BankIndex = (uint32_t)(std::max)(0, tempBank);
+                                if (saveCallback) saveCallback();
+                            }
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bank Index");
+
+                            ImGui::SameLine();
+                            if (ImGui::Button((gen.BoneIndex >= 0 ? "B:" + std::to_string(gen.BoneIndex) : "NoBone").c_str(), ImVec2(50, 0))) {
+                                g_EditingTargetType = 2; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
+                            }
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Assign bone to generator");
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("X", ImVec2(20, 0))) {
+                                g_ActiveMeshContent.Generators.erase(g_ActiveMeshContent.Generators.begin() + i);
+                                g_ActiveMeshContent.MeshGeneratorCount = (uint16_t)g_ActiveMeshContent.Generators.size();
+                                SortAndRepackGraphExtras();
+                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
+                            }
+                            ImGui::PopID();
                         }
-
-                        ImGui::SameLine(); ImGui::SetNextItemWidth(160);
-                        if (ImGui::DragFloat3("##Pos", &gen.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
-
-                        ImGui::SameLine(); ImGui::SetNextItemWidth(70);
-                        int tempBank = (int)gen.BankIndex;
-                        if (ImGui::InputInt("##Bank", &tempBank, 0)) {
-                            gen.BankIndex = (uint32_t)(std::max)(0, tempBank);
-                            if (saveCallback) saveCallback();
-                        }
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bank Index");
-
-                        ImGui::SameLine();
-                        if (ImGui::Button((gen.BoneIndex >= 0 ? "Bone: " + std::to_string(gen.BoneIndex) : "No Bone").c_str(), ImVec2(80, 0))) {
-                            g_EditingTargetType = 2; g_EditingTargetIndex = i; g_TriggerBonePopup = true;
-                        }
-
-                        ImGui::SameLine();
-                        if (ImGui::Button("X")) {
-                            g_ActiveMeshContent.Generators.erase(g_ActiveMeshContent.Generators.begin() + i);
-                            g_ActiveMeshContent.MeshGeneratorCount = (uint16_t)g_ActiveMeshContent.Generators.size();
-                            SortAndRepackGraphExtras();
-                            i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
-                        }
-                        ImGui::PopID();
                     }
                 }
 
-
-
-                if (g_BBMParser.IsParsed && ImGui::CollapsingHeader("Physics Volumes (Type 3 Only)", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    auto GenerateBoxPlanes = [](float* center, float* size, float* rot, std::vector<CBBMParser::BBMPlane>& outPlanes) {
-                        XMMATRIX rotMat = XMMatrixRotationRollPitchYaw(XMConvertToRadians(rot[0]), XMConvertToRadians(rot[1]), XMConvertToRadians(rot[2]));
-                        XMVECTOR right = rotMat.r[0];
-                        XMVECTOR up = rotMat.r[1];
-                        XMVECTOR fwd = rotMat.r[2];
-                        XMVECTOR c = XMVectorSet(center[0], center[1], center[2], 0);
-
-                        outPlanes.resize(6);
-                        auto setPlane = [](CBBMParser::BBMPlane& plane, XMVECTOR normal, XMVECTOR point) {
-                            plane.Normal[0] = XMVectorGetX(normal);
-                            plane.Normal[1] = XMVectorGetY(normal);
-                            plane.Normal[2] = XMVectorGetZ(normal);
-                            plane.D = -XMVectorGetX(XMVector3Dot(normal, point));
-                            };
-
-                        setPlane(outPlanes[0], right, c + right * (size[0] * 0.5f));
-                        setPlane(outPlanes[1], -right, c - right * (size[0] * 0.5f));
-                        setPlane(outPlanes[2], up, c + up * (size[1] * 0.5f));
-                        setPlane(outPlanes[3], -up, c - up * (size[1] * 0.5f));
-                        setPlane(outPlanes[4], fwd, c + fwd * (size[2] * 0.5f));
-                        setPlane(outPlanes[5], -fwd, c - fwd * (size[2] * 0.5f));
-                        };
-
-                    auto DrawVolumeItem = [&](CBBMParser::Volume& v, int i, const std::string& prefix) {
-                        std::string vKey = prefix + "_V_" + std::to_string(i);
-                        auto& vState = g_VolumeStates[vKey];
-                        ImGui::PushID(vKey.c_str());
-
-                        char nameBuf[128]; strncpy_s(nameBuf, v.Name.c_str(), 127);
-                        ImGui::SetNextItemWidth(150);
-                        if (ImGui::InputText("##Name", nameBuf, 128)) { v.Name = nameBuf; }
-                        if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
-
-                        ImGui::SameLine(); ImGui::SetNextItemWidth(100);
-                        int tempID = (int)v.ID;
-                        if (ImGui::InputInt("ID", &tempID, 0)) { v.ID = (uint32_t)(std::max)(0, tempID); if (saveCallback) saveCallback(); }
-
-                        ImGui::SameLine();
-                        if (ImGui::Button("X##DelVol")) {
-                            ImGui::PopID();
-                            return true;
-                        }
-
-                        ImGui::Indent(15.0f);
-                        if (ImGui::Checkbox("Edit as Box Mode", &vState.IsBoxMode)) {
-                            if (vState.IsBoxMode && v.Planes.size() >= 6) {
-                                float minX = -1e9f, maxX = 1e9f, minY = -1e9f, maxY = 1e9f, minZ = -1e9f, maxZ = 1e9f;
-                                for (auto& p : v.Planes) {
-                                    if (p.Normal[0] > 0.9f) maxX = -p.D; else if (p.Normal[0] < -0.9f) minX = p.D;
-                                    else if (p.Normal[1] > 0.9f) maxY = -p.D; else if (p.Normal[1] < -0.9f) minY = p.D;
-                                    else if (p.Normal[2] > 0.9f) maxZ = -p.D; else if (p.Normal[2] < -0.9f) minZ = p.D;
-                                }
-                                if (minX != -1e9f && maxX != 1e9f) { vState.Center[0] = (minX + maxX) * 0.5f; vState.Size[0] = maxX - minX; }
-                                if (minY != -1e9f && maxY != 1e9f) { vState.Center[1] = (minY + maxY) * 0.5f; vState.Size[1] = maxY - minY; }
-                                if (minZ != -1e9f && maxZ != 1e9f) { vState.Center[2] = (minZ + maxZ) * 0.5f; vState.Size[2] = maxZ - minZ; }
-                                vState.Rotation[0] = 0; vState.Rotation[1] = 0; vState.Rotation[2] = 0;
-                            }
-                            if (vState.IsBoxMode) {
-                                GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
-                                v.PlaneCount = (uint32_t)v.Planes.size();
-                                if (saveCallback) saveCallback();
-                            }
-                        }
-
-                        if (vState.IsBoxMode) {
-                            bool changed = false;
-                            ImGui::SetNextItemWidth(200); if (ImGui::DragFloat3("Center", vState.Center, 0.05f)) changed = true;
-                            ImGui::SetNextItemWidth(200); if (ImGui::DragFloat3("Size", vState.Size, 0.05f)) {
-                                vState.Size[0] = (std::max)(0.01f, vState.Size[0]);
-                                vState.Size[1] = (std::max)(0.01f, vState.Size[1]);
-                                vState.Size[2] = (std::max)(0.01f, vState.Size[2]);
-                                changed = true;
-                            }
-                            ImGui::SetNextItemWidth(200); if (ImGui::DragFloat3("Rotation", vState.Rotation, 1.0f)) changed = true;
-
-                            if (changed) {
-                                GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
-                                v.PlaneCount = (uint32_t)v.Planes.size();
-                                g_PreserveCamera = true;
-                                if (saveCallback) saveCallback();
-                            }
-                        }
-                        else {
-                            if (ImGui::TreeNode(("Raw Planes (" + std::to_string(v.Planes.size()) + ")###PlanesNode").c_str())) {
-                                if (ImGui::Button("+ Add Plane")) {
-                                    CBBMParser::BBMPlane p = { {0,1,0}, 0 };
-                                    v.Planes.push_back(p);
-                                    v.PlaneCount = (uint32_t)v.Planes.size();
-                                    if (saveCallback) saveCallback();
-                                }
-                                for (int pIdx = 0; pIdx < v.Planes.size(); pIdx++) {
-                                    auto& plane = v.Planes[pIdx];
-                                    ImGui::PushID(pIdx);
-                                    ImGui::Text("P%d", pIdx);
-                                    ImGui::SameLine(); ImGui::SetNextItemWidth(150);
-                                    if (ImGui::DragFloat3("Normal", plane.Normal, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
-                                    ImGui::SameLine(); ImGui::SetNextItemWidth(80);
-                                    if (ImGui::DragFloat("Dist(D)", &plane.D, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
-                                    ImGui::SameLine();
-                                    if (ImGui::Button("X")) {
-                                        v.Planes.erase(v.Planes.begin() + pIdx); pIdx--;
-                                        v.PlaneCount = (uint32_t)v.Planes.size();
-                                        if (saveCallback) saveCallback();
-                                    }
-                                    ImGui::PopID();
-                                }
-                                ImGui::TreePop();
-                            }
-                        }
-                        ImGui::Unindent(15.0f);
-                        ImGui::Separator();
-                        ImGui::PopID();
-                        return false;
-                        };
-
-                    if (ImGui::Button("+ Add Volume")) {
+                // --- Physics Volumes ---
+                if (g_BBMParser.IsParsed) {
+                    ImGui::SetNextItemAllowOverlap();
+                    bool openVolumes = ImGui::CollapsingHeader("Physics Volumes", ImGuiTreeNodeFlags_DefaultOpen);
+                    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
+                    if (ImGui::Button("+##AddVol", ImVec2(20, 0))) {
                         CBBMParser::Volume v; v.Name = "NewVolume"; v.ID = 0; v.PlaneCount = 0;
                         g_BBMParser.Volumes.push_back(v);
                         if (saveCallback) saveCallback();
                     }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Volume");
 
-                    for (int i = 0; i < g_BBMParser.Volumes.size(); i++) {
-                        if (DrawVolumeItem(g_BBMParser.Volumes[i], i, "BBM")) {
-                            g_BBMParser.Volumes.erase(g_BBMParser.Volumes.begin() + i);
-                            i--;
-                            if (saveCallback) saveCallback();
+                    if (openVolumes) {
+                        auto GenerateBoxPlanes = [](float* center, float* size, float* rot, std::vector<CBBMParser::BBMPlane>& outPlanes) {
+                            XMMATRIX rotMat = XMMatrixRotationRollPitchYaw(XMConvertToRadians(rot[0]), XMConvertToRadians(rot[1]), XMConvertToRadians(rot[2]));
+                            XMVECTOR right = rotMat.r[0];
+                            XMVECTOR up = rotMat.r[1];
+                            XMVECTOR fwd = rotMat.r[2];
+                            XMVECTOR c = XMVectorSet(center[0], center[1], center[2], 0);
+
+                            outPlanes.resize(6);
+                            auto setPlane = [](CBBMParser::BBMPlane& plane, XMVECTOR normal, XMVECTOR point) {
+                                plane.Normal[0] = XMVectorGetX(normal);
+                                plane.Normal[1] = XMVectorGetY(normal);
+                                plane.Normal[2] = XMVectorGetZ(normal);
+                                plane.D = -XMVectorGetX(XMVector3Dot(normal, point));
+                                };
+
+                            setPlane(outPlanes[0], right, c + right * (size[0] * 0.5f));
+                            setPlane(outPlanes[1], -right, c - right * (size[0] * 0.5f));
+                            setPlane(outPlanes[2], up, c + up * (size[1] * 0.5f));
+                            setPlane(outPlanes[3], -up, c - up * (size[1] * 0.5f));
+                            setPlane(outPlanes[4], fwd, c + fwd * (size[2] * 0.5f));
+                            setPlane(outPlanes[5], -fwd, c - fwd * (size[2] * 0.5f));
+                            };
+
+                        auto DrawVolumeItem = [&](CBBMParser::Volume& v, int i, const std::string& prefix) {
+                            std::string vKey = prefix + "_V_" + std::to_string(i);
+                            auto& vState = g_VolumeStates[vKey];
+                            ImGui::PushID(vKey.c_str());
+
+                            char nameBuf[128]; strncpy_s(nameBuf, v.Name.c_str(), 127);
+                            ImGui::SetNextItemWidth(110);
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { v.Name = nameBuf; }
+                            if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine(); ImGui::SetNextItemWidth(80);
+                            int tempID = (int)v.ID;
+                            if (ImGui::InputInt("ID", &tempID, 0)) { v.ID = (uint32_t)(std::max)(0, tempID); if (saveCallback) saveCallback(); }
+
+                            ImGui::SameLine();
+                            if (ImGui::Button("X##DelVol", ImVec2(20, 0))) {
+                                ImGui::PopID();
+                                return true;
+                            }
+
+                            ImGui::Indent(15.0f);
+                            if (ImGui::Checkbox("Edit as Box Mode", &vState.IsBoxMode)) {
+                                if (vState.IsBoxMode && v.Planes.size() >= 6) {
+                                    float minX = -1e9f, maxX = 1e9f, minY = -1e9f, maxY = 1e9f, minZ = -1e9f, maxZ = 1e9f;
+                                    for (auto& p : v.Planes) {
+                                        if (p.Normal[0] > 0.9f) maxX = -p.D; else if (p.Normal[0] < -0.9f) minX = p.D;
+                                        else if (p.Normal[1] > 0.9f) maxY = -p.D; else if (p.Normal[1] < -0.9f) minY = p.D;
+                                        else if (p.Normal[2] > 0.9f) maxZ = -p.D; else if (p.Normal[2] < -0.9f) minZ = p.D;
+                                    }
+                                    if (minX != -1e9f && maxX != 1e9f) { vState.Center[0] = (minX + maxX) * 0.5f; vState.Size[0] = maxX - minX; }
+                                    if (minY != -1e9f && maxY != 1e9f) { vState.Center[1] = (minY + maxY) * 0.5f; vState.Size[1] = maxY - minY; }
+                                    if (minZ != -1e9f && maxZ != 1e9f) { vState.Center[2] = (minZ + maxZ) * 0.5f; vState.Size[2] = maxZ - minZ; }
+                                    vState.Rotation[0] = 0; vState.Rotation[1] = 0; vState.Rotation[2] = 0;
+                                }
+                                if (vState.IsBoxMode) {
+                                    GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
+                                    v.PlaneCount = (uint32_t)v.Planes.size();
+                                    if (saveCallback) saveCallback();
+                                }
+                            }
+
+                            if (vState.IsBoxMode) {
+                                bool changed = false;
+                                ImGui::SetNextItemWidth(160); if (ImGui::DragFloat3("Center", vState.Center, 0.05f)) changed = true;
+                                ImGui::SetNextItemWidth(160); if (ImGui::DragFloat3("Size", vState.Size, 0.05f)) {
+                                    vState.Size[0] = (std::max)(0.01f, vState.Size[0]);
+                                    vState.Size[1] = (std::max)(0.01f, vState.Size[1]);
+                                    vState.Size[2] = (std::max)(0.01f, vState.Size[2]);
+                                    changed = true;
+                                }
+                                ImGui::SetNextItemWidth(160); if (ImGui::DragFloat3("Rotation", vState.Rotation, 1.0f)) changed = true;
+
+                                if (changed) {
+                                    GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
+                                    v.PlaneCount = (uint32_t)v.Planes.size();
+                                    g_PreserveCamera = true;
+                                    if (saveCallback) saveCallback();
+                                }
+                            }
+                            else {
+                                if (ImGui::TreeNode(("Raw Planes (" + std::to_string(v.Planes.size()) + ")###PlanesNode").c_str())) {
+                                    if (ImGui::Button("+ Add Plane")) {
+                                        CBBMParser::BBMPlane p = { {0,1,0}, 0 };
+                                        v.Planes.push_back(p);
+                                        v.PlaneCount = (uint32_t)v.Planes.size();
+                                        if (saveCallback) saveCallback();
+                                    }
+                                    for (int pIdx = 0; pIdx < v.Planes.size(); pIdx++) {
+                                        auto& plane = v.Planes[pIdx];
+                                        ImGui::PushID(pIdx);
+                                        ImGui::Text("P%d", pIdx);
+                                        ImGui::SameLine(); ImGui::SetNextItemWidth(110);
+                                        if (ImGui::DragFloat3("Normal", plane.Normal, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                                        ImGui::SameLine(); ImGui::SetNextItemWidth(60);
+                                        if (ImGui::DragFloat("D", &plane.D, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                                        ImGui::SameLine();
+                                        if (ImGui::Button("X", ImVec2(20, 0))) {
+                                            v.Planes.erase(v.Planes.begin() + pIdx); pIdx--;
+                                            v.PlaneCount = (uint32_t)v.Planes.size();
+                                            if (saveCallback) saveCallback();
+                                        }
+                                        ImGui::PopID();
+                                    }
+                                    ImGui::TreePop();
+                                }
+                            }
+                            ImGui::Unindent(15.0f);
+                            ImGui::Separator();
+                            ImGui::PopID();
+                            return false;
+                            };
+
+                        for (int i = 0; i < g_BBMParser.Volumes.size(); i++) {
+                            if (DrawVolumeItem(g_BBMParser.Volumes[i], i, "BBM")) {
+                                g_BBMParser.Volumes.erase(g_BBMParser.Volumes.begin() + i);
+                                i--;
+                                if (saveCallback) saveCallback();
+                            }
                         }
                     }
                 }
-            ImGui::EndTabItem();
+                ImGui::EndTabItem();
             }
 
             if (g_TriggerBonePopup) {
@@ -1738,8 +1788,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         };
 
                     auto DrawBBMTexRow = [&](const char* label, int& mapID, int matIdx, int type) {
-                        ImGui::AlignTextToFramePadding(); ImGui::Text("%s", label); ImGui::SameLine(130);
-                        ImGui::SetNextItemWidth(80);
+                        ImGui::AlignTextToFramePadding(); ImGui::Text("%s", label); ImGui::SameLine(100);
+                        ImGui::SetNextItemWidth(70);
                         std::string idStr = "##bbm_id" + std::to_string(type) + "_" + std::to_string(matIdx);
                         if (ImGui::InputInt(idStr.c_str(), &mapID, 0, 0)) {
                             g_MeshUploadNeeded = true;
@@ -1781,8 +1831,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip(visible ? "Hide this material" : "Show this material");
 
                         if (headerOpen) {
-                            ImGui::AlignTextToFramePadding(); ImGui::Text("Name"); ImGui::SameLine(130);
-                            char nameBuf[128]; strncpy_s(nameBuf, m.Name.c_str(), 127); ImGui::SetNextItemWidth(200);
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Name"); ImGui::SameLine(100);
+                            char nameBuf[128]; strncpy_s(nameBuf, m.Name.c_str(), 127); ImGui::SetNextItemWidth(150);
                             if (ImGui::InputText("##Name", nameBuf, 128)) { m.Name = nameBuf; if (saveCallback) saveCallback(); }
 
                             DrawBBMTexRow("Diffuse", m.DiffuseBank, i, 0);
@@ -1792,21 +1842,21 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
                             ImGui::Separator();
 
-                            ImGui::AlignTextToFramePadding(); ImGui::Text("Ambient Color"); ImGui::SameLine(130);
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Ambient Color"); ImGui::SameLine(100);
                             ImVec4 cAmb = UnpackBGRA(m.Ambient);
                             if (ImGui::ColorEdit4("##Amb", (float*)&cAmb, ImGuiColorEditFlags_NoInputs)) { m.Ambient = PackBGRA(cAmb); if (saveCallback) saveCallback(); }
 
-                            ImGui::AlignTextToFramePadding(); ImGui::Text("Diffuse Color"); ImGui::SameLine(130);
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Diffuse Color"); ImGui::SameLine(100);
                             ImVec4 cDif = UnpackBGRA(m.Diffuse);
                             if (ImGui::ColorEdit4("##Dif", (float*)&cDif, ImGuiColorEditFlags_NoInputs)) { m.Diffuse = PackBGRA(cDif); if (saveCallback) saveCallback(); }
 
-                            ImGui::AlignTextToFramePadding(); ImGui::Text("Shiny"); ImGui::SameLine(130); ImGui::SetNextItemWidth(120);
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Shiny"); ImGui::SameLine(100); ImGui::SetNextItemWidth(100);
                             if (ImGui::DragFloat("##Shi", &m.Shiny, 0.01f)) { if (saveCallback) saveCallback(); }
 
-                            ImGui::AlignTextToFramePadding(); ImGui::Text("Shiny Str"); ImGui::SameLine(130); ImGui::SetNextItemWidth(120);
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Shiny Str"); ImGui::SameLine(100); ImGui::SetNextItemWidth(100);
                             if (ImGui::DragFloat("##ShiStr", &m.ShinyStrength, 0.01f)) { if (saveCallback) saveCallback(); }
 
-                            ImGui::AlignTextToFramePadding(); ImGui::Text("Transparency"); ImGui::SameLine(130); ImGui::SetNextItemWidth(120);
+                            ImGui::AlignTextToFramePadding(); ImGui::Text("Transparency"); ImGui::SameLine(100); ImGui::SetNextItemWidth(100);
                             if (ImGui::DragFloat("##Trans", &m.Transparency, 0.01f)) { if (saveCallback) saveCallback(); }
 
                             ImGui::Dummy(ImVec2(0, 5));
@@ -1826,9 +1876,9 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     auto DrawTexRow = [&](const char* label, int& mapID, int matIdx, int type, auto& matObj) {
                         ImGui::AlignTextToFramePadding();
                         ImGui::Text("%s", label);
-                        ImGui::SameLine(130);
+                        ImGui::SameLine(100);
 
-                        ImGui::SetNextItemWidth(80);
+                        ImGui::SetNextItemWidth(70);
                         std::string idStr = "##id" + std::to_string(type) + "_" + std::to_string(matIdx);
                         if (ImGui::InputInt(idStr.c_str(), &mapID, 0, 0)) {
                             int flags = 0;
@@ -1888,9 +1938,9 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         if (headerOpen) {
                             ImGui::AlignTextToFramePadding();
                             ImGui::Text("Name");
-                            ImGui::SameLine(130);
+                            ImGui::SameLine(100);
                             char nameBuf[128]; strncpy_s(nameBuf, m.Name.c_str(), 127);
-                            ImGui::SetNextItemWidth(200);
+                            ImGui::SetNextItemWidth(150);
                             if (ImGui::InputText("##Name", nameBuf, 128)) m.Name = nameBuf;
 
                             DrawTexRow("Diffuse", m.DiffuseMapID, i, 0, m);
@@ -1899,21 +1949,19 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             DrawTexRow("Illumination", m.IlluminationMapID, i, 3, m);
                             DrawTexRow("Decals", m.DecalID, i, 4, m);
 
-
                             ImGui::AlignTextToFramePadding();
                             ImGui::Text("Map Flags");
-                            ImGui::SameLine(130);
-                            ImGui::SetNextItemWidth(120);
+                            ImGui::SameLine(100);
+                            ImGui::SetNextItemWidth(90);
                             if (ImGui::InputInt("##mapflags_int", &m.MapFlags)) {
                                 g_MeshUploadNeeded = true;
                                 if (saveCallback) saveCallback();
                             }
 
-
                             ImGui::AlignTextToFramePadding();
                             ImGui::Text("Self Illum");
-                            ImGui::SameLine(130);
-                            ImGui::SetNextItemWidth(120);
+                            ImGui::SameLine(100);
+                            ImGui::SetNextItemWidth(90);
                             if (ImGui::SliderInt("##si_slider", &m.SelfIllumination, 0, 255)) {
                                 g_MeshUploadNeeded = true;
                                 g_PreserveCamera = true;
@@ -1954,26 +2002,26 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                 for (size_t i = 0; i < g_ActiveMeshContent.Primitives.size(); i++) {
                     auto& prim = g_ActiveMeshContent.Primitives[i];
                     std::string headerName = "Primitive " + std::to_string(i);
-                    
+
                     if (prim.ClothPrimitives.size() > 0) {
                         headerName += " [CLOTH]";
                     }
 
                     if (ImGui::CollapsingHeader(headerName.c_str())) {
                         ImGui::Indent(15.0f);
-                        
+
                         ImGui::Text("InitFlags:         0x%08X", prim.InitFlags);
                         ImGui::Text("RepeatingMeshReps: %d", prim.RepeatingMeshReps);
                         ImGui::Text("Vertex Stride:     %d bytes", prim.VertexStride);
                         ImGui::Text("Buffer Type:       %u", prim.BufferType);
                         ImGui::Text("Is Compressed:     %s", prim.IsCompressed ? "True" : "False");
                         ImGui::Text("Material Index:    %d", prim.MaterialIndex);
-                        
+
                         ImGui::Dummy(ImVec2(0, 5));
                         ImGui::Text("Vertex Count:      %u", prim.VertexCount);
                         ImGui::Text("Index Count:       %u", prim.IndexCount);
                         ImGui::Text("Triangle Count:    %u", prim.TriangleCount);
-                        
+
                         ImGui::Dummy(ImVec2(0, 5));
                         ImGui::Text("Static Blocks:     %u", prim.StaticBlockCount);
                         ImGui::Text("Animated Blocks:   %u", prim.AnimatedBlockCount);
@@ -1983,202 +2031,23 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         ImGui::PushID((int)i);
                         ImGui::Text("Avg Texture Stretch:");
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(120);
+                        ImGui::SetNextItemWidth(100);
                         if (ImGui::DragFloat("##Stretch", &prim.AvgTextureStretch, 0.005f, 0.0f, 10.0f, "%.4f")) {
                             if (saveCallback) saveCallback();
                         }
                         ImGui::PopID();
-                        
+
                         ImGui::Unindent(15.0f);
                         ImGui::Separator();
                     }
                 }
                 ImGui::EndChild();
-                
                 ImGui::EndTabItem();
             }
 
             ImGui::EndTabBar();
         }
+
         ImGui::EndChild();
-    }
-
-    if (g_TriggerTexPopup) {
-        ImGui::OpenPopup("Select Texture");
-        g_ShowTextureSelectPopup = true;
-        g_TriggerTexPopup = false;
-    }
-
-    if (ImGui::BeginPopupModal("Select Texture", &g_ShowTextureSelectPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::InputTextWithHint("##Search", "Search Textures by ID or Name...", g_TextureSearchBuf, 128);
-        ImGui::Separator();
-
-        ImGui::BeginChild("TexList", ImVec2(350, 300), true);
-
-        std::string filter = g_TextureSearchBuf;
-        std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
-        bool foundAny = false;
-
-        bool isXboxActive = (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics);
-
-        if (isXboxActive) {
-            EnsureXboxTextureCache(g_ActiveBankIndex);
-            for (const auto& [id, meta] : g_XboxTexCache[g_ActiveBankIndex]) {
-                foundAny = true;
-                std::string nameLower = meta.Name;
-                std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                std::string idStr = std::to_string(id);
-
-                if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
-                    bool isSelected = (g_SelectedTextureID == id);
-                    if (ImGui::Selectable((idStr + " - " + meta.Name + " [Xbox]").c_str(), isSelected)) {
-                        g_SelectedTextureID = id;
-                    }
-                    if (isSelected) ImGui::SetItemDefaultFocus();
-                }
-            }
-            if (!foundAny) ImGui::TextDisabled("No textures found in this Xbox bank!");
-        }
-        else {
-            // 2. Global PC Textures ONLY
-            for (auto& bank : g_OpenBanks) {
-                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
-                    foundAny = true;
-                    for (const auto& entry : bank.Entries) {
-                        std::string nameLower = entry.Name;
-                        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                        std::string idStr = std::to_string(entry.ID);
-
-                        if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
-                            bool isSelected = (g_SelectedTextureID == entry.ID);
-
-                            std::string label = idStr + " - " + entry.Name;
-                            if (bank.Type == EBankType::Frontend) label += " [Frontend]";
-                            else if (bank.Type == EBankType::Effects) label += " [Effects]";
-
-                            if (ImGui::Selectable(label.c_str(), isSelected)) {
-                                g_SelectedTextureID = entry.ID;
-                            }
-                            if (isSelected) ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                }
-            }
-            if (!foundAny) ImGui::TextDisabled("No Texture Bank open!\nPlease open 'textures.big' in another tab.");
-        }
-        ImGui::EndChild();
-
-        ImGui::SameLine();
-
-        ImGui::BeginChild("TexPreview", ImVec2(256, 300), true);
-        if (g_SelectedTextureID > 0) {
-            ID3D11ShaderResourceView* srv = LoadTextureForMesh(g_SelectedTextureID);
-            if (srv) {
-                ImGui::Image((void*)srv, ImVec2(256, 256));
-            }
-            else {
-                ImGui::TextDisabled("Preview Not Available\n(Or Format Unsupported)");
-            }
-        }
-        else {
-            ImGui::TextDisabled("No Texture Selected");
-        }
-        ImGui::EndChild();
-
-        ImGui::Separator();
-
-        if (ImGui::Button("Choose", ImVec2(120, 0))) {
-            if (g_EditingMaterialIndex != -1 && g_SelectedTextureID >= 0) {
-                if (g_BBMParser.IsParsed) {
-                    auto& mat = g_BBMParser.ParsedMaterials[g_EditingMaterialIndex];
-                    switch (g_EditingTextureType) {
-                    case 0: mat.DiffuseBank = g_SelectedTextureID; break;
-                    case 1: mat.BumpBank = g_SelectedTextureID; break;
-                    case 2: mat.ReflectBank = g_SelectedTextureID; break;
-                    case 3: mat.IllumBank = g_SelectedTextureID; break;
-                    }
-                }
-                else {
-                    auto& mat = g_ActiveMeshContent.Materials[g_EditingMaterialIndex];
-                    switch (g_EditingTextureType) {
-                    case 0: mat.DiffuseMapID = g_SelectedTextureID; break;
-                    case 1: mat.BumpMapID = g_SelectedTextureID; break;
-                    case 2: mat.ReflectionMapID = g_SelectedTextureID; break;
-                    case 3: mat.IlluminationMapID = g_SelectedTextureID; break;
-                    case 4: mat.DecalID = g_SelectedTextureID; break;
-                    }
-                    int flags = 0;
-                    if (mat.DiffuseMapID > 0) flags |= 1;
-                    if (mat.BumpMapID > 0) flags |= 2;
-                    if (mat.ReflectionMapID > 0) flags |= 4;
-                    if (mat.IlluminationMapID > 0) flags |= 8;
-                    mat.MapFlags = (mat.MapFlags & ~0xF) | flags;
-                }
-
-                g_MeshUploadNeeded = true;
-                if (saveCallback) saveCallback();
-            }
-            g_ShowTextureSelectPopup = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-            g_ShowTextureSelectPopup = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
-    if (g_TriggerPhysicsPopup) {
-        ImGui::OpenPopup("Select Physics Mesh");
-        g_ShowPhysicsSelectPopup = true;
-        g_TriggerPhysicsPopup = false;
-    }
-
-    if (ImGui::BeginPopupModal("Select Physics Mesh", &g_ShowPhysicsSelectPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::InputTextWithHint("##PhysSearch", "Search Physics by ID or Name...", g_PhysicsSearchBuf, 128);
-        ImGui::Separator();
-
-        ImGui::BeginChild("PhysList", ImVec2(400, 300), true);
-
-        std::string filter = g_PhysicsSearchBuf;
-        std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
-
-        for (auto& bank : g_OpenBanks) {
-            if (bank.Type == EBankType::Graphics) {
-                for (const auto& entry : bank.Entries) {
-                    if (entry.Type == 3) {
-                        std::string nameLower = entry.Name;
-                        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                        std::string idStr = std::to_string(entry.ID);
-
-                        if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
-                            bool isSelected = (g_SelectedPhysicsID == entry.ID);
-                            if (ImGui::Selectable((idStr + " - " + entry.Name).c_str(), isSelected)) {
-                                g_SelectedPhysicsID = entry.ID;
-                            }
-                            if (isSelected) ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                }
-            }
-        }
-        ImGui::EndChild();
-        ImGui::Separator();
-
-        if (ImGui::Button("Choose", ImVec2(120, 0))) {
-            if (g_SelectedPhysicsID >= 0) {
-                g_ActiveMeshContent.EntryMeta.PhysicsIndex = g_SelectedPhysicsID;
-                if (saveCallback) saveCallback();
-            }
-            g_ShowPhysicsSelectPopup = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-            g_ShowPhysicsSelectPopup = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
     }
 }

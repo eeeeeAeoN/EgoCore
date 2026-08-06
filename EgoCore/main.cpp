@@ -29,6 +29,10 @@ ImTextureID g_MusicOffTexture = 0;
 ImTextureID g_SearchTexture = 0;
 ImTextureID g_SaveTexture = 0;
 ImTextureID g_DeleteTexture = 0;
+ImTextureID g_PlayTexture = 0;
+ImTextureID g_PauseTexture = 0;
+ImTextureID g_StopTexture = 0;
+ImTextureID g_LoopTexture = 0;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
@@ -188,6 +192,34 @@ int main(int, char**) {
         }
     }
 
+    ID3D11ShaderResourceView* srvPlay = nullptr;
+    if (std::filesystem::exists("Assets/Play.png")) {
+        if (LoadTextureFromFile("Assets/Play.png", g_pd3dDevice, &srvPlay, &iconWidth, &iconHeight)) {
+            g_PlayTexture = (ImTextureID)srvPlay;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvPause = nullptr;
+    if (std::filesystem::exists("Assets/Pause.png")) {
+        if (LoadTextureFromFile("Assets/Pause.png", g_pd3dDevice, &srvPause, &iconWidth, &iconHeight)) {
+            g_PauseTexture = (ImTextureID)srvPause;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvStop = nullptr;
+    if (std::filesystem::exists("Assets/Stop.png")) {
+        if (LoadTextureFromFile("Assets/Stop.png", g_pd3dDevice, &srvStop, &iconWidth, &iconHeight)) {
+            g_StopTexture = (ImTextureID)srvStop;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvLoop = nullptr;
+    if (std::filesystem::exists("Assets/Loop.png")) {
+        if (LoadTextureFromFile("Assets/Loop.png", g_pd3dDevice, &srvLoop, &iconWidth, &iconHeight)) {
+            g_LoopTexture = (ImTextureID)srvLoop;
+        }
+    }
+
     bool done = false;
     while (!done) {
         MSG msg;
@@ -227,6 +259,10 @@ int main(int, char**) {
     if (srvSearch) { srvSearch->Release(); srvSearch = nullptr; }
     if (srvSave) { srvSave->Release(); srvSave = nullptr; }
     if (srvDelete) { srvDelete->Release(); srvDelete = nullptr; }
+    if (srvPlay) { srvPlay->Release(); srvPlay = nullptr; }
+    if (srvPause) { srvPause->Release(); srvPause = nullptr; }
+    if (srvStop) { srvStop->Release(); srvStop = nullptr; }
+    if (srvLoop) { srvLoop->Release(); srvLoop = nullptr; }
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
