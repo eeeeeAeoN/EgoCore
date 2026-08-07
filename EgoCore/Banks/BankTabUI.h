@@ -157,7 +157,6 @@ static void DrawBankTab() {
     if (bankSidebarWidth < 50.0f) bankSidebarWidth = 50.0f;
     if (bankSidebarWidth > ImGui::GetWindowWidth() - 100.0f) bankSidebarWidth = ImGui::GetWindowWidth() - 100.0f;
 
-    // --- GLOBAL POPUPS ---
     if (g_ShowSuccessPopup) {
         ImGui::OpenPopup("Success");
         g_ShowSuccessPopup = false;
@@ -306,8 +305,6 @@ static void DrawBankTab() {
         ImGui::EndPopup();
     }
 
-
-    // --- LAYER 2: THE BANK CONTROL HEADER ---
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.12f, 1.0f));
     ImGui::BeginChild("BankHeaderBar", ImVec2(0, 40), true, ImGuiWindowFlags_NoScrollbar);
 
@@ -322,7 +319,6 @@ static void DrawBankTab() {
     if (g_ActiveBankIndex < 0 || g_ActiveBankIndex >= g_OpenBanks.size()) g_ActiveBankIndex = 0;
     LoadedBank& bank = g_OpenBanks[g_ActiveBankIndex];
 
-    // 1. Bank Dropdown
     ImGui::AlignTextToFramePadding();
     ImGui::Text("Bank:");
     ImGui::SameLine();
@@ -334,7 +330,6 @@ static void DrawBankTab() {
 
             if (ImGui::Selectable(comboLabel.c_str(), isSelected)) {
                 if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
-                    // Include SubBankIndex!
                     PushBankHistory(g_ActiveBankIndex, g_OpenBanks[g_ActiveBankIndex].ActiveSubBankIndex, g_OpenBanks[g_ActiveBankIndex].SelectedEntryIndex);
                 }
                 g_ActiveBankIndex = i;
@@ -346,7 +341,6 @@ static void DrawBankTab() {
         ImGui::EndCombo();
     }
 
-    // Close Bank Button 
     ImGui::SameLine();
     if (ImGui::Button("X##CloseBank", ImVec2(24, 0))) {
         g_OpenBanks.erase(g_OpenBanks.begin() + g_ActiveBankIndex);
@@ -1014,7 +1008,6 @@ static void DrawBankTab() {
                     };
             }
             else {
-                // Drawn inside the mesh renderer viewport (bottom-right overlay) via DrawMeshProperties().
                 drawLODControls = [&]() {
                     ImGui::Text("LOD:"); ImGui::SameLine();
                     ImGui::SetNextItemWidth(100);
@@ -1275,6 +1268,10 @@ static void DrawBankTab() {
             else {
                 DrawFontProperties(e.ID);
             }
+        }
+        else if (bank.Type == EBankType::Audio) {
+            if (bank.LugParserPtr) DrawLugAudioProperties(&bank);
+            else DrawAudioProperties(&bank);
         }
     }
     ImGui::EndChild();

@@ -27,19 +27,8 @@ inline bool g_TriggerFSEModal = false;
 inline fs::path g_AppBaseDir;
 inline float g_UIScale = 1.0f;
 inline bool g_TriggerAssetChangesExitPopup = false;
-
-// Set when "Run Fable" is used from inside the Editor (ModCreator). Unlike the
-// Frontend/Mod Manager launch flow, this skips ProcessModsAndLaunch() entirely -
-// the Editor works directly against the game's live files, so re-running the
-// mod patching pipeline on top of that is what was crashing the game. Editor
-// launches should just close the tool and start Fable.exe, same as if you'd
-// launched it yourself outside the tool.
 inline bool g_PendingRunFableLaunch = false;
 
-// --- Editor (Mod Creator) background load state ---
-// The Editor card kicks off PerformAutoLoad() (bank/def parsing) on a worker
-// thread instead of on the UI thread, so the app can keep drawing frames
-// (and show a loading popup) instead of freezing while it loads.
 inline std::atomic<bool> g_IsEditorLoading = false;
 inline std::atomic<bool> g_EditorLoadRequested = false;
 inline std::mutex g_EditorLoadStatusMutex;
@@ -83,9 +72,9 @@ struct MainMenuAudio {
         if (ma_engine_init(NULL, &engine) == MA_SUCCESS) {
             if (ma_sound_init_from_file(&engine, "Assets/MainMenuTheme.mp3", MA_SOUND_FLAG_STREAM, NULL, NULL, &sound) == MA_SUCCESS) {
                 ma_sound_set_looping(&sound, MA_TRUE);
-                isInitialized = true;   // <-- moved up, before ApplyConfig()
+                isInitialized = true;
                 ApplyConfig();
-                ma_sound_start(&sound); // <-- back to unconditional
+                ma_sound_start(&sound);
             }
             else {
                 isInitialized = true;
@@ -137,9 +126,7 @@ enum class EAppState {
     ModsManager
 };
 
-// Must come after EAppState (full definition) and g_TitleFont (extern above) -
-// DrawModManagerWindow() references EAppState::Frontend and g_TitleFont directly,
-// and as an inline function its body is type-checked at this point in the include chain.
+// --- This must be included here to avoid compiler errors. This is what happens when you make a project out of all headers. 
 #include "ModManagerUI.h"
 
 inline EAppState g_CurrentAppState = EAppState::Setup;
@@ -153,11 +140,6 @@ static void UpdateUIScale(float scale) {
     style.ScaleAllSizes(scale);
 }
 
-// Shared header treatment - outer gold glow aura, gradient banner, title-font
-// heading, and a center-fading divider line - matching the look used by the
-// "About EgoCore" and "Pending Asset Changes" modals. Pulled out here so the
-// smaller utility modals (Settings/Keybindings/Scaling/Unsaved Changes) can
-// get the same finished look without re-deriving the drawlist math each time.
 static void DrawGoldModalHeader(const char* title, float headerHeight = 58.0f) {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     ImVec2 winPos = ImGui::GetWindowPos();
@@ -176,15 +158,14 @@ static void DrawGoldModalHeader(const char* title, float headerHeight = 58.0f) {
         );
     }
 
-    // Gradient Header Banner
     ImVec2 headerMin = winPos;
     ImVec2 headerMax = ImVec2(winMax.x, winPos.y + headerHeight);
     drawList->AddRectFilledMultiColor(
         headerMin, headerMax,
-        IM_COL32(242, 193, 78, 30),  // Top-Left Gold
-        IM_COL32(110, 140, 175, 15), // Top-Right Slate Blue
-        IM_COL32(0, 0, 0, 0),        // Bottom-Right Clear
-        IM_COL32(0, 0, 0, 0)         // Bottom-Left Clear
+        IM_COL32(242, 193, 78, 30),
+        IM_COL32(110, 140, 175, 15),
+        IM_COL32(0, 0, 0, 0),
+        IM_COL32(0, 0, 0, 0)
     );
 
     if (g_TitleFont) ImGui::PushFont(g_TitleFont);
@@ -311,13 +292,10 @@ inline void CheckModEnvironmentAndFSE(const std::string& gameRoot) {
 }
 
 inline void DrawEnvironmentModals() {
-    // --- 1. FIX MODDING ENVIRONMENT POPUP ---
     if (g_TriggerModEnvModal) {
         ImGui::OpenPopup("Fix Modding Environment");
         g_TriggerModEnvModal = false;
     }
-
-    // Modal Styling (Matches About Modal)
     ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
@@ -333,7 +311,6 @@ inline void DrawEnvironmentModals() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // Outer Gold Glow Aura
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -344,34 +321,26 @@ inline void DrawEnvironmentModals() {
                 glowCol, 10.0f + expand, 0, 1.2f
             );
         }
-
-        // Arcane Header Gradient Banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
         drawList->AddRectFilledMultiColor(
             headerMin, headerMax,
-            IM_COL32(242, 193, 78, 30),  // Top-Left Gold
-            IM_COL32(110, 140, 175, 15), // Top-Right Slate Blue
-            IM_COL32(0, 0, 0, 0),        // Bottom-Right Clear
-            IM_COL32(0, 0, 0, 0)         // Bottom-Left Clear
+            IM_COL32(242, 193, 78, 30),
+            IM_COL32(110, 140, 175, 15),
+            IM_COL32(0, 0, 0, 0),
+            IM_COL32(0, 0, 0, 0)
         );
-
-        // Custom Header Title
         if (g_TitleFont) ImGui::PushFont(g_TitleFont);
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Fix Modding Environment");
         if (g_TitleFont) ImGui::PopFont();
 
         ImGui::Dummy(ImVec2(0, 4));
-
-        // Separator Line with Gold Fade
         drawList->AddLine(
             ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
             ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
             IM_COL32(242, 193, 78, 110), 1.2f
         );
         ImGui::Dummy(ImVec2(0, 12));
-
-        // Description Body Text
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
         ImGui::TextWrapped("Required modding files or definition templates are missing from your game directory.");
         ImGui::Dummy(ImVec2(0, 4));
@@ -379,8 +348,6 @@ inline void DrawEnvironmentModals() {
         ImGui::PopStyleColor();
 
         ImGui::Dummy(ImVec2(0, 16));
-
-        // Upgraded Primary Action Button (Golden Accent)
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
@@ -397,8 +364,6 @@ inline void DrawEnvironmentModals() {
         ImGui::PopStyleColor(4);
 
         ImGui::SameLine(0, 12.0f);
-
-        // Upgraded Secondary Action Button (Slate Dark)
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.18f, 0.24f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.32f, 0.42f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.14f, 0.18f, 1.00f));
@@ -424,14 +389,10 @@ inline void DrawEnvironmentModals() {
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
 
-
-    // --- 2. INSTALL FABLE SCRIPT EXTENDER POPUP ---
     if (g_TriggerFSEModal) {
         ImGui::OpenPopup("Install Fable Script Extender");
         g_TriggerFSEModal = false;
     }
-
-    // Modal Styling (Matches About Modal)
     ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
@@ -447,7 +408,6 @@ inline void DrawEnvironmentModals() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // Outer Gold Glow Aura
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -458,34 +418,28 @@ inline void DrawEnvironmentModals() {
                 glowCol, 10.0f + expand, 0, 1.2f
             );
         }
-
-        // Arcane Header Gradient Banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
         drawList->AddRectFilledMultiColor(
             headerMin, headerMax,
-            IM_COL32(242, 193, 78, 30),  // Top-Left Gold
-            IM_COL32(110, 140, 175, 15), // Top-Right Slate Blue
-            IM_COL32(0, 0, 0, 0),        // Bottom-Right Clear
-            IM_COL32(0, 0, 0, 0)         // Bottom-Left Clear
+            IM_COL32(242, 193, 78, 30),
+            IM_COL32(110, 140, 175, 15),
+            IM_COL32(0, 0, 0, 0),
+            IM_COL32(0, 0, 0, 0)
         );
 
-        // Custom Header Title
         if (g_TitleFont) ImGui::PushFont(g_TitleFont);
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Install Fable Script Extender");
         if (g_TitleFont) ImGui::PopFont();
 
         ImGui::Dummy(ImVec2(0, 4));
 
-        // Separator Line with Gold Fade
         drawList->AddLine(
             ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
             ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
             IM_COL32(242, 193, 78, 110), 1.2f
         );
         ImGui::Dummy(ImVec2(0, 12));
-
-        // Description Body Text
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
         ImGui::TextWrapped("Fable Script Extender (FSE) is not installed in your game directory.");
         ImGui::Dummy(ImVec2(0, 4));
@@ -494,7 +448,6 @@ inline void DrawEnvironmentModals() {
 
         ImGui::Dummy(ImVec2(0, 16));
 
-        // Upgraded Primary Action Button (Golden Accent)
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
@@ -510,7 +463,6 @@ inline void DrawEnvironmentModals() {
 
         ImGui::SameLine(0, 12.0f);
 
-        // Upgraded Secondary Action Button (Slate Dark)
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.18f, 0.24f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.32f, 0.42f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.14f, 0.18f, 1.00f));
@@ -535,7 +487,6 @@ static void DrawLaunchPopup() {
         g_LaunchState = 2;
     }
 
-    // Modal Styling (Matches Frontend Modal Design)
     ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
@@ -551,7 +502,6 @@ static void DrawLaunchPopup() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // 1. Outer Gold Glow Aura
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -563,25 +513,22 @@ static void DrawLaunchPopup() {
             );
         }
 
-        // 2. Header Gradient Banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
         drawList->AddRectFilledMultiColor(
             headerMin, headerMax,
-            IM_COL32(242, 193, 78, 30),  // Top-Left Gold
-            IM_COL32(110, 140, 175, 15), // Top-Right Slate Blue
-            IM_COL32(0, 0, 0, 0),        // Bottom-Right Clear
-            IM_COL32(0, 0, 0, 0)         // Bottom-Left Clear
+            IM_COL32(242, 193, 78, 30),
+            IM_COL32(110, 140, 175, 15),
+            IM_COL32(0, 0, 0, 0), 
+            IM_COL32(0, 0, 0, 0)
         );
 
-        // Header Title
         if (g_TitleFont) ImGui::PushFont(g_TitleFont);
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Launching Fable");
         if (g_TitleFont) ImGui::PopFont();
 
         ImGui::Dummy(ImVec2(0, 4));
 
-        // Gold Accent Separator Line
         drawList->AddLine(
             ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
             ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
@@ -589,7 +536,6 @@ static void DrawLaunchPopup() {
         );
         ImGui::Dummy(ImVec2(0, 12));
 
-        // Content Status
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
         ImGui::TextWrapped("Preparing to launch Fable...");
         ImGui::Dummy(ImVec2(0, 4));
@@ -610,17 +556,11 @@ static void DrawLaunchPopup() {
         }
         ImGui::PopStyleColor();
 
-        // State machine updates
         if (g_LaunchState >= 2 && g_LaunchState < 6) {
             g_LaunchState++;
         }
         else if (g_LaunchState == 6) {
             g_LaunchState = 7;
-
-            // ProcessModsAndLaunch() patches banks, restores/backs up files, and
-            // merges def mods on disk - slow enough to freeze a frame if run
-            // here directly. Run it on a worker thread instead; the popup stays
-            // open and animated (via g_IsProcessingLaunch) until it's done.
             SetLaunchStatus("Patching banks and applying load order...");
             g_IsProcessingLaunch = true;
             std::thread([]() {
@@ -644,12 +584,10 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
     ImGuiID id_hash = ImGui::GetID(id);
     ImVec2 pos = ImGui::GetCursorScreenPos();
 
-    // Standard public invisible button handles layout, bounding box, and click detection
     bool pressed = ImGui::InvisibleButton(id, size);
     bool hovered = ImGui::IsItemHovered();
     bool held = ImGui::IsItemActive();
 
-    // Hover Timer Tracking (Per Button)
     static std::unordered_map<ImGuiID, float> s_HoverTimers;
     float& hoverTime = s_HoverTimers[id_hash];
     if (hovered) {
@@ -659,13 +597,11 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
         hoverTime = 0.0f;
     }
 
-    // Subtext reveal threshold (Triggers after 1.0 second hover)
     float subtextAlpha = 0.0f;
     if (hoverTime > 1.0f) {
-        subtextAlpha = (std::min)(1.0f, (hoverTime - 1.0f) / 0.25f); // Smooth 0.25s fade-in
+        subtextAlpha = (std::min)(1.0f, (hoverTime - 1.0f) / 0.25f);
     }
 
-    // Elevation shift on hover / press
     float offsetY = (hovered && !held) ? -2.0f : (held ? 1.0f : 0.0f);
     ImVec2 pMin = ImVec2(pos.x, pos.y + offsetY);
     ImVec2 pMax = ImVec2(pos.x + size.x, pos.y + size.y + offsetY);
@@ -673,11 +609,9 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     float rounding = 8.0f;
 
-    // Base Colors
     ImU32 bgColor = hovered ? IM_COL32(24, 28, 38, 240) : IM_COL32(14, 16, 22, 215);
     ImU32 borderColor = hovered ? accentColor : IM_COL32(48, 54, 68, 160);
 
-    // 1. Outer Glow Aura (Multi-Layered Outer Outline on Hover)
     if (hovered) {
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.5f;
@@ -691,11 +625,8 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
         }
     }
 
-    // 2. Base Background Fill
     drawList->AddRectFilled(pMin, pMax, bgColor, rounding);
-
-    // 3. Stronger Horizontal Accent Gradient (Left to Right Sweep)
-    uint32_t alphaLeft = hovered ? 0x88000000 : 0x44000000; // ~53% alpha on hover, ~27% idle
+    uint32_t alphaLeft = hovered ? 0x88000000 : 0x44000000;
     ImU32 gradLeft = (accentColor & 0x00FFFFFF) | alphaLeft;
     ImU32 gradRight = IM_COL32(0, 0, 0, 0);
 
@@ -703,28 +634,21 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
     ImVec2 gradMax = ImVec2(pMax.x - 1.0f, pMax.y - 1.0f);
     drawList->AddRectFilledMultiColor(gradMin, gradMax, gradLeft, gradRight, gradRight, gradLeft);
 
-    // 4. Card Border
     drawList->AddRect(pMin, pMax, borderColor, rounding, 0, hovered ? 1.8f : 1.0f);
-
-    // 5. Scaled Font Sizes & Centered Text Layout
     ImFont* font = ImGui::GetFont();
-    float titleFontSize = ImGui::GetFontSize() * 1.15f; // +15% larger font size
+    float titleFontSize = ImGui::GetFontSize() * 1.15f;
     float subFontSize = ImGui::GetFontSize() * 0.90f;
 
-    // Title Horizontal Centering
     ImVec2 titleSize = font->CalcTextSizeA(titleFontSize, FLT_MAX, 0.0f, title);
     float centerTitleX = pMin.x + (size.x - titleSize.x) * 0.5f;
 
-    // Vertical Offset Interpolation (Glides up slightly as subtext fades in)
     float centerTitleY = pMin.y + (size.y - titleSize.y) * 0.5f;
     float topTitleY = (subtitle && subtitle[0] != '\0') ? (pMin.y + 7.0f) : centerTitleY;
     float titleY = centerTitleY + (topTitleY - centerTitleY) * subtextAlpha;
 
-    // Render Title Text
     ImU32 titleCol = hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(220, 225, 235, 240);
     drawList->AddText(font, titleFontSize, ImVec2(centerTitleX, titleY), titleCol, title);
 
-    // Render Subtext (Centered horizontally, reveals when hovered > 1.0s)
     if (subtitle && subtitle[0] != '\0' && subtextAlpha > 0.0f) {
         ImVec2 subSize = font->CalcTextSizeA(subFontSize, FLT_MAX, 0.0f, subtitle);
         float centerSubX = pMin.x + (size.x - subSize.x) * 0.5f;
@@ -748,7 +672,6 @@ static void DrawFrontendHub() {
     }
     s_LastAppState = g_CurrentAppState;
 
-    // --- 1. BACKGROUND MAP & VIGNETTE ---
     if (g_BackgroundTexture && g_BgWidth > 0 && g_BgHeight > 0) {
         ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 
@@ -771,13 +694,9 @@ static void DrawFrontendHub() {
 
         bgDrawList->AddImage((ImTextureID)g_BackgroundTexture, pMin, pMax);
 
-        // --- Drifting Cloud / Fog Layer ---
         if (g_CloudTexture && g_CloudWidth > 0 && g_CloudHeight > 0) {
             static float s_CloudTime = 0.0f;
             s_CloudTime += ImGui::GetIO().DeltaTime;
-
-            // radius = half-width of the drawn sprite. flip mirrors the sprite
-            // horizontally so five puffs from one 64x64 texture don't read as obvious repeats.
             struct CloudPuff { float xFrac, yFrac, radius, speed, alpha; bool flip; };
             static const CloudPuff puffs[] = {
                 { 0.05f, 0.15f, 260.0f, 6.0f, 235.0f, false },
@@ -793,7 +712,6 @@ static void DrawFrontendHub() {
                 float x = fmodf(baseX + s_CloudTime * p.speed, period) - p.radius;
                 float y = p.yFrac * scaledHeight - s_ScrollY;
 
-                // Slightly squashed so it reads as a fog bank rather than a round blob
                 float halfW = p.radius;
                 float halfH = p.radius * 0.55f;
                 ImVec2 spriteMin(x - halfW, y - halfH);
@@ -807,7 +725,6 @@ static void DrawFrontendHub() {
             }
         }
 
-        // Soft Edge Vignette
         float vignetteSize = 120.0f;
         ImU32 colDark = IM_COL32(0, 0, 0, 200);
         ImU32 colClear = IM_COL32(0, 0, 0, 0);
@@ -818,7 +735,6 @@ static void DrawFrontendHub() {
         bgDrawList->AddRectFilledMultiColor(ImVec2(displaySize.x - vignetteSize, 0), ImVec2(displaySize.x, displaySize.y), colClear, colDark, colDark, colClear);
     }
 
-    // --- 2. ACCURATE SYSTEM STATUS READS ---
     bool wadDecompiled = false;
     if (!g_AppConfig.GameRootPath.empty()) {
         fs::path finalAlbionPath = fs::path(g_AppConfig.GameRootPath) / "Data" / "Levels" / "FinalAlbion";
@@ -843,16 +759,12 @@ static void DrawFrontendHub() {
         }
     }
 
-    // Initialize Menu Audio once when entering Frontend
     if (!s_AudioInitialized) {
-        g_MenuAudio.Init(); // Init() already respects the saved mute state, no extra work needed here
+        g_MenuAudio.Init();
         s_AudioInitialized = true;
     }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-    // --- 2.5 BOTTOM-LEFT MUSIC TOGGLE BUTTON ---
-    // Anchored at bottom-left corner (X: 16px, Y: bottom - 16px)
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 16.0f, viewport->Pos.y + viewport->Size.y - 16.0f), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.07f, 0.82f));
@@ -881,7 +793,6 @@ static void DrawFrontendHub() {
             ImGui::PopStyleColor(3);
         }
         else {
-            // Fallback text button if textures are missing
             if (ImGui::Button(g_MenuAudio.isMuted ? "Unmute" : "Mute")) {
                 g_MenuAudio.Toggle();
             }
@@ -895,8 +806,6 @@ static void DrawFrontendHub() {
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 
-    // --- 3. BOTTOM-LEFT COLLAPSIBLE STATUS OVERLAY ---
-    // Positioned directly to the right of the music toggle button (X: 60px)
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 60.0f, viewport->Pos.y + viewport->Size.y - 16.0f), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
 
     float labelOffset = 165.0f;
@@ -972,8 +881,6 @@ static void DrawFrontendHub() {
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 
-
-    // --- 4. BOTTOM-RIGHT WATERMARK OVERLAY ---
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x - 16.0f, viewport->Pos.y + viewport->Size.y - 16.0f), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -1000,8 +907,6 @@ static void DrawFrontendHub() {
     ImGui::End();
     ImGui::PopStyleVar();
 
-
-    // --- 5. MAIN HUB CENTER WINDOW ---
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.09f, 0.12f, 0.80f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
 
@@ -1031,13 +936,11 @@ static void DrawFrontendHub() {
         float cardWidth = ImGui::GetContentRegionAvail().x;
         ImVec2 fullCardSize(cardWidth, 50.0f);
 
-        // 1. Launch Card (Gold Accent)
         if (DrawCardButton("##BtnLaunch", "Launch Fable", "Hook mods and start game", fullCardSize, IM_COL32(242, 193, 78, 255))) {
             g_LaunchState = 1;
         }
         ImGui::Dummy(ImVec2(0, 6));
 
-        // 2. Mod Manager Card (Arcane Purple Accent)
         char modSubtext[64];
         snprintf(modSubtext, sizeof(modSubtext), "Manage DLLs & mod packages (%d active)", activeModsCount);
         if (DrawCardButton("##BtnModMgr", "Mod Manager", modSubtext, fullCardSize, IM_COL32(138, 79, 255, 255))) {
@@ -1046,18 +949,11 @@ static void DrawFrontendHub() {
         }
         ImGui::Dummy(ImVec2(0, 6));
 
-        // 3. Editor Card (Teal Accent)
         if (!g_IsEditorLoading) {
             if (DrawCardButton("##BtnEditor", "Editor", "Decompile banks, edit defs & assets", fullCardSize, IM_COL32(32, 178, 170, 255))) {
                 if (!g_MenuAudio.isMuted) {
                     g_MenuAudio.Toggle();
                 }
-
-                // Don't call PerformAutoLoad() here directly - it walks the defs
-                // folder and parses every auto-load bank from disk, which is slow
-                // enough to freeze the UI for a visible moment. Kick it off on a
-                // worker thread and only switch to ModCreator once it's done, so
-                // we can show a loading popup in the meantime instead of freezing.
                 SetEditorLoadStatus("Loading definitions and banks...");
                 g_EditorLoadRequested = true;
                 g_IsEditorLoading = true;
@@ -1069,7 +965,6 @@ static void DrawFrontendHub() {
             }
         }
         else {
-            // Keep layout stable while the load is in progress.
             ImGui::BeginDisabled();
             DrawCardButton("##BtnEditor", "Editor", "Loading...", fullCardSize, IM_COL32(32, 178, 170, 255));
             ImGui::EndDisabled();
@@ -1079,18 +974,15 @@ static void DrawFrontendHub() {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 10));
 
-        // 4 & 5. About and Exit Half-Width Cards
         float halfWidth = (cardWidth - 8.0f) * 0.5f;
         ImVec2 halfCardSize(halfWidth, 50.0f);
 
-        // About Card (Slate Blue Accent)
         if (DrawCardButton("##BtnAbout", "About", "Hub & app details", halfCardSize, IM_COL32(110, 140, 175, 255))) {
             g_ShowAboutPopup = true;
         }
 
         ImGui::SameLine();
 
-        // Exit Card (Crimson Accent)
         if (DrawCardButton("##BtnExit", "Exit", "Close EgoCore", halfCardSize, IM_COL32(220, 65, 65, 255))) {
             if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty) {
                 g_TriggerAssetChangesExitPopup = true;
@@ -1105,7 +997,6 @@ static void DrawFrontendHub() {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    // --- Editor Loading Popup ---
     if (g_IsEditorLoading) { ImGui::OpenPopup("Loading Editor..."); }
 
     ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
@@ -1123,7 +1014,6 @@ static void DrawFrontendHub() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // Teal Glow Aura (matches the Editor card accent color)
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -1135,7 +1025,6 @@ static void DrawFrontendHub() {
             );
         }
 
-        // Header Banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
         drawList->AddRectFilledMultiColor(
@@ -1172,8 +1061,6 @@ static void DrawFrontendHub() {
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
 
-    // Only hand off to the ModCreator screen once the background load has
-    // actually finished, so it never reads workspace data mid-load.
     if (g_EditorLoadRequested && !g_IsEditorLoading) {
         g_EditorLoadRequested = false;
         g_CurrentAppState = EAppState::ModCreator;
@@ -1230,7 +1117,6 @@ static void DrawBankExplorer() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // Gold Glow Aura
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -1242,7 +1128,6 @@ static void DrawBankExplorer() {
             );
         }
 
-        // Header Banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
         drawList->AddRectFilledMultiColor(
@@ -1288,7 +1173,6 @@ static void DrawBankExplorer() {
     ImGui::PopStyleColor(3);
 
 
-    // --- COMPILE SUCCESS & ERROR MODALS ---
     if (g_TriggerCompileSuccess) {
         if (g_DefCompileSuccess) {
             ImGui::OpenPopup("Compile Complete");
@@ -1380,7 +1264,6 @@ static void DrawBankExplorer() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // Gold Aura
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -1418,8 +1301,6 @@ static void DrawBankExplorer() {
             ImGui::PopStyleColor();
 
             ImGui::Dummy(ImVec2(0, 10));
-
-            // Slate Copy Button
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.18f, 0.24f, 0.90f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.32f, 0.42f, 1.00f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.14f, 0.18f, 1.00f));
@@ -1438,8 +1319,6 @@ static void DrawBankExplorer() {
             ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 1.0f), "Please check your defs for syntax or linking errors.");
             ImGui::Dummy(ImVec2(0, 10));
         }
-
-        // Gold Close Button
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
@@ -1463,7 +1342,6 @@ static void DrawBankExplorer() {
         g_ShowAboutPopup = false;
     }
 
-    // --- FRONTEND HUB THEMED POPUP STYLING ---
     ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
@@ -1480,7 +1358,6 @@ static void DrawBankExplorer() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // 1. Outer Gold Glow Aura
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -1492,27 +1369,21 @@ static void DrawBankExplorer() {
             );
         }
 
-        // 2. Arcane Header Gradient Banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 70.0f);
         drawList->AddRectFilledMultiColor(
             headerMin, headerMax,
-            IM_COL32(242, 193, 78, 30),  // Top-Left Gold
-            IM_COL32(110, 140, 175, 15), // Top-Right Slate Blue
-            IM_COL32(0, 0, 0, 0),        // Bottom-Right Clear
-            IM_COL32(0, 0, 0, 0)         // Bottom-Left Clear
+            IM_COL32(242, 193, 78, 30), 
+            IM_COL32(110, 140, 175, 15),
+            IM_COL32(0, 0, 0, 0),
+            IM_COL32(0, 0, 0, 0)
         );
-
-        // Header Title
         if (g_TitleFont) ImGui::PushFont(g_TitleFont);
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "EgoCore");
         if (g_TitleFont) ImGui::PopFont();
-
-        //ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
-        // Version & Author Sub-bar
-        ImGui::TextDisabled("Version: 4.8.26");
+        ImGui::TextDisabled("Version: 7.8.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -1524,7 +1395,6 @@ static void DrawBankExplorer() {
 
         ImGui::Dummy(ImVec2(0, 6));
 
-        // Separator Line with Center Gold Fade
         drawList->AddLine(
             ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
             ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
@@ -1532,14 +1402,12 @@ static void DrawBankExplorer() {
         );
         ImGui::Dummy(ImVec2(0, 10));
 
-        // 3. Scrollable Content Area
         float footerHeight = 42.0f;
         ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0.04f, 0.05f, 0.07f, 0.50f));
         ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.30f, 0.35f, 0.45f, 0.60f));
 
         ImGui::BeginChild("##about_scroll_content", ImVec2(0, -footerHeight), false);
 
-        // Main Text Paragraphs
         ImGui::TextWrapped("EgoCore is the culmination of over twenty years of obsession with the inner workings of Fable. What began as programming related curiosity has evolved into a six-month intensive development journey to provide the community with a modern, robust, and versatile modding framework.");
         ImGui::Dummy(ImVec2(0, 8));
 
@@ -1550,7 +1418,6 @@ static void DrawBankExplorer() {
 
         ImGui::Dummy(ImVec2(0, 12));
 
-        // Resource Links Container Card
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.05f, 0.07f, 0.70f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
@@ -1592,7 +1459,6 @@ static void DrawBankExplorer() {
 
         ImGui::Dummy(ImVec2(0, 8));
 
-        // Special Thanks Container Card
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.05f, 0.07f, 0.70f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
@@ -1615,10 +1481,8 @@ static void DrawBankExplorer() {
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
 
-        ImGui::EndChild(); // End scroll child
+        ImGui::EndChild();
         ImGui::PopStyleColor(2);
-
-        // 4. Footer & Centered Gold Accent Close Button
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 4));
 
@@ -1665,7 +1529,6 @@ static void DrawBankExplorer() {
         ImVec2 winSize = ImGui::GetWindowSize();
         ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-        // Outer gold glow
         for (int i = 3; i >= 1; i--) {
             float expand = (float)i * 1.8f;
             float glowAlpha = (1.0f - (float)i / 4.0f) * 0.25f;
@@ -1677,7 +1540,6 @@ static void DrawBankExplorer() {
             );
         }
 
-        // Header banner
         ImVec2 headerMin = winPos;
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 58.0f);
         drawList->AddRectFilledMultiColor(
@@ -1700,7 +1562,6 @@ static void DrawBankExplorer() {
         );
         ImGui::Dummy(ImVec2(0, 12));
 
-        // Message
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.95f, 0.95f));
         ImGui::TextWrapped("You have pending changes to asset mods (reordered, enabled/disabled, or added).");
         ImGui::TextWrapped("These changes will only take effect after you launch the game through EgoCore.");
@@ -1708,8 +1569,6 @@ static void DrawBankExplorer() {
         ImGui::PopStyleColor();
 
         ImGui::Dummy(ImVec2(0, 12));
-
-        // Buttons
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
@@ -1745,7 +1604,6 @@ static void DrawBankExplorer() {
 
 
     if (g_CurrentAppState == EAppState::Setup) {
-        // Render background image & aggressive backdrop contrast
         if (g_BackgroundTexture && g_BgWidth > 0 && g_BgHeight > 0) {
             ImVec2 displaySize = ImGui::GetIO().DisplaySize;
             float scaledWidth = displaySize.x;
@@ -1754,13 +1612,9 @@ static void DrawBankExplorer() {
 
             ImDrawList* bgDrawList = ImGui::GetBackgroundDrawList();
             bgDrawList->AddImage((ImTextureID)g_BackgroundTexture, ImVec2(0.0f, 0.0f), ImVec2(scaledWidth, scaledHeight));
-
-            // 1. Heavy Overall Screen Dim Overlay (55% Black tint for setup contrast)
             bgDrawList->AddRectFilled(ImVec2(0, 0), displaySize, IM_COL32(0, 0, 0, 140));
-
-            // 2. Aggressive Edge Vignette Gradient
-            float vignetteSize = 280.0f; // Expanded vignette reach
-            ImU32 colDark = IM_COL32(0, 0, 0, 255); // Full opacity black at edges
+            float vignetteSize = 280.0f;
+            ImU32 colDark = IM_COL32(0, 0, 0, 255);
             ImU32 colClear = IM_COL32(0, 0, 0, 0);
 
             bgDrawList->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(displaySize.x, vignetteSize), colDark, colDark, colClear, colClear);
@@ -1768,8 +1622,6 @@ static void DrawBankExplorer() {
             bgDrawList->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(vignetteSize, displaySize.y), colDark, colClear, colClear, colDark);
             bgDrawList->AddRectFilledMultiColor(ImVec2(displaySize.x - vignetteSize, 0), ImVec2(displaySize.x, displaySize.y), colClear, colDark, colDark, colClear);
         }
-
-        // Window Styling
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.09f, 0.12f, 0.96f));
         ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.45f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
@@ -1786,7 +1638,6 @@ static void DrawBankExplorer() {
             ImVec2 winSize = ImGui::GetWindowSize();
             ImVec2 winMax = ImVec2(winPos.x + winSize.x, winPos.y + winSize.y);
 
-            // 1. Multi-Layered Gold Glow Aura
             for (int i = 3; i >= 1; i--) {
                 float expand = (float)i * 1.5f;
                 float glowAlpha = (1.0f - (float)i / 4.0f) * 0.30f;
@@ -1798,7 +1649,6 @@ static void DrawBankExplorer() {
                 );
             }
 
-            // 2. Title Header with Font & Gold Color
             if (g_TitleFont) ImGui::PushFont(g_TitleFont);
             ImGui::SetWindowFontScale(1.30f);
 
@@ -1811,7 +1661,6 @@ static void DrawBankExplorer() {
 
             ImGui::Dummy(ImVec2(0, 4));
 
-            // Gold Faded Separator
             drawList->AddLine(
                 ImVec2(winPos.x + 20.0f, ImGui::GetCursorScreenPos().y),
                 ImVec2(winMax.x - 20.0f, ImGui::GetCursorScreenPos().y),
@@ -1819,14 +1668,12 @@ static void DrawBankExplorer() {
             );
             ImGui::Dummy(ImVec2(0, 12));
 
-            // Description Text
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.88f, 0.92f, 0.90f));
             ImGui::TextWrapped("To get started, please select your main Fable game directory (the folder containing Fable.exe and the Data directory).");
             ImGui::PopStyleColor();
 
             ImGui::Dummy(ImVec2(0, 18));
 
-            // 3. Upgraded Selection Card
             float cardWidth = ImGui::GetContentRegionAvail().x;
             if (DrawCardButton("##BtnSelectFolder", "Select Game Folder", "Browse to Fable root folder", ImVec2(cardWidth, 54.0f), IM_COL32(242, 193, 78, 255))) {
                 std::string root = OpenFolderDialog();
@@ -1863,15 +1710,6 @@ static void DrawBankExplorer() {
         DrawModManagerWindow();
         return;
     }
-
-    // --- EDITOR (MOD CREATOR) THEME ---
-    // The Frontend Hub has its own dark navy / gold look (see DrawFrontendHub),
-    // but the Editor below was still drawing on stock ImGui defaults - blue
-    // frames/buttons, square corners. This pushes a matching gray-and-gold
-    // theme once for the whole Editor (fields, buttons, checkboxes, sliders,
-    // headers) so every call site below - including everything in
-    // BankTabUI.h/DefExplorer.h/FSETabUI.h - picks it up for free. Popped at
-    // the very end of this function, right before the closing brace.
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.12f, 0.16f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.22f, 0.20f, 0.18f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.30f, 0.27f, 0.18f, 1.00f));
@@ -2055,10 +1893,21 @@ static void DrawBankExplorer() {
         }
     }
 
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+
+    ImVec2 currentPad = ImGui::GetStyle().FramePadding;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(currentPad.x, currentPad.y + 4.0f));
+
     ImGui::BeginChild("LocalMenuBarChild", ImVec2(0, ImGui::GetFrameHeight()), false, ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar);
 
-    if (ImGui::BeginMenuBar()) {
+    bool menuBarOpen = ImGui::BeginMenuBar();
+
+    ImGui::PopStyleVar();
+
+    if (menuBarOpen) {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0f);
+
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Return to Main Menu")) {
                 g_CurrentAppState = EAppState::Frontend;
@@ -2076,10 +1925,6 @@ static void DrawBankExplorer() {
                 g_ShowModPackageWindow = true;
             }
             if (ImGui::MenuItem("Run Fable")) {
-                // This is a direct launch from the Editor, not the Frontend/Mod
-                // Manager flow - skip g_LaunchState / ProcessModsAndLaunch()
-                // entirely and just start the game, same as launching it
-                // outside the tool. At most, warn about unsaved changes first.
                 if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
                     g_PendingRunFableLaunch = true;
                     g_DefWorkspace.TriggerUnsavedPopup = true;
@@ -2168,7 +2013,7 @@ static void DrawBankExplorer() {
         ImGui::EndMenuBar();
     }
     ImGui::EndChild();
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
 
     if (g_TriggerGeneralSettingsPopup) {
         ImGui::OpenPopup("General Settings");
@@ -2264,8 +2109,6 @@ static void DrawBankExplorer() {
             ImGui::PopStyleColor(2);
             };
 
-        // Scrollable Content Area (mirrors the About modal's content child so
-        // this stays robust if the row list grows or the UI is scaled up)
         float footerHeight = 52.0f;
         ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0.04f, 0.05f, 0.07f, 0.50f));
         ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.30f, 0.35f, 0.45f, 0.60f));
@@ -2490,6 +2333,6 @@ static void DrawBankExplorer() {
     if (g_CurrentAppState == EAppState::ModCreator) {
         DrawModPackageWindow();
     }
-    ImGui::PopStyleColor(22); 
+    ImGui::PopStyleColor(22);
     ImGui::PopStyleVar(7);
 }
