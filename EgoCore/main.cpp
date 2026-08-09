@@ -33,6 +33,14 @@ ImTextureID g_PlayTexture = 0;
 ImTextureID g_PauseTexture = 0;
 ImTextureID g_StopTexture = 0;
 ImTextureID g_LoopTexture = 0;
+ImTextureID g_ImportTexture = 0;
+ImTextureID g_ExportTexture = 0;
+ImTextureID g_AddTexture = 0;
+ImTextureID g_ResizeTexture = 0;
+ImTextureID g_ZoomInTexture = 0;
+ImTextureID g_ZoomOutTexture = 0;
+ImTextureID g_ChangeTexture = 0;
+ImTextureID g_SettingsTexture = 0;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
@@ -58,10 +66,6 @@ bool LoadTextureFromFile(const char* filename, ID3D11Device* d3dDevice, ID3D11Sh
     int image_height = 0;
     unsigned char* image_data = stbi_load(filename, &image_width, &image_height, NULL, 4);
     if (image_data == NULL) return false;
-
-    // Optionally amplify the alpha channel in-place. Useful for sprites (like soft fog/cloud
-    // art) whose peak alpha is low by design - a tint color alone can only make AddImage()
-    // draws MORE transparent, never less, since tint multiplies against the source alpha.
     if (alphaBoost != 1.0f) {
         int pixelCount = image_width * image_height;
         for (int i = 0; i < pixelCount; i++) {
@@ -220,6 +224,62 @@ int main(int, char**) {
         }
     }
 
+    ID3D11ShaderResourceView* srvImport = nullptr;
+    if (std::filesystem::exists("Assets/Import.png")) {
+        if (LoadTextureFromFile("Assets/Import.png", g_pd3dDevice, &srvImport, &iconWidth, &iconHeight)) {
+            g_ImportTexture = (ImTextureID)srvImport;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvExport = nullptr;
+    if (std::filesystem::exists("Assets/Export.png")) {
+        if (LoadTextureFromFile("Assets/Export.png", g_pd3dDevice, &srvExport, &iconWidth, &iconHeight)) {
+            g_ExportTexture = (ImTextureID)srvExport;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvAdd = nullptr;
+    if (std::filesystem::exists("Assets/Add.png")) {
+        if (LoadTextureFromFile("Assets/Add.png", g_pd3dDevice, &srvAdd, &iconWidth, &iconHeight)) {
+            g_AddTexture = (ImTextureID)srvAdd;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvResize = nullptr;
+    if (std::filesystem::exists("Assets/Resize.png")) {
+        if (LoadTextureFromFile("Assets/Resize.png", g_pd3dDevice, &srvResize, &iconWidth, &iconHeight)) {
+            g_ResizeTexture = (ImTextureID)srvResize;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvZoomIn = nullptr;
+    if (std::filesystem::exists("Assets/ZoomIn.png")) {
+        if (LoadTextureFromFile("Assets/ZoomIn.png", g_pd3dDevice, &srvZoomIn, &iconWidth, &iconHeight)) {
+            g_ZoomInTexture = (ImTextureID)srvZoomIn;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvZoomOut = nullptr;
+    if (std::filesystem::exists("Assets/ZoomOut.png")) {
+        if (LoadTextureFromFile("Assets/ZoomOut.png", g_pd3dDevice, &srvZoomOut, &iconWidth, &iconHeight)) {
+            g_ZoomOutTexture = (ImTextureID)srvZoomOut;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvChange = nullptr;
+    if (std::filesystem::exists("Assets/Change.png")) {
+        if (LoadTextureFromFile("Assets/Change.png", g_pd3dDevice, &srvChange, &iconWidth, &iconHeight)) {
+            g_ChangeTexture = (ImTextureID)srvChange;
+        }
+    }
+
+    ID3D11ShaderResourceView* srvSettings = nullptr;
+    if (std::filesystem::exists("Assets/Settings.png")) {
+        if (LoadTextureFromFile("Assets/Settings.png", g_pd3dDevice, &srvSettings, &iconWidth, &iconHeight)) {
+            g_SettingsTexture = (ImTextureID)srvSettings;
+        }
+    }
+
     bool done = false;
     while (!done) {
         MSG msg;
@@ -263,6 +323,14 @@ int main(int, char**) {
     if (srvPause) { srvPause->Release(); srvPause = nullptr; }
     if (srvStop) { srvStop->Release(); srvStop = nullptr; }
     if (srvLoop) { srvLoop->Release(); srvLoop = nullptr; }
+    if (srvImport) { srvImport->Release(); srvImport = nullptr; }
+    if (srvExport) { srvExport->Release(); srvExport = nullptr; }
+    if (srvAdd) { srvAdd->Release(); srvAdd = nullptr; }
+    if (srvResize) { srvResize->Release(); srvResize = nullptr; }
+    if (srvZoomIn) { srvZoomIn->Release(); srvZoomIn = nullptr; }
+    if (srvZoomOut) { srvZoomOut->Release(); srvZoomOut = nullptr; }
+    if (srvChange) { srvChange->Release(); srvChange = nullptr; }
+    if (srvSettings) { srvSettings->Release(); srvSettings = nullptr; }
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

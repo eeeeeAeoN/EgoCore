@@ -17,6 +17,12 @@ extern ImTextureID g_PlayTexture;
 extern ImTextureID g_PauseTexture;
 extern ImTextureID g_StopTexture;
 extern ImTextureID g_LoopTexture;
+extern ImTextureID g_ImportTexture;
+extern ImTextureID g_ExportTexture;
+extern ImTextureID g_ChangeTexture;
+
+
+static const ImVec4 kChangeIconTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
 
 static MeshRenderer g_StandaloneRenderer;
 static C3DMeshContent g_StandaloneMesh;
@@ -445,7 +451,16 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         ImVec2 viewportAvail = ImGui::GetContentRegionAvail();
         if (viewportAvail.y < 60.0f) viewportAvail.y = 60.0f;
 
+        bool openImportPopup = false;
+
         ImGui::BeginChild("AnimViewport", viewportAvail, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        bool viewportHovered = ImGui::IsWindowHovered();
+        static float s_AnimOverlayAlpha = 1.0f;
+        float targetAlpha = viewportHovered ? 1.0f : 0.0f;
+        s_AnimOverlayAlpha += (targetAlpha - s_AnimOverlayAlpha) * ImGui::GetIO().DeltaTime * 15.0f;
+        if (s_AnimOverlayAlpha < 0.0f) s_AnimOverlayAlpha = 0.0f;
+        if (s_AnimOverlayAlpha > 1.0f) s_AnimOverlayAlpha = 1.0f;
 
         ImVec2 pMin = ImGui::GetCursorScreenPos();
         ImVec2 pMax = ImVec2(pMin.x + viewportAvail.x, pMin.y + viewportAvail.y);
@@ -562,6 +577,7 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
             }
             {
                 ImGui::SetCursorScreenPos(ImVec2(pMin.x + 10, pMin.y + 10));
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, s_AnimOverlayAlpha);
                 ImGui::BeginGroup();
                 if (g_StandaloneMesh.BoneCount > 0) {
                     ImGui::Checkbox("Skeleton", &g_StandaloneShowSkeleton);
@@ -569,6 +585,7 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
                 }
                 ImGui::Checkbox("Movement Vector", &g_StandaloneShowMovementVector);
                 ImGui::EndGroup();
+                ImGui::PopStyleVar();
             }
         }
         {
@@ -576,24 +593,67 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
             static float s_AnimOverlayH = 24.0f;
 
             ImGui::SetCursorScreenPos(ImVec2(pMax.x - s_AnimOverlayW - 18, pMax.y - s_AnimOverlayH - 18));
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, s_AnimOverlayAlpha);
             ImGui::BeginGroup();
 
-            if (ImGui::Button("Import")) {
-                replaceAnimType = (entryType == 7) ? 7 : 6;
-                ImGui::OpenPopup("Import Over Existing");
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.12f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.22f));
+
+            // Import button
+            if (g_ImportTexture) {
+                if (ImGui::ImageButton("##AnimImport", g_ImportTexture, ImVec2(24, 24), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kImportIconTint)) {
+                    replaceAnimType = (entryType == 7) ? 7 : 6;
+                    openImportPopup = true;
+                }
             }
+            else if (ImGui::Button("Import")) {
+                replaceAnimType = (entryType == 7) ? 7 : 6;
+                openImportPopup = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Import");
+
             ImGui::SameLine();
-            if (ImGui::Button("Export")) {
+
+            // Export button
+            ImGui::BeginDisabled(!g_StandaloneMeshLoaded);
+            if (g_ExportTexture) {
+                if (ImGui::ImageButton("##AnimExport", g_ExportTexture, ImVec2(24, 24), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kExportIconTint)) {
+                    g_ShowStandaloneExportPopup = true;
+                }
+            }
+            else if (ImGui::Button("Export")) {
                 g_ShowStandaloneExportPopup = true;
             }
-            ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.55f, 0.10f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.66f, 0.16f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.45f, 0.08f, 1.0f));
-            if (ImGui::Button(g_StandaloneMeshLoaded ? "Change Mesh" : "Select Mesh")) g_ShowStandaloneMeshPicker = true;
-            ImGui::PopStyleColor(3);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Export");
 
+            ImGui::SameLine();
+
+            // Change Mesh button (now using texture)
+            if (g_ChangeTexture) {
+                if (ImGui::ImageButton("##AnimChangeMesh", g_ChangeTexture, ImVec2(24, 24), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kChangeIconTint)) {
+                    g_ShowStandaloneMeshPicker = true;
+                }
+            }
+            else {
+                // fallback to text button if texture not loaded
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.55f, 0.10f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.66f, 0.16f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.45f, 0.08f, 1.0f));
+                if (ImGui::Button(g_StandaloneMeshLoaded ? "Change Mesh" : "Select Mesh")) {
+                    g_ShowStandaloneMeshPicker = true;
+                }
+                ImGui::PopStyleColor(3);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(g_StandaloneMeshLoaded ? "Change Mesh" : "Select Mesh");
+            }
+
+            ImGui::PopStyleColor(3);  // restore button colors for the three buttons (they share the same style)
             ImGui::EndGroup();
+            ImGui::PopStyleVar();     // restore alpha
+
             ImVec2 brMin = ImGui::GetItemRectMin();
             ImVec2 brMax = ImGui::GetItemRectMax();
             s_AnimOverlayW = brMax.x - brMin.x;
@@ -601,6 +661,11 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         }
 
         ImGui::EndChild();
+
+        if (openImportPopup) {                       
+            ImGui::OpenPopup("Import Over Existing"); 
+        }                                                  
+
         if (ImGui::BeginPopupModal("Import Over Existing", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "Select target animation type:");
             ImGui::RadioButton("Normal Animation (6)", &replaceAnimType, 6);

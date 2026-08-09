@@ -21,6 +21,9 @@ extern ImTextureID g_PlayTexture;
 extern ImTextureID g_PauseTexture;
 extern ImTextureID g_StopTexture;
 extern ImTextureID g_LoopTexture;
+extern ImTextureID g_SettingsTexture;
+extern ImTextureID g_ImportTexture;
+extern ImTextureID g_ExportTexture;
 
 static MeshRenderer g_MeshRenderer;
 static bool g_ShowWireframe = false;
@@ -66,6 +69,12 @@ static bool g_ExportAnimation = true;
 static bool g_ShowExportPopup = false;
 static bool g_TriggerExportPopup = false;
 inline bool g_IsMeshViewportHovered = false;
+
+static const ImVec4 kImportIconTint = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
+static const ImVec4 kExportIconTint = ImVec4(0.45f, 0.70f, 0.95f, 1.0f);
+static const ImVec4 kSettingsIconTint = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+static float s_MeshOverlayAlpha = 1.0f;
 
 struct VolumeBoxState {
     bool IsBoxMode = false;
@@ -740,6 +749,11 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
     g_IsMeshViewportHovered = ImGui::IsWindowHovered();
 
+    float meshOverlayTargetAlpha = g_IsMeshViewportHovered ? 1.0f : 0.0f;
+    s_MeshOverlayAlpha += (meshOverlayTargetAlpha - s_MeshOverlayAlpha) * ImGui::GetIO().DeltaTime * 15.0f;
+    if (s_MeshOverlayAlpha < 0.0f) s_MeshOverlayAlpha = 0.0f;
+    if (s_MeshOverlayAlpha > 1.0f) s_MeshOverlayAlpha = 1.0f;
+
     g_MeshRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
     if (g_ShowPhysicsOverlay) g_PhysicsOverlayRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
 
@@ -913,6 +927,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
     // Top-left overlay
     ImGui::SetCursorScreenPos(ImVec2(pMin.x + 10, pMin.y + 10));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, s_MeshOverlayAlpha);
     ImGui::BeginGroup();
 
     if (showTextureWarning) {
@@ -991,12 +1006,23 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
     }
 
     ImGui::EndGroup();
+    ImGui::PopStyleVar();
 
-    // Top-right overlay: collapse/expand info panel toggle
-    ImGui::SetCursorScreenPos(ImVec2(pMax.x - 28 - 10, pMin.y + 10));
-    if (ImGui::Button(g_ShowRightPanel ? ">>##RightToggle" : "<<##RightToggle", ImVec2(28, 24))) {
-        g_ShowRightPanel = !g_ShowRightPanel;
+    ImGui::SetCursorScreenPos(ImVec2(pMax.x - 24 - 10, pMin.y + 10));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, s_MeshOverlayAlpha);
+    if (g_SettingsTexture) {
+        if (ImGui::ImageButton("##RightToggle", g_SettingsTexture, ImVec2(24, 20),
+            ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kSettingsIconTint)) {
+            g_ShowRightPanel = !g_ShowRightPanel;
+        }
     }
+    else {
+        // fallback to text button if texture not loaded
+        if (ImGui::Button(g_ShowRightPanel ? ">>##RightToggle" : "<<##RightToggle", ImVec2(24, 20))) {
+            g_ShowRightPanel = !g_ShowRightPanel;
+        }
+    }
+    ImGui::PopStyleVar();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowRightPanel ? "Collapse Info Panel" : "Expand Info Panel");
 
     // Bottom-right overlay
@@ -1005,17 +1031,33 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         static float s_BottomRightOverlayH = 30.0f;
 
         ImGui::SetCursorScreenPos(ImVec2(pMax.x - s_BottomRightOverlayW - 10, pMax.y - s_BottomRightOverlayH - 10));
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, s_MeshOverlayAlpha);
         ImGui::BeginGroup();
 
         if (lodControlsCallback) {
             lodControlsCallback();
             ImGui::SameLine();
         }
-        if (ImGui::Button("Export")) {
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.12f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.22f));
+
+        // Export button
+        if (g_ExportTexture) {
+            if (ImGui::ImageButton("##MeshExport", g_ExportTexture, ImVec2(24, 24), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kExportIconTint)) {
+                g_TriggerExportPopup = true;
+            }
+        }
+        else if (ImGui::Button("Export")) {
             g_TriggerExportPopup = true;
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Export");
+
+        ImGui::PopStyleColor(3);
 
         ImGui::EndGroup();
+        ImGui::PopStyleVar();
         ImVec2 brMin = ImGui::GetItemRectMin();
         ImVec2 brMax = ImGui::GetItemRectMax();
         s_BottomRightOverlayW = brMax.x - brMin.x;

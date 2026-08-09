@@ -519,7 +519,7 @@ static void DrawLaunchPopup() {
             headerMin, headerMax,
             IM_COL32(242, 193, 78, 30),
             IM_COL32(110, 140, 175, 15),
-            IM_COL32(0, 0, 0, 0), 
+            IM_COL32(0, 0, 0, 0),
             IM_COL32(0, 0, 0, 0)
         );
 
@@ -657,6 +657,70 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
         ImU32 subCol = IM_COL32(150, 162, 180, (uint32_t)(subtextAlpha * 220.0f));
         drawList->AddText(font, subFontSize, ImVec2(centerSubX, subY), subCol, subtitle);
     }
+
+    return pressed;
+}
+
+// Compact "pill" tab button for the top bar mode switcher (Banks / Defs / FSE).
+// Same visual language as DrawCardButton (glow, gradient fill, accent border) but
+// sized to sit inside a normal menu-bar row instead of a big hub tile.
+//
+// IMPORTANT: `rowHeight` is the FULL row height (same value passed to every other
+// item on that row) and it is what gets reserved for the item itself. The pill
+// is drawn a few px smaller than that reserved space, but that shrink is *only*
+// in the drawing -- never in the size given to InvisibleButton. That's what
+// keeps this pixel-aligned with everything else on the row via plain SameLine(),
+// with no manual SetCursorPosY offset required anywhere.
+static bool DrawModeTabButton(const char* id, const char* label, bool active, ImU32 accentColor, float rowHeight) {
+    ImVec2 textSize = ImGui::CalcTextSize(label);
+    const float paddingX = 14.0f;
+    ImVec2 size = ImVec2(textSize.x + paddingX * 2.0f, rowHeight);
+
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    bool pressed = ImGui::InvisibleButton(id, size);
+    bool hovered = ImGui::IsItemHovered();
+    bool held = ImGui::IsItemActive();
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    // Cosmetic-only inset: shrinks the drawn pill within the reserved bounds so
+    // it reads as a tab, without touching layout/alignment at all.
+    const float inset = 3.0f;
+    ImVec2 pMin = ImVec2(pos.x, pos.y + inset);
+    ImVec2 pMax = ImVec2(pos.x + size.x, pos.y + size.y - inset);
+    float rounding = (pMax.y - pMin.y) * 0.30f;
+
+    ImU32 bgColor, borderColor, textColor;
+    if (active) {
+        bgColor = (accentColor & 0x00FFFFFF) | 0xB4000000;
+        borderColor = accentColor;
+        textColor = IM_COL32(255, 255, 255, 255);
+    }
+    else if (hovered) {
+        bgColor = (accentColor & 0x00FFFFFF) | (held ? 0x33000000 : 0x55000000);
+        borderColor = (accentColor & 0x00FFFFFF) | 0x99000000;
+        textColor = IM_COL32(230, 232, 238, 255);
+    }
+    else {
+        bgColor = IM_COL32(255, 255, 255, 12);
+        borderColor = IM_COL32(255, 255, 255, 24);
+        textColor = IM_COL32(160, 165, 175, 255);
+    }
+
+    if (active) {
+        for (int i = 2; i >= 1; i--) {
+            float expand = (float)i * 1.4f;
+            float glowAlpha = (1.0f - (float)i / 3.0f) * 0.30f;
+            ImU32 glowCol = (accentColor & 0x00FFFFFF) | ((uint32_t)(glowAlpha * 255.0f) << 24);
+            drawList->AddRect(ImVec2(pMin.x - expand, pMin.y - expand), ImVec2(pMax.x + expand, pMax.y + expand), glowCol, rounding + expand, 0, 1.2f);
+        }
+    }
+
+    drawList->AddRectFilled(pMin, pMax, bgColor, rounding);
+    drawList->AddRect(pMin, pMax, borderColor, rounding, 0, active ? 1.4f : 1.0f);
+
+    ImVec2 textPos = ImVec2(pMin.x + (size.x - textSize.x) * 0.5f, pMin.y + ((pMax.y - pMin.y) - textSize.y) * 0.5f);
+    drawList->AddText(textPos, textColor, label);
 
     return pressed;
 }
@@ -1373,7 +1437,7 @@ static void DrawBankExplorer() {
         ImVec2 headerMax = ImVec2(winMax.x, winPos.y + 70.0f);
         drawList->AddRectFilledMultiColor(
             headerMin, headerMax,
-            IM_COL32(242, 193, 78, 30), 
+            IM_COL32(242, 193, 78, 30),
             IM_COL32(110, 140, 175, 15),
             IM_COL32(0, 0, 0, 0),
             IM_COL32(0, 0, 0, 0)
@@ -1893,21 +1957,30 @@ static void DrawBankExplorer() {
         }
     }
 
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+    // BeginMenuBar() paints its own separate background (ImGuiCol_MenuBarBg).
+    // Left at the theme default it doesn't exactly match ChildBg, which shows
+    // up as a thin seam/line along the bottom edge of the bar. This is a pure
+    // color fix -- it doesn't touch height, position, or layout at all, so it
+    // can't reintroduce any of the alignment/clipping issues from before.
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
 
-    ImVec2 currentPad = ImGui::GetStyle().FramePadding;
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(currentPad.x, currentPad.y + 4.0f));
-
+    // -----------------------------------------------------------------------
+    // Reverted back to the exact geometry from the known-good baseline: plain
+    // ImGui::GetFrameHeight() for the child, no FramePadding pushes, no custom
+    // offset math, no measurement caching, no absolute screen-space
+    // positioning. Every bug in this bar over the last several rounds came
+    // from "clever" additions layered on top of this -- the baseline itself
+    // was never broken. The only actual change from that baseline is
+    // reskinning Banks/Defs/FSE via DrawModeTabButton for a nicer look, using
+    // the same ImGui::GetFrameHeight() as their height (exactly what the old
+    // ImGui::Button(60, 0) resolved to) so they still fall on the same
+    // baseline as the menu titles next to them, the same way the original
+    // plain buttons did.
+    // -----------------------------------------------------------------------
     ImGui::BeginChild("LocalMenuBarChild", ImVec2(0, ImGui::GetFrameHeight()), false, ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar);
 
-    bool menuBarOpen = ImGui::BeginMenuBar();
-
-    ImGui::PopStyleVar();
-
-    if (menuBarOpen) {
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0f);
-
+    if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Return to Main Menu")) {
                 g_CurrentAppState = EAppState::Frontend;
@@ -1985,33 +2058,46 @@ static void DrawBankExplorer() {
             ImGui::EndMenu();
         }
 
-        float rightAlign = ImGui::GetWindowWidth() - 210.0f;
+        // ---- Right-side mode switcher: Banks / Defs / FSE, reskinned via
+        // DrawModeTabButton but positioned exactly like the old plain
+        // ImGui::Button(60, 0) version -- SameLine() chaining, right inside
+        // the menu bar, height = GetFrameHeight() (what Button(.., 0) resolved
+        // to). Width is measured per-label instead of the old hardcoded 210,
+        // since the pill shape needs a bit more horizontal room than a plain
+        // button did.
+        const float btnHeight = ImGui::GetFrameHeight();
+        const float tabPad = 30.0f; // must match DrawModeTabButton's internal padding*2
+        const float tabSpacing = ImGui::GetStyle().ItemSpacing.x;
+
+        float banksW = ImGui::CalcTextSize("Banks").x + tabPad;
+        float defsW = ImGui::CalcTextSize("Defs").x + tabPad;
+        float fseW = g_FSEWorkspace.IsInstalled ? (ImGui::CalcTextSize("FSE").x + tabPad) : 0.0f;
+
+        float groupWidth = banksW + tabSpacing + defsW;
+        if (g_FSEWorkspace.IsInstalled) groupWidth += tabSpacing + fseW;
+
+        float rightAlign = ImGui::GetWindowWidth() - groupWidth - 12.0f;
         if (rightAlign > 0) ImGui::SameLine(rightAlign);
 
-        bool isBanks = (g_CurrentMode == EAppMode::Banks);
-        if (isBanks) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.43f, 0.34f, 0.17f, 1.0f));
-        if (ImGui::Button("Banks", ImVec2(60, 0))) g_CurrentMode = EAppMode::Banks;
-        if (isBanks) ImGui::PopStyleColor();
+        if (DrawModeTabButton("##mode_banks", "Banks", g_CurrentMode == EAppMode::Banks, IM_COL32(216, 168, 62, 255), btnHeight)) {
+            g_CurrentMode = EAppMode::Banks;
+        }
 
         ImGui::SameLine();
-
-        bool isDefs = (g_CurrentMode == EAppMode::Defs);
-        if (isDefs) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.52f, 0.14f, 0.24f, 1.0f));
-        if (ImGui::Button("Defs", ImVec2(60, 0))) g_CurrentMode = EAppMode::Defs;
-        if (isDefs) ImGui::PopStyleColor();
-
-        ImGui::SameLine();
+        if (DrawModeTabButton("##mode_defs", "Defs", g_CurrentMode == EAppMode::Defs, IM_COL32(196, 60, 84, 255), btnHeight)) {
+            g_CurrentMode = EAppMode::Defs;
+        }
 
         if (g_FSEWorkspace.IsInstalled) {
             ImGui::SameLine();
-            bool isFSE = (g_CurrentMode == EAppMode::FSE);
-            if (isFSE) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.52f, 0.24f, 1.0f));
-            if (ImGui::Button("FSE", ImVec2(60, 0))) g_CurrentMode = EAppMode::FSE;
-            if (isFSE) ImGui::PopStyleColor();
+            if (DrawModeTabButton("##mode_fse", "FSE", g_CurrentMode == EAppMode::FSE, IM_COL32(56, 176, 96, 255), btnHeight)) {
+                g_CurrentMode = EAppMode::FSE;
+            }
         }
 
         ImGui::EndMenuBar();
     }
+
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
 

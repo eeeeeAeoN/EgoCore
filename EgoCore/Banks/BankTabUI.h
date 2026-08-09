@@ -37,6 +37,7 @@ static int g_ImportAnimType = 6;
 static bool g_ShowLeftPanel = true;
 extern ImTextureID g_SaveTexture;
 extern ImTextureID g_DeleteTexture;
+extern ImTextureID g_ImportTexture;
 
 static void DrawBinaryTab() {
     static bool isCompilingBins = false;
@@ -988,7 +989,11 @@ static void DrawBankTab() {
                 // Drawn inside the mesh renderer viewport (bottom-right overlay) via DrawMeshProperties(),
                 // same as the regular mesh Import button below.
                 drawLODControls = [&]() {
-                    if (ImGui::Button("Import")) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.85f, 0.45f, 0.3f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.85f, 0.45f, 0.5f));
+                    ImVec4 importTint = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
+                    if (ImGui::ImageButton("##ImportPhysicsBtn", g_ImportTexture, ImVec2(24, 24), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), importTint)) {
                         std::string gltfPath = OpenFileDialog("glTF Files\0*.gltf\0All Files\0*.*\0");
                         if (!gltfPath.empty()) {
                             CBBMParser newBBM;
@@ -1005,6 +1010,8 @@ static void DrawBankTab() {
                             }
                         }
                     }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Import");
+                    ImGui::PopStyleColor(3);
                     };
             }
             else {
@@ -1037,11 +1044,17 @@ static void DrawBankTab() {
                         ImGui::EndCombo();
                     }
                     ImGui::SameLine();
-                    if (ImGui::Button("Import")) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.85f, 0.45f, 0.3f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.85f, 0.45f, 0.5f));
+                    ImVec4 importTint = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
+                    if (ImGui::ImageButton("##ImportLODBtn", g_ImportTexture, ImVec2(24, 24), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), importTint)) {
                         g_PendingLODActionIndex = bank.SelectedLOD;
                         g_LODImportType = e.Type;
                         g_ShowReplaceLODPopup = true;
                     }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Import");
+                    ImGui::PopStyleColor(3);
                     };
             }
 
