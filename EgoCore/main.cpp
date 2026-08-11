@@ -12,8 +12,6 @@
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
-
-// For BETA Launch
 #pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
 
 ID3D11Device* g_pd3dDevice = nullptr;
@@ -378,23 +376,17 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case WM_CLOSE:
     {
-        // 1. Always check for unsaved definitions/banks first (this takes priority)
         if ((g_DefWorkspace.IsDirty() || HasUnsavedBankChanges()) && g_AppConfig.ShowUnsavedChangesWarning) {
             g_DefWorkspace.PendingNav = { DefAction::ExitProgram, "", -1 };
             g_DefWorkspace.TriggerUnsavedPopup = true;
-            return 0; // don't close yet - the popup will handle it
+            return 0;
         }
-
-        // 2. If we are in the Frontend or ModsManager, and there are pending asset changes,
-        //    show the asset changes popup instead of closing immediately.
         if ((g_CurrentAppState == EAppState::Frontend || g_CurrentAppState == EAppState::ModsManager) &&
             (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty))
         {
             g_TriggerAssetChangesExitPopup = true;
-            return 0; // don't destroy yet - popup will decide
+            return 0;
         }
-
-        // 3. Otherwise, close normally.
         ::DestroyWindow(hWnd);
         return 0;
     }

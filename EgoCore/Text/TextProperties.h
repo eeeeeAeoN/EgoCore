@@ -3,7 +3,9 @@
 #include "TextBackend.h" 
 #include "FileDialogs.h"
 #include "LipSyncCompiler.h"
+#include "AudioExplorer.h"
 #include <functional> 
+#include <algorithm>
 
 bool LoadDialogueBankInBackground();
 
@@ -13,6 +15,7 @@ static bool g_ShowLipSyncAnalysisPopup = false;
 static std::string g_PendingWavPath = "";
 static std::string g_PendingSpeechBank = "";
 static std::string g_PendingIdentifier = "";
+static bool g_LinkedMediaLoopEnabled = false;
 
 struct GroupItemPreview {
     std::string Speaker;
@@ -88,7 +91,7 @@ inline void RenderTagEditor(CTextTag& tag) {
     if (mode == TagMode::Animation) {
         std::string animName = tag.Name.substr(5);
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("ANIM:");
+        ImGui::TextColored(kAudioAccent, "ANIM:");
         ImGui::SameLine();
         if (TextInputField("##anim", animName)) {
             tag.Name = "ANIM:" + animName;
@@ -100,7 +103,7 @@ inline void RenderTagEditor(CTextTag& tag) {
         if (attitudes.empty()) attitudes = GetEnumMembers("EConversationAttitude");
 
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("MOOD:");
+        ImGui::TextColored(kAudioAccent, "MOOD:");
         ImGui::SameLine();
 
         if (ImGui::BeginCombo("##att", tag.Name.c_str(), (ImGuiComboFlags)0)) {
@@ -142,17 +145,17 @@ inline void RenderTagEditor(CTextTag& tag) {
 
         bool changed = false;
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("Pos:"); ImGui::SameLine(); ImGui::SetNextItemWidth(100);
+        ImGui::TextColored(kAudioAccent, "Pos:"); ImGui::SameLine(); ImGui::SetNextItemWidth(100);
         if (ImGui::BeginCombo("##pp", posP.c_str(), (ImGuiComboFlags)0)) { for (auto& x : protags) if (ImGui::Selectable(x.c_str(), false, (ImGuiSelectableFlags)0)) { posP = x; changed = true; } ImGui::EndCombo(); }
         ImGui::SameLine(); ImGui::SetNextItemWidth(150);
         if (ImGui::BeginCombo("##p", pos.c_str(), (ImGuiComboFlags)0)) { for (auto& x : camPos) if (ImGui::Selectable(x.c_str(), false, (ImGuiSelectableFlags)0)) { pos = x; changed = true; } ImGui::EndCombo(); }
 
-        ImGui::Text("Look:"); ImGui::SameLine(); ImGui::SetNextItemWidth(100);
+        ImGui::TextColored(kAudioAccent, "Look:"); ImGui::SameLine(); ImGui::SetNextItemWidth(100);
         if (ImGui::BeginCombo("##fp", focP.c_str(), (ImGuiComboFlags)0)) { for (auto& x : protags) if (ImGui::Selectable(x.c_str(), false, (ImGuiSelectableFlags)0)) { focP = x; changed = true; } ImGui::EndCombo(); }
         ImGui::SameLine(); ImGui::SetNextItemWidth(150);
         if (ImGui::BeginCombo("##f", foc.c_str(), (ImGuiComboFlags)0)) { for (auto& x : camFoc) if (ImGui::Selectable(x.c_str(), false, (ImGuiSelectableFlags)0)) { foc = x; changed = true; } ImGui::EndCombo(); }
 
-        ImGui::Text("Zoom:"); ImGui::SameLine(); ImGui::SetNextItemWidth(150);
+        ImGui::TextColored(kAudioAccent, "Zoom:"); ImGui::SameLine(); ImGui::SetNextItemWidth(150);
         if (ImGui::BeginCombo("##z", zoom.c_str(), (ImGuiComboFlags)0)) { for (auto& x : camZoom) if (ImGui::Selectable(x.c_str(), false, (ImGuiSelectableFlags)0)) { zoom = x; changed = true; } ImGui::EndCombo(); }
 
         if (changed) { tag.Name = "CAM:(" + posP + "," + pos + ")(" + focP + "," + foc + ")(" + zoom + ")"; g_IsTextDirty = true; }
@@ -312,24 +315,30 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
     }
     else {
         CTextEntry& e = g_TextParser.TextData;
-
-        ImGui::Text("Identifier");
-        if (TextInputField("##id", e.Identifier, -FLT_MIN)) g_IsTextDirty = true;
-        ImGui::Spacing();
-
-        float avail = ImGui::GetContentRegionAvail().x;
-        float colWidth = (avail - ImGui::GetStyle().ItemSpacing.x) / 2.0f;
+        float rowAvail = ImGui::GetContentRegionAvail().x;
+        float rowSpacing = ImGui::GetStyle().ItemSpacing.x;
+        float idColWidth = (rowAvail - rowSpacing * 2.0f) * 0.5f;
+        float sideColWidth = (rowAvail - rowSpacing * 2.0f) * 0.25f;
+        float idFieldWidth = (std::max)(idColWidth - 24.0f, 80.0f);
+        float sideFieldWidth = (std::max)(sideColWidth - 24.0f, 60.0f);
 
         ImGui::BeginGroup();
-        ImGui::Text("Speaker");
-        if (TextInputField("##speaker", e.Speaker, colWidth)) g_IsTextDirty = true;
+        ImGui::TextColored(kAudioAccent, "Identifier");
+        if (TextInputField("##id", e.Identifier, idFieldWidth)) g_IsTextDirty = true;
         ImGui::EndGroup();
 
         ImGui::SameLine();
 
         ImGui::BeginGroup();
-        ImGui::Text("Sound Bank");
-        ImGui::SetNextItemWidth(colWidth);
+        ImGui::TextColored(kAudioAccent, "Speaker");
+        if (TextInputField("##speaker", e.Speaker, sideFieldWidth)) g_IsTextDirty = true;
+        ImGui::EndGroup();
+
+        ImGui::SameLine();
+
+        ImGui::BeginGroup();
+        ImGui::TextColored(kAudioAccent, "Sound Bank");
+        ImGui::SetNextItemWidth(sideFieldWidth);
         if (g_AvailableSoundBanks.empty()) {
             if (TextInputField("##soundbank", e.SpeechBank)) g_IsTextDirty = true;
         }
@@ -352,33 +361,49 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         std::string utf8Content = WStringToString(e.Content);
         strncpy_s(contentBuf, sizeof(contentBuf), utf8Content.c_str(), _TRUNCATE);
 
-        ImGui::Text("Content");
-        if (ImGui::InputTextMultiline("##content", contentBuf, sizeof(contentBuf), ImVec2(-FLT_MIN, 100))) {
+        ImGui::TextColored(kAudioAccent, "Content");
+        float contentBoxWidth = ImGui::GetContentRegionAvail().x;
+        if (ImGui::InputTextMultiline("##content", contentBuf, sizeof(contentBuf), ImVec2(contentBoxWidth, 120), ImGuiInputTextFlags_NoHorizontalScroll)) {
             e.Content = StringToWString(contentBuf);
             g_IsTextDirty = true;
         }
 
         ImGui::Spacing();
 
-        if (ImGui::CollapsingHeader("Tags / Modifiers")) {
-            if (ImGui::BeginTable("TagsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                ImGui::TableSetupColumn("Tag Data", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 50);
-
-                int tagToDelete = -1;
-                for (int i = 0; i < e.Tags.size(); i++) {
-                    ImGui::PushID(i);
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); RenderTagEditor(e.Tags[i]);
-                    ImGui::TableSetColumnIndex(1); if (ImGui::Button("X")) tagToDelete = i;
-                    ImGui::PopID();
-                }
-                ImGui::EndTable();
-                if (tagToDelete != -1) { e.Tags.erase(e.Tags.begin() + tagToDelete); g_IsTextDirty = true; }
-            }
+        {
+            ImGui::SetNextItemAllowOverlap();
+            bool openTagsHeader = ImGui::CollapsingHeader("Tags / Modifiers");
+            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
 
             static bool showTagPopup = false;
-            if (ImGui::Button("+ Add New Tag")) { showTagPopup = true; ImGui::OpenPopup("New Tag Type"); }
+            if (ImGui::Button("+##AddTag", ImVec2(20, 0))) { showTagPopup = true; ImGui::OpenPopup("New Tag Type"); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Tag");
+
+            if (openTagsHeader) {
+                if (e.Tags.empty()) {
+                    ImGui::TextDisabled("No tags yet. Use the + on the header above to add one.");
+                }
+                else if (ImGui::BeginTable("TagsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                    ImGui::TableSetupColumn("Tag Data", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 50);
+
+                    int tagToDelete = -1;
+                    for (int i = 0; i < e.Tags.size(); i++) {
+                        ImGui::PushID(i);
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); RenderTagEditor(e.Tags[i]);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.15f, 0.85f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.25f, 0.25f, 1.0f));
+                        if (ImGui::Button("X")) tagToDelete = i;
+                        ImGui::PopStyleColor(3);
+                        ImGui::PopID();
+                    }
+                    ImGui::EndTable();
+                    if (tagToDelete != -1) { e.Tags.erase(e.Tags.begin() + tagToDelete); g_IsTextDirty = true; }
+                }
+            }
 
             if (ImGui::BeginPopupModal("New Tag Type", &showTagPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
                 auto AddT = [&](std::string n) {
@@ -397,14 +422,15 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
 
         ImGui::Spacing();
 
-        if (ImGui::CollapsingHeader("Linked Media", ImGuiTreeNodeFlags_DefaultOpen)) {
-            bool audioFound = false;
+        {
+            bool canLinkMedia = !e.SpeechBank.empty() && !e.Identifier.empty();
+            int32_t soundID = -1;
             std::shared_ptr<AudioBankParser> audioBank = nullptr;
             int audioIndex = -1;
+            bool audioFound = false;
 
-            if (!e.SpeechBank.empty() && !e.Identifier.empty()) {
-                int32_t soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
-
+            if (canLinkMedia) {
+                soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
                 if (soundID != -1) {
                     std::string loadPath = e.SpeechBank;
                     if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
@@ -413,89 +439,133 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                         for (int i = 0; i < (int)audioBank->Entries.size(); i++) {
                             if (audioBank->Entries[i].SoundID == (uint32_t)soundID) { audioIndex = i; audioFound = true; break; }
                         }
-
-                        if (audioFound) {
-                            if (audioBank->ModifiedCache.count(audioIndex)) ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[PENDING SAVE]");
-
-                            auto& player = audioBank->Player;
-                            float progress = player.GetProgress();
-
-                            ImGui::PushItemWidth(300);
-                            if (ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "")) { player.Seek(progress); }
-                            ImGui::PopItemWidth();
-
-                            ImGui::SameLine();
-                            if (ImGui::Button(player.IsPlaying() ? "Pause" : "Play", ImVec2(50, 0))) {
-                                if (player.GetTotalDuration() == 0.0f) {
-                                    auto riff = audioBank->GetRiffBlob(audioIndex);
-                                    if (!riff.empty()) player.PlayWav(riff);
-                                }
-                                else { if (player.IsPlaying()) player.Pause(); else player.Play(); }
-                            }
-
-                            ImGui::SameLine();
-                            if (ImGui::Button("Export", ImVec2(50, 0))) {
-                                auto riff = audioBank->GetRiffBlob(audioIndex);
-                                if (!riff.empty()) {
-                                    std::string savePath = SaveFileDialog("WAV File\0*.wav\0");
-                                    if (!savePath.empty()) {
-                                        if (savePath.find(".wav") == std::string::npos) savePath += ".wav";
-                                        std::ofstream out(savePath, std::ios::binary);
-                                        out.write((char*)riff.data(), riff.size());
-                                        out.close();
-                                    }
-                                }
-                            }
-                            ImGui::SameLine();
-                            if (ImGui::Button("Import", ImVec2(50, 0))) {
-                                std::string openPath = OpenFileDialog("WAV File\0*.wav\0All Files\0*.*\0");
-                                if (!openPath.empty()) {
-                                    if (audioBank->ImportWav(audioIndex, openPath)) { player.Reset(); g_IsTextDirty = true; }
-                                }
-                            }
-
-                            ImGui::Dummy(ImVec2(0, 5));
-                            if (ImGui::Button("Phonemes", ImVec2(80, 0))) { if (onJump) onJump("dialogue.big", (uint32_t)soundID, e.SpeechBank); }
-                            ImGui::SameLine();
-                            if (ImGui::Button("Sample", ImVec2(80, 0))) {
-                                std::string lut = e.SpeechBank;
-                                if (lut.find(".lug") != std::string::npos) lut = lut.substr(0, lut.find(".lug")) + ".lut";
-                                else if (lut.find(".") == std::string::npos) lut += ".lut";
-                                if (onJump) onJump(lut, (uint32_t)soundID, "");
-                            }
-                            ImGui::SameLine();
-                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-                            if (ImGui::Button("Remove", ImVec2(80, 0))) {
-                                DeleteLinkedMedia(e.SpeechBank, e.Identifier);
-                                ImGui::PopStyleColor();
-                                return;
-                            }
-                            ImGui::PopStyleColor();
-                        }
-                        else ImGui::TextColored(ImVec4(1, 0, 0, 1), "ID %d found in Defs, but not in Audio Bank.", soundID);
-                    }
-                    else ImGui::TextDisabled("Audio bank not found on disk (.lut missing).");
-                }
-                else {
-                    if (ImGui::Button("Create Linked Media (Import Wav)", ImVec2(300, 30))) {
-                        std::string loadPath = e.SpeechBank;
-                        if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
-                        audioBank = GetOrLoadAudioBank(loadPath);
-                        if (audioBank) {
-                            uint32_t nextID = GetNextIDFromHeader(e.SpeechBank);
-                            std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
-                            if (!wavPath.empty()) {
-                                g_PendingWavPath = wavPath;
-                                g_PendingSpeechBank = e.SpeechBank;
-                                g_PendingIdentifier = e.Identifier;
-                                g_ShowLipSyncAnalysisPopup = true;
-                                ImGui::OpenPopup("Analyze LipSync?");
-                            }
-                        }
                     }
                 }
             }
-            else ImGui::TextDisabled("Assign a SpeechBank and Identifier to link media.");
+
+            ImGui::SetNextItemAllowOverlap();
+            bool openLinkedMedia = ImGui::CollapsingHeader("Linked Media", ImGuiTreeNodeFlags_DefaultOpen);
+            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24);
+
+            if (audioFound) {
+                if (ImGui::Button("-##RemoveLinkedMedia", ImVec2(20, 0))) {
+                    DeleteLinkedMedia(e.SpeechBank, e.Identifier);
+                    return;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove Linked Media");
+            }
+            else {
+                bool canCreateNow = canLinkMedia && soundID == -1;
+                ImGui::BeginDisabled(!canCreateNow);
+                if (ImGui::Button("+##AddLinkedMedia", ImVec2(20, 0))) {
+                    std::string loadPath = e.SpeechBank;
+                    if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
+                    audioBank = GetOrLoadAudioBank(loadPath);
+                    if (audioBank) {
+                        uint32_t nextID = GetNextIDFromHeader(e.SpeechBank);
+                        std::string wavPath = OpenFileDialog("WAV File\0*.wav\0");
+                        if (!wavPath.empty()) {
+                            g_PendingWavPath = wavPath;
+                            g_PendingSpeechBank = e.SpeechBank;
+                            g_PendingIdentifier = e.Identifier;
+                            g_ShowLipSyncAnalysisPopup = true;
+                            ImGui::OpenPopup("Analyze LipSync?");
+                        }
+                    }
+                }
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered()) {
+                    if (!canLinkMedia) ImGui::SetTooltip("Assign a Speaker and Sound Bank first");
+                    else if (soundID != -1) ImGui::SetTooltip("A Sound ID is already assigned but missing from the bank");
+                    else ImGui::SetTooltip("Create Linked Media (Import WAV)");
+                }
+            }
+
+            if (openLinkedMedia) {
+                if (!canLinkMedia) {
+                    ImGui::TextDisabled("Assign a SpeechBank and Identifier to link media.");
+                }
+                else if (soundID == -1) {
+                    ImGui::TextDisabled("No linked media yet. Use the + on the header above to import one.");
+                }
+                else if (!audioBank) {
+                    ImGui::TextDisabled("Audio bank not found on disk (.lut missing).");
+                }
+                else if (!audioFound) {
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "ID %d found in Defs, but not in Audio Bank.", soundID);
+                }
+                else {
+                    if (audioBank->ModifiedCache.count(audioIndex)) ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "[PENDING SAVE]");
+
+                    auto& player = audioBank->Player;
+
+                    if (player.GetTotalDuration() > 0.0f && player.GetProgress() >= 1.0f) {
+                        if (g_LinkedMediaLoopEnabled) { player.Seek(0.0f); player.Play(); }
+                        else player.Stop();
+                    }
+
+                    DrawAudioScrubber(player);
+                    ImGui::Dummy(ImVec2(0, 6));
+
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 1.0f, 0.6f, 0.25f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 1.0f, 0.6f, 0.4f));
+
+                    BeginCenteredButtonRow(5);
+
+                    ImTextureID playPauseTex = player.IsPlaying() ? g_PauseTexture : g_PlayTexture;
+                    if (AudioIconButton("##LinkedPlayPause", playPauseTex, player.IsPlaying() ? "Pause" : "Play", player.IsPlaying() ? "Pause" : "Play")) {
+                        if (player.GetTotalDuration() == 0.0f) {
+                            auto riff = audioBank->GetRiffBlob(audioIndex);
+                            if (!riff.empty()) player.PlayWav(riff);
+                        }
+                        else { if (player.IsPlaying()) player.Pause(); else player.Play(); }
+                    }
+
+                    ImGui::SameLine(0.0f, 12.0f);
+                    if (AudioIconButton("##LinkedStop", g_StopTexture, "Stop", "Stop")) player.Stop();
+
+                    ImGui::SameLine(0.0f, 12.0f);
+                    if (AudioIconButton("##LinkedLoop", g_LoopTexture, g_LinkedMediaLoopEnabled ? "Loop: On" : "Loop: Off",
+                        g_LinkedMediaLoopEnabled ? "Looping enabled" : "Looping disabled", g_LinkedMediaLoopEnabled)) {
+                        g_LinkedMediaLoopEnabled = !g_LinkedMediaLoopEnabled;
+                    }
+
+                    ImGui::SameLine(0.0f, 12.0f);
+                    if (AudioIconButton("##LinkedImport", g_ImportTexture, "Import", "Import WAV (replace)")) {
+                        std::string openPath = OpenFileDialog("WAV File\0*.wav\0All Files\0*.*\0");
+                        if (!openPath.empty()) {
+                            if (audioBank->ImportWav(audioIndex, openPath)) { player.Reset(); g_IsTextDirty = true; }
+                        }
+                    }
+
+                    ImGui::SameLine(0.0f, 12.0f);
+                    if (AudioIconButton("##LinkedExport", g_ExportTexture, "Export", "Export WAV")) {
+                        auto riff = audioBank->GetRiffBlob(audioIndex);
+                        if (!riff.empty()) {
+                            std::string savePath = SaveFileDialog("WAV File\0*.wav\0");
+                            if (!savePath.empty()) {
+                                if (savePath.find(".wav") == std::string::npos) savePath += ".wav";
+                                std::ofstream out(savePath, std::ios::binary);
+                                out.write((char*)riff.data(), riff.size());
+                                out.close();
+                            }
+                        }
+                    }
+
+                    ImGui::PopStyleColor(3);
+                    ImGui::Dummy(ImVec2(0, kPlayerBottomMargin));
+
+                    if (ImGui::Button("Phonemes", ImVec2(80, 0))) { if (onJump) onJump("dialogue.big", (uint32_t)soundID, e.SpeechBank); }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Sample", ImVec2(80, 0))) {
+                        std::string lut = e.SpeechBank;
+                        if (lut.find(".lug") != std::string::npos) lut = lut.substr(0, lut.find(".lug")) + ".lut";
+                        else if (lut.find(".") == std::string::npos) lut += ".lut";
+                        if (onJump) onJump(lut, (uint32_t)soundID, "");
+                    }
+                }
+            }
         }
     }
 
