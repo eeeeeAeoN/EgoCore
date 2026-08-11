@@ -16,6 +16,7 @@ static std::string g_PendingWavPath = "";
 static std::string g_PendingSpeechBank = "";
 static std::string g_PendingIdentifier = "";
 static bool g_LinkedMediaLoopEnabled = false;
+static bool g_LinkedMediaCacheDirty = true;
 
 struct GroupItemPreview {
     std::string Speaker;
@@ -163,6 +164,85 @@ inline void RenderTagEditor(CTextTag& tag) {
     else {
         if (TextInputField("##raw", tag.Name)) g_IsTextDirty = true;
     }
+}
+
+inline std::string WordWrapContent(const std::string& textIn, float wrapWidth) {
+    std::string text = textIn;
+    for (char& c : text) if (c == '\n') c = ' ';
+
+    if (wrapWidth <= 1.0f) return text;
+    ImFont* font = ImGui::GetFont();
+    float fontSize = ImGui::GetFontSize();
+
+    size_t n = text.size();
+    size_t segStart = 0;
+    float lineWidth = 0.0f;
+    size_t lastSpace = std::string::npos;
+    size_t pos = 0;
+
+    while (pos < n) {
+        unsigned char c = (unsigned char)text[pos];
+        size_t charLen = 1;
+        if ((c & 0x80) != 0) {
+            if ((c & 0xE0) == 0xC0) charLen = 2;
+            else if ((c & 0xF0) == 0xE0) charLen = 3;
+            else if ((c & 0xF8) == 0xF0) charLen = 4;
+        }
+        charLen = (std::min)(charLen, n - pos);
+
+        float charWidth = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str() + pos, text.c_str() + pos + charLen).x;
+
+        if (lineWidth + charWidth > wrapWidth && pos > segStart) {
+            if (lastSpace != std::string::npos) {
+                text[lastSpace] = '\n';
+                pos = lastSpace + 1;
+                segStart = pos;
+            }
+            else {
+                text.insert(pos, 1, '\n');
+                n += 1;
+                segStart = pos + 1;
+                pos = segStart;
+            }
+            lineWidth = 0.0f;
+            lastSpace = std::string::npos;
+            continue;
+        }
+
+        if (c == ' ') lastSpace = pos;
+        lineWidth += charWidth;
+        pos += charLen;
+    }
+
+    return text;
+}
+
+inline std::string StripWrapNewlines(const std::string& text) {
+    std::string result = text;
+    for (char& c : result) if (c == '\n') c = ' ';
+    return result;
+}
+
+struct ContentWrapCallbackData { float Width; };
+
+
+inline int ContentWrapInputCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag != ImGuiInputTextFlags_CallbackEdit) return 0;
+    ContentWrapCallbackData* wrapData = (ContentWrapCallbackData*)data->UserData;
+
+    int cursorPos = data->CursorPos;
+
+    std::string logical(data->Buf, data->BufTextLen);
+    for (char& c : logical) if (c == '\n') c = ' ';
+
+    std::string wrapped = WordWrapContent(logical, wrapData->Width);
+    if ((int)wrapped.size() > data->BufSize - 1) wrapped.resize(data->BufSize - 1);
+
+    data->DeleteChars(0, data->BufTextLen);
+    data->InsertChars(0, wrapped.c_str());
+    data->CursorPos = (std::max)(0, (std::min)(cursorPos, data->BufTextLen));
+    data->SelectionStart = data->SelectionEnd = data->CursorPos;
+    return 0;
 }
 
 inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, std::function<void(std::string, uint32_t, std::string)> onJump) {
@@ -315,6 +395,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
     }
     else {
         CTextEntry& e = g_TextParser.TextData;
+
         float rowAvail = ImGui::GetContentRegionAvail().x;
         float rowSpacing = ImGui::GetStyle().ItemSpacing.x;
         float idColWidth = (rowAvail - rowSpacing * 2.0f) * 0.5f;
@@ -357,15 +438,30 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
 
         ImGui::Spacing(); ImGui::Separator();
 
-        static char contentBuf[8192];
-        std::string utf8Content = WStringToString(e.Content);
-        strncpy_s(contentBuf, sizeof(contentBuf), utf8Content.c_str(), _TRUNCATE);
-
         ImGui::TextColored(kAudioAccent, "Content");
+        // Height raised 20% (100 -> 120) to give the text more room to breathe.
         float contentBoxWidth = ImGui::GetContentRegionAvail().x;
-        if (ImGui::InputTextMultiline("##content", contentBuf, sizeof(contentBuf), ImVec2(contentBoxWidth, 120), ImGuiInputTextFlags_NoHorizontalScroll)) {
-            e.Content = StringToWString(contentBuf);
+        float wrapWidth = contentBoxWidth - ImGui::GetStyle().FramePadding.x * 2.0f;
+
+        static char contentBuf[8192];
+        static std::wstring s_LastWrappedContent;
+        static float s_LastWrapWidth = -1.0f;
+
+        if (e.Content != s_LastWrappedContent || fabsf(wrapWidth - s_LastWrapWidth) > 1.0f) {
+            std::string utf8Content = WStringToString(e.Content);
+            std::string wrapped = WordWrapContent(utf8Content, wrapWidth);
+            strncpy_s(contentBuf, sizeof(contentBuf), wrapped.c_str(), _TRUNCATE);
+            s_LastWrappedContent = e.Content;
+            s_LastWrapWidth = wrapWidth;
+        }
+
+        static ContentWrapCallbackData contentWrapData;
+        contentWrapData.Width = wrapWidth;
+        if (ImGui::InputTextMultiline("##content", contentBuf, sizeof(contentBuf), ImVec2(contentBoxWidth, 120),
+            ImGuiInputTextFlags_CallbackEdit, ContentWrapInputCallback, &contentWrapData)) {
+            e.Content = StringToWString(StripWrapNewlines(std::string(contentBuf)));
             g_IsTextDirty = true;
+            s_LastWrappedContent = e.Content;
         }
 
         ImGui::Spacing();
@@ -423,25 +519,44 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
         ImGui::Spacing();
 
         {
-            bool canLinkMedia = !e.SpeechBank.empty() && !e.Identifier.empty();
-            int32_t soundID = -1;
-            std::shared_ptr<AudioBankParser> audioBank = nullptr;
-            int audioIndex = -1;
-            bool audioFound = false;
+            static std::string s_CachedSpeechBank;
+            static std::string s_CachedIdentifier;
+            static bool s_CachedCanLinkMedia = false;
+            static int32_t s_CachedSoundID = -1;
+            static std::shared_ptr<AudioBankParser> s_CachedAudioBank;
+            static int s_CachedAudioIndex = -1;
+            static bool s_CachedAudioFound = false;
 
-            if (canLinkMedia) {
-                soundID = ResolveAudioID(e.SpeechBank, e.Identifier);
-                if (soundID != -1) {
-                    std::string loadPath = e.SpeechBank;
-                    if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
-                    audioBank = GetOrLoadAudioBank(loadPath);
-                    if (audioBank) {
-                        for (int i = 0; i < (int)audioBank->Entries.size(); i++) {
-                            if (audioBank->Entries[i].SoundID == (uint32_t)soundID) { audioIndex = i; audioFound = true; break; }
+            if (g_LinkedMediaCacheDirty || s_CachedSpeechBank != e.SpeechBank || s_CachedIdentifier != e.Identifier) {
+                s_CachedSpeechBank = e.SpeechBank;
+                s_CachedIdentifier = e.Identifier;
+                s_CachedCanLinkMedia = !e.SpeechBank.empty() && !e.Identifier.empty();
+                s_CachedSoundID = -1;
+                s_CachedAudioBank = nullptr;
+                s_CachedAudioIndex = -1;
+                s_CachedAudioFound = false;
+
+                if (s_CachedCanLinkMedia) {
+                    s_CachedSoundID = ResolveAudioID(e.SpeechBank, e.Identifier);
+                    if (s_CachedSoundID != -1) {
+                        std::string loadPath = e.SpeechBank;
+                        if (loadPath.find(".lug") != std::string::npos) loadPath = loadPath.substr(0, loadPath.find(".lug")) + ".lut";
+                        s_CachedAudioBank = GetOrLoadAudioBank(loadPath);
+                        if (s_CachedAudioBank) {
+                            for (int i = 0; i < (int)s_CachedAudioBank->Entries.size(); i++) {
+                                if (s_CachedAudioBank->Entries[i].SoundID == (uint32_t)s_CachedSoundID) { s_CachedAudioIndex = i; s_CachedAudioFound = true; break; }
+                            }
                         }
                     }
                 }
+                g_LinkedMediaCacheDirty = false;
             }
+
+            bool canLinkMedia = s_CachedCanLinkMedia;
+            int32_t soundID = s_CachedSoundID;
+            std::shared_ptr<AudioBankParser> audioBank = s_CachedAudioBank;
+            int audioIndex = s_CachedAudioIndex;
+            bool audioFound = s_CachedAudioFound;
 
             ImGui::SetNextItemAllowOverlap();
             bool openLinkedMedia = ImGui::CollapsingHeader("Linked Media", ImGuiTreeNodeFlags_DefaultOpen);
@@ -450,6 +565,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
             if (audioFound) {
                 if (ImGui::Button("-##RemoveLinkedMedia", ImVec2(20, 0))) {
                     DeleteLinkedMedia(e.SpeechBank, e.Identifier);
+                    g_LinkedMediaCacheDirty = true;
                     return;
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove Linked Media");
@@ -627,6 +743,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
 
                 AddLipSyncEntryFromWav(g_PendingSpeechBank, nextID, g_PendingWavPath);
                 g_IsTextDirty = true;
+                g_LinkedMediaCacheDirty = true;
             }
 
             g_ShowLipSyncAnalysisPopup = false;
@@ -663,6 +780,7 @@ inline void DrawTextProperties(LoadedBank* bank, std::function<void()> onSave, s
                     AddLipSyncEntry(g_PendingSpeechBank, nextID, 1.0f);
                 }
                 g_IsTextDirty = true;
+                g_LinkedMediaCacheDirty = true;
             }
 
             g_ShowLipSyncAnalysisPopup = false;
