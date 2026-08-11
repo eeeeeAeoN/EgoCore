@@ -961,7 +961,7 @@ static void DrawFrontendHub() {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 0.90f), "AlbionSecrets");
         if (g_TitleFont) ImGui::PopFont();
 
-        const char* verStr = "7.8.26";
+        const char* verStr = "11.8.26";
         float verWidth = ImGui::CalcTextSize(verStr).x;
         float winWidth = ImGui::GetWindowWidth();
 
@@ -1447,7 +1447,7 @@ static void DrawBankExplorer() {
         if (g_TitleFont) ImGui::PopFont();
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
-        ImGui::TextDisabled("Version: 7.8.26");
+        ImGui::TextDisabled("Version: 11.8.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
