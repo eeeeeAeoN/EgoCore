@@ -397,17 +397,12 @@ static void DrawBankTab() {
     else if (bank.Type == EBankType::Audio) compileText = bank.LugParserPtr ? "RECOMPILE" : "RECOMPILE";
 
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.78f, 0.35f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.55f, 0.18f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
 
-    if (ImGui::Button(compileText.c_str(), ImVec2(compileBtnWidth, 28))) {
+    if (ImGui::Button(compileText.c_str(), ImVec2(compileBtnWidth, 0))) {
         if (bank.Type == EBankType::Audio) SaveAudioBank(&bank);
         else SaveBigBank(&bank);
     }
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor(4);
+    ImGui::PopStyleColor();
 
     ImGui::EndChild();
     ImGui::PopStyleColor();
