@@ -749,7 +749,13 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
     g_IsMeshViewportHovered = ImGui::IsWindowHovered();
 
-    float meshOverlayTargetAlpha = g_IsMeshViewportHovered ? 1.0f : 0.0f;
+    bool lodPopupOpen =
+        ImGui::IsPopupOpen("##lod") ||
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
+
+    bool meshUiActive = g_IsMeshViewportHovered || lodPopupOpen;
+
+    float meshOverlayTargetAlpha = meshUiActive ? 1.0f : 0.0f;
     s_MeshOverlayAlpha += (meshOverlayTargetAlpha - s_MeshOverlayAlpha) * ImGui::GetIO().DeltaTime * 15.0f;
     if (s_MeshOverlayAlpha < 0.0f) s_MeshOverlayAlpha = 0.0f;
     if (s_MeshOverlayAlpha > 1.0f) s_MeshOverlayAlpha = 1.0f;
