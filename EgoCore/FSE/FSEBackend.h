@@ -162,16 +162,21 @@ inline void SaveQuestsLua() {
         out << "        name = \"" << q.Name << "\",\n";
         out << "        file = \"" << q.File << "\",\n";
         out << "        id = " << q.ID << ",\n\n";
-        out << "        entity_scripts = {\n";
-
-        for (size_t j = 0; j < q.Entities.size(); ++j) {
-            const auto& e = q.Entities[j];
-            out << "            { name = \"" << e.Name << "\", file = \"" << e.File << "\", id = " << e.ID << " }";
-            if (j < q.Entities.size() - 1) out << ",\n";
-            else out << "\n";
+        if (q.Entities.empty()) {
+            out << "        entity_scripts = {}\n";
+        }
+        else {
+            out << "        entity_scripts = {\n";
+            for (size_t j = 0; j < q.Entities.size(); ++j) {
+                const auto& e = q.Entities[j];
+                out << "            { name = \"" << e.Name << "\", file = \"" << e.File << "\", id = " << e.ID << " }";
+                if (j < q.Entities.size() - 1) out << ",\n";
+                else out << "\n";
+            }
+            out << "        }\n";
         }
 
-        out << "        }\n    }";
+        out << "    }";
         if (i < g_FSEWorkspace.Quests.size() - 1) out << ",\n\n";
         else out << "\n";
     }

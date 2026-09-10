@@ -15,6 +15,7 @@ struct AppConfig {
     bool ModSystemDirty = false;
     bool DefSystemDirty = false;
     bool TngSystemDirty = false;
+    bool FSESystemDirty = false;
     bool ShowDeleteConfirm = true;
     bool ShowAddConfirm = true;
     bool ShowBankDeleteConfirm = true;
@@ -79,6 +80,7 @@ inline void SaveConfig() {
         file << "ModSystemDirty=" << (g_AppConfig.ModSystemDirty ? "1" : "0") << "\n";
         file << "DefSystemDirty=" << (g_AppConfig.DefSystemDirty ? "1" : "0") << "\n";
         file << "TngSystemDirty=" << (g_AppConfig.TngSystemDirty ? "1" : "0") << "\n";
+        file << "FSESystemDirty=" << (g_AppConfig.FSESystemDirty ? "1" : "0") << "\n";
         file << "EnableLookupGeneration=" << (g_AppConfig.EnableLookupGeneration ? "1" : "0") << "\n";
         file << "EnableAutosuggest=" << (g_AppConfig.EnableAutosuggest ? "1" : "0") << "\n";
         file << "DisableWadPrompt=" << (g_AppConfig.DisableWadPrompt ? "1" : "0") << "\n";
@@ -132,6 +134,7 @@ inline void LoadConfig() {
     g_AppConfig.ModSystemDirty = false;
     g_AppConfig.DefSystemDirty = false;
     g_AppConfig.TngSystemDirty = false;
+    g_AppConfig.FSESystemDirty = false;
     g_AppConfig.EnableLookupGeneration = false;
     g_AppConfig.DisableWadPrompt = false;
     g_AppConfig.ModEnvironmentSetup = false;
@@ -204,6 +207,7 @@ inline void LoadConfig() {
             else if (line.find("ModSystemDirty=") == 0) g_AppConfig.ModSystemDirty = (line.substr(15) == "1");
             else if (line.find("DefSystemDirty=") == 0) g_AppConfig.DefSystemDirty = (line.substr(15) == "1");
             else if (line.find("TngSystemDirty=") == 0) g_AppConfig.TngSystemDirty = (line.substr(15) == "1");
+            else if (line.find("FSESystemDirty=") == 0) g_AppConfig.FSESystemDirty = (line.substr(15) == "1");
             else if (line.find("EnableLookupGeneration=") == 0) g_AppConfig.EnableLookupGeneration = (line.substr(23) == "1");
             else if (line.find("EnableAutosuggest=") == 0) g_AppConfig.EnableAutosuggest = (line.substr(18) == "1");
             else if (line.find("DisableWadPrompt=") == 0) g_AppConfig.DisableWadPrompt = (line.substr(17) == "1");

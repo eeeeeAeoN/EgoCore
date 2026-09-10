@@ -39,6 +39,7 @@ struct ModEntry {
     bool IsAssetMod = false;
     bool IsDefMod = false;
     bool IsTngMod = false;
+    bool IsFSEMod = false;
     std::string ModFolderPath;
     std::string SettingsIniPath;
     std::vector<IniLine> SettingsLines;

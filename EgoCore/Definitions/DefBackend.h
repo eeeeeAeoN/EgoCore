@@ -244,7 +244,8 @@ inline void LoadHeadersFromDir(const std::string& rootPath) {
             std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), ::tolower);
             if (pathLower.find("devheaders") != std::string::npos) continue;
             if (pathLower.find("retailheaders") != std::string::npos && pathLower.find("xbox") != std::string::npos) continue;
-            if (entry.path().extension() == ".h") {
+            std::string ext = entry.path().extension().string();
+            if (ext == ".h" || ext == ".def") {
                 if (visitedFiles.count(pathStr)) continue;
                 visitedFiles.insert(pathStr);
                 std::ifstream file(entry.path(), std::ios::binary);

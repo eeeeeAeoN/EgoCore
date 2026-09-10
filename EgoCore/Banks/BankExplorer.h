@@ -547,8 +547,8 @@ static void DrawLaunchPopup() {
             std::string spinner = "Please wait"; for (int i = 0; i < dots; i++) spinner += ".";
             ImGui::TextDisabled("%s", spinner.c_str());
         }
-        else if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty) {
-            ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Compiling modified banks and applying load order...");
+        else if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty || g_AppConfig.FSESystemDirty) {
+            ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Processing modified mods and applying load order...");
             ImGui::TextDisabled("Please wait. EgoCore will process mods and launch automatically.");
         }
         else {
@@ -665,13 +665,12 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
 // Same visual language as DrawCardButton (glow, gradient fill, accent border) but
 // sized to sit inside a normal menu-bar row instead of a big hub tile.
 //
-// IMPORTANT: `rowHeight` is the FULL row height (same value passed to every other
-// item on that row) and it is what gets reserved for the item itself. The pill
-// is drawn a few px smaller than that reserved space, but that shrink is *only*
-// in the drawing -- never in the size given to InvisibleButton. That's what
-// keeps this pixel-aligned with everything else on the row via plain SameLine(),
-// with no manual SetCursorPosY offset required anywhere.
+// ---------------------------------------------------------------------------
+// DrawModeTabButton: pill-style toggle button designed to sit inside the
+// menu bar, pixel-aligned with the menu titles and centered vertically.
+// ---------------------------------------------------------------------------
 static bool DrawModeTabButton(const char* id, const char* label, bool active, ImU32 accentColor, float rowHeight) {
+    ImGui::SetCursorPosY(0.0f);
     ImVec2 textSize = ImGui::CalcTextSize(label);
     const float paddingX = 14.0f;
     ImVec2 size = ImVec2(textSize.x + paddingX * 2.0f, rowHeight);
@@ -684,7 +683,7 @@ static bool DrawModeTabButton(const char* id, const char* label, bool active, Im
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
     // Cosmetic-only inset: shrinks the drawn pill within the reserved bounds so
-    // it reads as a tab, without touching layout/alignment at all.
+    // it reads as a tab, perfectly centered vertically in the row.
     const float inset = 3.0f;
     ImVec2 pMin = ImVec2(pos.x, pos.y + inset);
     ImVec2 pMax = ImVec2(pos.x + size.x, pos.y + size.y - inset);
@@ -709,7 +708,7 @@ static bool DrawModeTabButton(const char* id, const char* label, bool active, Im
 
     if (active) {
         for (int i = 2; i >= 1; i--) {
-            float expand = (float)i * 1.4f;
+            float expand = (float)i * 1.0f;
             float glowAlpha = (1.0f - (float)i / 3.0f) * 0.30f;
             ImU32 glowCol = (accentColor & 0x00FFFFFF) | ((uint32_t)(glowAlpha * 255.0f) << 24);
             drawList->AddRect(ImVec2(pMin.x - expand, pMin.y - expand), ImVec2(pMax.x + expand, pMax.y + expand), glowCol, rounding + expand, 0, 1.2f);
@@ -1048,7 +1047,7 @@ static void DrawFrontendHub() {
         ImGui::SameLine();
 
         if (DrawCardButton("##BtnExit", "Exit", "Close EgoCore", halfCardSize, IM_COL32(220, 65, 65, 255))) {
-            if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty) {
+            if (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty || g_AppConfig.FSESystemDirty) {
                 g_TriggerAssetChangesExitPopup = true;
             }
             else {
@@ -1958,26 +1957,11 @@ static void DrawBankExplorer() {
     }
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-    // BeginMenuBar() paints its own separate background (ImGuiCol_MenuBarBg).
-    // Left at the theme default it doesn't exactly match ChildBg, which shows
-    // up as a thin seam/line along the bottom edge of the bar. This is a pure
-    // color fix -- it doesn't touch height, position, or layout at all, so it
-    // can't reintroduce any of the alignment/clipping issues from before.
-    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
-    // -----------------------------------------------------------------------
-    // Reverted back to the exact geometry from the known-good baseline: plain
-    // ImGui::GetFrameHeight() for the child, no FramePadding pushes, no custom
-    // offset math, no measurement caching, no absolute screen-space
-    // positioning. Every bug in this bar over the last several rounds came
-    // from "clever" additions layered on top of this -- the baseline itself
-    // was never broken. The only actual change from that baseline is
-    // reskinning Banks/Defs/FSE via DrawModeTabButton for a nicer look, using
-    // the same ImGui::GetFrameHeight() as their height (exactly what the old
-    // ImGui::Button(60, 0) resolved to) so they still fall on the same
-    // baseline as the menu titles next to them, the same way the original
-    // plain buttons did.
-    // -----------------------------------------------------------------------
     ImGui::BeginChild("LocalMenuBarChild", ImVec2(0, ImGui::GetFrameHeight()), false, ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar);
 
     if (ImGui::BeginMenuBar()) {
@@ -2058,15 +2042,9 @@ static void DrawBankExplorer() {
             ImGui::EndMenu();
         }
 
-        // ---- Right-side mode switcher: Banks / Defs / FSE, reskinned via
-        // DrawModeTabButton but positioned exactly like the old plain
-        // ImGui::Button(60, 0) version -- SameLine() chaining, right inside
-        // the menu bar, height = GetFrameHeight() (what Button(.., 0) resolved
-        // to). Width is measured per-label instead of the old hardcoded 210,
-        // since the pill shape needs a bit more horizontal room than a plain
-        // button did.
+        // ---- Right-side mode switcher: Banks / Defs / FSE
         const float btnHeight = ImGui::GetFrameHeight();
-        const float tabPad = 30.0f; // must match DrawModeTabButton's internal padding*2
+        const float tabPad = 28.0f; // matches DrawModeTabButton's internal padding*2 (14.0f * 2)
         const float tabSpacing = ImGui::GetStyle().ItemSpacing.x;
 
         float banksW = ImGui::CalcTextSize("Banks").x + tabPad;
@@ -2099,7 +2077,8 @@ static void DrawBankExplorer() {
     }
 
     ImGui::EndChild();
-    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
 
     if (g_TriggerGeneralSettingsPopup) {
         ImGui::OpenPopup("General Settings");

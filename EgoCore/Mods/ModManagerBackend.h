@@ -83,6 +83,12 @@ public:
                 mod.IsAssetMod = false;
                 mod.IsDefMod = false;
                 mod.IsTngMod = false;
+                mod.IsFSEMod = false;
+
+                // FSE detection: simple folder check (must have "FSE" directory)
+                if (fs::exists(mod.ModFolderPath + "\\FSE") && fs::is_directory(mod.ModFolderPath + "\\FSE")) {
+                    mod.IsFSEMod = true;
+                }
 
                 try {
                     for (const auto& file : fs::recursive_directory_iterator(mod.ModFolderPath)) {
@@ -298,6 +304,7 @@ public:
         bool wasAsset = g_LoadedMods[index].IsAssetMod;
         bool wasDef = g_LoadedMods[index].IsDefMod;
         bool wasTng = g_LoadedMods[index].IsTngMod;
+        bool wasFSE = g_LoadedMods[index].IsFSEMod;
 
         std::string path = g_LoadedMods[index].ModFolderPath;
         try { if (fs::exists(path)) fs::remove_all(path); }
@@ -310,7 +317,8 @@ public:
         if (wasAsset) g_AppConfig.ModSystemDirty = true;
         if (wasDef) g_AppConfig.DefSystemDirty = true;
         if (wasTng) g_AppConfig.TngSystemDirty = true;
-        if (wasAsset || wasDef || wasTng) SaveConfig();
+        if (wasFSE) g_AppConfig.FSESystemDirty = true;
+        if (wasAsset || wasDef || wasTng || wasFSE) SaveConfig();
     }
 
     static void MergeDefFile(const std::string& modFile, const std::string& targetFile) {
@@ -362,6 +370,42 @@ public:
             }
             mCursor = defEnd;
         }
+
+        // --- Merge enum blocks (full block replacement for .def enums) ---
+        std::regex enumRegex(R"(enum\s+(\w+)\s*\{[\s\S]*?\};)");
+        auto mEnumBegin = std::sregex_iterator(maskedMContent.begin(), maskedMContent.end(), enumRegex);
+        auto mEnumEnd = std::sregex_iterator();
+
+        for (auto it = mEnumBegin; it != mEnumEnd; ++it) {
+            std::string enumName = (*it)[1].str();
+            size_t modEnumStart = it->position();
+            size_t modEnumLen = it->length();
+
+            // Use original (unmasked) content so comments inside the enum are preserved
+            std::string modEnumBlock = mContent.substr(modEnumStart, modEnumLen);
+
+            // Search target for an enum with the same name
+            std::regex targetEnumRegex("enum\\s+" + enumName + "\\s*\\{[\\s\\S]*?\\};");
+            std::smatch tMatch;
+
+            if (std::regex_search(maskedTContent, tMatch, targetEnumRegex)) {
+                // Replace the entire enum block in the target
+                tContent.replace(tMatch.position(), tMatch.length(), modEnumBlock);
+                maskedTContent = CreateCommentMaskedString(tContent);
+            }
+            else {
+                // New enum: insert before the first #definition, or append at end
+                size_t insertPos = maskedTContent.find("#definition");
+                if (insertPos != std::string::npos) {
+                    tContent.insert(insertPos, modEnumBlock + "\n\n");
+                }
+                else {
+                    tContent += "\n\n" + modEnumBlock;
+                }
+                maskedTContent = CreateCommentMaskedString(tContent);
+            }
+        }
+
         std::ofstream out(targetFile, std::ios::binary | std::ios::trunc); out << tContent;
     }
 
@@ -503,6 +547,432 @@ public:
         std::ofstream out(targetFile, std::ios::binary | std::ios::trunc); out << tContent;
     }
 
+    // ========================================================================
+    //  FSE MOD INSTALLATION HELPERS
+    // ========================================================================
+
+    struct ModParsedQuest {
+        std::string Name;
+        std::string File;
+        std::vector<FSEEntity> Entities;
+    };
+
+    // Robust parser for a mod's quests.lua
+    static std::vector<ModParsedQuest> ParseModQuestsLua(const std::string& filePath) {
+        std::vector<ModParsedQuest> result;
+        if (!fs::exists(filePath)) return result;
+
+        std::ifstream file(filePath);
+        if (!file.is_open()) return result;
+
+        std::string line;
+        ModParsedQuest currentQuest;
+        bool inQuest = false;
+        bool inEntities = false;
+
+        std::regex questStartRegex(R"(([a-zA-Z0-9_]+)\s*=\s*\{)");
+        std::regex propNameRegex(R"(name\s*=\s*["']([^"']+)["'])");
+        std::regex propFileRegex(R"(file\s*=\s*["']([^"']+)["'])");
+        std::regex entityScriptsStartRegex(R"(entity_scripts\s*=\s*\{)");
+        std::regex entityBlockRegex(R"(\{([^}]+)\})");
+
+        while (std::getline(file, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+
+            // Strip Lua comments (-- ...)
+            size_t commentPos = line.find("--");
+            if (commentPos != std::string::npos) {
+                line = line.substr(0, commentPos);
+            }
+
+            std::string trimmed = line;
+            trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+            trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+            if (trimmed.empty()) continue;
+
+            if (!inQuest) {
+                if (trimmed.find("Quests") != std::string::npos && trimmed.find('=') != std::string::npos) continue;
+                std::smatch match;
+                if (std::regex_search(line, match, questStartRegex)) {
+                    inQuest = true;
+                    inEntities = false;
+                    currentQuest = ModParsedQuest();
+                    currentQuest.Name = match[1].str();
+                }
+            }
+            else if (!inEntities) {
+                std::smatch match;
+                if (std::regex_search(line, match, propNameRegex)) {
+                    currentQuest.Name = match[1].str();
+                }
+                else if (std::regex_search(line, match, propFileRegex)) {
+                    currentQuest.File = match[1].str();
+                }
+                else if (std::regex_search(line, match, entityScriptsStartRegex)) {
+                    // Check if closing brace is on the same line (e.g. entity_scripts = {})
+                    size_t bracePos = line.find('{');
+                    size_t closeBracePos = line.find('}', bracePos);
+                    if (closeBracePos != std::string::npos) {
+                        std::string inside = line.substr(bracePos + 1, closeBracePos - bracePos - 1);
+                        std::sregex_iterator it(inside.begin(), inside.end(), entityBlockRegex);
+                        std::sregex_iterator end;
+                        for (; it != end; ++it) {
+                            std::string entContent = (*it)[1].str();
+                            std::smatch eNameMatch, eFileMatch;
+                            if (std::regex_search(entContent, eNameMatch, propNameRegex) &&
+                                std::regex_search(entContent, eFileMatch, propFileRegex)) {
+                                FSEEntity ent;
+                                ent.Name = eNameMatch[1].str();
+                                ent.File = eFileMatch[1].str();
+                                ent.ID = 0;
+                                currentQuest.Entities.push_back(ent);
+                            }
+                        }
+                    }
+                    else {
+                        inEntities = true;
+                    }
+                }
+                else if (trimmed == "}," || trimmed == "}" || trimmed.find('}') == 0) {
+                    if (!currentQuest.Name.empty()) {
+                        result.push_back(currentQuest);
+                    }
+                    inQuest = false;
+                }
+            }
+            else { // inEntities == true
+                std::sregex_iterator it(line.begin(), line.end(), entityBlockRegex);
+                std::sregex_iterator end;
+                for (; it != end; ++it) {
+                    std::string entContent = (*it)[1].str();
+                    std::smatch eNameMatch, eFileMatch;
+                    if (std::regex_search(entContent, eNameMatch, propNameRegex) &&
+                        std::regex_search(entContent, eFileMatch, propFileRegex)) {
+                        FSEEntity ent;
+                        ent.Name = eNameMatch[1].str();
+                        ent.File = eFileMatch[1].str();
+                        ent.ID = 0;
+                        currentQuest.Entities.push_back(ent);
+                    }
+                }
+
+                if (trimmed == "}" || trimmed == "}," || trimmed.find('}') != std::string::npos) {
+                    inEntities = false;
+                }
+            }
+        }
+
+        if (inQuest && !currentQuest.Name.empty()) {
+            result.push_back(currentQuest);
+        }
+
+        return result;
+    }
+
+    // Merge parsed quests from a mod into the workspace quests.
+    // Higher-priority mods run first in forward pass, so claimedQuestNames prevents lower-priority overrides.
+    static void PatchQuestsLua(const ModEntry& mod, std::set<std::string>& claimedQuestNames) {
+        std::string modQuestsFile = mod.ModFolderPath + "\\FSE\\quests.lua";
+        if (!fs::exists(modQuestsFile)) return;
+
+        auto modQuests = ParseModQuestsLua(modQuestsFile);
+
+        for (const auto& mq : modQuests) {
+            // Never overwrite FSE_Master
+            if (mq.Name == "FSE_Master") continue;
+
+            // If a higher-priority mod already claimed this quest name, skip it
+            if (claimedQuestNames.count(mq.Name)) continue;
+            claimedQuestNames.insert(mq.Name);
+
+            // Check if quest already exists in the workspace (e.g. vanilla quest like MazeResearch)
+            bool found = false;
+            for (auto& existing : g_FSEWorkspace.Quests) {
+                if (existing.Name == mq.Name) {
+                    existing.File = mq.File;
+                    existing.Entities = mq.Entities;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                FSEQuest newQuest;
+                newQuest.Name = mq.Name;
+                newQuest.File = mq.File;
+                newQuest.ID = 0;
+                newQuest.Entities = mq.Entities;
+                g_FSEWorkspace.Quests.push_back(newQuest);
+            }
+        }
+    }
+
+    // Reassign all quest and entity IDs according to specifications:
+    // FSE_Master = 1000.
+    // Quest IDs start at 1001, sequential.
+    // Entity IDs start at 1, sequential across all quests.
+    static void FinalizeQuestsLuaIDsAndSave() {
+        int nextQuestID = 1001;
+        int nextEntityID = 1;
+        for (auto& q : g_FSEWorkspace.Quests) {
+            if (q.Name == "FSE_Master") {
+                q.ID = 1000;
+            } else {
+                q.ID = nextQuestID++;
+            }
+            for (auto& e : q.Entities) {
+                e.ID = nextEntityID++;
+            }
+        }
+        SaveQuestsLua();
+    }
+
+    // Track deployed script folders for clean restoration
+    static inline std::set<std::string> g_DeployedFSEScriptFolders;
+
+    // Copy script folders from [Mod]/FSE into [Fable]/FSE.
+    // Called in reverse priority order (lowest first, highest overwrites).
+    static void DeployFSEScriptFolders(const ModEntry& mod) {
+        std::string modFSEPath = mod.ModFolderPath + "\\FSE";
+        std::string gameFSEPath = g_AppConfig.GameRootPath + "\\FSE";
+
+        if (!fs::exists(modFSEPath)) return;
+
+        for (const auto& entry : fs::directory_iterator(modFSEPath)) {
+            if (!entry.is_directory()) continue;
+
+            std::string folderName = entry.path().filename().string();
+            if (folderName == "Master") continue; // Safeguard vanilla Master folder
+
+            g_DeployedFSEScriptFolders.insert(folderName);
+
+            // Record in persistent manifest file inside [Fable]/FSE/
+            std::string manifestPath = gameFSEPath + "\\.egocore_deployed_folders.txt";
+            try {
+                std::ofstream mf(manifestPath, std::ios::app);
+                if (mf.is_open()) {
+                    mf << folderName << "\n";
+                }
+            }
+            catch (...) {}
+
+            std::string targetDir = gameFSEPath + "\\" + folderName;
+            try {
+                fs::copy(entry.path(), targetDir, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+            }
+            catch (...) {}
+        }
+    }
+
+    // Patch text files (FinalAlbion.qst from FSE.qst, user.ini from FSEuser.ini).
+    // Supports [Delete] and [Add] sections.
+    static void PatchTextFile(const std::string& patchFilePath, const std::string& targetFilePath) {
+        if (!fs::exists(patchFilePath) || !fs::exists(targetFilePath)) return;
+
+        std::vector<std::string> deleteLines;
+        std::vector<std::string> addLines;
+
+        {
+            std::ifstream patchFile(patchFilePath);
+            std::string line;
+            enum { None, Delete, Add } section = None;
+            bool firstLine = true;
+
+            while (std::getline(patchFile, line)) {
+                if (firstLine) {
+                    firstLine = false;
+                    if (line.size() >= 3 &&
+                        (unsigned char)line[0] == 0xEF &&
+                        (unsigned char)line[1] == 0xBB &&
+                        (unsigned char)line[2] == 0xBF) {
+                        line = line.substr(3);
+                    }
+                }
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+
+                std::string trimmed = line;
+                trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+                trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+
+                std::string lowerTrimmed = trimmed;
+                std::transform(lowerTrimmed.begin(), lowerTrimmed.end(), lowerTrimmed.begin(), ::tolower);
+
+                if (lowerTrimmed == "[delete]") { section = Delete; continue; }
+                if (lowerTrimmed == "[add]") { section = Add; continue; }
+                if (trimmed.empty()) continue;
+
+                if (section == Delete) deleteLines.push_back(trimmed);
+                else if (section == Add) addLines.push_back(line);
+            }
+        }
+
+        // Read target file lines
+        std::vector<std::string> targetLines;
+        {
+            std::ifstream targetFile(targetFilePath);
+            std::string line;
+            bool firstLine = true;
+            while (std::getline(targetFile, line)) {
+                if (firstLine) {
+                    firstLine = false;
+                    if (line.size() >= 3 &&
+                        (unsigned char)line[0] == 0xEF &&
+                        (unsigned char)line[1] == 0xBB &&
+                        (unsigned char)line[2] == 0xBF) {
+                        line = line.substr(3);
+                    }
+                }
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                targetLines.push_back(line);
+            }
+        }
+
+        // Helper to normalize whitespace and optional trailing semicolon
+        auto normalizeLine = [](const std::string& str) -> std::string {
+            std::string res;
+            bool inSpace = false;
+            size_t start = str.find_first_not_of(" \t");
+            if (start == std::string::npos) return "";
+            size_t end = str.find_last_not_of(" \t");
+            for (size_t i = start; i <= end; ++i) {
+                char c = str[i];
+                if (c == ' ' || c == '\t') {
+                    if (!inSpace) { res += ' '; inSpace = true; }
+                } else {
+                    res += c;
+                    inSpace = false;
+                }
+            }
+            if (!res.empty() && res.back() == ';') res.pop_back();
+            res.erase(res.find_last_not_of(" \t") + 1);
+            return res;
+        };
+
+        // Apply deletions
+        if (!deleteLines.empty()) {
+            std::vector<std::string> filteredLines;
+            for (const auto& tLine : targetLines) {
+                std::string trimmedTarget = tLine;
+                trimmedTarget.erase(0, trimmedTarget.find_first_not_of(" \t"));
+                trimmedTarget.erase(trimmedTarget.find_last_not_of(" \t") + 1);
+                std::string normTarget = normalizeLine(tLine);
+
+                bool shouldDelete = false;
+                for (const auto& dLine : deleteLines) {
+                    if (trimmedTarget == dLine || normTarget == normalizeLine(dLine)) {
+                        shouldDelete = true;
+                        break;
+                    }
+                }
+                if (!shouldDelete) filteredLines.push_back(tLine);
+            }
+            targetLines = filteredLines;
+        }
+
+        // Append [Add] lines (avoid exact duplicates)
+        for (const auto& aLine : addLines) {
+            std::string trimmedAdd = aLine;
+            trimmedAdd.erase(0, trimmedAdd.find_first_not_of(" \t"));
+            trimmedAdd.erase(trimmedAdd.find_last_not_of(" \t") + 1);
+            if (trimmedAdd.empty()) continue;
+
+            bool alreadyExists = false;
+            for (const auto& existing : targetLines) {
+                std::string trimmedExist = existing;
+                trimmedExist.erase(0, trimmedExist.find_first_not_of(" \t"));
+                trimmedExist.erase(trimmedExist.find_last_not_of(" \t") + 1);
+                if (trimmedExist == trimmedAdd) {
+                    alreadyExists = true;
+                    break;
+                }
+            }
+            if (!alreadyExists) {
+                targetLines.push_back(aLine);
+            }
+        }
+
+        // Write back with CRLF line endings
+        std::ofstream out(targetFilePath, std::ios::trunc | std::ios::binary);
+        for (const auto& l : targetLines) {
+            out << l << "\r\n";
+        }
+    }
+
+    // Backup the three files affected by FSE mods:
+    //   [Fable]/FSE/quests.lua  ->  quests.lua.tmp
+    //   [Fable]/Data/Levels/FinalAlbion.qst  ->  FinalAlbion.qst.tmp
+    //   [Fable]/user.ini  ->  user.ini.tmp
+    static void BackupFSEFiles() {
+        auto backupOne = [](const std::string& path) {
+            if (!fs::exists(path)) return;
+            std::string tmpPath = path + ".tmp";
+            if (!fs::exists(tmpPath)) {
+                try { fs::copy_file(path, tmpPath); }
+                catch (...) {}
+            }
+        };
+
+        backupOne(g_AppConfig.GameRootPath + "\\FSE\\quests.lua");
+        backupOne(g_AppConfig.GameRootPath + "\\Data\\Levels\\FinalAlbion.qst");
+        backupOne(g_AppConfig.GameRootPath + "\\user.ini");
+    }
+
+    // Restore the three FSE-affected files from .tmp backups, and delete
+    // any script folders that were deployed by FSE mods.
+    static void RestoreFSEFiles() {
+        auto restoreOne = [](const std::string& path) {
+            std::string tmpPath = path + ".tmp";
+            if (!fs::exists(tmpPath)) return;
+            try {
+                if (fs::exists(path)) fs::remove(path);
+                fs::copy_file(tmpPath, path);
+                fs::remove(tmpPath);
+            }
+            catch (...) {}
+        };
+
+        restoreOne(g_AppConfig.GameRootPath + "\\FSE\\quests.lua");
+        restoreOne(g_AppConfig.GameRootPath + "\\Data\\Levels\\FinalAlbion.qst");
+        restoreOne(g_AppConfig.GameRootPath + "\\user.ini");
+
+        // Delete deployed script folders from [Fable]/FSE/
+        std::string gameFSEPath = g_AppConfig.GameRootPath + "\\FSE";
+        std::string manifestPath = gameFSEPath + "\\.egocore_deployed_folders.txt";
+
+        std::set<std::string> foldersToDelete = g_DeployedFSEScriptFolders;
+
+        if (fs::exists(manifestPath)) {
+            std::ifstream mf(manifestPath);
+            std::string folder;
+            while (std::getline(mf, folder)) {
+                if (!folder.empty() && folder.back() == '\r') folder.pop_back();
+                if (!folder.empty()) foldersToDelete.insert(folder);
+            }
+            mf.close();
+            try { fs::remove(manifestPath); } catch (...) {}
+        }
+
+        for (const auto& mod : g_LoadedMods) {
+            if (!mod.IsFSEMod) continue;
+            std::string modFSEPath = mod.ModFolderPath + "\\FSE";
+            if (fs::exists(modFSEPath)) {
+                for (const auto& entry : fs::directory_iterator(modFSEPath)) {
+                    if (entry.is_directory()) foldersToDelete.insert(entry.path().filename().string());
+                }
+            }
+        }
+
+        for (const auto& folderName : foldersToDelete) {
+            if (folderName == "Master") continue; // Never delete vanilla Master folder
+            std::string deployedPath = gameFSEPath + "\\" + folderName;
+            try {
+                if (fs::exists(deployedPath)) fs::remove_all(deployedPath);
+            }
+            catch (...) {}
+        }
+        g_DeployedFSEScriptFolders.clear();
+    }
+
     static void ProcessModsAndLaunch() {
         SetLaunchStatus("Reading mod load order...");
 
@@ -518,6 +988,7 @@ public:
         bool hasActiveAssetMods = false;
         bool hasActiveDefMods = false;
         bool hasActiveTngMods = false;
+        bool hasActiveFSEMods = false;
         std::set<std::string> neededBankFiles;
 
         for (const auto& mod : g_LoadedMods) {
@@ -532,18 +1003,24 @@ public:
             if (mod.IsTngMod) {
                 hasActiveTngMods = true;
             }
+            if (mod.IsFSEMod) {
+                hasActiveFSEMods = true;
+            }
         }
 
-        if (!hasActiveAssetMods && !hasActiveDefMods && !hasActiveTngMods) {
+        if (!hasActiveAssetMods && !hasActiveDefMods && !hasActiveTngMods && !hasActiveFSEMods) {
             bool wasBankDirty = g_AppConfig.ModSystemDirty;
             bool wasDefDirty = g_AppConfig.DefSystemDirty;
             bool wasTngDirty = g_AppConfig.TngSystemDirty;
+            bool wasFSEDirty = g_AppConfig.FSESystemDirty;
 
             RestoreAllTmpBackups();
+            if (wasFSEDirty) RestoreFSEFiles();
 
             g_AppConfig.ModSystemDirty = false;
             g_AppConfig.DefSystemDirty = false;
             g_AppConfig.TngSystemDirty = false;
+            g_AppConfig.FSESystemDirty = false;
             SaveConfig();
 
             if (wasDefDirty) {
@@ -556,7 +1033,7 @@ public:
             return;
         }
 
-        if (!g_AppConfig.ModSystemDirty && !g_AppConfig.DefSystemDirty && !g_AppConfig.TngSystemDirty) {
+        if (!g_AppConfig.ModSystemDirty && !g_AppConfig.DefSystemDirty && !g_AppConfig.TngSystemDirty && !g_AppConfig.FSESystemDirty) {
             LaunchGame();
             return;
         }
@@ -662,6 +1139,56 @@ public:
             g_AppConfig.TngSystemDirty = false;
         }
 
+        // --- FSE SCRIPT EXTENDER MODS ---
+        if (g_AppConfig.FSESystemDirty) {
+            if (hasActiveFSEMods) {
+                SetLaunchStatus("Patching FSE script mods...");
+
+                // Restore previous FSE state (files + delete deployed script folders)
+                RestoreFSEFiles();
+
+                // Create fresh backups before patching
+                BackupFSEFiles();
+
+                // Reload the (now-vanilla) quests.lua into the workspace
+                CheckFSEInstalled(g_AppConfig.GameRootPath);
+                LoadQuestsLua();
+
+                // 1. Script folder deployment and text patches (reverse priority order: lowest first, highest overwrites)
+                for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
+                    const auto& mod = *it;
+                    if (!mod.IsEnabled || !mod.IsFSEMod) continue;
+
+                    DeployFSEScriptFolders(mod);
+
+                    // Patch FinalAlbion.qst with FSE.qst
+                    std::string fseQstPath = mod.ModFolderPath + "\\FSE\\FSE.qst";
+                    std::string finalAlbionPath = g_AppConfig.GameRootPath + "\\Data\\Levels\\FinalAlbion.qst";
+                    if (fs::exists(fseQstPath)) PatchTextFile(fseQstPath, finalAlbionPath);
+
+                    // Patch user.ini with FSEUser.ini (or FSEuser.ini)
+                    std::string fseUserPath = mod.ModFolderPath + "\\FSE\\FSEUser.ini";
+                    if (!fs::exists(fseUserPath)) fseUserPath = mod.ModFolderPath + "\\FSE\\FSEuser.ini";
+                    std::string userIniPath = g_AppConfig.GameRootPath + "\\user.ini";
+                    if (fs::exists(fseUserPath)) PatchTextFile(fseUserPath, userIniPath);
+                }
+
+                // 2. Quests.lua patching (forward priority order: index 0 = highest priority claims first)
+                std::set<std::string> claimedQuestNames;
+                for (const auto& mod : g_LoadedMods) {
+                    if (!mod.IsEnabled || !mod.IsFSEMod) continue;
+                    PatchQuestsLua(mod, claimedQuestNames);
+                }
+
+                // 3. Reassign IDs and save quests.lua
+                FinalizeQuestsLuaIDsAndSave();
+            } else {
+                // No active FSE mods but dirty — just restore
+                RestoreFSEFiles();
+            }
+            g_AppConfig.FSESystemDirty = false;
+        }
+
         if (g_AppConfig.DefSystemDirty) {
             if (hasActiveDefMods) {
                 SetLaunchStatus("Merging definition mods...");
@@ -732,7 +1259,7 @@ public:
             bool isBank = (origExt == ".big" || origExt == ".lut" || origExt == ".lug");
             bool isDef = (origExt == ".def" || origExt == ".txt" || origExt == ".h" || origExt == ".bin");
             bool isTng = (origExt == ".tng");
-            bool isLooseAsset = (!isBank && !isDef && !isTng);
+            bool isLooseAsset = (!isBank && !isDef && !isTng && origExt != ".qst" && origExt != ".lua" && origExt != ".ini");
 
             // Group Loose Assets with Bank restoration (Asset Mods)
             if ((restoreBanks && (isBank || isLooseAsset)) || (restoreDefs && isDef) || (restoreTngs && isTng)) {
@@ -747,6 +1274,7 @@ public:
 
     static void RestoreAllTmpBackups() {
         RestoreVanillaFiles(true, true, true);
+        RestoreFSEFiles();
     }
 
     static void BackupNeededBankFiles(const std::set<std::string>& neededBankFileNames) {

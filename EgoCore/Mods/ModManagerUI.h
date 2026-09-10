@@ -33,12 +33,13 @@ extern int g_ModManagerBgHeight;
 
 static std::unordered_map<ImGuiID, float> s_CardHoverTimers;
 
-// ModEntry has no single "type" field — it's expressed as a set of booleans
-// (IsCoreMod / HasDll / IsAssetMod / IsDefMod / IsTngMod). Build a short display tag from them.
+// ModEntry has no single "type" field - it's expressed as a set of booleans
+// (IsCoreMod / HasDll / IsAssetMod / IsDefMod / IsTngMod / IsFSEMod). Build a short display tag from them.
 static std::string BuildModTypeString(const ModEntry& mod) {
     std::vector<std::string> tags;
     if (mod.IsCoreMod) tags.push_back("Core Utility");
     if (mod.HasDll) tags.push_back("DLL Hook");
+    if (mod.IsFSEMod) tags.push_back("Script Extender");
     if (mod.IsAssetMod) tags.push_back("Asset Mod");
     if (mod.IsDefMod) tags.push_back("Definition Mod");
     if (mod.IsTngMod) tags.push_back("World Edit");
@@ -52,22 +53,75 @@ static std::string BuildModTypeString(const ModEntry& mod) {
     return out;
 }
 
-// The type color regardless of enabled state — used to preview what the toggle
+// Per-tag label + color pairs for drawing individual colored pill badges.
+struct ModTagInfo { const char* Label; ImU32 Color; };
+
+static std::vector<ModTagInfo> GetModTags(const ModEntry& mod) {
+    std::vector<ModTagInfo> tags;
+    if (mod.IsCoreMod)  tags.push_back({"Core Utility",     IM_COL32(219, 68, 68, 255)});
+    if (mod.HasDll)     tags.push_back({"DLL Hook",          IM_COL32(151, 79, 255, 255)});
+    if (mod.IsFSEMod)   tags.push_back({"Script Extender",   IM_COL32(255, 140, 50, 255)});
+    if (mod.IsAssetMod) tags.push_back({"Asset Mod",         IM_COL32(70, 140, 230, 255)});
+    if (mod.IsDefMod)   tags.push_back({"Definition Mod",    IM_COL32(224, 196, 60, 255)});
+    if (mod.IsTngMod)   tags.push_back({"World Edit",        IM_COL32(90, 200, 120, 255)});
+    if (tags.empty())   tags.push_back({"Unknown",           IM_COL32(140, 145, 155, 255)});
+    return tags;
+}
+
+// Draw colored pill badges on mod cards
+static void DrawModCardBadges(ImDrawList* dl, ImVec2 startPos, const ModEntry& mod, float maxWidth) {
+    ImFont* font = ImGui::GetFont();
+    float fontSize = ImGui::GetFontSize() * 0.78f;
+    auto tags = GetModTags(mod);
+
+    float padX = 6.0f;
+    float padY = 2.0f;
+    float rounding = 3.0f;
+    ImVec2 curPos = startPos;
+
+    for (const auto& tag : tags) {
+        ImVec2 txtSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, tag.Label);
+        float pillW = txtSize.x + padX * 2.0f;
+        float pillH = txtSize.y + padY * 2.0f;
+
+        if (curPos.x + pillW > maxWidth) break;
+
+        ImVec2 bMin = curPos;
+        ImVec2 bMax = ImVec2(curPos.x + pillW, curPos.y + pillH);
+
+        float alphaMult = mod.IsEnabled ? 1.0f : 0.65f;
+        uint32_t bgA = (uint32_t)(0x2C * alphaMult);
+        uint32_t borderA = (uint32_t)(0x99 * alphaMult);
+        uint32_t textA = (uint32_t)(0xF0 * alphaMult);
+
+        ImU32 bgCol = (tag.Color & 0x00FFFFFF) | (bgA << 24);
+        ImU32 borderCol = (tag.Color & 0x00FFFFFF) | (borderA << 24);
+        ImU32 textCol = (tag.Color & 0x00FFFFFF) | (textA << 24);
+
+        dl->AddRectFilled(bMin, bMax, bgCol, rounding);
+        dl->AddRect(bMin, bMax, borderCol, rounding, 0, 1.0f);
+        dl->AddText(font, fontSize, ImVec2(bMin.x + padX, bMin.y + padY), textCol, tag.Label);
+
+        curPos.x = bMax.x + 5.0f;
+    }
+}
+
+// The type color regardless of enabled state - used to preview what the toggle
 // switches "on" to, since GetModAccentColor() below collapses disabled mods to gray.
 static ImU32 GetModTypeColor(const ModEntry& mod) {
-    if (mod.IsCoreMod)  return IM_COL32(219, 68, 68, 255);     // Core — red (highest)
-    if (mod.HasDll)     return IM_COL32(151, 79, 255, 255);    // DLL — purple
-    if (mod.IsTngMod)   return IM_COL32(90, 200, 120, 255);    // Tng — green (now higher than Def/Asset)
-    if (mod.IsAssetMod) return IM_COL32(70, 140, 230, 255);    // Asset — blue
-    if (mod.IsDefMod)   return IM_COL32(224, 196, 60, 255);    // Def — yellow
+    if (mod.IsCoreMod)  return IM_COL32(219, 68, 68, 255);     // Core - red (highest)
+    if (mod.HasDll)     return IM_COL32(151, 79, 255, 255);    // DLL - purple
+    if (mod.IsFSEMod)   return IM_COL32(255, 140, 50, 255);    // FSE - orange
+    if (mod.IsTngMod)   return IM_COL32(90, 200, 120, 255);    // Tng - green
+    if (mod.IsAssetMod) return IM_COL32(70, 140, 230, 255);    // Asset - blue
+    if (mod.IsDefMod)   return IM_COL32(224, 196, 60, 255);    // Def - yellow
     return IM_COL32(140, 145, 155, 255);                       // Fallback
 }
 
-// Card accent color by mod type. A mod can match multiple flags at once (e.g. an
-// asset mod that also ships a DLL), so ties resolve by priority: Core > DLL > Asset > Def > Tng.
+// Card accent color by mod type. Ties resolve by priority: Core > DLL > FSE > Tng > Asset > Def.
 // Disabled always overrides to neutral gray regardless of type.
 static ImU32 GetModAccentColor(const ModEntry& mod) {
-    if (!mod.IsEnabled) return IM_COL32(100, 104, 114, 255);   // Disabled — neutral gray
+    if (!mod.IsEnabled) return IM_COL32(100, 104, 114, 255);   // Disabled - neutral gray
     return GetModTypeColor(mod);
 }
 
@@ -501,6 +555,7 @@ inline void DrawModManagerWindow() {
                         bool wasAsset = ModManagerBackend::g_LoadedMods[sourceIdx].IsAssetMod;
                         bool wasDef = ModManagerBackend::g_LoadedMods[sourceIdx].IsDefMod;
                         bool wasTng = ModManagerBackend::g_LoadedMods[sourceIdx].IsTngMod;
+                        bool wasFSE = ModManagerBackend::g_LoadedMods[sourceIdx].IsFSEMod;
 
                         std::swap(ModManagerBackend::g_LoadedMods[sourceIdx], ModManagerBackend::g_LoadedMods[i]);
 
@@ -510,6 +565,7 @@ inline void DrawModManagerWindow() {
                         if (wasAsset) g_AppConfig.ModSystemDirty = true;
                         if (wasDef) g_AppConfig.DefSystemDirty = true;
                         if (wasTng) g_AppConfig.TngSystemDirty = true;
+                        if (wasFSE) g_AppConfig.FSESystemDirty = true;
                         SaveConfig();
                     }
                 }
@@ -568,22 +624,12 @@ inline void DrawModManagerWindow() {
             std::string nameStr = mod.Name;
             std::string typeStr = "Type: " + BuildModTypeString(mod);
 
-            ImVec2 nameSize = font->CalcTextSizeA(nameFontSize, FLT_MAX, 0.0f, nameStr.c_str());
-            float centerY = pMin.y + (cardSize.y - nameSize.y) * 0.5f;
-            float topY = pMin.y + 8.0f;
-            float nameY = centerY + (topY - centerY) * subtextAlpha;
-
-            ImVec2 namePos = ImVec2(pMin.x + 78.0f, nameY);
+            ImVec2 namePos = ImVec2(pMin.x + 78.0f, pMin.y + 8.0f);
             ImU32 nameColor = mod.IsEnabled ? IM_COL32(243, 243, 250, 255) : IM_COL32(140, 148, 166, 255);
             cardDraw->AddText(font, nameFontSize, namePos, nameColor, nameStr.c_str());
 
-            if (subtextAlpha > 0.01f) {
-                ImVec2 subSize = font->CalcTextSizeA(subFontSize, FLT_MAX, 0.0f, typeStr.c_str());
-                float subY = nameY + nameSize.y + 4.0f;
-                ImVec2 subPos = ImVec2(pMin.x + 78.0f, subY);
-                ImU32 subColor = IM_COL32(140, 148, 166, (uint32_t)(subtextAlpha * 255 * 0.9f));
-                cardDraw->AddText(font, subFontSize, subPos, subColor, typeStr.c_str());
-            }
+            // Always render color-coded pill tags on the mod card
+            DrawModCardBadges(cardDraw, ImVec2(pMin.x + 78.0f, pMin.y + 30.0f), mod, pMax.x - 65.0f);
 
             ImGui::SetCursorScreenPos(ImVec2(pMax.x - 54.0f, pMin.y + (cardSize.y - 20.0f) * 0.5f));
             bool wasEnabled = mod.IsEnabled;
@@ -593,6 +639,7 @@ inline void DrawModManagerWindow() {
                 if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true;
                 if (mod.IsDefMod)   g_AppConfig.DefSystemDirty = true;
                 if (mod.IsTngMod)   g_AppConfig.TngSystemDirty = true;
+                if (mod.IsFSEMod)   g_AppConfig.FSESystemDirty = true;
                 SaveConfig();
             }
 
@@ -651,7 +698,23 @@ inline void DrawModManagerWindow() {
             ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.95f, 1.0f), "%s", mod.Name.c_str());
 
             ImGui::Text("Type:"); ImGui::SameLine(100.0f);
-            ImGui::TextColored(ImVec4(0.8f, 0.85f, 0.9f, 1.0f), "%s", BuildModTypeString(mod).c_str());
+            auto inspectorTags = GetModTags(mod);
+            for (size_t tIdx = 0; tIdx < inspectorTags.size(); ++tIdx) {
+                const auto& tag = inspectorTags[tIdx];
+                if (tIdx > 0) ImGui::SameLine(0, 5.0f);
+                ImVec4 col = ImGui::ColorConvertU32ToFloat4(tag.Color);
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x, col.y, col.z, 0.20f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x, col.y, col.z, 0.20f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(col.x, col.y, col.z, 0.20f));
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(col.x, col.y, col.z, 0.70f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(col.x, col.y, col.z, 1.00f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7, 2));
+                ImGui::SmallButton(tag.Label);
+                ImGui::PopStyleVar(3);
+                ImGui::PopStyleColor(5);
+            }
 
             ImGui::Text("Path:"); ImGui::SameLine(100.0f);
             ImGui::TextDisabled("%s", mod.ModFolderPath.c_str());
@@ -896,9 +959,11 @@ inline void DrawModManagerWindow() {
         ImGui::BeginDisabled(!validTarget);
         if (DrawAccentButton("Delete", ImVec2(150, 32), ImVec4(0.55f, 0.14f, 0.14f, 0.85f), ImVec4(0.80f, 0.22f, 0.22f, 1.00f))) {
             bool wasDef = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsDefMod;
+            bool wasFSE = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsFSEMod;
             ModManagerBackend::DeleteMod(g_ModToDeleteIndex);
             g_AppConfig.ModSystemDirty = true;
             if (wasDef) g_AppConfig.DefSystemDirty = true;
+            if (wasFSE) g_AppConfig.FSESystemDirty = true;
             SaveConfig();
 
             if (s_SelectedModIndex == g_ModToDeleteIndex) s_SelectedModIndex = -1;

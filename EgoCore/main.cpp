@@ -382,7 +382,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         if ((g_CurrentAppState == EAppState::Frontend || g_CurrentAppState == EAppState::ModsManager) &&
-            (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty))
+            (g_AppConfig.ModSystemDirty || g_AppConfig.DefSystemDirty || g_AppConfig.TngSystemDirty || g_AppConfig.FSESystemDirty))
         {
             g_TriggerAssetChangesExitPopup = true;
             return 0;
