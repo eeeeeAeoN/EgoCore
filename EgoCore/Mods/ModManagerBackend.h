@@ -1183,7 +1183,7 @@ public:
                 // 3. Reassign IDs and save quests.lua
                 FinalizeQuestsLuaIDsAndSave();
             } else {
-                // No active FSE mods but dirty — just restore
+                // No active FSE mods but dirty â€” just restore
                 RestoreFSEFiles();
             }
             g_AppConfig.FSESystemDirty = false;
@@ -1542,7 +1542,7 @@ private:
         std::transform(lowerBankName.begin(), lowerBankName.end(), lowerBankName.begin(), ::tolower);
         bool audioInjected = false;
 
-        for (size_t i = 0; i < bank->Entries.size(); i++) {
+        for (int i = 0; i < (int)bank->Entries.size(); i++) {
             std::string entryNameLower = bank->Entries[i].Name;
             std::transform(entryNameLower.begin(), entryNameLower.end(), entryNameLower.begin(), ::tolower);
             std::string key = lowerBankName + "/N/A/" + entryNameLower;

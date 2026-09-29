@@ -101,6 +101,8 @@ struct DefWorkspace {
         Editor.SetShowWhitespaces(false);
     }
 
+    int SavedUndoIndex = 0;
+
     bool IsDirty() const {
         if (ShowDefsMode) {
             if (SelectedType.empty() || SelectedEntryIndex == -1) return false;
@@ -108,6 +110,7 @@ struct DefWorkspace {
         else {
             if (SelectedEnumIndex == -1) return false;
         }
+        if (Editor.GetUndoIndex() == SavedUndoIndex) return false;
         return Editor.GetText() != OriginalContent;
     }
 };
@@ -534,6 +537,7 @@ inline void SaveDefEntry(DefEntry& entry) {
 
     g_DefWorkspace.Editor.SetText(newContent);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
+    g_DefWorkspace.SavedUndoIndex = g_DefWorkspace.Editor.GetUndoIndex();
 
     std::stringstream ss(newContent);
     std::string line;
@@ -570,6 +574,7 @@ inline void SaveHeaderEntry(EnumEntry& entry) {
     entry.FullContent = newContent;
     g_DefWorkspace.Editor.SetText(newContent);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
+    g_DefWorkspace.SavedUndoIndex = g_DefWorkspace.Editor.GetUndoIndex();
 }
 
 inline void LoadDefContent(DefEntry& entry) {
@@ -581,11 +586,13 @@ inline void LoadDefContent(DefEntry& entry) {
     file.read(&buffer[0], len);
     g_DefWorkspace.Editor.SetText(buffer);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
+    g_DefWorkspace.SavedUndoIndex = g_DefWorkspace.Editor.GetUndoIndex();
 }
 
 inline void LoadHeaderContent(EnumEntry& entry) {
     g_DefWorkspace.Editor.SetText(entry.FullContent);
     g_DefWorkspace.OriginalContent = g_DefWorkspace.Editor.GetText();
+    g_DefWorkspace.SavedUndoIndex = g_DefWorkspace.Editor.GetUndoIndex();
 }
 
 inline void FindNextInEditor() {
@@ -661,6 +668,7 @@ inline bool ReplaceAndSaveEnum(const std::string& enumName, const std::string& n
     if (g_DefWorkspace.ShowDefsMode == false && g_DefWorkspace.SelectedEnumIndex == idx) {
         g_DefWorkspace.Editor.SetText(newContent);
         g_DefWorkspace.OriginalContent = newContent;
+        g_DefWorkspace.SavedUndoIndex = g_DefWorkspace.Editor.GetUndoIndex();
     }
     return true;
 }

@@ -28,7 +28,7 @@ inline void RebuildStringTexture(const char* text) {
     for (size_t i = 0; i < len; i++) {
         uint8_t charCode = (uint8_t)text[i];
         uint32_t chunkIdx = charCode / 64;
-        uint32_t localIdx = charCode % 64;
+        int localIdx = (int)(charCode % 64);
 
         if (chunkIdx < meta.GlyphBanks.size() && meta.GlyphBanks[chunkIdx].NoGlyphs > 0) {
             const auto& bank = meta.GlyphBanks[chunkIdx];
@@ -73,7 +73,7 @@ inline void RebuildStringTexture(const char* text) {
     for (size_t i = 0; i < len; i++) {
         uint8_t charCode = (uint8_t)text[i];
         uint32_t chunkIdx = charCode / 64;
-        uint32_t localIdx = charCode % 64;
+        int localIdx = (int)(charCode % 64);
 
         if (chunkIdx < meta.GlyphBanks.size() && meta.GlyphBanks[chunkIdx].NoGlyphs > 0) {
             const auto& bank = meta.GlyphBanks[chunkIdx];
@@ -211,9 +211,11 @@ inline void DrawStreamingFontProperties(LoadedBank* bank, int entryIdx) {
     ImGui::Dummy(ImVec2(0, 10));
     if (s_StitchedStringTex) {
         ImVec2 p = ImGui::GetCursorScreenPos();
-        ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + s_StitchedW * 2, p.y + s_StitchedH * 2), IM_COL32(45, 45, 48, 255));
-        ImGui::Image((void*)s_StitchedStringTex, ImVec2(s_StitchedW * 2, s_StitchedH * 2));
-        ImGui::Dummy(ImVec2(s_StitchedW * 2, s_StitchedH * 2));
+        float dispW = (float)(s_StitchedW * 2);
+        float dispH = (float)(s_StitchedH * 2);
+        ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + dispW, p.y + dispH), IM_COL32(45, 45, 48, 255));
+        ImGui::Image((void*)s_StitchedStringTex, ImVec2(dispW, dispH));
+        ImGui::Dummy(ImVec2(dispW, dispH));
     }
     else {
         if (!type2Entry) ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: No Type 2 Pixel Payload found in this bank!");

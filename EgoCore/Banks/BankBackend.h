@@ -199,7 +199,7 @@ inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) 
         if (upperFolder.find("SHADER") != std::string::npos) return EBankType::Shaders;
         if (upperFolder.find("FONT") != std::string::npos) return EBankType::Fonts;
     }
-    if (folders.count("PARTICLE_MAIN_PC")) return EBankType::Effects;
+    if (folders.count("PARTICLE_MAIN_PC") || folders.count("PARTICLE_MAIN")) return EBankType::Effects;
     return EBankType::Unknown;
 }
 
@@ -278,7 +278,7 @@ inline void UpdateFilter(LoadedBank& bank) {
     std::string filter = bank.FilterText;
     std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
 
-    bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank)));
+    bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank)));
 
     for (size_t i = 0; i < bank.Entries.size(); i++) {
         if (bank.FilterTypeMask != -1) {

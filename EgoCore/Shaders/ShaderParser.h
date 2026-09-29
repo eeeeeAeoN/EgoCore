@@ -106,7 +106,15 @@ public:
         HRESULT hr = D3DDisassemble(Data.Bytecode.data(), Data.ByteSize, 0, nullptr, &pDisassembly);
 
         if (SUCCEEDED(hr) && pDisassembly) {
-            DecompiledText = std::string((const char*)pDisassembly->GetBufferPointer(), pDisassembly->GetBufferSize() - 1);
+            size_t blobSize = pDisassembly->GetBufferSize();
+            const char* blobPtr = (const char*)pDisassembly->GetBufferPointer();
+            if (blobSize > 0 && blobPtr) {
+                size_t textLen = (blobPtr[blobSize - 1] == '\0') ? (blobSize - 1) : blobSize;
+                DecompiledText = std::string(blobPtr, textLen);
+            }
+            else {
+                DecompiledText = "// Empty disassembly output.";
+            }
             pDisassembly->Release();
         }
         else {

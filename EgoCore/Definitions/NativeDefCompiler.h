@@ -8,8 +8,8 @@
 // reads Data\Defs and writes the four binaries directly, so none of that is
 // needed: no ego_r.exe, no ini patching, no hidden game process.
 //
-// It also reports real diagnostics — file, line, column and message for every
-// bad def — where the stealth path could only suppress crash popups.
+// It also reports real diagnostics â€” file, line, column and message for every
+// bad def â€” where the stealth path could only suppress crash popups.
 //
 #include "def_compiler.h"
 

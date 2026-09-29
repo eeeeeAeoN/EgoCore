@@ -3,6 +3,7 @@
 #include "BankBackend.h"
 #include "MeshRenderer.h"
 #include "AnimParser.h"
+#include "BoneConfigParser.h"
 #include <functional>
 #include <d3d11.h>
 #include <map>
@@ -70,6 +71,59 @@ static bool g_ShowExportPopup = false;
 static bool g_TriggerExportPopup = false;
 inline bool g_IsMeshViewportHovered = false;
 
+inline BoneConfigData g_CurrentBoneConfig;
+inline std::vector<std::string> g_BoneConfigFiles;
+inline bool g_BoneConfigFilesScanned = false;
+static bool s_ApplyBoneConfig = false;
+static std::string s_SelectedBoneConfig = "";
+
+inline void ScanBoneConfigFiles() {
+    g_BoneConfigFiles.clear();
+    g_BoneConfigFilesScanned = true;
+
+    if (g_AppConfig.GameRootPath.empty()) return;
+
+    fs::path bonesDir = fs::path(g_AppConfig.GameRootPath) / "Data" / "Bones";
+    std::error_code ec;
+    if (!fs::exists(bonesDir, ec) || !fs::is_directory(bonesDir, ec)) {
+        bonesDir = fs::path(g_AppConfig.GameRootPath) / "data" / "bones";
+        if (!fs::exists(bonesDir, ec) || !fs::is_directory(bonesDir, ec)) return;
+    }
+
+    for (const auto& entry : fs::directory_iterator(bonesDir, ec)) {
+        if (entry.is_regular_file(ec)) {
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".bncfg") {
+                g_BoneConfigFiles.push_back(entry.path().filename().string());
+            }
+        }
+    }
+
+    std::sort(g_BoneConfigFiles.begin(), g_BoneConfigFiles.end());
+}
+
+inline void LoadBoneConfigFile(const std::string& filename) {
+    if (filename.empty() || g_AppConfig.GameRootPath.empty()) {
+        g_CurrentBoneConfig = BoneConfigData();
+        return;
+    }
+
+    fs::path filePath = fs::path(g_AppConfig.GameRootPath) / "Data" / "Bones" / filename;
+    std::error_code ec;
+    if (!fs::exists(filePath, ec)) {
+        filePath = fs::path(g_AppConfig.GameRootPath) / "data" / "bones" / filename;
+    }
+
+    if (fs::exists(filePath, ec)) {
+        BoneConfigParser::Parse(filePath.string(), g_CurrentBoneConfig);
+        g_CurrentBoneConfig.FileName = filename;
+    }
+    else {
+        g_CurrentBoneConfig = BoneConfigData();
+    }
+}
+
 static const ImVec4 kImportIconTint = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
 static const ImVec4 kExportIconTint = ImVec4(0.45f, 0.70f, 0.95f, 1.0f);
 static const ImVec4 kSettingsIconTint = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
@@ -93,13 +147,13 @@ struct XboxTexMeta {
     std::vector<uint8_t> Info;
 };
 
-static std::map<int, std::map<uint32_t, XboxTexMeta>> g_XboxTexCache;
+inline std::map<int, std::map<uint32_t, XboxTexMeta>> g_XboxTexCache;
 
 inline void EnsureXboxTextureCache(int bankIndex) {
     if (g_XboxTexCache.count(bankIndex)) return;
     LoadedBank& bank = g_OpenBanks[bankIndex];
 
-    auto pos = bank.Stream->tellg(); // Save current file position
+    auto pos = bank.Stream->tellg();
     for (const auto& sb : bank.SubBanks) {
         if (StartsWith(sb.Name, "GBANK")) {
             bank.Stream->clear();
@@ -136,25 +190,28 @@ inline void EnsureXboxTextureCache(int bankIndex) {
         }
     }
     bank.Stream->clear();
-    bank.Stream->seekg(pos, std::ios::beg); // Restore original file position
+    bank.Stream->seekg(pos, std::ios::beg);
 }
 
 inline std::string GetTextureNameForMesh(int textureID) {
     if (textureID <= 0) return "";
 
-    // 1. Check local Xbox bank first
-    if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics) {
-        EnsureXboxTextureCache(g_ActiveBankIndex);
-        if (g_XboxTexCache[g_ActiveBankIndex].count(textureID)) {
-            return g_XboxTexCache[g_ActiveBankIndex][textureID].Name;
+    for (int bIdx = 0; bIdx < (int)g_OpenBanks.size(); ++bIdx) {
+        if (g_OpenBanks[bIdx].Type == EBankType::XboxGraphics) {
+            EnsureXboxTextureCache(bIdx);
+            if (g_XboxTexCache[bIdx].count(textureID)) {
+                return g_XboxTexCache[bIdx][textureID].Name;
+            }
         }
     }
 
-    // 2. Fallback to global PC texture banks
     for (auto& bank : g_OpenBanks) {
-        if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+        if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Graphics) {
             for (auto& e : bank.Entries) {
-                if (e.ID == (uint32_t)textureID) return e.Name;
+                if (e.ID == (uint32_t)textureID) {
+                    if (bank.Type == EBankType::Graphics && e.Type != 2 && e.Type != 3 && e.Type != 10) continue;
+                    return e.Name;
+                }
             }
         }
     }
@@ -165,67 +222,88 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
     if (textureID <= 0) return nullptr;
     if (g_MeshTextureCache.count(textureID)) return g_MeshTextureCache[textureID];
 
-    // 1. Process local Xbox bank first
-    if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics) {
-        EnsureXboxTextureCache(g_ActiveBankIndex);
-        auto& cache = g_XboxTexCache[g_ActiveBankIndex];
+    // Check Xbox Graphics banks
+    for (int bIdx = 0; bIdx < (int)g_OpenBanks.size(); ++bIdx) {
+        if (g_OpenBanks[bIdx].Type == EBankType::XboxGraphics) {
+            EnsureXboxTextureCache(bIdx);
+            auto& cache = g_XboxTexCache[bIdx];
 
-        if (cache.count(textureID)) {
-            auto& meta = cache[textureID];
-            LoadedBank& bank = g_OpenBanks[g_ActiveBankIndex];
+            if (cache.count(textureID)) {
+                auto& meta = cache[textureID];
+                LoadedBank& bank = g_OpenBanks[bIdx];
 
-            std::vector<uint8_t> tempData;
-            bank.Stream->clear();
-            bank.Stream->seekg(meta.Offset, std::ios::beg);
-            tempData.resize(meta.Size + 64);
-            bank.Stream->read((char*)tempData.data(), meta.Size);
-
-            g_TextureParser.Parse(meta.Info, tempData, meta.Type);
-
-            if (g_TextureParser.IsParsed && !g_TextureParser.DecodedPixels.empty()) {
-                ID3D11ShaderResourceView* srv = nullptr;
-                DXGI_FORMAT dxFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-                uint32_t blockWidth = 1;
-
-                switch (g_TextureParser.DecodedFormat) {
-                case ETextureFormat::DXT1: case ETextureFormat::NormalMap_DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
-                case ETextureFormat::DXT3: dxFormat = DXGI_FORMAT_BC2_UNORM; blockWidth = 4; break;
-                case ETextureFormat::DXT5: case ETextureFormat::NormalMap_DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
-                case ETextureFormat::ARGB8888: dxFormat = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+                std::vector<uint8_t> tempData;
+                if (bank.Stream && bank.Stream->is_open()) {
+                    bank.Stream->clear();
+                    bank.Stream->seekg(meta.Offset, std::ios::beg);
+                    tempData.resize(meta.Size + 64);
+                    bank.Stream->read((char*)tempData.data(), meta.Size);
                 }
 
-                uint32_t w = g_TextureParser.Header.Width ? g_TextureParser.Header.Width : g_TextureParser.Header.FrameWidth;
-                uint32_t h = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
+                g_TextureParser.Parse(meta.Info, tempData, meta.Type);
 
-                D3D11_TEXTURE2D_DESC desc = {};
-                desc.Width = w; desc.Height = h; desc.MipLevels = 1; desc.ArraySize = 1;
-                desc.Format = dxFormat; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
-                desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                if (g_TextureParser.IsParsed && !g_TextureParser.DecodedPixels.empty()) {
+                    ID3D11ShaderResourceView* srv = nullptr;
+                    DXGI_FORMAT dxFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+                    uint32_t blockWidth = 1;
 
-                D3D11_SUBRESOURCE_DATA subData = {};
-                subData.pSysMem = g_TextureParser.DecodedPixels.data();
-                if (blockWidth == 4) subData.SysMemPitch = ((w + 3) / 4) * ((dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
-                else subData.SysMemPitch = w * 4;
+                    switch (g_TextureParser.DecodedFormat) {
+                    case ETextureFormat::DXT1: case ETextureFormat::NormalMap_DXT1: dxFormat = DXGI_FORMAT_BC1_UNORM; blockWidth = 4; break;
+                    case ETextureFormat::DXT3: dxFormat = DXGI_FORMAT_BC2_UNORM; blockWidth = 4; break;
+                    case ETextureFormat::DXT5: case ETextureFormat::NormalMap_DXT5: dxFormat = DXGI_FORMAT_BC3_UNORM; blockWidth = 4; break;
+                    case ETextureFormat::ARGB8888: dxFormat = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+                    }
 
-                ID3D11Texture2D* tex = nullptr;
-                if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex))) {
-                    g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &srv);
-                    tex->Release();
-                }
+                    uint32_t w = g_TextureParser.Header.Width ? g_TextureParser.Header.Width : g_TextureParser.Header.FrameWidth;
+                    uint32_t h = g_TextureParser.Header.Height ? g_TextureParser.Header.Height : g_TextureParser.Header.FrameHeight;
 
-                if (srv) {
-                    g_MeshTextureCache[textureID] = srv;
-                    return srv;
+                    D3D11_TEXTURE2D_DESC desc = {};
+                    desc.Width = w; desc.Height = h; desc.MipLevels = 1; desc.ArraySize = 1;
+                    desc.Format = dxFormat; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
+                    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                    D3D11_SUBRESOURCE_DATA subData = {};
+                    subData.pSysMem = g_TextureParser.DecodedPixels.data();
+                    if (blockWidth == 4) subData.SysMemPitch = ((w + 3) / 4) * ((dxFormat == DXGI_FORMAT_BC1_UNORM) ? 8 : 16);
+                    else subData.SysMemPitch = w * 4;
+
+                    ID3D11Texture2D* tex = nullptr;
+                    HRESULT hr = g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex);
+                    if (SUCCEEDED(hr)) {
+                        g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &srv);
+                        tex->Release();
+                    }
+                    else if (blockWidth == 4) {
+                        std::vector<uint8_t> rgba = TextureUtils::DecompressFrameToRGBA(
+                            g_TextureParser.DecodedPixels.data(), w, h, g_TextureParser.DecodedFormat);
+                        if (!rgba.empty()) {
+                            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                            D3D11_SUBRESOURCE_DATA fallbackSubData = {};
+                            fallbackSubData.pSysMem = rgba.data();
+                            fallbackSubData.SysMemPitch = w * 4;
+                            if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &fallbackSubData, &tex))) {
+                                g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &srv);
+                                tex->Release();
+                            }
+                        }
+                    }
+
+                    if (srv) {
+                        g_MeshTextureCache[textureID] = srv;
+                        return srv;
+                    }
                 }
             }
         }
     }
 
-    // 2. Process global PC texture banks
     for (auto& bank : g_OpenBanks) {
-        if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+        if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Graphics) {
             for (int i = 0; i < bank.Entries.size(); ++i) {
                 if (bank.Entries[i].ID == (uint32_t)textureID) {
+                    if (bank.Type == EBankType::Graphics && bank.Entries[i].Type != 2 && bank.Entries[i].Type != 3 && bank.Entries[i].Type != 10) {
+                        continue;
+                    }
 
                     if (bank.StagedEntries.count(i) && bank.StagedEntries[i].Texture) {
                         auto& tex = bank.StagedEntries[i].Texture;
@@ -294,9 +372,24 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
                         else subData.SysMemPitch = w * 4;
 
                         ID3D11Texture2D* tex = nullptr;
-                        if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex))) {
+                        HRESULT hr = g_pd3dDevice->CreateTexture2D(&desc, &subData, &tex);
+                        if (SUCCEEDED(hr)) {
                             g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &srv);
                             tex->Release();
+                        }
+                        else if (blockWidth == 4) {
+                            std::vector<uint8_t> rgba = TextureUtils::DecompressFrameToRGBA(
+                                g_TextureParser.DecodedPixels.data(), w, h, g_TextureParser.DecodedFormat);
+                            if (!rgba.empty()) {
+                                desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                                D3D11_SUBRESOURCE_DATA fallbackSubData = {};
+                                fallbackSubData.pSysMem = rgba.data();
+                                fallbackSubData.SysMemPitch = w * 4;
+                                if (SUCCEEDED(g_pd3dDevice->CreateTexture2D(&desc, &fallbackSubData, &tex))) {
+                                    g_pd3dDevice->CreateShaderResourceView(tex, nullptr, &srv);
+                                    tex->Release();
+                                }
+                            }
                         }
 
                         if (srv) {
@@ -314,7 +407,6 @@ inline ID3D11ShaderResourceView* LoadTextureForMesh(int textureID) {
 inline std::string ExtractTextureForGltf(int textureID, const std::string& exportDir) {
     if (textureID <= 0) return "";
 
-    // 1. Process local Xbox bank first
     if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size() && g_OpenBanks[g_ActiveBankIndex].Type == EBankType::XboxGraphics) {
         EnsureXboxTextureCache(g_ActiveBankIndex);
         auto& cache = g_XboxTexCache[g_ActiveBankIndex];
@@ -343,11 +435,13 @@ inline std::string ExtractTextureForGltf(int textureID, const std::string& expor
         }
     }
 
-    // 2. Process global PC texture banks
     for (auto& bank : g_OpenBanks) {
-        if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects) {
+        if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Graphics) {
             for (int i = 0; i < bank.Entries.size(); ++i) {
                 if (bank.Entries[i].ID == (uint32_t)textureID) {
+                    if (bank.Type == EBankType::Graphics && bank.Entries[i].Type != 2 && bank.Entries[i].Type != 3 && bank.Entries[i].Type != 10) {
+                        continue;
+                    }
 
                     std::string fname = "tex_" + std::to_string(textureID) + ".dds";
                     std::string fullPath = exportDir + fname;
@@ -414,7 +508,6 @@ inline void CheckMeshUpload(ID3D11Device* device) {
         if (g_BBMParser.IsParsed) {
             g_MeshRenderer.UploadBBM(device, g_BBMParser, resetCam);
 
-            // Added BBM Material Support!
             std::vector<MeshRenderer::RenderMaterial> materials;
             int maxMat = 0;
             for (const auto& m : g_BBMParser.ParsedMaterials) if (m.Index > maxMat) maxMat = m.Index;
@@ -436,7 +529,6 @@ inline void CheckMeshUpload(ID3D11Device* device) {
             for (const auto& m : g_ActiveMeshContent.Materials) if (m.ID > maxMat) maxMat = m.ID;
             materials.resize(maxMat + 1);
 
-            // PASS 1: Load Degenerate/Dummy materials first (as fallbacks)
             for (const auto& m : g_ActiveMeshContent.Materials) {
                 if (!m.DegenerateTriangles) continue;
 
@@ -447,7 +539,6 @@ inline void CheckMeshUpload(ID3D11Device* device) {
                 materials[m.ID].Visible = !g_MaterialVisible.count(m.ID) || g_MaterialVisible[m.ID];
             }
 
-            // PASS 2: Load REAL materials (These will overwrite the dummy data!)
             for (const auto& m : g_ActiveMeshContent.Materials) {
                 if (m.DegenerateTriangles) continue;
 
@@ -478,16 +569,13 @@ inline void UpdateAnimationBones() {
 
     std::vector<XMMATRIX> ibm(boneCount);
     std::vector<XMMATRIX> bindGlobal(boneCount);
-    std::vector<XMMATRIX> bindLocal(boneCount);
 
     for (int i = 0; i < boneCount; i++) {
         if ((i + 1) * 64 <= g_ActiveMeshContent.BoneTransformsRaw.size()) {
             float* raw = (float*)(g_ActiveMeshContent.BoneTransformsRaw.data() + i * 64);
             XMMATRIX rawMatrix = XMMATRIX(raw);
-
             rawMatrix.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
             XMMATRIX dxIBM = XMMatrixTranspose(rawMatrix);
-
             ibm[i] = dxIBM;
             bindGlobal[i] = XMMatrixInverse(nullptr, dxIBM);
         }
@@ -497,27 +585,24 @@ inline void UpdateAnimationBones() {
         }
     }
 
+    // 1. Extract pure bind-pose local rotation and translation
+    std::vector<XMVECTOR> localRot(boneCount);
+    std::vector<XMVECTOR> localTrans(boneCount);
+
     for (int i = 0; i < boneCount; i++) {
         int p = g_ActiveMeshContent.Bones[i].ParentIndex;
+        XMMATRIX bLocal;
         if (p == -1 || p >= boneCount) {
-            bindLocal[i] = bindGlobal[i];
+            bLocal = bindGlobal[i];
         }
         else {
-            bindLocal[i] = XMMatrixMultiply(bindGlobal[i], ibm[p]);
+            bLocal = XMMatrixMultiply(bindGlobal[i], ibm[p]);
         }
+        XMVECTOR s_dummy, r, t;
+        XMMatrixDecompose(&s_dummy, &r, &t, bLocal);
+        localRot[i] = r;
+        localTrans[i] = t;
     }
-
-    bool isAnimLoaded = g_PreviewAnimParser.Data.IsParsed;
-
-    if (!isAnimLoaded) {
-        for (int i = 0; i < boneCount; i++) {
-            g_PreviewBoneTransforms[i] = XMMatrixIdentity();
-            g_PreviewGlobalTransforms[i] = bindGlobal[i];
-        }
-        return;
-    }
-
-    std::vector<XMMATRIX> localTransforms(boneCount);
 
     auto cleanName = [](const std::string& str) {
         std::string res;
@@ -527,81 +612,124 @@ inline void UpdateAnimationBones() {
         return res;
         };
 
-    for (int i = 0; i < boneCount; i++) {
-        bool hasAnim = false;
+    // 2. Fetch bone scaling factors from bncfg (default is 1.0)
+    std::vector<XMFLOAT3> boneScales(boneCount, XMFLOAT3(1.0f, 1.0f, 1.0f));
+    bool isBoneConfigApplied = s_ApplyBoneConfig && g_CurrentBoneConfig.IsLoaded;
 
-        std::string targetBoneName = i < g_ActiveMeshContent.BoneNames.size() ? g_ActiveMeshContent.BoneNames[i] : "";
-        std::string cleanTarget = cleanName(targetBoneName);
+    if (isBoneConfigApplied) {
+        for (int i = 0; i < boneCount; i++) {
+            std::string bName = i < g_ActiveMeshContent.BoneNames.size() ? g_ActiveMeshContent.BoneNames[i] : "";
+            std::string cName = cleanName(bName);
+            if (!cName.empty()) {
+                auto it = g_CurrentBoneConfig.BoneScales.find(cName);
+                if (it != g_CurrentBoneConfig.BoneScales.end()) {
+                    boneScales[i] = it->second;
+                }
+            }
+        }
+    }
 
-        if (!cleanTarget.empty()) {
+    bool isAnimLoaded = g_PreviewAnimParser.Data.IsParsed;
+
+    // Fast-path: no animation and no config applied
+    if (!isAnimLoaded && !isBoneConfigApplied) {
+        for (int i = 0; i < boneCount; i++) {
+            g_PreviewBoneTransforms[i] = XMMatrixIdentity();
+            g_PreviewGlobalTransforms[i] = bindGlobal[i];
+        }
+        return;
+    }
+
+    // 3. Apply animation tracks if active
+    if (isAnimLoaded) {
+        for (int i = 0; i < boneCount; i++) {
+            std::string targetBoneName = i < g_ActiveMeshContent.BoneNames.size() ? g_ActiveMeshContent.BoneNames[i] : "";
+            std::string cleanTarget = cleanName(targetBoneName);
+            if (cleanTarget.empty()) continue;
+
             for (const auto& track : g_PreviewAnimParser.Data.Tracks) {
-                std::string cleanTrack = cleanName(track.BoneName);
-
-                if (cleanTarget == cleanTrack) {
+                if (cleanTarget == cleanName(track.BoneName)) {
                     if (track.FrameCount > 0 && track.SamplesPerSecond > 0) {
                         int frame = (int)(g_PreviewAnimTime * track.SamplesPerSecond) % track.FrameCount;
                         if (frame < 0) frame += track.FrameCount;
 
-                        if (g_SelectedAnimType == 7) {
+                        if (g_SelectedAnimType == 7) { // Delta
                             Vec3 p = { 0.0f, 0.0f, 0.0f };
                             Vec4 q = { 0.0f, 0.0f, 0.0f, 1.0f };
-
                             track.EvaluateFrame(frame, p, q);
 
-                            XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 1.0f);
+                            XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 0.0f);
                             XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
                             vRot = XMQuaternionConjugate(vRot);
 
                             XMMATRIX trackMat = XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
-                            localTransforms[i] = XMMatrixMultiply(trackMat, bindLocal[i]);
+                            XMMATRIX bLocal = XMMatrixRotationQuaternion(localRot[i]) * XMMatrixTranslationFromVector(localTrans[i]);
+                            XMMATRIX resLocal = XMMatrixMultiply(trackMat, bLocal);
+
+                            XMVECTOR s_dummy;
+                            XMMatrixDecompose(&s_dummy, &localRot[i], &localTrans[i], resLocal);
                         }
-                        else {
-                            XMVECTOR s_b, r_b, t_b;
-                            XMMatrixDecompose(&s_b, &r_b, &t_b, bindLocal[i]);
-                            r_b = XMQuaternionConjugate(r_b);
-
-                            Vec3 p = { XMVectorGetX(t_b), XMVectorGetY(t_b), XMVectorGetZ(t_b) };
-                            Vec4 q = { XMVectorGetX(r_b), XMVectorGetY(r_b), XMVectorGetZ(r_b), XMVectorGetW(r_b) };
-
+                        else { // Standard Pose Track
+                            Vec3 p = { 0.0f, 0.0f, 0.0f };
+                            Vec4 q = { 0.0f, 0.0f, 0.0f, 1.0f };
                             track.EvaluateFrame(frame, p, q);
 
-                            XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 1.0f);
+                            XMVECTOR vPos = XMVectorSet(p.x, p.y, p.z, 0.0f);
                             XMVECTOR vRot = XMQuaternionNormalize(XMVectorSet(q.x, q.y, q.z, q.w));
-                            vRot = XMQuaternionConjugate(vRot);
-
-                            localTransforms[i] = XMMatrixScalingFromVector(s_b) * XMMatrixRotationQuaternion(vRot) * XMMatrixTranslationFromVector(vPos);
+                            localRot[i] = XMQuaternionConjugate(vRot);
+                            localTrans[i] = vPos;
                         }
-
-                        hasAnim = true;
                     }
                     break;
                 }
             }
         }
-
-        if (!hasAnim) {
-            localTransforms[i] = bindLocal[i];
-        }
     }
 
+    // 4. Compute Global Hierarchy (Separating pure rotation from position to prevent shear)
+    std::vector<XMVECTOR> globalRot(boneCount);
+    std::vector<XMVECTOR> globalPos(boneCount);
     std::vector<bool> computed(boneCount, false);
-    std::function<void(int)> ComputeGlobal = [&](int idx) {
+
+    std::function<void(int)> ComputeHierarchy = [&](int idx) {
         if (computed[idx]) return;
 
         int p = g_ActiveMeshContent.Bones[idx].ParentIndex;
         if (p != -1 && p < boneCount) {
-            ComputeGlobal(p);
-            g_PreviewGlobalTransforms[idx] = XMMatrixMultiply(localTransforms[idx], g_PreviewGlobalTransforms[p]);
+            ComputeHierarchy(p);
+
+            // Child global rotation is pure orthonormal (ParentGlobalRot * ChildLocalRot)
+            globalRot[idx] = XMQuaternionMultiply(localRot[idx], globalRot[p]);
+
+            // Child position offset is scaled by PARENT's scale along parent's local axes
+            XMVECTOR parentScale = XMVectorSet(boneScales[p].x, boneScales[p].y, boneScales[p].z, 0.0f);
+            XMVECTOR scaledOffset = XMVectorMultiply(localTrans[idx], parentScale);
+
+            // Rotate offset by parent's global orientation
+            XMVECTOR rotatedOffset = XMVector3Rotate(scaledOffset, globalRot[p]);
+            globalPos[idx] = XMVectorAdd(globalPos[p], rotatedOffset);
         }
         else {
-            g_PreviewGlobalTransforms[idx] = localTransforms[idx];
+            globalRot[idx] = localRot[idx];
+            XMVECTOR rootScale = XMVectorSet(boneScales[idx].x, boneScales[idx].y, boneScales[idx].z, 0.0f);
+            globalPos[idx] = XMVectorMultiply(localTrans[idx], rootScale);
         }
         computed[idx] = true;
         };
 
     for (int i = 0; i < boneCount; i++) {
-        ComputeGlobal(i);
-        g_PreviewBoneTransforms[i] = XMMatrixMultiply(ibm[i], g_PreviewGlobalTransforms[i]);
+        ComputeHierarchy(i);
+    }
+
+    // 5. Final Skinning Matrix: Scale(OwnScale) * Rotation(GlobalRot) * Translation(GlobalPos)
+    for (int i = 0; i < boneCount; i++) {
+        XMVECTOR selfScale = XMVectorSet(boneScales[i].x, boneScales[i].y, boneScales[i].z, 0.0f);
+        XMMATRIX finalGlobal = XMMatrixScalingFromVector(selfScale) *
+            XMMatrixRotationQuaternion(globalRot[i]) *
+            XMMatrixTranslationFromVector(globalPos[i]);
+
+        g_PreviewGlobalTransforms[i] = finalGlobal;
+        g_PreviewBoneTransforms[i] = XMMatrixMultiply(ibm[i], finalGlobal);
     }
 }
 
@@ -735,7 +863,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         ImGui::EndPopup();
     }
 
-    // Reduced default inspector width from 450.0f to 310.0f
     static float rightPanelWidth = 373.0f;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float splitterWidth = 4.0f;
@@ -1023,7 +1150,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         }
     }
     else {
-        // fallback to text button if texture not loaded
         if (ImGui::Button(g_ShowRightPanel ? ">>##RightToggle" : "<<##RightToggle", ImVec2(24, 20))) {
             g_ShowRightPanel = !g_ShowRightPanel;
         }
@@ -1049,7 +1175,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.12f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.22f));
 
-        // Export button
         if (g_ExportTexture) {
             if (ImGui::ImageButton("##MeshExport", g_ExportTexture, ImVec2(24, 24), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kExportIconTint)) {
                 g_TriggerExportPopup = true;
@@ -1142,6 +1267,50 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         ImGui::PopID();
                     }
                 }
+
+                if (g_ActiveMeshContent.BoneCount > 0) {
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Bone Configuration (.bncfg)");
+
+                    if (!g_BoneConfigFilesScanned) {
+                        ScanBoneConfigFiles();
+                    }
+
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+
+                    std::string comboPreview = s_SelectedBoneConfig.empty() ? "No Bone Preset" : s_SelectedBoneConfig;
+                    if (ImGui::BeginCombo("##BoneConfigSelect", comboPreview.c_str())) {
+                        // Default "No Bone Preset" option
+                        bool isNoneSelected = s_SelectedBoneConfig.empty();
+                        if (ImGui::Selectable("No Bone Preset", isNoneSelected)) {
+                            s_SelectedBoneConfig = "";
+                            s_ApplyBoneConfig = false;
+                            g_CurrentBoneConfig = BoneConfigData();
+                        }
+                        if (isNoneSelected) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+
+                        // Available .bncfg files
+                        for (const auto& file : g_BoneConfigFiles) {
+                            bool isSelected = (s_SelectedBoneConfig == file);
+                            if (ImGui::Selectable(file.c_str(), isSelected)) {
+                                s_SelectedBoneConfig = file;
+                                s_ApplyBoneConfig = true;
+                                LoadBoneConfigFile(s_SelectedBoneConfig);
+                            }
+                            if (isSelected) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+
+                        if (g_BoneConfigFiles.empty()) {
+                            ImGui::TextDisabled("No .bncfg files found in Data/Bones");
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+
                 if (tocChanged && saveCallback) saveCallback();
                 ImGui::EndTabItem();
             }

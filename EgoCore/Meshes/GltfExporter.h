@@ -163,8 +163,8 @@ namespace GltfExporter {
         }
 
         int boneStartIdx = 0; int meshNodeIdx = mesh.BoneCount; int helperStartIdx = meshNodeIdx + 1;
-        int dummyStartIdx = helperStartIdx + mesh.Helpers.size(); int genStartIdx = dummyStartIdx + mesh.Dummies.size();
-        int volStartIdx = genStartIdx + mesh.Generators.size(); int rootWrapperIdx = volStartIdx + mesh.Volumes.size();
+        int dummyStartIdx = helperStartIdx + (int)mesh.Helpers.size(); int genStartIdx = dummyStartIdx + (int)mesh.Dummies.size();
+        int volStartIdx = genStartIdx + (int)mesh.Generators.size(); int rootWrapperIdx = volStartIdx + (int)mesh.Volumes.size();
         int totalNodes = rootWrapperIdx + 1;
 
         std::vector<std::vector<int>> nodeChildren(totalNodes);
@@ -178,10 +178,10 @@ namespace GltfExporter {
             else nodeChildren[rootWrapperIdx].push_back(myIdx);
             };
 
-        for (size_t i = 0; i < mesh.Helpers.size(); i++) LinkToParent(helperStartIdx + i, mesh.Helpers[i].BoneIndex);
-        for (size_t i = 0; i < mesh.Dummies.size(); i++) LinkToParent(dummyStartIdx + i, mesh.Dummies[i].BoneIndex);
-        for (size_t i = 0; i < mesh.Generators.size(); i++) LinkToParent(genStartIdx + i, mesh.Generators[i].BoneIndex);
-        for (size_t i = 0; i < mesh.Volumes.size(); i++) nodeChildren[rootWrapperIdx].push_back(volStartIdx + i);
+        for (size_t i = 0; i < mesh.Helpers.size(); i++) LinkToParent(helperStartIdx + (int)i, mesh.Helpers[i].BoneIndex);
+        for (size_t i = 0; i < mesh.Dummies.size(); i++) LinkToParent(dummyStartIdx + (int)i, mesh.Dummies[i].BoneIndex);
+        for (size_t i = 0; i < mesh.Generators.size(); i++) LinkToParent(genStartIdx + (int)i, mesh.Generators[i].BoneIndex);
+        for (size_t i = 0; i < mesh.Volumes.size(); i++) nodeChildren[rootWrapperIdx].push_back(volStartIdx + (int)i);
         for (int i = 0; i < mesh.BoneCount; i++) if (mesh.Bones[i].ParentIndex == -1) nodeChildren[rootWrapperIdx].push_back(i);
 
         json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"EgoCore\"},";
@@ -353,28 +353,28 @@ namespace GltfExporter {
 
             bufferViews.push_back({ bin.Write(posData.data(), posData.size() * 4), (int)posData.size() * 4, 34962 });
             accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC3", min, max, true));
-            int posAcc = accessors.size() - 1;
+            int posAcc = (int)accessors.size() - 1;
 
             bufferViews.push_back({ bin.Write(normData.data(), normData.size() * 4), (int)normData.size() * 4, 34962 });
             accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC3", 0, 0, false));
-            int normAcc = accessors.size() - 1;
+            int normAcc = (int)accessors.size() - 1;
 
             bufferViews.push_back({ bin.Write(uvData.data(), uvData.size() * 4), (int)uvData.size() * 4, 34962 });
             accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC2", 0, 0, false));
-            int uvAcc = accessors.size() - 1;
+            int uvAcc = (int)accessors.size() - 1;
 
             bufferViews.push_back({ bin.Write(colData.data(), colData.size() * 4), (int)colData.size() * 4, 34962 });
             accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC4", 0, 0, false));
-            int colAcc = accessors.size() - 1;
+            int colAcc = (int)accessors.size() - 1;
 
             int jointAcc = -1, weightAcc = -1;
             if (hasBones) {
                 bufferViews.push_back({ bin.Write(jointData.data(), jointData.size() * 2), (int)jointData.size() * 2, 34962 });
                 accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5123, "VEC4", 0, 0, false));
-                jointAcc = accessors.size() - 1;
+                jointAcc = (int)accessors.size() - 1;
                 bufferViews.push_back({ bin.Write(weightData.data(), weightData.size() * 4), (int)weightData.size() * 4, 34962 });
                 accessors.push_back(Accessor((int)bufferViews.size() - 1, exportVerts, 5126, "VEC4", 0, 0, false));
-                weightAcc = accessors.size() - 1;
+                weightAcc = (int)accessors.size() - 1;
             }
 
             std::stringstream attrJson;
@@ -422,7 +422,7 @@ namespace GltfExporter {
                 bool blocksWritten = false;
                 for (const auto& b : prim.StaticBlocks) { WriteGltfPrim(b.PrimitiveCount, b.StartIndex, b.IsStrip, b.MaterialIndex); blocksWritten = true; }
                 for (const auto& b : prim.AnimatedBlocks) { WriteGltfPrim(b.PrimitiveCount, b.StartIndex, b.IsStrip, prim.MaterialIndex); blocksWritten = true; }
-                if (!blocksWritten && !prim.IndexBuffer.empty()) { WriteGltfPrim(prim.IndexBuffer.size() / 3, 0, false, prim.MaterialIndex); }
+                if (!blocksWritten && !prim.IndexBuffer.empty()) { WriteGltfPrim((uint32_t)(prim.IndexBuffer.size() / 3), 0, false, prim.MaterialIndex); }
             }
 
             std::stringstream extras;
@@ -488,7 +488,7 @@ namespace GltfExporter {
             uint8_t cyc = anim->Data.IsCyclic; wMeta(&cyc, 1);
             uint8_t hlp = anim->Data.HasHelper; wMeta(&hlp, 1);
 
-            uint32_t evCount = anim->Data.TimeEvents.size(); wMeta(&evCount, 4);
+            uint32_t evCount = (uint32_t)anim->Data.TimeEvents.size(); wMeta(&evCount, 4);
             for (auto& e : anim->Data.TimeEvents) {
                 uint32_t nl = (uint32_t)e.Name.length(); wMeta(&nl, 4);
                 wMeta(e.Name.c_str(), nl); wMeta(&e.Time, 4);

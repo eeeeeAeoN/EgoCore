@@ -53,8 +53,11 @@ struct FSEWorkspace {
         Editor.SetShowWhitespaces(false);
     }
 
+    int SavedUndoIndex = 0;
+
     bool IsDirty() const {
         if (ActiveFilePath.empty()) return false;
+        if (Editor.GetUndoIndex() == SavedUndoIndex) return false;
         return Editor.GetText() != OriginalContent;
     }
 };
@@ -272,10 +275,12 @@ inline void LoadFSEScriptContent(const std::string& relativePath, EFSEItemType t
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         g_FSEWorkspace.Editor.SetText(content);
         g_FSEWorkspace.OriginalContent = g_FSEWorkspace.Editor.GetText();
+        g_FSEWorkspace.SavedUndoIndex = g_FSEWorkspace.Editor.GetUndoIndex();
     }
     else {
         g_FSEWorkspace.Editor.SetText("-- File not found: " + relativePath);
         g_FSEWorkspace.OriginalContent = "";
+        g_FSEWorkspace.SavedUndoIndex = g_FSEWorkspace.Editor.GetUndoIndex();
     }
 }
 
@@ -285,6 +290,7 @@ inline void SaveActiveFSEScript() {
     out << g_FSEWorkspace.Editor.GetText();
     out.close();
     g_FSEWorkspace.OriginalContent = g_FSEWorkspace.Editor.GetText();
+    g_FSEWorkspace.SavedUndoIndex = g_FSEWorkspace.Editor.GetUndoIndex();
 }
 
 inline void DeleteActiveFSEItem() {

@@ -29,6 +29,7 @@ static void DrawFSETab() {
     static bool showDeleteConfirm = false;
     static int targetQuestIdx = -1;
     static char inputName[128] = "";
+    static char questFilter[128] = "";
 
     auto DrawMinusButton = []() -> bool {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
@@ -48,10 +49,60 @@ static void DrawFSETab() {
         }
 
         ImGui::Separator();
+        ImGui::InputText("Filter", questFilter, sizeof(questFilter));
+        std::string filterLower = questFilter;
+        std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
+        bool hasFilter = !filterLower.empty();
+
+        // When filter is cleared, reset the pane's state storage so all trees collapse again
+        static bool wasFiltering = false;
+        if (wasFiltering && !hasFilter) {
+            ImGui::GetStateStorage()->Clear();
+        }
+        wasFiltering = hasFilter;
+
+        ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 5));
 
-        for (int i = 0; i < g_FSEWorkspace.Quests.size(); i++) {
+        for (int i = 0; i < (int)g_FSEWorkspace.Quests.size(); i++) {
             auto& quest = g_FSEWorkspace.Quests[i];
+
+            bool questMatches = false;
+            bool mainMatches = false;
+            bool hasMatchingExtra = false;
+            bool hasMatchingEntity = false;
+
+            if (hasFilter) {
+                std::string qName = quest.Name;
+                std::transform(qName.begin(), qName.end(), qName.begin(), ::tolower);
+                if (qName.find(filterLower) != std::string::npos) questMatches = true;
+
+                std::string mainName = quest.Name + " " + quest.File;
+                std::transform(mainName.begin(), mainName.end(), mainName.begin(), ::tolower);
+                if (mainName.find(filterLower) != std::string::npos) mainMatches = true;
+
+                for (const auto& script : quest.ExtraScripts) {
+                    std::string sName = script;
+                    std::transform(sName.begin(), sName.end(), sName.begin(), ::tolower);
+                    if (sName.find(filterLower) != std::string::npos) {
+                        hasMatchingExtra = true;
+                        break;
+                    }
+                }
+
+                for (const auto& ent : quest.Entities) {
+                    std::string eName = ent.Name + " " + ent.File;
+                    std::transform(eName.begin(), eName.end(), eName.begin(), ::tolower);
+                    if (eName.find(filterLower) != std::string::npos) {
+                        hasMatchingEntity = true;
+                        break;
+                    }
+                }
+
+                if (!questMatches && !mainMatches && !hasMatchingExtra && !hasMatchingEntity) {
+                    continue;
+                }
+            }
 
             ImGui::PushID(i);
 
@@ -62,12 +113,23 @@ static void DrawFSETab() {
             }
             ImGui::SameLine();
 
-            if (ImGui::TreeNodeEx(quest.Name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                if (ImGui::Selectable(("[Main] " + quest.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(quest.File) != std::string::npos)) {
-                    LoadFSEScriptContent(quest.File, EFSEItemType::QuestMain, i);
+            if (hasFilter) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+            if (ImGui::TreeNodeEx(quest.Name.c_str(), 0)) {
+                // Main Quest Script
+                if (!hasFilter || questMatches || mainMatches) {
+                    if (ImGui::Selectable(("[Main] " + quest.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(quest.File) != std::string::npos)) {
+                        LoadFSEScriptContent(quest.File, EFSEItemType::QuestMain, i);
+                    }
                 }
 
+                // Extra Scripts
                 for (const auto& script : quest.ExtraScripts) {
+                    if (hasFilter && !questMatches) {
+                        std::string sLo = script;
+                        std::transform(sLo.begin(), sLo.end(), sLo.begin(), ::tolower);
+                        if (sLo.find(filterLower) == std::string::npos) continue;
+                    }
+
                     ImGui::PushID(script.c_str());
                     if (DrawMinusButton()) {
                         g_FSEWorkspace.ActiveItemType = EFSEItemType::ExtraScript;
@@ -84,41 +146,56 @@ static void DrawFSETab() {
                     ImGui::PopID();
                 }
 
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
-                if (ImGui::Selectable("+ Create Script")) {
-                    targetQuestIdx = i;
-                    memset(inputName, 0, sizeof(inputName));
-                    showCreateScript = true;
-                }
-                ImGui::PopStyleColor();
-
-                if (ImGui::TreeNodeEx("Entities", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    for (int j = 0; j < quest.Entities.size(); j++) {
-                        auto& ent = quest.Entities[j];
-
-                        ImGui::PushID(j);
-                        if (DrawMinusButton()) {
-                            g_FSEWorkspace.ActiveItemType = EFSEItemType::Entity;
-                            g_FSEWorkspace.ActiveQuestIdx = i;
-                            g_FSEWorkspace.ActiveEntityIdx = j;
-                            showDeleteConfirm = true;
-                        }
-                        ImGui::SameLine();
-
-                        if (ImGui::Selectable((ent.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(ent.File) != std::string::npos)) {
-                            LoadFSEScriptContent(ent.File, EFSEItemType::Entity, i, j);
-                        }
-                        ImGui::PopID();
-                    }
-
+                if (!hasFilter) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
-                    if (ImGui::Selectable("+ Create Entity")) {
+                    if (ImGui::Selectable("+ Create Script")) {
                         targetQuestIdx = i;
                         memset(inputName, 0, sizeof(inputName));
-                        showCreateEntity = true;
+                        showCreateScript = true;
                     }
                     ImGui::PopStyleColor();
-                    ImGui::TreePop();
+                }
+
+                // Entities Tree
+                bool showEntitiesNode = !hasFilter || questMatches || hasMatchingEntity;
+                if (showEntitiesNode) {
+                    if (hasFilter) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+                    if (ImGui::TreeNodeEx("Entities", 0)) {
+                        for (int j = 0; j < (int)quest.Entities.size(); j++) {
+                            auto& ent = quest.Entities[j];
+
+                            if (hasFilter && !questMatches) {
+                                std::string eLo = ent.Name + " " + ent.File;
+                                std::transform(eLo.begin(), eLo.end(), eLo.begin(), ::tolower);
+                                if (eLo.find(filterLower) == std::string::npos) continue;
+                            }
+
+                            ImGui::PushID(j);
+                            if (DrawMinusButton()) {
+                                g_FSEWorkspace.ActiveItemType = EFSEItemType::Entity;
+                                g_FSEWorkspace.ActiveQuestIdx = i;
+                                g_FSEWorkspace.ActiveEntityIdx = j;
+                                showDeleteConfirm = true;
+                            }
+                            ImGui::SameLine();
+
+                            if (ImGui::Selectable((ent.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(ent.File) != std::string::npos)) {
+                                LoadFSEScriptContent(ent.File, EFSEItemType::Entity, i, j);
+                            }
+                            ImGui::PopID();
+                        }
+
+                        if (!hasFilter) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
+                            if (ImGui::Selectable("+ Create Entity")) {
+                                targetQuestIdx = i;
+                                memset(inputName, 0, sizeof(inputName));
+                                showCreateEntity = true;
+                            }
+                            ImGui::PopStyleColor();
+                        }
+                        ImGui::TreePop();
+                    }
                 }
 
                 ImGui::TreePop();
@@ -237,7 +314,7 @@ static void DrawFSETab() {
                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing;
 
                     if (ImGui::Begin("AutosuggestPopup", nullptr, flags)) {
-                        for (int i = 0; i < FSEAutosuggest::FilteredSuggestions.size(); i++) {
+                        for (int i = 0; i < (int)FSEAutosuggest::FilteredSuggestions.size(); i++) {
                             std::string label = FSEAutosuggest::FilteredSuggestions[i];
                             std::string helper = FSEAutosuggest::FilteredSignatures[i];
 

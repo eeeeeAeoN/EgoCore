@@ -207,7 +207,7 @@ private:
 
                 if (lzo1x_decompress_safe(&PixelData.CompressedPixels[startOffset], compSize, uncompressed.data(), &outLen, nullptr) == LZO_E_OK) {
                     CStreamingGlyphData* glyphs = (CStreamingGlyphData*)uncompressed.data();
-                    int numDecompressed = outLen / sizeof(CStreamingGlyphData);
+                    int numDecompressed = (int)(outLen / sizeof(CStreamingGlyphData));
                     for (int g = 0; g < numDecompressed; g++) PixelData.DecompressedMetrics.push_back(glyphs[g]);
                 }
             }

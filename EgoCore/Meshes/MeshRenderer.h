@@ -146,6 +146,10 @@ public:
     ID3D11RenderTargetView* GetRTV() const { return RTV; }
     ID3D11DepthStencilView* GetDSV() const { return DSV; }
 
+    MeshRenderer() = default;
+    MeshRenderer(const MeshRenderer&) = delete;
+    MeshRenderer& operator=(const MeshRenderer&) = delete;
+
     ~MeshRenderer() { Release(); }
     void Release() {
         if (VS) VS->Release(); VS = nullptr;
@@ -355,8 +359,8 @@ public:
             int blk = 0; int proc = 0;
             int limit = (prim.AnimatedBlocks.empty() ? 999999 : prim.AnimatedBlocks[0].VertexCount);
 
-            for (int v = 0; v < totalVerts; v++) {
-                if (hasBones && proc >= limit) { blk++; proc = 0; if (blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
+            for (uint32_t v = 0; v < totalVerts; v++) {
+                if (hasBones && proc >= limit) { blk++; proc = 0; if ((size_t)blk < prim.AnimatedBlocks.size()) limit = prim.AnimatedBlocks[blk].VertexCount; }
                 proc++;
 
                 size_t offset = v * prim.VertexStride; if (offset + 12 > prim.VertexBuffer.size()) break;

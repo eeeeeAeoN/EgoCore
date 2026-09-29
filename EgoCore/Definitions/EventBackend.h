@@ -102,8 +102,11 @@ struct EventWorkspace {
         return SelectedFileType == 0 ? &SoundEvents : &GameEvents;
     }
 
+    int SavedUndoIndex = 0;
+
     bool IsDirty() {
         if (SelectedEventIndex == -1) return false;
+        if (Editor.GetUndoIndex() == SavedUndoIndex) return false;
         return Editor.GetText() != OriginalContent;
     }
 };

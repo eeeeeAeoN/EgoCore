@@ -747,14 +747,14 @@ inline void DrawTextureProperties() {
     }
 
     // ---------- Bottom Overview bar (always fully visible) ----------
-    // Background – constant alpha
+    // Background â€“ constant alpha
     drawList->AddRectFilled(
         bottomBarMin,
         bottomBarMax,
         IM_COL32(8, 8, 8, 205)      // no fade
     );
 
-    // Separator line – constant alpha
+    // Separator line â€“ constant alpha
     drawList->AddLine(
         ImVec2(bottomBarMin.x, bottomBarMin.y),
         ImVec2(bottomBarMax.x, bottomBarMin.y),
@@ -773,7 +773,7 @@ inline void DrawTextureProperties() {
         )
     );
 
-    // Do NOT push ImGuiStyleVar_Alpha here – use full opacity
+    // Do NOT push ImGuiStyleVar_Alpha here â€“ use full opacity
 
     // Overview
     ImGui::TextColored(

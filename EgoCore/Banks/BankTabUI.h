@@ -11,6 +11,8 @@
 #include "StreamingFontProperties.h"
 #include "ModManagerCompiler.h"
 #include <thread>
+#include <mutex>
+#include <atomic>
 
 extern bool g_IsMeshViewportHovered;
 static int g_ContextEntryIndex = -1;
@@ -40,9 +42,10 @@ extern ImTextureID g_DeleteTexture;
 extern ImTextureID g_ImportTexture;
 
 static void DrawBinaryTab() {
-    static bool isCompilingBins = false;
+    static std::atomic<bool> isCompilingBins = false;
+    static std::mutex compileBinMutex;
     static std::string compileBinStatus = "";
-    static bool showBinResult = false;
+    static std::atomic<bool> showBinResult = false;
 
     if (ImGui::Button("Load Binaries from Data/Defs")) {
         LoadSystemBinaries(g_AppConfig.GameRootPath);
@@ -51,15 +54,22 @@ static void DrawBinaryTab() {
     ImGui::SameLine();
 
     if (ImGui::Button("Compile Sound Binaries")) {
-        compileBinStatus = "Starting compilation...";
+        {
+            std::lock_guard<std::mutex> lock(compileBinMutex);
+            compileBinStatus = "Starting compilation...";
+        }
         isCompilingBins = true;
         ImGui::OpenPopup("Compiling Binaries");
 
-        std::thread([&]() {
+        std::string gameRoot = g_AppConfig.GameRootPath;
+        std::thread([gameRoot]() {
             std::string log = "";
-            std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
+            std::string defsPath = gameRoot + "\\Data\\Defs";
             BinaryParser::CompileSoundBinaries(defsPath, log);
-            compileBinStatus = log;
+            {
+                std::lock_guard<std::mutex> lock(compileBinMutex);
+                compileBinStatus = std::move(log);
+            }
             isCompilingBins = false;
             showBinResult = true;
             }).detach();
@@ -86,7 +96,12 @@ static void DrawBinaryTab() {
     if (ImGui::BeginPopupModal("Binary Compile Result", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("Compilation Report:");
         ImGui::Separator();
-        ImGui::TextUnformatted(compileBinStatus.c_str());
+        std::string reportText;
+        {
+            std::lock_guard<std::mutex> lock(compileBinMutex);
+            reportText = compileBinStatus;
+        }
+        ImGui::TextUnformatted(reportText.c_str());
         ImGui::Separator();
         if (ImGui::Button("OK", ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();
@@ -533,7 +548,7 @@ static void DrawBankTab() {
                     if (ImGui::RadioButton("Groups", bank.FilterTypeMask == 1)) { bank.FilterTypeMask = 1; UpdateFilter(bank); }
                     if (ImGui::RadioButton("Narrator List", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
                 }
-                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank))) {
+                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank))) {
                     ImGui::TextColored(ImVec4(0, 1, 1, 1), "Texture Type:");
                     if (ImGui::RadioButton("Show All Types##Tex", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
                     if (ImGui::RadioButton("Graphic Single", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
@@ -925,7 +940,7 @@ static void DrawBankTab() {
                 bank.Entries[bank.SelectedEntryIndex].FriendlyName = nameBuf;
                 if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type) && e.Type != 3)
                     g_ActiveMeshContent.MeshName = nameBuf;
-                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Effects)
+                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend)
                     g_TextureParser.PendingName = nameBuf;
                 if (e.Type == 6 || e.Type == 7 || e.Type == 9)
                     g_AnimParser.Data.ObjectName = nameBuf;
@@ -1059,7 +1074,7 @@ static void DrawBankTab() {
 
             auto getLODOffsetAndSize = [&](int lodIndex, size_t& outOffset, size_t& outSize) {
                 outOffset = 0; outSize = 0;
-                if (lodIndex < 0 || lodIndex >= g_ActiveMeshContent.EntryMeta.LODCount) return;
+                if (lodIndex < 0 || (uint32_t)lodIndex >= g_ActiveMeshContent.EntryMeta.LODCount) return;
                 for (int i = 0; i < lodIndex; i++) outOffset += g_ActiveMeshContent.EntryMeta.LODSizes[i];
                 outSize = g_ActiveMeshContent.EntryMeta.LODSizes[lodIndex];
                 };
@@ -1241,7 +1256,6 @@ static void DrawBankTab() {
         ImGui::Separator();
 
         if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank))) DrawTextureProperties();
-        else if (bank.Type == EBankType::Effects) { DrawParticleProperties(g_ActiveParticleEmitter); }
         else if (bank.Type == EBankType::Text) DrawTextProperties(&bank, nullptr, [&](std::string target, uint32_t id, std::string hint) { JumpToBankEntry(target, id, hint); });
         else if (bank.Type == EBankType::Dialogue) DrawLipSyncProperties(&bank, nullptr, nullptr);
         else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && IsSupportedMesh(e.Type)) DrawMeshProperties(nullptr, drawLODControls);
@@ -1254,6 +1268,8 @@ static void DrawBankTab() {
                     g_ActiveParticleEmitter = *bank.StagedEntries[bank.SelectedEntryIndex].Particle;
                 }
                 s_LastParticleEntryID = bank.SelectedEntryIndex;
+                g_ParticleSimTime = 0.0f;
+                g_ParticleSimNeedsReset = true;
             }
 
             DrawParticleProperties(g_ActiveParticleEmitter);

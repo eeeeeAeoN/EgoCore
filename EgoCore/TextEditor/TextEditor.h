@@ -259,6 +259,7 @@ public:
 
 	bool CanUndo() const;
 	bool CanRedo() const;
+	int GetUndoIndex() const { return mUndoIndex; }
 	void Undo(int aSteps = 1);
 	void Redo(int aSteps = 1);
 

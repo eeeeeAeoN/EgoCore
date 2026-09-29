@@ -314,7 +314,7 @@ public:
                 if (g_ActiveModAssets.count(key)) {
                     isModded = true;
                     modResPath = g_ActiveModAssets[key].ResourcePath;
-                    entry.Size = fs::file_size(modResPath);
+                    entry.Size = (uint32_t)fs::file_size(modResPath);
                     if (!g_ActiveModAssets[key].HeaderPath.empty()) {
                         entry.InfoSize = (uint32_t)fs::file_size(g_ActiveModAssets[key].HeaderPath);
                         metaData.resize(entry.InfoSize);
@@ -356,12 +356,12 @@ public:
             newEntry.ID = highestID;
             newEntry.Name = fs::path(asset.ResourcePath).stem().string();
             if (lowerBankName == "graphics.big" || lowerBankName == "xboxgraphics.big") newEntry.Type = 1; else newEntry.Type = 0;
-            newEntry.Size = fs::file_size(asset.ResourcePath);
+            newEntry.Size = (uint32_t)fs::file_size(asset.ResourcePath);
             newEntry.Offset = 0; newEntry.CRC = 0; newEntry.Timestamp = 0;
 
             std::vector<uint8_t> newMeta;
             if (!asset.HeaderPath.empty() && fs::exists(asset.HeaderPath)) {
-                newEntry.InfoSize = fs::file_size(asset.HeaderPath);
+                newEntry.InfoSize = (uint32_t)fs::file_size(asset.HeaderPath);
                 newMeta.resize(newEntry.InfoSize);
                 std::ifstream hdrIn(asset.HeaderPath, std::ios::binary);
                 hdrIn.read((char*)newMeta.data(), newEntry.InfoSize);
@@ -946,7 +946,7 @@ public:
                                             std::ifstream inFile(def.SourceFile, std::ios::binary | std::ios::ate);
                                             if (inFile.is_open()) {
                                                 std::streamsize fileSize = inFile.tellg();
-                                                if (def.StartOffset >= 0 && def.EndOffset <= fileSize && def.EndOffset > def.StartOffset) {
+                                                if (fileSize > 0 && def.EndOffset <= (size_t)fileSize && def.EndOffset > def.StartOffset) {
                                                     inFile.seekg(def.StartOffset, std::ios::beg);
                                                     std::string buffer(def.EndOffset - def.StartOffset, '\0');
                                                     if (inFile.read(&buffer[0], buffer.size())) {

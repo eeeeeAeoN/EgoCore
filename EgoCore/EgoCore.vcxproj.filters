@@ -318,6 +318,15 @@
     <ClInclude Include="Banks\AnimationEventCompiler.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
+    <ClInclude Include="Meshes\BoneConfigParser.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Particles\ParticleRenderer.h">
+      <Filter>Source Files\Particles</Filter>
+    </ClInclude>
+    <ClInclude Include="Particles\ParticleSimulator.h">
+      <Filter>Source Files\Particles</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

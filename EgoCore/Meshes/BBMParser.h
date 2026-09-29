@@ -498,7 +498,7 @@ private:
 
     void ParseUNIV(const uint8_t* base, size_t& cursor, size_t end, int depth) {
         if ((end - cursor) < 4) return; uint32_t c = 0; memcpy(&c, base + cursor, 4); cursor += 4;
-        if (cursor + c * 4 > end) c = (end - cursor) / 4;
+        if (cursor + c * 4 > end) c = static_cast<uint32_t>((end - cursor) / 4);
         for (uint32_t i = 0; i < c; i++) { uint32_t v; memcpy(&v, base + cursor, 4); ParsedUniqueVertices.push_back(v); cursor += 4; }
     }
     void ParseSMTH(const uint8_t* base, size_t& cursor, size_t end, int depth) {

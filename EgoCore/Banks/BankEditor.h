@@ -704,49 +704,57 @@ inline void ExportAllShaders(LoadedBank* bank, const std::string& baseDir) {
     int originalSubBank = bank->ActiveSubBankIndex;
     int exportCount = 0;
 
-    for (int s = 0; s < bank->SubBanks.size(); s++) {
+    for (int s = 0; s < (int)bank->SubBanks.size(); s++) {
         LoadSubBankEntries(bank, s);
 
         std::string currentDir = baseDir + "\\" + bank->SubBanks[s].Name;
-        fs::create_directories(currentDir);
+        std::error_code ec;
+        fs::create_directories(currentDir, ec);
 
-        for (int i = 0; i < bank->Entries.size(); i++) {
+        for (int i = 0; i < (int)bank->Entries.size(); i++) {
             const auto& e = bank->Entries[i];
+            if (e.Size == 0 || e.Size > 50000000) continue;
 
-            std::vector<uint8_t> rawData;
-            if (bank->ModifiedEntryData.count(i)) {
-                rawData = bank->ModifiedEntryData[i];
-            }
-            else {
-                bank->Stream->clear();
-                bank->Stream->seekg(e.Offset, std::ios::beg);
-                rawData.resize(e.Size);
-                bank->Stream->read((char*)rawData.data(), e.Size);
-            }
+            try {
+                std::vector<uint8_t> rawData;
+                if (bank->ModifiedEntryData.count(i)) {
+                    rawData = bank->ModifiedEntryData[i];
+                }
+                else {
+                    bank->Stream->clear();
+                    bank->Stream->seekg(e.Offset, std::ios::beg);
+                    rawData.resize(e.Size);
+                    bank->Stream->read((char*)rawData.data(), e.Size);
+                }
 
-            if (rawData.empty()) continue;
+                if (rawData.empty()) continue;
 
-            CShaderParser parser;
-            parser.Parse(rawData);
+                CShaderParser parser;
+                parser.Parse(rawData);
 
-            if (parser.IsParsed && !parser.DecompiledText.empty()) {
-                std::string safeName = e.Name;
-                std::replace(safeName.begin(), safeName.end(), '/', '_');
-                std::replace(safeName.begin(), safeName.end(), '\\', '_');
+                if (parser.IsParsed && !parser.DecompiledText.empty()) {
+                    std::string safeName = e.Name;
+                    for (char& c : safeName) {
+                        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+                            c = '_';
+                        }
+                    }
 
-                std::string filePath = currentDir + "\\" + std::to_string(e.ID) + "_" + safeName + ".txt";
-                std::ofstream out(filePath, std::ios::trunc | std::ios::binary);
-                if (out.is_open()) {
-                    out << parser.DecompiledText;
-                    out.close();
-                    exportCount++;
+                    std::string filePath = currentDir + "\\" + std::to_string(e.ID) + "_" + safeName + ".txt";
+                    std::ofstream out(filePath, std::ios::trunc | std::ios::binary);
+                    if (out.is_open()) {
+                        out << parser.DecompiledText;
+                        out.close();
+                        exportCount++;
+                    }
                 }
             }
+            catch (...) {}
         }
     }
 
     // Restore UI state
-    if (originalSubBank >= 0 && originalSubBank < bank->SubBanks.size()) {
+    if (originalSubBank >= 0 && originalSubBank < (int)bank->SubBanks.size()) {
         LoadSubBankEntries(bank, originalSubBank);
     }
 
@@ -1468,7 +1476,7 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         if (g_TextureParser.IsParsed) {
             if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {
                 // Entry already staged (e.g. by ReplaceTextureFrame/AddTextureFrame).
-                // Those functions write directly to StagedEntries — do NOT clobber their work.
+                // Those functions write directly to StagedEntries â€” do NOT clobber their work.
                 g_BankStatus = "Texture already staged.";
                 UpdateFilter(*bank);
                 return;

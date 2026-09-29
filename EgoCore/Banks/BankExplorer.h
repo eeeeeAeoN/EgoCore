@@ -960,7 +960,7 @@ static void DrawFrontendHub() {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 0.90f), "AlbionSecrets");
         if (g_TitleFont) ImGui::PopFont();
 
-        const char* verStr = "11.8.26";
+        const char* verStr = "29.9.26";
         float verWidth = ImGui::CalcTextSize(verStr).x;
         float winWidth = ImGui::GetWindowWidth();
 
@@ -1211,7 +1211,7 @@ static void DrawBankExplorer() {
         );
         ImGui::Dummy(ImVec2(0, 12));
 
-        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 1.0f), "%s", g_CompileStatus.c_str());
+        ImGui::TextColored(ImVec4(0.85f, 0.88f, 0.95f, 1.0f), "%s", GetCompileStatus().c_str());
         ImGui::Dummy(ImVec2(0, 6));
 
         static int dots = 0; if (ImGui::GetFrameCount() % 20 == 0) dots = (dots + 1) % 4;
@@ -1446,7 +1446,7 @@ static void DrawBankExplorer() {
         if (g_TitleFont) ImGui::PopFont();
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
-        ImGui::TextDisabled("Version: 11.8.26");
+        ImGui::TextDisabled("Version: 29.9.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -1877,6 +1877,7 @@ static void DrawBankExplorer() {
                     if (node.Index >= 0 && node.Index < (int)activeFile->Events.size()) {
                         g_EventWorkspace.Editor.SetText(activeFile->Events[node.Index].Content);
                         g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                        g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
                     }
                 }
             }
@@ -1949,6 +1950,7 @@ static void DrawBankExplorer() {
                     if (node.Index >= 0 && node.Index < (int)activeFile->Events.size()) {
                         g_EventWorkspace.Editor.SetText(activeFile->Events[node.Index].Content);
                         g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                        g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
                     }
                 }
             }

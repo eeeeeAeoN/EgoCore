@@ -177,7 +177,7 @@ public:
         uint32_t CompressedDataSize = (uint32_t)compressedMetrics.size();
         uint32_t ChunkSize = 64;
 
-        uint32_t headersSize = 20 + (chunkIndices.size() * 4) + existingPixelData.Adjustments.size() + CompressedDataSize;
+        uint32_t headersSize = (uint32_t)(20 + (chunkIndices.size() * 4) + existingPixelData.Adjustments.size() + CompressedDataSize);
         uint32_t BinaryDataStart = (headersSize + 2047) & ~2047;
 
         write32(out_Type2, GlyphDataNum);

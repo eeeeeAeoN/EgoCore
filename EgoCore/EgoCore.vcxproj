@@ -56,6 +56,7 @@
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
     <ClInclude Include="Lipsync\SpeechAnalyzer.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
+    <ClInclude Include="Meshes\BoneConfigParser.h" />
     <ClInclude Include="Meshes\GltfExporter.h" />
     <ClInclude Include="Meshes\GltfMeshImporter.h" />
     <ClInclude Include="Meshes\MeshCompiler.h" />
@@ -69,6 +70,8 @@
     <ClInclude Include="Particles\ParticleCompiler.h" />
     <ClInclude Include="Particles\ParticleParser.h" />
     <ClInclude Include="Particles\ParticleProperties.h" />
+    <ClInclude Include="Particles\ParticleRenderer.h" />
+    <ClInclude Include="Particles\ParticleSimulator.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Shaders\ShaderCompiler.h" />
     <ClInclude Include="Shaders\ShaderParser.h" />

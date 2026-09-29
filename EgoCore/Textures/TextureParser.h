@@ -26,7 +26,7 @@ struct Color32 { uint8_t r, g, b, a; };
 
 class TextureUtils {
 public:
-    static void GetColorBlockColors(Color32* colors, const uint8_t* block) {
+    static void GetColorBlockColors(Color32* colors, const uint8_t* block, bool isDXT1 = true) {
         uint16_t c0; memcpy(&c0, block, 2);
         uint16_t c1; memcpy(&c1, block + 2, 2);
 
@@ -40,7 +40,7 @@ public:
         colors[1].b = (c1 & 0x1F) * 255 / 31;
         colors[1].a = 255;
 
-        if (c0 > c1) {
+        if (!isDXT1 || c0 > c1) {
             colors[2].r = (2 * colors[0].r + colors[1].r) / 3;
             colors[2].g = (2 * colors[0].g + colors[1].g) / 3;
             colors[2].b = (2 * colors[0].b + colors[1].b) / 3;
@@ -61,9 +61,9 @@ public:
         }
     }
 
-    static void DecompressDXT1Block(const uint8_t* block, Color32* output, uint32_t stride) {
+    static void DecompressDXT1Block(const uint8_t* block, Color32* output, uint32_t stride, bool isDXT1 = true) {
         Color32 colors[4];
-        GetColorBlockColors(colors, block);
+        GetColorBlockColors(colors, block, isDXT1);
         uint32_t indices; memcpy(&indices, block + 4, 4);
 
         for (int y = 0; y < 4; y++) {
@@ -75,7 +75,7 @@ public:
     }
 
     static void DecompressDXT3Block(const uint8_t* block, Color32* output, uint32_t stride) {
-        DecompressDXT1Block(block + 8, output, stride);
+        DecompressDXT1Block(block + 8, output, stride, false);
         for (int y = 0; y < 4; y++) {
             uint16_t alphaRow; memcpy(&alphaRow, block + 2 * y, 2);
             for (int x = 0; x < 4; x++) {
@@ -86,7 +86,7 @@ public:
     }
 
     static void DecompressDXT5Block(const uint8_t* block, Color32* output, uint32_t stride) {
-        DecompressDXT1Block(block + 8, output, stride);
+        DecompressDXT1Block(block + 8, output, stride, false);
         uint8_t a0 = block[0];
         uint8_t a1 = block[1];
 
@@ -179,24 +179,25 @@ public:
     }
 
     uint32_t GetMipSize(uint32_t w, uint32_t h, uint32_t d) {
-        uint32_t minDim = 1;
-        uint32_t bitsPerPixel = 0;
-
-        if (DecodedFormat == ETextureFormat::DXT1 || DecodedFormat == ETextureFormat::NormalMap_DXT1) {
-            minDim = 4; bitsPerPixel = 4;
-        }
-        else if (DecodedFormat == ETextureFormat::DXT3 || DecodedFormat == ETextureFormat::DXT5 || DecodedFormat == ETextureFormat::NormalMap_DXT5) {
-            minDim = 4; bitsPerPixel = 8;
-        }
-        else if (DecodedFormat == ETextureFormat::ARGB8888) {
-            minDim = 1; bitsPerPixel = 32;
-        }
-
-        uint32_t currentW = (w < minDim) ? minDim : w;
-        uint32_t currentH = (h < minDim) ? minDim : h;
         uint32_t currentD = (d < 1) ? 1 : d;
 
-        return ((currentW * currentH * bitsPerPixel) / 8) * currentD;
+        if (DecodedFormat == ETextureFormat::ARGB8888) {
+            uint32_t currentW = (w < 1) ? 1 : w;
+            uint32_t currentH = (h < 1) ? 1 : h;
+            return currentW * currentH * 4 * currentD;
+        }
+
+        uint32_t blocksX = (w + 3) / 4;
+        uint32_t blocksY = (h + 3) / 4;
+        if (blocksX < 1) blocksX = 1;
+        if (blocksY < 1) blocksY = 1;
+
+        uint32_t blockSize = 16;
+        if (DecodedFormat == ETextureFormat::DXT1 || DecodedFormat == ETextureFormat::NormalMap_DXT1) {
+            blockSize = 8;
+        }
+
+        return blocksX * blocksY * blockSize * currentD;
     }
 
     void DecodeFormat(bool isBump) {
@@ -254,21 +255,30 @@ public:
 
         if (metadata.size() < 28) return;
 
-        memcpy(&Header, metadata.data(), 28);
+        try {
+            memcpy(&Header, metadata.data(), 28);
 
-        if (metadata.size() >= 34) memcpy(&FormatInfo, metadata.data() + 28, 6);
-        else FormatInfo = { 0, 0, 0, 0, 0, 0 };
+            // Sanity check header fields to avoid corrupt allocations
+            uint32_t w = Header.Width ? Header.Width : Header.FrameWidth;
+            uint32_t h = Header.Height ? Header.Height : Header.FrameHeight;
+            if (w == 0 || w > 8192 || h == 0 || h > 8192) return;
+            if (Header.FrameCount > 512 || Header.MipmapLevels > 16) return;
+            if (Header.FrameDataSize > 128 * 1024 * 1024) return;
 
-        bool isBump = (entryType == 0x2 || entryType == 0x3);
-        DecodeFormat(isBump);
+            if (metadata.size() >= 34) memcpy(&FormatInfo, metadata.data() + 28, 6);
+            else FormatInfo = { 0, 0, 0, 0, 0, 0 };
 
-        TrueFrameStride = CalculateTotalFrameSize();
-        if (TrueFrameStride < Header.FrameDataSize) TrueFrameStride = Header.FrameDataSize;
+            bool isBump = (entryType == 0x2 || entryType == 0x3);
+            DecodeFormat(isBump);
 
-        uint32_t frames = (Header.FrameCount > 0) ? Header.FrameCount : 1;
-        size_t expectedTotalSize = (size_t)TrueFrameStride * frames;
+            TrueFrameStride = CalculateTotalFrameSize();
+            if (TrueFrameStride < Header.FrameDataSize) TrueFrameStride = Header.FrameDataSize;
 
-        DecodedPixels.resize(expectedTotalSize + 65536, 0);
+            uint32_t frames = (Header.FrameCount > 0) ? Header.FrameCount : 1;
+            size_t expectedTotalSize = (size_t)TrueFrameStride * frames;
+            if (expectedTotalSize == 0 || expectedTotalSize > 256 * 1024 * 1024) return; // 256MB safety limit
+
+            DecodedPixels.resize(expectedTotalSize + 65536, 0);
 
         if (pixelData.empty()) return;
 
@@ -356,4 +366,9 @@ public:
         DecodedPixels.resize(expectedTotalSize);
         if (!DecodedPixels.empty()) IsParsed = true;
     }
+    catch (...) {
+        IsParsed = false;
+        DecodedPixels.clear();
+    }
+}
 };

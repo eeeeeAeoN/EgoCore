@@ -1005,7 +1005,7 @@ inline void DrawModPackageWindow() {
 
         if (ImGui::Button("Auto-Add Changed Entries", ImVec2(btnWidth, 30))) {
             for (const auto& bank : g_OpenBanks) {
-                for (size_t i = 0; i < bank.Entries.size(); ++i) {
+                for (int i = 0; i < (int)bank.Entries.size(); ++i) {
                     if (bank.StagedEntries.count(i) || bank.ModifiedEntryData.count(i)) {
 
                         std::string currentSubBank = (bank.ActiveSubBankIndex >= 0 && bank.ActiveSubBankIndex < bank.SubBanks.size()) ? bank.SubBanks[bank.ActiveSubBankIndex].Name : std::string("N/A");

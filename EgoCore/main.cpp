@@ -1,3 +1,6 @@
+#ifndef MA_COINIT_VALUE
+#define MA_COINIT_VALUE 2 /* COINIT_APARTMENTTHREADED */
+#endif
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #include "imgui.h"
@@ -7,6 +10,7 @@
 #include <tchar.h>
 #include <filesystem>
 #include <iostream>
+#include <wrl/client.h>
 #include "BankExplorer.h"
 #include "resource.h"
 
@@ -109,6 +113,7 @@ bool LoadTextureFromFile(const char* filename, ID3D11Device* d3dDevice, ID3D11Sh
 }
 
 int main(int, char**) {
+    HRESULT hrCom = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     //InitDebugConsole();
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"FableTool", nullptr };
 
@@ -158,125 +163,35 @@ int main(int, char**) {
     }
 
     int iconWidth = 0, iconHeight = 0;
-    ID3D11ShaderResourceView* srvMusicOn = nullptr;
-    ID3D11ShaderResourceView* srvMusicOff = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvMusicOn, srvMusicOff, srvSearch, srvSave, srvDelete;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvPlay, srvPause, srvStop, srvLoop, srvImport;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvExport, srvAdd, srvResize, srvZoomIn, srvZoomOut, srvChange, srvSettings;
 
-    if (std::filesystem::exists("Assets/MusicOn.png")) {
-        if (LoadTextureFromFile("Assets/MusicOn.png", g_pd3dDevice, &srvMusicOn, &iconWidth, &iconHeight)) {
-            g_MusicOnTexture = (ImTextureID)srvMusicOn;
+    auto LoadIcon = [&](const char* path, Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& srv, ImTextureID& targetTex) {
+        if (std::filesystem::exists(path)) {
+            if (LoadTextureFromFile(path, g_pd3dDevice, srv.GetAddressOf(), &iconWidth, &iconHeight)) {
+                targetTex = (ImTextureID)srv.Get();
+            }
         }
-    }
+    };
 
-    if (std::filesystem::exists("Assets/MusicOff.png")) {
-        if (LoadTextureFromFile("Assets/MusicOff.png", g_pd3dDevice, &srvMusicOff, &iconWidth, &iconHeight)) {
-            g_MusicOffTexture = (ImTextureID)srvMusicOff;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvSearch = nullptr;
-    if (std::filesystem::exists("Assets/Search.png")) {
-        if (LoadTextureFromFile("Assets/Search.png", g_pd3dDevice, &srvSearch, &iconWidth, &iconHeight)) {
-            g_SearchTexture = (ImTextureID)srvSearch;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvSave = nullptr;
-    if (std::filesystem::exists("Assets/Save.png")) {
-        if (LoadTextureFromFile("Assets/Save.png", g_pd3dDevice, &srvSave, &iconWidth, &iconHeight)) {
-            g_SaveTexture = (ImTextureID)srvSave;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvDelete = nullptr;
-    if (std::filesystem::exists("Assets/Delete.png")) {
-        if (LoadTextureFromFile("Assets/Delete.png", g_pd3dDevice, &srvDelete, &iconWidth, &iconHeight)) {
-            g_DeleteTexture = (ImTextureID)srvDelete;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvPlay = nullptr;
-    if (std::filesystem::exists("Assets/Play.png")) {
-        if (LoadTextureFromFile("Assets/Play.png", g_pd3dDevice, &srvPlay, &iconWidth, &iconHeight)) {
-            g_PlayTexture = (ImTextureID)srvPlay;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvPause = nullptr;
-    if (std::filesystem::exists("Assets/Pause.png")) {
-        if (LoadTextureFromFile("Assets/Pause.png", g_pd3dDevice, &srvPause, &iconWidth, &iconHeight)) {
-            g_PauseTexture = (ImTextureID)srvPause;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvStop = nullptr;
-    if (std::filesystem::exists("Assets/Stop.png")) {
-        if (LoadTextureFromFile("Assets/Stop.png", g_pd3dDevice, &srvStop, &iconWidth, &iconHeight)) {
-            g_StopTexture = (ImTextureID)srvStop;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvLoop = nullptr;
-    if (std::filesystem::exists("Assets/Loop.png")) {
-        if (LoadTextureFromFile("Assets/Loop.png", g_pd3dDevice, &srvLoop, &iconWidth, &iconHeight)) {
-            g_LoopTexture = (ImTextureID)srvLoop;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvImport = nullptr;
-    if (std::filesystem::exists("Assets/Import.png")) {
-        if (LoadTextureFromFile("Assets/Import.png", g_pd3dDevice, &srvImport, &iconWidth, &iconHeight)) {
-            g_ImportTexture = (ImTextureID)srvImport;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvExport = nullptr;
-    if (std::filesystem::exists("Assets/Export.png")) {
-        if (LoadTextureFromFile("Assets/Export.png", g_pd3dDevice, &srvExport, &iconWidth, &iconHeight)) {
-            g_ExportTexture = (ImTextureID)srvExport;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvAdd = nullptr;
-    if (std::filesystem::exists("Assets/Add.png")) {
-        if (LoadTextureFromFile("Assets/Add.png", g_pd3dDevice, &srvAdd, &iconWidth, &iconHeight)) {
-            g_AddTexture = (ImTextureID)srvAdd;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvResize = nullptr;
-    if (std::filesystem::exists("Assets/Resize.png")) {
-        if (LoadTextureFromFile("Assets/Resize.png", g_pd3dDevice, &srvResize, &iconWidth, &iconHeight)) {
-            g_ResizeTexture = (ImTextureID)srvResize;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvZoomIn = nullptr;
-    if (std::filesystem::exists("Assets/ZoomIn.png")) {
-        if (LoadTextureFromFile("Assets/ZoomIn.png", g_pd3dDevice, &srvZoomIn, &iconWidth, &iconHeight)) {
-            g_ZoomInTexture = (ImTextureID)srvZoomIn;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvZoomOut = nullptr;
-    if (std::filesystem::exists("Assets/ZoomOut.png")) {
-        if (LoadTextureFromFile("Assets/ZoomOut.png", g_pd3dDevice, &srvZoomOut, &iconWidth, &iconHeight)) {
-            g_ZoomOutTexture = (ImTextureID)srvZoomOut;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvChange = nullptr;
-    if (std::filesystem::exists("Assets/Change.png")) {
-        if (LoadTextureFromFile("Assets/Change.png", g_pd3dDevice, &srvChange, &iconWidth, &iconHeight)) {
-            g_ChangeTexture = (ImTextureID)srvChange;
-        }
-    }
-
-    ID3D11ShaderResourceView* srvSettings = nullptr;
-    if (std::filesystem::exists("Assets/Settings.png")) {
-        if (LoadTextureFromFile("Assets/Settings.png", g_pd3dDevice, &srvSettings, &iconWidth, &iconHeight)) {
-            g_SettingsTexture = (ImTextureID)srvSettings;
-        }
-    }
+    LoadIcon("Assets/MusicOn.png", srvMusicOn, g_MusicOnTexture);
+    LoadIcon("Assets/MusicOff.png", srvMusicOff, g_MusicOffTexture);
+    LoadIcon("Assets/Search.png", srvSearch, g_SearchTexture);
+    LoadIcon("Assets/Save.png", srvSave, g_SaveTexture);
+    LoadIcon("Assets/Delete.png", srvDelete, g_DeleteTexture);
+    LoadIcon("Assets/Play.png", srvPlay, g_PlayTexture);
+    LoadIcon("Assets/Pause.png", srvPause, g_PauseTexture);
+    LoadIcon("Assets/Stop.png", srvStop, g_StopTexture);
+    LoadIcon("Assets/Loop.png", srvLoop, g_LoopTexture);
+    LoadIcon("Assets/Import.png", srvImport, g_ImportTexture);
+    LoadIcon("Assets/Export.png", srvExport, g_ExportTexture);
+    LoadIcon("Assets/Add.png", srvAdd, g_AddTexture);
+    LoadIcon("Assets/Resize.png", srvResize, g_ResizeTexture);
+    LoadIcon("Assets/ZoomIn.png", srvZoomIn, g_ZoomInTexture);
+    LoadIcon("Assets/ZoomOut.png", srvZoomOut, g_ZoomOutTexture);
+    LoadIcon("Assets/Change.png", srvChange, g_ChangeTexture);
+    LoadIcon("Assets/Settings.png", srvSettings, g_SettingsTexture);
 
     bool done = false;
     while (!done) {
@@ -312,23 +227,15 @@ int main(int, char**) {
         g_pSwapChain->Present(1, 0);
     }
 
-    if (srvMusicOn) { srvMusicOn->Release();  srvMusicOn = nullptr; }
-    if (srvMusicOff) { srvMusicOff->Release(); srvMusicOff = nullptr; }
-    if (srvSearch) { srvSearch->Release(); srvSearch = nullptr; }
-    if (srvSave) { srvSave->Release(); srvSave = nullptr; }
-    if (srvDelete) { srvDelete->Release(); srvDelete = nullptr; }
-    if (srvPlay) { srvPlay->Release(); srvPlay = nullptr; }
-    if (srvPause) { srvPause->Release(); srvPause = nullptr; }
-    if (srvStop) { srvStop->Release(); srvStop = nullptr; }
-    if (srvLoop) { srvLoop->Release(); srvLoop = nullptr; }
-    if (srvImport) { srvImport->Release(); srvImport = nullptr; }
-    if (srvExport) { srvExport->Release(); srvExport = nullptr; }
-    if (srvAdd) { srvAdd->Release(); srvAdd = nullptr; }
-    if (srvResize) { srvResize->Release(); srvResize = nullptr; }
-    if (srvZoomIn) { srvZoomIn->Release(); srvZoomIn = nullptr; }
-    if (srvZoomOut) { srvZoomOut->Release(); srvZoomOut = nullptr; }
-    if (srvChange) { srvChange->Release(); srvChange = nullptr; }
-    if (srvSettings) { srvSettings->Release(); srvSettings = nullptr; }
+    srvMusicOn.Reset(); srvMusicOff.Reset(); srvSearch.Reset(); srvSave.Reset(); srvDelete.Reset();
+    srvPlay.Reset(); srvPause.Reset(); srvStop.Reset(); srvLoop.Reset(); srvImport.Reset();
+    srvExport.Reset(); srvAdd.Reset(); srvResize.Reset(); srvZoomIn.Reset(); srvZoomOut.Reset();
+    srvChange.Reset(); srvSettings.Reset();
+
+    if (g_BackgroundTexture) { g_BackgroundTexture->Release(); g_BackgroundTexture = nullptr; }
+    if (g_ModManagerBgTexture) { g_ModManagerBgTexture->Release(); g_ModManagerBgTexture = nullptr; }
+    if (g_CloudTexture) { g_CloudTexture->Release(); g_CloudTexture = nullptr; }
+    if (g_FontAtlasSRV) { g_FontAtlasSRV->Release(); g_FontAtlasSRV = nullptr; }
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
@@ -336,6 +243,9 @@ int main(int, char**) {
     CleanupDeviceD3D();
     ::DestroyWindow(hwnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    if (SUCCEEDED(hrCom)) {
+        CoUninitialize();
+    }
     return 0;
 }
 

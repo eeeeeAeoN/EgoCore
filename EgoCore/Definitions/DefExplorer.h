@@ -548,6 +548,7 @@ static void DrawDefTab() {
                 g_EventWorkspace.SelectedEventIndex = (int)activeFile->Events.size() - 1;
                 g_EventWorkspace.Editor.SetText("");
                 g_EventWorkspace.OriginalContent = "";
+                g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
                 activeFile->Save();
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Event");
@@ -616,6 +617,7 @@ static void DrawDefTab() {
                         g_EventWorkspace.SelectedEventIndex = i;
                         g_EventWorkspace.Editor.SetText(ev.Content);
                         g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                        g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
                     }
 
                     // --- DRAG AND DROP SOURCE FOR EVENTS ---
@@ -708,6 +710,7 @@ static void DrawDefTab() {
             if (ImGui::ImageButton("##SaveEventBtn", g_SaveTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), saveTint)) {
                 ev.Content = g_EventWorkspace.Editor.GetText();
                 g_EventWorkspace.OriginalContent = ev.Content;
+                g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
                 activeFile->Save();
             }
             if (ImGui::IsItemHovered()) {
@@ -726,6 +729,7 @@ static void DrawDefTab() {
             if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl && g_Keybinds.SaveEntry.IsPressed()) {
                 ev.Content = g_EventWorkspace.Editor.GetText();
                 g_EventWorkspace.OriginalContent = ev.Content;
+                g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
                 activeFile->Save();
             }
         }

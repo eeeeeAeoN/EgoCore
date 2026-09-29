@@ -695,7 +695,8 @@ namespace GltfMeshImporter {
             int d2 = distances[edge.second] == -1 ? 9999 : distances[edge.second];
             float x1 = sim.Positions[edge.first * 3], y1 = sim.Positions[edge.first * 3 + 1], z1 = sim.Positions[edge.first * 3 + 2];
             float x2 = sim.Positions[edge.second * 3], y2 = sim.Positions[edge.second * 3 + 1], z2 = sim.Positions[edge.second * 3 + 2];
-            float restLength = std::sqrt(std::pow(x1 - x2, 2) + std::pow(y1 - y2, 2) + std::pow(z1 - z2, 2));
+            float dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
+            float restLength = std::sqrt(dx * dx + dy * dy + dz * dz);
             sortedEdges.push_back({ edge.first, edge.second, d1 + d2, restLength });
         }
 
@@ -727,7 +728,8 @@ namespace GltfMeshImporter {
             for (int i = 0; i < pAcc.count; i++) {
                 float gx = pData[i * 3], gy = pData[i * 3 + 1], gz = pData[i * 3 + 2];
                 if (applyBlenderFix) { float tmp = gy; gy = -gz; gz = tmp; }
-                float d = std::pow(px - gx, 2) + std::pow(py - gy, 2) + std::pow(pz - gz, 2);
+                float dx = px - gx, dy = py - gy, dz = pz - gz;
+                float d = dx * dx + dy * dy + dz * dz;
                 if (d < bestDist) { bestDist = d; bestGltf = i; }
             }
 
@@ -978,7 +980,7 @@ namespace GltfMeshImporter {
 
                     for (int j = 0; j < 3; j++) {
                         uint32_t vIdx = idxs[j];
-                        if (vIdx >= posAcc.count || vIdx == 0xFFFFFFFF) continue;
+                        if (vIdx >= (uint32_t)posAcc.count || vIdx == 0xFFFFFFFF) continue;
 
                         BaseVertex v = {};
                         v.p[0] = pData[vIdx * 3]; v.p[1] = pData[vIdx * 3 + 1]; v.p[2] = pData[vIdx * 3 + 2];
@@ -1300,7 +1302,7 @@ namespace GltfMeshImporter {
 
                     for (int j = 0; j < 3; j++) {
                         uint32_t vIdx = idxs[j];
-                        if (vIdx >= posAcc.count || vIdx == 0xFFFFFFFF) continue;
+                        if (vIdx >= (uint32_t)posAcc.count || vIdx == 0xFFFFFFFF) continue;
 
                         BaseVertex v = {};
                         v.p[0] = pData[vIdx * 3]; v.p[1] = pData[vIdx * 3 + 1]; v.p[2] = pData[vIdx * 3 + 2];
@@ -1354,7 +1356,7 @@ namespace GltfMeshImporter {
 
             for (const auto& baseSb : baseBlocks) {
                 CStaticBlock finalSb = baseSb;
-                finalSb.StartIndex = baseSb.StartIndex + (mergedBaseIndices.size() * (reps - 1));
+                finalSb.StartIndex = baseSb.StartIndex + (uint32_t)(mergedBaseIndices.size() * (reps - 1));
                 outPrim.StaticBlocks.push_back(finalSb);
                 outMesh.TotalStaticBlocks++;
             }
@@ -1551,7 +1553,7 @@ namespace GltfMeshImporter {
 
                     for (int j = 0; j < 3; j++) {
                         uint32_t vIdx = idxs[j];
-                        if (vIdx >= posAcc.count || vIdx == 0xFFFFFFFF) continue;
+                        if (vIdx >= (uint32_t)posAcc.count || vIdx == 0xFFFFFFFF) continue;
 
                         BaseVertex v = {};
                         v.p[0] = pData[vIdx * 3]; v.p[1] = pData[vIdx * 3 + 1]; v.p[2] = pData[vIdx * 3 + 2];
@@ -1749,7 +1751,7 @@ namespace GltfMeshImporter {
 
                         for (int j = 0; j < 3; j++) {
                             uint32_t vIdx = idxs[j];
-                            if (vIdx >= posAcc.count || vIdx == 0xFFFFFFFF) continue;
+                            if (vIdx >= (uint32_t)posAcc.count || vIdx == 0xFFFFFFFF) continue;
 
                             CBBMParser::C3DVertex2 v = {};
                             v.Position.x = pData[vIdx * 3]; v.Position.y = pData[vIdx * 3 + 1]; v.Position.z = pData[vIdx * 3 + 2];
@@ -1942,7 +1944,7 @@ namespace GltfMeshImporter {
             int fableId = i;
             std::string extras = ExtractBlock(nodeObjs[nodeIdx], "extras");
             if (extras.find("\"FableID\"") != std::string::npos) {
-                fableId = (int)ExtractFloatClean(extras, "FableID", i);
+                fableId = (int)ExtractFloatClean(extras, "FableID", (float)i);
             }
             outMesh.BoneIndices.push_back((uint16_t)fableId);
 

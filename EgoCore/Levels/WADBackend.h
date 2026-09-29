@@ -5,6 +5,7 @@
 #include <fstream>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <algorithm>
 #include "ConfigBackend.h"
 #include "imgui.h"
@@ -16,10 +17,21 @@ namespace WADBackend {
     inline bool g_ShowWadPrompt = false;
     inline bool g_TriggerManualWadModal = false;
     inline std::atomic<bool> g_IsUnpacking{ false };
-    inline bool g_UnpackFinished = false;
+    inline std::atomic<bool> g_UnpackFinished{ false };
     inline bool g_IsManualUnpack = false;
+    inline std::mutex g_UnpackStatusMutex;
     inline std::string g_UnpackStatus = "";
     inline std::string g_TargetGameRoot = "";
+
+    inline void SetUnpackStatus(const std::string& status) {
+        std::lock_guard<std::mutex> lock(g_UnpackStatusMutex);
+        g_UnpackStatus = status;
+    }
+
+    inline std::string GetUnpackStatus() {
+        std::lock_guard<std::mutex> lock(g_UnpackStatusMutex);
+        return g_UnpackStatus;
+    }
 
     inline bool RequiresUnpack(const std::string& gameRoot) {
         fs::path levelsDir = fs::path(gameRoot) / "Data" / "Levels";
@@ -43,7 +55,7 @@ namespace WADBackend {
 
         std::ifstream file(wadPath, std::ios::binary);
         if (!file.is_open()) {
-            g_UnpackStatus = "Failed to open WAD!";
+            SetUnpackStatus("Failed to open WAD!");
             g_IsUnpacking = false;
             g_UnpackFinished = true;
             return;
@@ -68,7 +80,7 @@ namespace WADBackend {
             file.read((char*)&magicE, 4);
 
             if (magicE != 42) {
-                g_UnpackStatus = "Warning: Alignment lost at entry " + std::to_string(i);
+                SetUnpackStatus("Warning: Alignment lost at entry " + std::to_string(i));
                 break;
             }
 
@@ -101,7 +113,7 @@ namespace WADBackend {
             if (infoSize > 0) file.seekg(infoSize, std::ios::cur);
 
             if (eSize > 0 && !name.empty()) {
-                g_UnpackStatus = "Extracting: " + name;
+                SetUnpackStatus("Extracting: " + name);
 
                 std::string cleanName = name;
                 std::replace(cleanName.begin(), cleanName.end(), '/', '\\');
@@ -130,7 +142,7 @@ namespace WADBackend {
         file.close();
 
         if (isSystemSetup) {
-            g_UnpackStatus = "Cleaning up WAD and patching userst.ini...";
+            SetUnpackStatus("Cleaning up WAD and patching userst.ini...");
             std::error_code ec;
             fs::remove(wadPath, ec);
 
@@ -167,7 +179,7 @@ namespace WADBackend {
     inline void StartSystemUnpack(const std::string& gameRoot) {
         g_IsUnpacking = true;
         g_UnpackFinished = false;
-        g_UnpackStatus = "Reading Table of Contents...";
+        SetUnpackStatus("Reading Table of Contents...");
         fs::path wadPath = fs::path(gameRoot) / "Data" / "Levels" / "FinalAlbion.wad";
         std::thread(UnpackRoutine, wadPath.string(), true, gameRoot).detach();
     }
@@ -176,7 +188,7 @@ namespace WADBackend {
         g_IsManualUnpack = true;
         g_IsUnpacking = true;
         g_UnpackFinished = false;
-        g_UnpackStatus = "Reading Table of Contents...";
+        SetUnpackStatus("Reading Table of Contents...");
         g_TriggerManualWadModal = true;
         std::thread(UnpackRoutine, wadPath, false, "").detach();
     }
@@ -300,7 +312,7 @@ namespace WADBackend {
             else if (g_IsUnpacking) {
                 ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Decompiling WAD Archive...");
                 ImGui::Dummy(ImVec2(0, 4));
-                ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.50f, 1.0f), "%s", g_UnpackStatus.c_str());
+                ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.50f, 1.0f), "%s", GetUnpackStatus().c_str());
                 ImGui::Dummy(ImVec2(0, 10));
 
                 static int dots = 0;

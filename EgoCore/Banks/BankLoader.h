@@ -536,7 +536,7 @@ inline void ParseSelectedLOD(LoadedBank* bank) {
     if (bank->CurrentEntryRawData.empty()) return;
     size_t offset = 0; size_t size = bank->CurrentEntryRawData.size();
     if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
-        if (bank->SelectedLOD >= g_ActiveMeshContent.EntryMeta.LODCount) bank->SelectedLOD = 0;
+        if (bank->SelectedLOD < 0 || (uint32_t)bank->SelectedLOD >= g_ActiveMeshContent.EntryMeta.LODCount) bank->SelectedLOD = 0;
         size_t currentOffset = 0;
         for (int i = 0; i < bank->SelectedLOD; i++) currentOffset += g_ActiveMeshContent.EntryMeta.LODSizes[i];
         size_t currentSize = g_ActiveMeshContent.EntryMeta.LODSizes[bank->SelectedLOD];
