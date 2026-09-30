@@ -960,7 +960,7 @@ static void DrawFrontendHub() {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 0.90f), "AlbionSecrets");
         if (g_TitleFont) ImGui::PopFont();
 
-        const char* verStr = "29.9.26";
+        const char* verStr = "30.9.26";
         float verWidth = ImGui::CalcTextSize(verStr).x;
         float winWidth = ImGui::GetWindowWidth();
 
@@ -1446,7 +1446,7 @@ static void DrawBankExplorer() {
         if (g_TitleFont) ImGui::PopFont();
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
-        ImGui::TextDisabled("Version: 29.9.26");
+        ImGui::TextDisabled("Version: 30.9.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -2093,7 +2093,7 @@ static void DrawBankExplorer() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
 
-    ImGui::SetNextWindowSize(ImVec2(480, 320), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     if (ImGui::BeginPopupModal("General Settings", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
@@ -2120,6 +2120,22 @@ static void DrawBankExplorer() {
             SaveConfig();
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the smart dropdown list when typing functions in FSE.");
+
+        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::Text("Renderer Background Color:");
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::ColorEdit3("##RendererBgColor", g_AppConfig.RendererBgColor, ImGuiColorEditFlags_NoAlpha)) {
+            SaveConfig();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset##RendererBgColor", ImVec2(60.0f, 0.0f))) {
+            g_AppConfig.RendererBgColor[0] = 0.13f;
+            g_AppConfig.RendererBgColor[1] = 0.13f;
+            g_AppConfig.RendererBgColor[2] = 0.13f;
+            g_AppConfig.RendererBgColor[3] = 1.0f;
+            SaveConfig();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset viewport background color to default (#212121)");
 
         ImGui::Dummy(ImVec2(0, 14));
         ImGui::Separator();

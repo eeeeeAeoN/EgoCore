@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <sstream>
 #include <filesystem>
 #include "InputManager.h"
 
@@ -26,6 +27,7 @@ struct AppConfig {
     bool ModEnvironmentSetup = false;
     bool FseSetup = false;
     bool EnableMusic = true;
+    float RendererBgColor[4] = { 0.13f, 0.13f, 0.13f, 1.0f };
 };
 
 inline AppConfig g_AppConfig;
@@ -87,6 +89,10 @@ inline void SaveConfig() {
         file << "ModEnvironmentSetup=" << (g_AppConfig.ModEnvironmentSetup ? "1" : "0") << "\n";
         file << "FseSetup=" << (g_AppConfig.FseSetup ? "1" : "0") << "\n";
         file << "EnableMusic=" << (g_AppConfig.EnableMusic ? "1" : "0") << "\n";
+        file << "RendererBgColor=" << g_AppConfig.RendererBgColor[0] << ","
+                                   << g_AppConfig.RendererBgColor[1] << ","
+                                   << g_AppConfig.RendererBgColor[2] << ","
+                                   << g_AppConfig.RendererBgColor[3] << "\n";
 
         auto SaveKey = [&](const std::string& name, const ShortcutKey& k) {
             file << name << "=" << (int)k.Key << "," << k.Ctrl << "," << k.Shift << "," << k.Alt << "\n";
@@ -139,6 +145,10 @@ inline void LoadConfig() {
     g_AppConfig.DisableWadPrompt = false;
     g_AppConfig.ModEnvironmentSetup = false;
     g_AppConfig.EnableMusic = true;
+    g_AppConfig.RendererBgColor[0] = 0.13f;
+    g_AppConfig.RendererBgColor[1] = 0.13f;
+    g_AppConfig.RendererBgColor[2] = 0.13f;
+    g_AppConfig.RendererBgColor[3] = 1.0f;
     g_SavedModOrder.clear();
     g_SavedMarkedEntries.clear();
 
@@ -214,6 +224,23 @@ inline void LoadConfig() {
             else if (line.find("ModEnvironmentSetup=") == 0) g_AppConfig.ModEnvironmentSetup = (line.substr(20) == "1");
             else if (line.find("FseSetup=") == 0) g_AppConfig.FseSetup = (line.substr(9) == "1");
             else if (line.find("EnableMusic=") == 0) g_AppConfig.EnableMusic = (line.substr(12) == "1");
+            else if (line.find("RendererBgColor=") == 0) {
+                std::stringstream ss(line.substr(16));
+                std::string item;
+                float vals[4] = { 0.13f, 0.13f, 0.13f, 1.0f };
+                int count = 0;
+                while (count < 4 && std::getline(ss, item, ',')) {
+                    try {
+                        vals[count++] = std::stof(item);
+                    } catch (...) {}
+                }
+                if (count >= 3) {
+                    g_AppConfig.RendererBgColor[0] = vals[0];
+                    g_AppConfig.RendererBgColor[1] = vals[1];
+                    g_AppConfig.RendererBgColor[2] = vals[2];
+                    g_AppConfig.RendererBgColor[3] = (count == 4) ? vals[3] : 1.0f;
+                }
+            }
             else if (line.find("Key_SwitchBankMode=") == 0) ParseKey(line.substr(19), g_Keybinds.SwitchBankMode);
             else if (line.find("Key_SwitchDefMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchDefMode);
             else if (line.find("Key_SwitchFSEMode=") == 0) ParseKey(line.substr(18), g_Keybinds.SwitchFSEMode);

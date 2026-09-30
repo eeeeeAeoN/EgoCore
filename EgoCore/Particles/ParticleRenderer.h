@@ -14,6 +14,7 @@
 
 #include "BankBackend.h"
 #include "MeshProperties.h"
+#include "ConfigBackend.h"
 #include <unordered_map>
 
 using namespace DirectX;
@@ -1454,7 +1455,7 @@ public:
         }
 
         // Clear offscreen buffers
-        float clearColor[4] = { 0.12f, 0.12f, 0.13f, 1.0f };
+        float clearColor[4] = { g_AppConfig.RendererBgColor[0], g_AppConfig.RendererBgColor[1], g_AppConfig.RendererBgColor[2], 1.0f };
         ctx->ClearRenderTargetView(RTV, clearColor);
         ctx->ClearDepthStencilView(DSV, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
 

@@ -6,6 +6,7 @@
 #include <string>
 #include "MeshParser.h"
 #include "BBMParser.h"
+#include "ConfigBackend.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -616,7 +617,7 @@ public:
         ID3D11DepthStencilView* activeDSV = overrideDSV ? overrideDSV : DSV;
 
         if (clearTarget) {
-            float bgColor[4] = { 0.13f, 0.13f, 0.13f, 1.0f };
+            float bgColor[4] = { g_AppConfig.RendererBgColor[0], g_AppConfig.RendererBgColor[1], g_AppConfig.RendererBgColor[2], 1.0f };
             ctx->ClearRenderTargetView(activeRTV, bgColor);
             ctx->ClearDepthStencilView(activeDSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
         }
