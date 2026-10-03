@@ -1344,4 +1344,4 @@ inline void DrawLipSyncProperties(LoadedBank* bank, std::function<void()> onSave
         }
         ImGui::EndChild();
     }
-}
+}

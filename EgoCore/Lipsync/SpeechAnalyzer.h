@@ -157,91 +157,138 @@ public:
         CLipSyncData result;
         result.IsParsed = true;
 
-        std::vector<PhonemeSignature> signatures;
-        signatures.push_back({ 0, 0.40f, 0.40f, 0.20f, 0.10f }); // AA
-        signatures.push_back({ 1, 0.20f, 0.50f, 0.30f, 0.10f }); // EE
-        signatures.push_back({ 2, 0.80f, 0.15f, 0.05f, 0.02f }); // MM
-        signatures.push_back({ 3, 0.60f, 0.30f, 0.10f, 0.05f }); // OH
-        signatures.push_back({ 4, 0.10f, 0.20f, 0.70f, 0.45f }); // SZ
+        if (pcmData.empty()) return result;
 
-        std::vector<std::string> symbols = { "AA", "EE", "MM", "OH", "SZ" };
-        for (uint8_t i = 0; i < symbols.size(); i++) {
+        // Resample input audio to 22050 Hz if needed
+        std::vector<int16_t> pcm22k;
+        if (sampleRate == SAMPLE_RATE || sampleRate <= 0) {
+            pcm22k = pcmData;
+        }
+        else {
+            double ratio = (double)SAMPLE_RATE / (double)sampleRate;
+            size_t targetSamples = (size_t)(pcmData.size() * ratio);
+            pcm22k.resize(targetSamples);
+            for (size_t i = 0; i < targetSamples; i++) {
+                double srcIdx = i / ratio;
+                size_t idx0 = (size_t)srcIdx;
+                size_t idx1 = (idx0 + 1 < pcmData.size()) ? idx0 + 1 : idx0;
+                double frac = srcIdx - (double)idx0;
+                double val = (1.0 - frac) * (double)pcmData[idx0] + frac * (double)pcmData[idx1];
+                pcm22k[i] = (int16_t)std::clamp(val, -32768.0, 32767.0);
+            }
+        }
+
+        // Fable standard spoken phonemes (MM is excluded as it is the default closed-mouth base)
+        // ID 0: AH (open jaw / vowel)
+        // ID 1: EE (wide / spread lips)
+        // ID 2: OH (rounded open lips)
+        // ID 3: SZ (fricative / sibilant)
+        // ID 4: WW (puckered / rounded narrow)
+        std::vector<PhonemeSignature> signatures = {
+            { 0, 0.35f, 0.50f, 0.15f, 0.08f }, // AH
+            { 1, 0.20f, 0.55f, 0.25f, 0.12f }, // EE
+            { 2, 0.60f, 0.32f, 0.08f, 0.05f }, // OH
+            { 3, 0.05f, 0.20f, 0.75f, 0.40f }, // SZ
+            { 4, 0.80f, 0.16f, 0.04f, 0.03f }  // WW
+        };
+
+        std::vector<std::string> symbols = { "AH", "EE", "OH", "SZ", "WW" };
+        for (uint8_t i = 0; i < (uint8_t)symbols.size(); i++) {
             result.Dictionary.push_back({ i, symbols[i] });
         }
 
-        size_t totalSamples = pcmData.size();
+        size_t totalSamples = pcm22k.size();
         size_t numFrames = totalSamples / FRAME_SIZE;
-        result.FPS = (float)SAMPLE_RATE / FRAME_SIZE;
+        result.FPS = (float)SAMPLE_RATE / (float)FRAME_SIZE;
         result.FrameCount = (uint32_t)numFrames;
-        result.Duration = (float)totalSamples / SAMPLE_RATE;
+        result.Duration = (float)totalSamples / (float)SAMPLE_RATE;
 
+        if (numFrames == 0) return result;
+
+        // Pass 1: Raw acoustic analysis and confidence per frame
+        std::vector<std::vector<float>> rawWeights(numFrames, std::vector<float>(signatures.size(), 0.0f));
         size_t cursor = 0;
+
         for (size_t f = 0; f < numFrames; f++) {
-            std::vector<int16_t> framePcm;
-            if (cursor + FRAME_SIZE <= totalSamples) {
-                framePcm.assign(pcmData.begin() + cursor, pcmData.begin() + cursor + FRAME_SIZE);
-                cursor += FRAME_SIZE;
-            }
-            else break;
+            std::vector<int16_t> framePcm(pcm22k.begin() + cursor, pcm22k.begin() + cursor + FRAME_SIZE);
+            cursor += FRAME_SIZE;
 
             FrameAnalysis fa = AnalyzeFrame(framePcm);
-            CLipSyncFrame lsFrame;
 
-            if (fa.RMS > 0.015f) {
-                struct Score { uint8_t ID; float Val; };
-                std::vector<Score> scores;
+            // Speech energy gate: silence/background hum (< 0.018f) leaves weights at 0.0
+            if (fa.RMS > 0.018f) {
+                // Volume factor: scale mouth opening with speech intensity
+                float volumeFactor = std::clamp((fa.RMS - 0.014f) / 0.055f, 0.0f, 1.0f);
 
-                for (const auto& sig : signatures) {
+                for (size_t s = 0; s < signatures.size(); s++) {
+                    const auto& sig = signatures[s];
                     float dLow = fa.EnergyLow - sig.TargetLow;
                     float dMid = fa.EnergyMid - sig.TargetMid;
                     float dHigh = fa.EnergyHigh - sig.TargetHigh;
-                    float dZCR = (fa.ZCR - sig.TargetZCR) * 2.5f;
+                    float dZCR = (fa.ZCR - sig.TargetZCR) * 2.0f;
 
                     float distSq = (dLow * dLow) + (dMid * dMid) + (dHigh * dHigh) + (dZCR * dZCR);
-                    float distance = sqrt(distSq);
+                    float distance = sqrtf(distSq);
 
-                    float confidence = 1.0f - (distance * 1.5f);
+                    float confidence = 1.0f - (distance * 1.6f);
                     if (confidence < 0.0f) confidence = 0.0f;
-                    if (confidence > 1.0f) confidence = 1.0f;
 
-                    float volumeFactor = (std::min)(fa.RMS * 5.0f, 1.0f);
-                    float finalWeight = confidence * volumeFactor;
+                    rawWeights[f][s] = confidence * volumeFactor;
+                }
+            }
+        }
 
-                    if (finalWeight > 0.01f) {
-                        scores.push_back({ sig.ID, finalWeight });
-                    }
+        // Pass 2: Temporal attack/decay smoothing to avoid erratic jitter between adjacent frames
+        std::vector<float> prevWeights(signatures.size(), 0.0f);
+        for (size_t f = 0; f < numFrames; f++) {
+            CLipSyncFrame lsFrame;
+            struct Candidate { uint8_t ID; float Weight; };
+            std::vector<Candidate> candidates;
+
+            for (size_t s = 0; s < signatures.size(); s++) {
+                float target = rawWeights[f][s];
+                // Fast attack when opening, smooth decay when closing
+                if (target > prevWeights[s]) {
+                    prevWeights[s] += (target - prevWeights[s]) * 0.65f;
+                }
+                else {
+                    prevWeights[s] += (target - prevWeights[s]) * 0.35f;
                 }
 
-                std::sort(scores.begin(), scores.end(), [](const Score& a, const Score& b) {
-                    return a.Val > b.Val;
-                    });
+                if (prevWeights[s] < 0.03f) prevWeights[s] = 0.0f;
 
-                // Take Top 3
-                int count = (std::min)((int)scores.size(), 3);
+                if (prevWeights[s] > 0.12f) {
+                    candidates.push_back({ signatures[s].ID, prevWeights[s] });
+                }
+            }
 
-                for (int i = 0; i < count; ++i) {
-                    if (scores[i].Val > 0.15f) {
-                        CLipSyncFrameKey key;
-                        key.ID = scores[i].ID;
-                        key.WeightFloat = scores[i].Val;
-                        key.WeightByte = (uint8_t)(scores[i].Val * 255.0f);
-                        lsFrame.Keys.push_back(key);
+            if (!candidates.empty()) {
+                std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+                    return a.Weight > b.Weight;
+                });
+
+                // Pick top dominant phonemes (up to 2)
+                float topWeight = candidates[0].Weight;
+                CLipSyncFrameKey key1;
+                key1.ID = candidates[0].ID;
+                key1.WeightFloat = std::clamp(topWeight, 0.15f, 1.0f);
+                key1.WeightByte = (uint8_t)(key1.WeightFloat * 255.0f);
+                lsFrame.Keys.push_back(key1);
+
+                if (candidates.size() > 1 && candidates[1].Weight >= 0.20f && candidates[1].Weight >= topWeight * 0.35f) {
+                    CLipSyncFrameKey key2;
+                    key2.ID = candidates[1].ID;
+                    float w2 = candidates[1].Weight;
+                    if (key1.WeightFloat + w2 > 1.0f) w2 = 1.0f - key1.WeightFloat;
+                    if (w2 >= 0.10f) {
+                        key2.WeightFloat = w2;
+                        key2.WeightByte = (uint8_t)(w2 * 255.0f);
+                        lsFrame.Keys.push_back(key2);
                     }
                 }
             }
 
-            // The game engine treats 0 keys as uninitialized/invalid, causing the mouth to hang open.
-            // We must provide at least some keys (with 0 weight) to indicate "Mouth Closed".
-            if (lsFrame.Keys.empty()) {
-                for (uint8_t i = 0; i < 3; i++) {
-                    CLipSyncFrameKey key;
-                    key.ID = i;
-                    key.WeightFloat = 0.0f;
-                    key.WeightByte = 0;
-                    lsFrame.Keys.push_back(key);
-                }
-            }
-
+            // Silent frames remain empty (null keys, 0 weight), keeping mouth completely shut in default MM
             result.Frames.push_back(lsFrame);
         }
 
