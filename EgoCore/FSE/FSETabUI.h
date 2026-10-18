@@ -114,11 +114,29 @@ static void DrawFSETab() {
             ImGui::SameLine();
 
             if (hasFilter) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-            if (ImGui::TreeNodeEx(quest.Name.c_str(), 0)) {
+            bool isNodeOpen = ImGui::TreeNodeEx(quest.Name.c_str(), 0);
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                FSEDragPayload payload;
+                payload.QuestIndex = i;
+                payload.ScriptType = 0; // Entire Quest
+                ImGui::SetDragDropPayload("FSE_SCRIPT_PAYLOAD", &payload, sizeof(FSEDragPayload));
+                ImGui::Text("Stage FSE Quest: %s", quest.Name.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            if (isNodeOpen) {
                 // Main Quest Script
                 if (!hasFilter || questMatches || mainMatches) {
                     if (ImGui::Selectable(("[Main] " + quest.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(quest.File) != std::string::npos)) {
                         LoadFSEScriptContent(quest.File, EFSEItemType::QuestMain, i);
+                    }
+                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                        FSEDragPayload payload;
+                        payload.QuestIndex = i;
+                        payload.ScriptType = 1; // Main script
+                        ImGui::SetDragDropPayload("FSE_SCRIPT_PAYLOAD", &payload, sizeof(FSEDragPayload));
+                        ImGui::Text("Stage FSE Script: [Main] %s.lua", quest.Name.c_str());
+                        ImGui::EndDragDropSource();
                     }
                 }
 
@@ -142,6 +160,15 @@ static void DrawFSETab() {
                     std::string relPath = quest.Name + "/" + script;
                     if (ImGui::Selectable((script + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(relPath) != std::string::npos)) {
                         LoadFSEScriptContent(relPath, EFSEItemType::ExtraScript, i, -1, script);
+                    }
+                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                        FSEDragPayload payload;
+                        payload.QuestIndex = i;
+                        payload.ScriptType = 2; // Extra script
+                        strncpy_s(payload.ExtraScriptName, script.c_str(), sizeof(payload.ExtraScriptName) - 1);
+                        ImGui::SetDragDropPayload("FSE_SCRIPT_PAYLOAD", &payload, sizeof(FSEDragPayload));
+                        ImGui::Text("Stage FSE Script: %s.lua", script.c_str());
+                        ImGui::EndDragDropSource();
                     }
                     ImGui::PopID();
                 }
@@ -181,6 +208,15 @@ static void DrawFSETab() {
 
                             if (ImGui::Selectable((ent.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(ent.File) != std::string::npos)) {
                                 LoadFSEScriptContent(ent.File, EFSEItemType::Entity, i, j);
+                            }
+                            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                                FSEDragPayload payload;
+                                payload.QuestIndex = i;
+                                payload.EntityIndex = j;
+                                payload.ScriptType = 3; // Entity script
+                                ImGui::SetDragDropPayload("FSE_SCRIPT_PAYLOAD", &payload, sizeof(FSEDragPayload));
+                                ImGui::Text("Stage FSE Entity: %s.lua", ent.Name.c_str());
+                                ImGui::EndDragDropSource();
                             }
                             ImGui::PopID();
                         }

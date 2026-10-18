@@ -49,6 +49,47 @@ namespace WADBackend {
         }
     }
 
+    inline void PatchUserstIni(const std::string& gameRoot) {
+        fs::path iniPath = fs::path(gameRoot) / "userst.ini";
+        if (!fs::exists(iniPath)) return;
+
+        std::string iniContent;
+        bool foundWad = false;
+        bool foundWorld = false;
+        bool foundGtg = false;
+
+        std::ifstream iniIn(iniPath);
+        if (iniIn.is_open()) {
+            std::string line;
+            while (std::getline(iniIn, line)) {
+                line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+                if (line.find("UseLevelWAD") != std::string::npos) {
+                    foundWad = true;
+                    iniContent += "UseLevelWAD FALSE;\n";
+                }
+                else if (line.find("UseCompiledWorldFiles") != std::string::npos) {
+                    foundWorld = true;
+                    iniContent += "UseCompiledWorldFiles FALSE;\n";
+                }
+                else if (line.find("UseCompiledGlobalThings") != std::string::npos) {
+                    foundGtg = true;
+                    iniContent += "UseCompiledGlobalThings FALSE;\n";
+                }
+                else {
+                    iniContent += line + "\n";
+                }
+            }
+            iniIn.close();
+        }
+
+        if (!foundWad) iniContent += "UseLevelWAD FALSE;\n";
+        if (!foundWorld) iniContent += "UseCompiledWorldFiles FALSE;\n";
+        if (!foundGtg) iniContent += "UseCompiledGlobalThings FALSE;\n";
+
+        std::ofstream iniOut(iniPath);
+        if (iniOut.is_open()) iniOut << iniContent;
+    }
+
     inline void UnpackRoutine(std::string wadPathStr, bool isSystemSetup, std::string gameRoot) {
         fs::path wadPath = wadPathStr;
         fs::path outBaseDir = wadPath.parent_path();
@@ -146,30 +187,7 @@ namespace WADBackend {
             std::error_code ec;
             fs::remove(wadPath, ec);
 
-            fs::path iniPath = fs::path(gameRoot) / "userst.ini";
-            std::string iniContent;
-            bool found = false;
-
-            std::ifstream iniIn(iniPath);
-            if (iniIn.is_open()) {
-                std::string line;
-                while (std::getline(iniIn, line)) {
-                    line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
-                    if (line.find("UseLevelWAD") != std::string::npos) {
-                        found = true;
-                        iniContent += "UseLevelWAD FALSE;\n";
-                    }
-                    else {
-                        iniContent += line + "\n";
-                    }
-                }
-                iniIn.close();
-            }
-
-            if (!found) iniContent += "UseLevelWAD FALSE;\n";
-
-            std::ofstream iniOut(iniPath);
-            if (iniOut.is_open()) iniOut << iniContent;
+            PatchUserstIni(gameRoot);
         }
 
         g_IsUnpacking = false;

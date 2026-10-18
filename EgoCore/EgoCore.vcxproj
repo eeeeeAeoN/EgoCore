@@ -50,6 +50,7 @@
     <ClInclude Include="FSE\FSEAutosuggest.h" />
     <ClInclude Include="FSE\FSEBackend.h" />
     <ClInclude Include="FSE\FSETabUI.h" />
+    <ClInclude Include="Levels\STBBackend.h" />
     <ClInclude Include="Levels\WADBackend.h" />
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
@@ -63,10 +64,12 @@
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
+    <ClInclude Include="Mods\GtgMerger.h" />
     <ClInclude Include="Mods\ModManagerBackend.h" />
     <ClInclude Include="Mods\ModManagerCompiler.h" />
     <ClInclude Include="Mods\ModManagerUI.h" />
     <ClInclude Include="Mods\TngMerger.h" />
+    <ClInclude Include="Mods\WldMerger.h" />
     <ClInclude Include="Particles\ParticleCompiler.h" />
     <ClInclude Include="Particles\ParticleParser.h" />
     <ClInclude Include="Particles\ParticleProperties.h" />
@@ -121,6 +124,11 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="EgoCore.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\StaticTerrainBankCompiler\StaticTerrainBank.vcxproj">
+      <Project>{a82f1043-41a5-4bc5-8851-c2e46ba90d32}</Project>
+    </ProjectReference>
   </ItemGroup>
   <!-- The FableDefCompiler static library is superseded by the native def
        compiler (extern/fable-defs) and is no longer referenced. It also required
@@ -233,7 +241,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\Emi\source\repos\EgoCore\EgoCore\Levels;C:\Users\Emi\source\repos\EgoCore\FableDefCompiler;C:\Users\Emi\source\repos\EgoCore\EgoCore\FSE;C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)StaticTerrainBankCompiler\include;C:\Users\Emi\source\repos\EgoCore\EgoCore\Levels;C:\Users\Emi\source\repos\EgoCore\FableDefCompiler;C:\Users\Emi\source\repos\EgoCore\EgoCore\FSE;C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

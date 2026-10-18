@@ -13,6 +13,10 @@
 #include "BankEditor.h"
 #include "CompilerBackend.h"
 #include "TngMerger.h"
+#include "WldMerger.h"
+#include "GtgMerger.h"
+#include "WADBackend.h"
+#include "egostb/stb_compiler.hpp"
 
 namespace fs = std::filesystem;
 
@@ -115,8 +119,8 @@ public:
                                 mod.IsDefMod = true;
                             }
 
-                            // Tng Mod Condition
-                            if (ext == ".tng") {
+                            // Tng / Level Mod Condition
+                            if (ext == ".tng" || ext == ".wld" || ext == ".gtg" || ext == ".lev") {
                                 mod.IsTngMod = true;
                             }
 
@@ -124,7 +128,8 @@ public:
                             if (!mod.IsAssetMod) {
                                 if (lowerRelPath.find("\\data\\bones\\") != std::string::npos ||
                                     lowerRelPath.find("\\data\\enginecache\\") != std::string::npos ||
-                                    (lowerRelPath.find("\\data\\levels\\") != std::string::npos && ext != ".tng") ||
+                                    (lowerRelPath.find("\\data\\levels\\") != std::string::npos &&
+                                     ext != ".tng" && ext != ".wld" && ext != ".gtg" && ext != ".lev" && ext != ".stb" && ext != ".ism") ||
                                     lowerRelPath.find("\\data\\lightingtable\\") != std::string::npos ||
                                     lowerRelPath.find("\\data\\video\\") != std::string::npos ||
                                     lowerRelPath.find("\\data\\tattoos\\") != std::string::npos) {
@@ -1108,33 +1113,176 @@ public:
         }
         g_AppConfig.ModSystemDirty = false;
 
+        bool stbCompilationNeeded = false;
+
         if (g_AppConfig.TngSystemDirty) {
             if (hasActiveTngMods) {
-                SetLaunchStatus("Merging level (.tng) mods...");
-                std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
+                SetLaunchStatus("Merging level (.tng, .wld, .gtg, .lev) mods...");
+                std::string levelsDir = g_AppConfig.GameRootPath + "\\Data\\Levels";
+                std::string targetWldPath = levelsDir + "\\FinalAlbion.wld";
+                std::string targetGtgPath = levelsDir + "\\FinalAlbion.gtg";
 
-                for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
-                    const auto& mod = *it;
-                    if (!mod.IsEnabled || !mod.IsTngMod) continue;
+                // 1. Ensure userst.ini is patched for loose level loading
+                WADBackend::PatchUserstIni(g_AppConfig.GameRootPath);
 
-                    std::string modDataPath = mod.ModFolderPath + "\\Data\\Levels";
-                    if (!fs::exists(modDataPath)) continue;
-
-                    for (const auto& entry : fs::recursive_directory_iterator(modDataPath)) {
-                        if (entry.is_regular_file() && entry.path().extension() == ".tng") {
-                            std::string relPath = entry.path().string().substr(mod.ModFolderPath.length() + 5);
-                            std::string targetPath = dataPath + relPath;
-
-                            if (!fs::exists(targetPath)) {
-                                fs::create_directories(fs::path(targetPath).parent_path());
-                                fs::copy_file(entry.path(), targetPath);
-                            }
-                            else {
-                                TngMerger::ProcessTngMod(entry.path().string(), targetPath);
+                // 2. Build index of all vanilla .tng files in Data\Levels\ (mapping lowercase filename -> full path)
+                std::map<std::string, std::string> vanillaTngByName;
+                if (fs::exists(levelsDir)) {
+                    for (const auto& entry : fs::recursive_directory_iterator(levelsDir)) {
+                        if (entry.is_regular_file()) {
+                            std::string ext = entry.path().extension().string();
+                            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                            if (ext == ".tng") {
+                                std::string fName = entry.path().filename().string();
+                                std::transform(fName.begin(), fName.end(), fName.begin(), ::tolower);
+                                vanillaTngByName[fName] = entry.path().string();
                             }
                         }
                     }
                 }
+
+                // 3. Manifest file for brand-new deployed files
+                std::string manifestPath = levelsDir + "\\.egocore_deployed_level_files.txt";
+                std::ofstream manifestOut(manifestPath, std::ios::app);
+
+                // Tracking for WLD -> GTG synchronization and STB recompilation
+                std::map<int, int> accumulatedRemappedMapIds;
+
+                // Process active mods in reverse load order (lowest priority first, highest priority last)
+                for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
+                    const auto& mod = *it;
+                    if (!mod.IsEnabled || !mod.IsTngMod) continue;
+
+                    std::string modLevelsDir = "";
+                    if (fs::exists(mod.ModFolderPath + "\\Data\\Levels")) {
+                        modLevelsDir = mod.ModFolderPath + "\\Data\\Levels";
+                    }
+                    else if (fs::exists(mod.ModFolderPath + "\\Levels")) {
+                        modLevelsDir = mod.ModFolderPath + "\\Levels";
+                    }
+
+                    // A. Check for FinalAlbion.wld in mod
+                    std::string modWldPath = "";
+                    if (!modLevelsDir.empty() && fs::exists(modLevelsDir + "\\FinalAlbion.wld")) {
+                        modWldPath = modLevelsDir + "\\FinalAlbion.wld";
+                    }
+                    else if (fs::exists(mod.ModFolderPath + "\\FinalAlbion.wld")) {
+                        modWldPath = mod.ModFolderPath + "\\FinalAlbion.wld";
+                    }
+
+                    if (!modWldPath.empty() && fs::exists(targetWldPath)) {
+                        SetLaunchStatus("Merging FinalAlbion.wld (" + mod.Name + ")...");
+                        WldMergeResult wldRes = WldMerger::ProcessWldMod(modWldPath, targetWldPath);
+                        if (wldRes.mapsChanged) stbCompilationNeeded = true;
+                        for (const auto& pair : wldRes.remappedMapIds) {
+                            accumulatedRemappedMapIds[pair.first] = pair.second;
+                        }
+                    }
+
+                    // B. Check for FinalAlbion.gtg in mod
+                    std::string modGtgPath = "";
+                    if (!modLevelsDir.empty() && fs::exists(modLevelsDir + "\\FinalAlbion.gtg")) {
+                        modGtgPath = modLevelsDir + "\\FinalAlbion.gtg";
+                    }
+                    else if (fs::exists(mod.ModFolderPath + "\\FinalAlbion.gtg")) {
+                        modGtgPath = mod.ModFolderPath + "\\FinalAlbion.gtg";
+                    }
+
+                    if (!modGtgPath.empty() && fs::exists(targetGtgPath)) {
+                        SetLaunchStatus("Merging FinalAlbion.gtg (" + mod.Name + ")...");
+                        GtgMerger::ProcessGtgMod(modGtgPath, targetGtgPath, accumulatedRemappedMapIds);
+                    }
+
+                    // C. Process .lev and .tng files in mod
+                    if (!modLevelsDir.empty()) {
+                        for (const auto& entry : fs::recursive_directory_iterator(modLevelsDir)) {
+                            if (!entry.is_regular_file()) continue;
+
+                            std::string filename = entry.path().filename().string();
+                            std::string lowerFilename = filename;
+                            std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), ::tolower);
+
+                            if (lowerFilename == "finalalbion.wld" || lowerFilename == "finalalbion.gtg") continue;
+
+                            std::string ext = entry.path().extension().string();
+                            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                            std::string relSubPath = entry.path().string().substr(modLevelsDir.length());
+                            if (!relSubPath.empty() && (relSubPath[0] == '\\' || relSubPath[0] == '/')) {
+                                relSubPath = relSubPath.substr(1);
+                            }
+
+                            std::string targetFilePath = levelsDir + "\\" + relSubPath;
+
+                            if (ext == ".lev") {
+                                bool targetExisted = fs::exists(targetFilePath);
+                                fs::create_directories(fs::path(targetFilePath).parent_path());
+                                fs::copy_file(entry.path(), targetFilePath, fs::copy_options::overwrite_existing);
+
+                                if (!targetExisted) {
+                                    if (manifestOut.is_open()) manifestOut << targetFilePath << "\n";
+                                }
+                            }
+                            else if (ext == ".tng") {
+                                auto itVanilla = vanillaTngByName.find(lowerFilename);
+                                if (itVanilla == vanillaTngByName.end()) {
+                                    // Brand-new .tng
+                                    bool targetExisted = fs::exists(targetFilePath);
+                                    fs::create_directories(fs::path(targetFilePath).parent_path());
+                                    fs::copy_file(entry.path(), targetFilePath, fs::copy_options::overwrite_existing);
+
+                                    if (!targetExisted) {
+                                        if (manifestOut.is_open()) manifestOut << targetFilePath << "\n";
+                                    }
+                                    vanillaTngByName[lowerFilename] = targetFilePath;
+                                }
+                                else {
+                                    // Existing .tng: merge with vanilla file
+                                    std::string mergeTargetPath = itVanilla->second;
+                                    if (fs::exists(targetFilePath)) mergeTargetPath = targetFilePath;
+                                    TngMerger::ProcessTngMod(entry.path().string(), mergeTargetPath);
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        // Fallback: check if mod has loose .tng or .lev files directly in mod folder
+                        for (const auto& entry : fs::recursive_directory_iterator(mod.ModFolderPath)) {
+                            if (!entry.is_regular_file()) continue;
+                            std::string ext = entry.path().extension().string();
+                            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                            if (ext != ".tng" && ext != ".lev") continue;
+
+                            std::string filename = entry.path().filename().string();
+                            std::string lowerFilename = filename;
+                            std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), ::tolower);
+
+                            if (ext == ".lev") {
+                                std::string targetFilePath = levelsDir + "\\" + filename;
+                                bool targetExisted = fs::exists(targetFilePath);
+                                fs::create_directories(fs::path(targetFilePath).parent_path());
+                                fs::copy_file(entry.path(), targetFilePath, fs::copy_options::overwrite_existing);
+                                if (!targetExisted && manifestOut.is_open()) manifestOut << targetFilePath << "\n";
+                            }
+                            else if (ext == ".tng") {
+                                auto itVanilla = vanillaTngByName.find(lowerFilename);
+                                if (itVanilla == vanillaTngByName.end()) {
+                                    std::string targetFilePath = levelsDir + "\\" + filename;
+                                    bool targetExisted = fs::exists(targetFilePath);
+                                    fs::create_directories(fs::path(targetFilePath).parent_path());
+                                    fs::copy_file(entry.path(), targetFilePath, fs::copy_options::overwrite_existing);
+                                    if (!targetExisted && manifestOut.is_open()) manifestOut << targetFilePath << "\n";
+                                    vanillaTngByName[lowerFilename] = targetFilePath;
+                                }
+                                else {
+                                    TngMerger::ProcessTngMod(entry.path().string(), itVanilla->second);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (manifestOut.is_open()) manifestOut.close();
             }
             g_AppConfig.TngSystemDirty = false;
         }
@@ -1189,6 +1337,25 @@ public:
             g_AppConfig.FSESystemDirty = false;
         }
 
+        auto performSTBRecompileIfNeeded = [&]() {
+            if (!stbCompilationNeeded) return;
+            SetLaunchStatus("Recompiling Static Terrain Bank (FinalAlbion.wld)...");
+            egostb::CompilerConfig stbConfig;
+            stbConfig.fableRoot = g_AppConfig.GameRootPath;
+            stbConfig.wldName = "FinalAlbion.wld";
+            stbConfig.retailMode = true;
+            stbConfig.outputIsm = true;
+            stbConfig.verbose = true;
+            stbConfig.progressCallback = [](float progress, const std::string& status) {
+                int pct = (int)(progress * 100.0f);
+                if (pct > 100) pct = 100;
+                SetLaunchStatus("Recompiling STB (" + std::to_string(pct) + "%): " + status);
+            };
+
+            egostb::StbCompiler::compileWorld(stbConfig);
+            stbCompilationNeeded = false;
+        };
+
         if (g_AppConfig.DefSystemDirty) {
             if (hasActiveDefMods) {
                 SetLaunchStatus("Merging definition mods...");
@@ -1228,6 +1395,8 @@ public:
                 CompileAudioBinFiles();
             }
 
+            performSTBRecompileIfNeeded();
+
             g_AppConfig.DefSystemDirty = false;
             SaveConfig();
 
@@ -1236,6 +1405,8 @@ public:
             CompileAllDefs_Native();
             return;
         }
+
+        performSTBRecompileIfNeeded();
 
         g_AppConfig.DefSystemDirty = false;
         SaveConfig();
@@ -1247,6 +1418,40 @@ public:
         std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
         if (!fs::exists(dataPath)) return;
 
+        // 1. Clean up brand-new deployed level files recorded in manifest
+        if (restoreTngs) {
+            std::string manifestPath = dataPath + "\\Levels\\.egocore_deployed_level_files.txt";
+            if (fs::exists(manifestPath)) {
+                std::ifstream mf(manifestPath);
+                if (mf.is_open()) {
+                    std::string line;
+                    while (std::getline(mf, line)) {
+                        size_t first = line.find_first_not_of(" \t\r\n");
+                        if (first == std::string::npos) continue;
+                        size_t last = line.find_last_not_of(" \t\r\n");
+                        std::string filePath = line.substr(first, last - first + 1);
+
+                        try {
+                            if (fs::exists(filePath)) {
+                                fs::remove(filePath);
+                                // Clean up parent directory if empty (excluding Data/Levels and Data/Levels/FinalAlbion)
+                                fs::path parent = fs::path(filePath).parent_path();
+                                fs::path levelsDir = fs::path(dataPath) / "Levels";
+                                fs::path faDir = levelsDir / "FinalAlbion";
+                                if (parent != levelsDir && parent != faDir && fs::is_directory(parent) && fs::is_empty(parent)) {
+                                    fs::remove(parent);
+                                }
+                            }
+                        }
+                        catch (...) {}
+                    }
+                    mf.close();
+                }
+                try { fs::remove(manifestPath); } catch (...) {}
+            }
+        }
+
+        // 2. Restore .tmp backups
         for (const auto& entry : fs::recursive_directory_iterator(dataPath)) {
             if (!entry.is_regular_file()) continue;
             if (entry.path().extension() != ".tmp") continue;
@@ -1258,11 +1463,11 @@ public:
 
             bool isBank = (origExt == ".big" || origExt == ".lut" || origExt == ".lug");
             bool isDef = (origExt == ".def" || origExt == ".txt" || origExt == ".h" || origExt == ".bin");
-            bool isTng = (origExt == ".tng");
-            bool isLooseAsset = (!isBank && !isDef && !isTng && origExt != ".qst" && origExt != ".lua" && origExt != ".ini");
+            bool isLevelFile = (origExt == ".tng" || origExt == ".wld" || origExt == ".gtg" || origExt == ".lev" || origExt == ".stb" || origExt == ".ism");
+            bool isLooseAsset = (!isBank && !isDef && !isLevelFile && origExt != ".qst" && origExt != ".lua" && origExt != ".ini");
 
             // Group Loose Assets with Bank restoration (Asset Mods)
-            if ((restoreBanks && (isBank || isLooseAsset)) || (restoreDefs && isDef) || (restoreTngs && isTng)) {
+            if ((restoreBanks && (isBank || isLooseAsset)) || (restoreDefs && isDef) || (restoreTngs && isLevelFile)) {
                 try {
                     if (fs::exists(originalPath)) fs::remove(originalPath);
                     fs::rename(tmpPath, originalPath);
@@ -1330,34 +1535,91 @@ public:
         }
     }
 
-    static void BackupAffectedTngFiles() {
-        std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
-        if (!fs::exists(dataPath)) return;
+    static void BackupAffectedLevelFiles() {
+        std::string levelsDir = g_AppConfig.GameRootPath + "\\Data\\Levels";
+        if (!fs::exists(levelsDir)) return;
+
+        auto backupFile = [](const std::string& path) {
+            if (!fs::exists(path)) return;
+            std::string tmpPath = path + ".tmp";
+            if (!fs::exists(tmpPath)) {
+                try { fs::copy_file(path, tmpPath); }
+                catch (...) {}
+            }
+        };
+
+        // Build index of vanilla .tng files in Data\Levels\ by lowercase filename
+        std::map<std::string, std::string> vanillaTngByName;
+        for (const auto& entry : fs::recursive_directory_iterator(levelsDir)) {
+            if (entry.is_regular_file()) {
+                std::string ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".tng") {
+                    std::string fn = entry.path().filename().string();
+                    std::transform(fn.begin(), fn.end(), fn.begin(), ::tolower);
+                    vanillaTngByName[fn] = entry.path().string();
+                }
+            }
+        }
 
         for (const auto& mod : g_LoadedMods) {
             if (!mod.IsEnabled || !mod.IsTngMod) continue;
 
-            std::string modDataPath = mod.ModFolderPath + "\\Data\\Levels";
-            if (!fs::exists(modDataPath)) continue;
+            std::string modLevelsDir = "";
+            if (fs::exists(mod.ModFolderPath + "\\Data\\Levels")) modLevelsDir = mod.ModFolderPath + "\\Data\\Levels";
+            else if (fs::exists(mod.ModFolderPath + "\\Levels")) modLevelsDir = mod.ModFolderPath + "\\Levels";
 
-            for (const auto& entry : fs::recursive_directory_iterator(modDataPath)) {
-                if (!entry.is_regular_file()) continue;
+            // WLD check
+            bool hasWld = (!modLevelsDir.empty() && fs::exists(modLevelsDir + "\\FinalAlbion.wld")) ||
+                          fs::exists(mod.ModFolderPath + "\\FinalAlbion.wld");
+            if (hasWld) {
+                backupFile(levelsDir + "\\FinalAlbion.wld");
+                backupFile(levelsDir + "\\FinalAlbion_RT.stb");
+                backupFile(levelsDir + "\\FinalAlbion_RT.ism");
+                backupFile(levelsDir + "\\FinalAlbion.stb");
+                backupFile(levelsDir + "\\FinalAlbion.ism");
+            }
 
-                std::string ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext != ".tng") continue;
-                std::string relPath = entry.path().string().substr(mod.ModFolderPath.length() + 5);
-                std::string targetPath = dataPath + relPath;
+            // GTG check
+            bool hasGtg = (!modLevelsDir.empty() && fs::exists(modLevelsDir + "\\FinalAlbion.gtg")) ||
+                          fs::exists(mod.ModFolderPath + "\\FinalAlbion.gtg");
+            if (hasGtg) {
+                backupFile(levelsDir + "\\FinalAlbion.gtg");
+            }
 
-                if (!fs::exists(targetPath)) continue;
+            // Scan mod levels folder for .lev and .tng files
+            if (!modLevelsDir.empty()) {
+                for (const auto& entry : fs::recursive_directory_iterator(modLevelsDir)) {
+                    if (!entry.is_regular_file()) continue;
 
-                std::string tmpPath = targetPath + ".tmp";
-                if (!fs::exists(tmpPath)) {
-                    try { fs::copy_file(targetPath, tmpPath); }
-                    catch (...) {}
+                    std::string filename = entry.path().filename().string();
+                    std::string lowerFilename = filename;
+                    std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), ::tolower);
+
+                    std::string ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                    std::string relSubPath = entry.path().string().substr(modLevelsDir.length());
+                    if (!relSubPath.empty() && (relSubPath[0] == '\\' || relSubPath[0] == '/')) relSubPath = relSubPath.substr(1);
+                    std::string targetFilePath = levelsDir + "\\" + relSubPath;
+
+                    if (ext == ".lev") {
+                        backupFile(targetFilePath);
+                    }
+                    else if (ext == ".tng") {
+                        auto it = vanillaTngByName.find(lowerFilename);
+                        if (it != vanillaTngByName.end()) {
+                            backupFile(it->second);
+                        }
+                        backupFile(targetFilePath);
+                    }
                 }
             }
         }
+    }
+
+    static void BackupAffectedTngFiles() {
+        BackupAffectedLevelFiles();
     }
 
     static void DeployLooseAssetMods() {
@@ -1388,7 +1650,8 @@ public:
 
                     if (lowerRelPath.find("\\data\\bones\\") != std::string::npos ||
                         lowerRelPath.find("\\data\\enginecache\\") != std::string::npos ||
-                        (lowerRelPath.find("\\data\\levels\\") != std::string::npos && ext != ".tng") ||
+                        (lowerRelPath.find("\\data\\levels\\") != std::string::npos &&
+                         ext != ".tng" && ext != ".wld" && ext != ".gtg" && ext != ".lev" && ext != ".stb" && ext != ".ism") ||
                         lowerRelPath.find("\\data\\lightingtable\\") != std::string::npos ||
                         lowerRelPath.find("\\data\\video\\") != std::string::npos ||
                         lowerRelPath.find("\\data\\tattoos\\") != std::string::npos) {

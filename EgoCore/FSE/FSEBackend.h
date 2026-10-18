@@ -26,6 +26,13 @@ struct FSEQuest {
     std::vector<std::string> ExtraScripts;
 };
 
+struct FSEDragPayload {
+    int QuestIndex = -1;
+    int EntityIndex = -1;
+    int ScriptType = 0; // 0: Whole Quest, 1: Main Script, 2: Extra Script, 3: Entity Script
+    char ExtraScriptName[128] = { 0 };
+};
+
 struct FSEWorkspace {
     bool IsInstalled = false;
     std::string FSERoot;

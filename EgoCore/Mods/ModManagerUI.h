@@ -960,10 +960,12 @@ inline void DrawModManagerWindow() {
         if (DrawAccentButton("Delete", ImVec2(150, 32), ImVec4(0.55f, 0.14f, 0.14f, 0.85f), ImVec4(0.80f, 0.22f, 0.22f, 1.00f))) {
             bool wasDef = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsDefMod;
             bool wasFSE = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsFSEMod;
+            bool wasTng = ModManagerBackend::g_LoadedMods[g_ModToDeleteIndex].IsTngMod;
             ModManagerBackend::DeleteMod(g_ModToDeleteIndex);
             g_AppConfig.ModSystemDirty = true;
             if (wasDef) g_AppConfig.DefSystemDirty = true;
             if (wasFSE) g_AppConfig.FSESystemDirty = true;
+            if (wasTng) g_AppConfig.TngSystemDirty = true;
             SaveConfig();
 
             if (s_SelectedModIndex == g_ModToDeleteIndex) s_SelectedModIndex = -1;
@@ -989,21 +991,120 @@ inline void DrawModManagerWindow() {
     ImGui::PopStyleColor(); // pop initial WindowBg
 }
 
+static void DrawAssetCategoryBadge(EModAssetCategory cat) {
+    const char* label = "BANK";
+    ImU32 col = IM_COL32(70, 140, 230, 255);
+
+    switch (cat) {
+    case EModAssetCategory::BankEntry:
+        label = "BANK";
+        col = IM_COL32(70, 140, 230, 255);
+        break;
+    case EModAssetCategory::Definition:
+        label = "DEF";
+        col = IM_COL32(224, 196, 60, 255);
+        break;
+    case EModAssetCategory::Header:
+        label = "HDR";
+        col = IM_COL32(90, 200, 120, 255);
+        break;
+    case EModAssetCategory::AnimationEvent:
+        label = "EVT";
+        col = IM_COL32(151, 79, 255, 255);
+        break;
+    case EModAssetCategory::FSEScript:
+        label = "FSE";
+        col = IM_COL32(255, 140, 50, 255);
+        break;
+    }
+
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float h = ImGui::GetTextLineHeight();
+    float w = 46.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    ImU32 bgCol = (col & 0x00FFFFFF) | (0x28 << 24);
+    ImU32 borderCol = (col & 0x00FFFFFF) | (0xAA << 24);
+    ImU32 textCol = (col & 0x00FFFFFF) | (0xF5 << 24);
+
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h + 2.0f), bgCol, 3.0f);
+    dl->AddRect(p, ImVec2(p.x + w, p.y + h + 2.0f), borderCol, 3.0f, 0, 1.0f);
+
+    ImVec2 txtSz = ImGui::CalcTextSize(label);
+    ImVec2 txtPos = ImVec2(p.x + (w - txtSz.x) * 0.5f, p.y + 1.0f);
+    dl->AddText(txtPos, textCol, label);
+
+    ImGui::Dummy(ImVec2(w, h + 2.0f));
+}
+
+static bool s_ShowModPackagePopup = false;
+static std::string s_ModPackagePopupMsg = "";
+static std::string s_LastExportedModPath = "";
+
 inline void DrawModPackageWindow() {
     if (!g_ShowModPackageWindow) return;
 
-    ImGui::SetNextWindowSize(ImVec2(750, 550), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(800, 580), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(700, 480), ImVec2(1920, 1200));
+
     if (ImGui::Begin("Create Mod Package", &g_ShowModPackageWindow)) {
 
-        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Mod Name:");
-        ImGui::SetNextItemWidth(300);
-        ImGui::InputText("##modname", g_ModNameBuffer, 128);
-        ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 5));
+        // Arcane Header Bar
+        ImVec2 winPos = ImGui::GetWindowPos();
+        ImVec2 winSize = ImGui::GetWindowSize();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        float btnWidth = (ImGui::GetContentRegionAvail().x / 2.0f) - 4.0f;
+        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.35f, 1.0f), "MOD PACKAGE BUILDER");
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.70f, 0.75f, 0.85f, 1.0f), "%zu Staged Assets", g_ModPackageEntries.size());
 
-        if (ImGui::Button("Auto-Add Changed Entries", ImVec2(btnWidth, 30))) {
+        float curY = ImGui::GetCursorScreenPos().y;
+        dl->AddRectFilledMultiColor(
+            ImVec2(winPos.x + 10.0f, curY),
+            ImVec2(winPos.x + winSize.x - 10.0f, curY + 2.0f),
+            IM_COL32(242, 193, 78, 160),
+            IM_COL32(151, 79, 255, 120),
+            IM_COL32(151, 79, 255, 120),
+            IM_COL32(242, 193, 78, 160)
+        );
+        ImGui::Dummy(ImVec2(0, 6.0f));
+
+        // Mod Name input row
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.35f, 1.0f), "Mod Name:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(260.0f);
+        ImGui::InputTextWithHint("##modname", "Enter mod package name...", g_ModNameBuffer, 128);
+
+        ImGui::SameLine();
+        if (!g_ModPackageEntries.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.12f, 0.12f, 0.65f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.55f, 0.18f, 0.18f, 0.90f));
+            if (ImGui::Button("Clear Staged", ImVec2(95, 0))) {
+                g_ModPackageEntries.clear();
+            }
+            ImGui::PopStyleColor(2);
+        }
+
+        ImGui::Dummy(ImVec2(0, 4.0f));
+
+        // Quick Auto-Add buttons
+        int changedCount = 0;
+        for (const auto& bank : g_OpenBanks) {
+            changedCount += (int)(bank.StagedEntries.size() + bank.ModifiedEntryData.size());
+        }
+        int markedCount = (int)ModPackageTracker::g_MarkedEntries.size();
+
+        char changedLabel[64];
+        snprintf(changedLabel, sizeof(changedLabel), "Auto-Add Changed (%d)", changedCount);
+        char markedLabel[64];
+        snprintf(markedLabel, sizeof(markedLabel), "Auto-Add Marked (%d)", markedCount);
+
+        float btnW = (ImGui::GetContentRegionAvail().x - 10.0f) * 0.5f;
+
+        if (ImGui::Button(changedLabel, ImVec2(btnW, 28))) {
             for (const auto& bank : g_OpenBanks) {
                 for (int i = 0; i < (int)bank.Entries.size(); ++i) {
                     if (bank.StagedEntries.count(i) || bank.ModifiedEntryData.count(i)) {
@@ -1034,9 +1135,9 @@ inline void DrawModPackageWindow() {
             }
         }
 
-        ImGui::SameLine();
+        ImGui::SameLine(0, 10.0f);
 
-        if (ImGui::Button("Auto-Add Marked Entries", ImVec2(btnWidth, 30))) {
+        if (ImGui::Button(markedLabel, ImVec2(btnW, 28))) {
             for (const auto& tracked : ModPackageTracker::g_MarkedEntries) {
                 bool exists = false;
                 for (const auto& existing : g_ModPackageEntries) {
@@ -1048,38 +1149,67 @@ inline void DrawModPackageWindow() {
             }
         }
 
-        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 4.0f));
 
-        if (ImGui::BeginTable("ModPackageTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, -50))) {
-            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 60);
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 130);
-            ImGui::TableSetupColumn("Bank", ImGuiTableColumnFlags_WidthFixed, 120);
-            ImGui::TableSetupColumn("Sub-Bank", ImGuiTableColumnFlags_WidthFixed, 120);
-            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 40);
+        const float footerHeight = 110.0f;
+        int toDeleteIndex = -1;
+
+        if (ImGui::BeginTable("ModPackageTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, -footerHeight))) {
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+            ImGui::TableSetupColumn("Asset Name", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+            ImGui::TableSetupColumn("Bank / Source", ImGuiTableColumnFlags_WidthFixed, 115.0f);
+            ImGui::TableSetupColumn("Sub-Bank / Dir", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+            ImGui::TableSetupColumn("Del", ImGuiTableColumnFlags_WidthFixed, 32.0f);
             ImGui::TableHeadersRow();
 
-            for (size_t i = 0; i < g_ModPackageEntries.size(); i++) {
-                auto& e = g_ModPackageEntries[i];
+            if (g_ModPackageEntries.empty()) {
                 ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Dummy(ImVec2(0, 24.0f));
+                ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.35f, 1.0f), "No assets staged for package.");
+                ImGui::Dummy(ImVec2(0, 4.0f));
+                ImGui::TextColored(ImVec4(0.70f, 0.72f, 0.78f, 1.0f), "Drag & drop entries here from Bank Explorer, Defs, Headers, Events, or FSE Quests.");
+                ImGui::Dummy(ImVec2(0, 4.0f));
+                ImGui::TextDisabled("Or use 'Auto-Add' buttons above to pull your modified assets.");
+                ImGui::Dummy(ImVec2(0, 24.0f));
+            }
+            else {
+                for (size_t i = 0; i < g_ModPackageEntries.size(); i++) {
+                    auto& e = g_ModPackageEntries[i];
+                    ImGui::TableNextRow();
 
-                ImGui::TableSetColumnIndex(0);
-                if (e.Category == EModAssetCategory::BankEntry) ImGui::Text("%u", e.EntryID);
-                else ImGui::TextDisabled("TEXT");
+                    ImGui::TableSetColumnIndex(0);
+                    DrawAssetCategoryBadge(e.Category);
 
-                ImGui::TableSetColumnIndex(1); ImGui::Text("%s", e.EntryName.c_str());
-                ImGui::TableSetColumnIndex(2); ImGui::Text("%s", e.TypeName.c_str());
-                ImGui::TableSetColumnIndex(3); ImGui::Text("%s", e.BankName.c_str());
-                ImGui::TableSetColumnIndex(4); ImGui::Text("%s", e.SubBankName.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    if (e.Category == EModAssetCategory::BankEntry) ImGui::Text("%u", e.EntryID);
+                    else if (e.Category == EModAssetCategory::FSEScript && e.EntryID > 0) ImGui::Text("%u", e.EntryID);
+                    else ImGui::TextDisabled("-");
 
-                ImGui::TableSetColumnIndex(5);
-                ImGui::PushID((int)i);
-                if (ImGui::Button("X")) {
-                    g_ModPackageEntries.erase(g_ModPackageEntries.begin() + i);
+                    ImGui::TableSetColumnIndex(2); ImGui::TextUnformatted(e.EntryName.c_str());
+                    ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(e.TypeName.c_str());
+                    ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(e.BankName.c_str());
+                    ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(e.SubBankName.c_str());
+
+                    ImGui::TableSetColumnIndex(6);
+                    ImGui::PushID((int)i);
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.12f, 0.12f, 0.50f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.70f, 0.20f, 0.20f, 0.90f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.85f, 0.25f, 0.25f, 1.00f));
+                    if (ImGui::Button("X", ImVec2(22, 19))) {
+                        toDeleteIndex = (int)i;
+                    }
+                    ImGui::PopStyleColor(3);
+                    ImGui::PopID();
                 }
-                ImGui::PopID();
             }
             ImGui::EndTable();
+        }
+
+        if (toDeleteIndex >= 0 && toDeleteIndex < (int)g_ModPackageEntries.size()) {
+            g_ModPackageEntries.erase(g_ModPackageEntries.begin() + toDeleteIndex);
         }
 
         if (ImGui::BeginDragDropTarget()) {
@@ -1128,15 +1258,17 @@ inline void DrawModPackageWindow() {
                         }
 
                         if (isDisallowedNewAudio) {
-                            g_SuccessMessage = "Directly adding new audio/lipsync entries is locked!\nDrag the matching Text.big entry instead to auto-link dependencies.";
-                            g_ShowSuccessPopup = true;
+                            s_ModPackagePopupMsg = "Directly adding new audio/lipsync entries is locked!\nDrag the matching Text.big entry instead to auto-link dependencies.";
+                            s_LastExportedModPath = "";
+                            s_ShowModPackagePopup = true;
                             goto EndOfBankDropLogic;
                         }
 
                         // Gate B: Streaming Font GlyphData Lock
                         if (bank.Type == EBankType::Fonts && entry.Type == 2) {
-                            g_SuccessMessage = "GlyphData cannot be added manually!\nDrag a Streaming Font entry instead to auto-link its GlyphData.";
-                            g_ShowSuccessPopup = true;
+                            s_ModPackagePopupMsg = "GlyphData cannot be added manually!\nDrag a Streaming Font entry instead to auto-link its GlyphData.";
+                            s_LastExportedModPath = "";
+                            s_ShowModPackagePopup = true;
                             goto EndOfBankDropLogic;
                         }
 
@@ -1157,7 +1289,7 @@ inline void DrawModPackageWindow() {
                                 staged.TypeName = GetEntryTypeName(bType, type, bName);
                                 g_ModPackageEntries.push_back(staged);
                             }
-                            };
+                        };
 
                         // Add the primary dragged entry
                         addEntryToPackage(entry.ID, entry.Name, entry.Type, bank.Type, bank.FileName, currentSubBank, bank.FullPath);
@@ -1225,7 +1357,7 @@ inline void DrawModPackageWindow() {
                                                     if (fs::exists(p)) { LoadBank(p); break; }
                                                 }
                                             }
-                                            };
+                                        };
 
                                         loadMissingMediaBank(targetLutName);
                                         loadMissingMediaBank("dialogue.big");
@@ -1328,8 +1460,9 @@ inline void DrawModPackageWindow() {
                 };
 
                 if (std::find(blockedEnums.begin(), blockedEnums.end(), entry.Name) != blockedEnums.end()) {
-                    g_SuccessMessage = "This header is auto-generated by the asset builder and cannot be staged manually!";
-                    g_ShowSuccessPopup = true;
+                    s_ModPackagePopupMsg = "This header is auto-generated by the asset builder and cannot be staged manually!";
+                    s_LastExportedModPath = "";
+                    s_ShowModPackagePopup = true;
                 }
                 else {
 
@@ -1376,35 +1509,178 @@ inline void DrawModPackageWindow() {
                 }
             }
 
+            // --- 5. HANDLE FSE SCRIPT ENTRIES ---
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("FSE_SCRIPT_PAYLOAD")) {
+                FSEDragPayload* data = (FSEDragPayload*)payload->Data;
+                if (data->QuestIndex >= 0 && data->QuestIndex < (int)g_FSEWorkspace.Quests.size()) {
+                    auto& quest = g_FSEWorkspace.Quests[data->QuestIndex];
+
+                    auto addFSEScript = [&](const std::string& entryName, const std::string& typeName, const std::string& subBank, const std::string& srcPath, uint32_t id) {
+                        bool exists = false;
+                        for (const auto& existing : g_ModPackageEntries) {
+                            if (existing.Category == EModAssetCategory::FSEScript && existing.EntryName == entryName && existing.SubBankName == subBank) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists) {
+                            StagedModPackageEntry staged;
+                            staged.Category = EModAssetCategory::FSEScript;
+                            staged.EntryID = id;
+                            staged.EntryName = entryName;
+                            staged.TypeName = typeName;
+                            staged.BankName = "FSE";
+                            staged.SubBankName = subBank;
+                            staged.SourceFullPath = srcPath;
+                            g_ModPackageEntries.push_back(staged);
+                        }
+                    };
+
+                    if (data->ScriptType == 0) {
+                        // Entire Quest: Add main script, all extra scripts, all entity scripts
+                        std::string mainFileName = fs::path(quest.File).filename().string() + ".lua";
+                        std::string mainSrc = (fs::path(g_FSEWorkspace.FSERoot) / (quest.File + ".lua")).string();
+                        addFSEScript(mainFileName, "FSE Quest", quest.Name, mainSrc, (uint32_t)quest.ID);
+
+                        for (const auto& extra : quest.ExtraScripts) {
+                            std::string extraFile = extra + ".lua";
+                            std::string extraSrc = (fs::path(g_FSEWorkspace.FSERoot) / quest.Name / extraFile).string();
+                            addFSEScript(extraFile, "FSE Extra Script", quest.Name, extraSrc, 0);
+                        }
+
+                        for (const auto& ent : quest.Entities) {
+                            std::string entFile = ent.Name + ".lua";
+                            std::string entSrc = (fs::path(g_FSEWorkspace.FSERoot) / (ent.File + ".lua")).string();
+                            addFSEScript(entFile, "FSE Entity Script", quest.Name + "\\Entities", entSrc, (uint32_t)ent.ID);
+                        }
+                    }
+                    else if (data->ScriptType == 1) {
+                        // Main quest script only
+                        std::string mainFileName = fs::path(quest.File).filename().string() + ".lua";
+                        std::string mainSrc = (fs::path(g_FSEWorkspace.FSERoot) / (quest.File + ".lua")).string();
+                        addFSEScript(mainFileName, "FSE Quest Script", quest.Name, mainSrc, (uint32_t)quest.ID);
+                    }
+                    else if (data->ScriptType == 2) {
+                        // Extra script
+                        std::string extraName = std::string(data->ExtraScriptName);
+                        if (!extraName.empty()) {
+                            std::string extraFile = extraName + ".lua";
+                            std::string extraSrc = (fs::path(g_FSEWorkspace.FSERoot) / quest.Name / extraFile).string();
+                            addFSEScript(extraFile, "FSE Extra Script", quest.Name, extraSrc, 0);
+                        }
+                    }
+                    else if (data->ScriptType == 3) {
+                        // Entity script
+                        if (data->EntityIndex >= 0 && data->EntityIndex < (int)quest.Entities.size()) {
+                            auto& ent = quest.Entities[data->EntityIndex];
+                            std::string entFile = ent.Name + ".lua";
+                            std::string entSrc = (fs::path(g_FSEWorkspace.FSERoot) / (ent.File + ".lua")).string();
+                            addFSEScript(entFile, "FSE Entity Script", quest.Name + "\\Entities", entSrc, (uint32_t)ent.ID);
+                        }
+                    }
+                }
+            }
+
             ImGui::EndDragDropTarget();
         }
 
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 60);
-        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Warning: Building the package will automatically compile and save all staged entries to your active banks.");
+        ImGui::Dummy(ImVec2(0, 4.0f));
 
-        bool canBuild = !g_ModPackageEntries.empty() && strlen(g_ModNameBuffer) > 0;
+        // Alert / Notice Card
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.10f, 0.06f, 0.70f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.65f, 0.20f, 0.40f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 7.0f));
+        if (ImGui::BeginChild("##ModBuildNotice", ImVec2(0, 44.0f), true, ImGuiWindowFlags_NoScrollbar)) {
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.32f, 1.0f), "[!] Notice:");
+            ImGui::SameLine(0, 6.0f);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.88f, 1.0f),
+                "Building exports all staged assets into ExportedMods/<ModName>. Any unsaved modifications in active banks will be compiled.");
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
+
+        ImGui::Dummy(ImVec2(0, 5.0f));
+
+        // Bottom Controls Row
+        bool hasName = (strlen(g_ModNameBuffer) > 0);
+        bool hasEntries = !g_ModPackageEntries.empty();
+        bool canBuild = hasName && hasEntries;
+
+        ImGui::AlignTextToFramePadding();
+        if (!hasName && !hasEntries) {
+            ImGui::TextColored(ImVec4(0.60f, 0.62f, 0.68f, 1.0f), "Enter a mod name and stage at least one asset to build.");
+        }
+        else if (!hasName) {
+            ImGui::TextColored(ImVec4(0.92f, 0.50f, 0.35f, 1.0f), "Enter a mod name above to enable packaging.");
+        }
+        else if (!hasEntries) {
+            ImGui::TextColored(ImVec4(0.60f, 0.62f, 0.68f, 1.0f), "Stage at least one asset to build the package.");
+        }
+        else {
+            ImGui::TextColored(ImVec4(0.40f, 0.88f, 0.55f, 1.0f), "%zu assets staged ready for packaging.", g_ModPackageEntries.size());
+        }
+
+        float buildBtnWidth = 210.0f;
+        float availX = ImGui::GetContentRegionAvail().x;
+        if (availX > buildBtnWidth) {
+            ImGui::SameLine(ImGui::GetWindowWidth() - buildBtnWidth - ImGui::GetStyle().WindowPadding.x);
+        }
 
         ImGui::BeginDisabled(!canBuild);
-        if (ImGui::Button("Build Mod Package", ImVec2(-1, 30))) {
-
+        if (DrawAccentButton("Build Mod Package", ImVec2(buildBtnWidth, 32.0f),
+            canBuild ? ImVec4(0.18f, 0.48f, 0.28f, 0.90f) : ImVec4(0.20f, 0.22f, 0.25f, 0.50f),
+            ImVec4(0.24f, 0.65f, 0.36f, 1.00f)))
+        {
             ModManagerCompiler::BuildPackageStructure(g_ModNameBuffer, g_ModPackageEntries);
-
-            g_SuccessMessage = "Mod folder structure & files created successfully!";
-            g_ShowSuccessPopup = true;
+            s_LastExportedModPath = fs::current_path().string() + "\\ExportedMods\\" + g_ModNameBuffer;
+            s_ModPackagePopupMsg = std::string("Mod package '") + g_ModNameBuffer + "' was created successfully!\nAll staged assets and folders were generated.";
+            s_ShowModPackagePopup = true;
         }
         ImGui::EndDisabled();
 
-        if (g_ShowSuccessPopup) {
-            ImGui::OpenPopup("Success");
-            g_ShowSuccessPopup = false;
+        // Notification Modal Popup with "Open Folder in Explorer"
+        if (s_ShowModPackagePopup) {
+            ImGui::OpenPopup("Mod Package Notification");
+            s_ShowModPackagePopup = false;
         }
 
-        if (ImGui::BeginPopupModal("Success", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("%s", g_SuccessMessage.c_str());
+        if (ImGui::BeginPopupModal("Mod Package Notification", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Dummy(ImVec2(0, 4.0f));
+
+            if (!s_LastExportedModPath.empty()) {
+                ImGui::TextColored(ImVec4(0.40f, 0.88f, 0.55f, 1.0f), "[SUCCESS]");
+                ImGui::SameLine();
+                ImGui::Text("%s", s_ModPackagePopupMsg.c_str());
+                ImGui::Dummy(ImVec2(0, 6.0f));
+                ImGui::TextDisabled("Output Directory:");
+                ImGui::TextWrapped("%s", s_LastExportedModPath.c_str());
+            }
+            else {
+                ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "[NOTICE]");
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", s_ModPackagePopupMsg.c_str());
+            }
+
+            ImGui::Dummy(ImVec2(0, 6.0f));
             ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0))) {
+            ImGui::Dummy(ImVec2(0, 6.0f));
+
+            if (!s_LastExportedModPath.empty() && fs::exists(s_LastExportedModPath)) {
+                if (DrawAccentButton("Open Folder in Explorer", ImVec2(190, 28), ImVec4(0.18f, 0.35f, 0.60f, 0.90f), ImVec4(0.25f, 0.48f, 0.80f, 1.00f))) {
+                    ShellExecuteA(NULL, "open", s_LastExportedModPath.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                }
+                ImGui::SameLine(0, 10.0f);
+            }
+
+            if (ImGui::Button("Close", ImVec2(100, 28))) {
+                s_LastExportedModPath.clear();
                 ImGui::CloseCurrentPopup();
             }
+
             ImGui::EndPopup();
         }
     }
