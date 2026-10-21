@@ -64,6 +64,101 @@ static void DrawFSETab() {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 5));
 
+        struct FSENavScriptItem {
+            EFSEItemType Type;
+            int QuestIdx;
+            int EntityIdx;
+            std::string ExtraScriptName;
+            std::string RelativePath;
+        };
+
+        std::vector<FSENavScriptItem> matchingScripts;
+        for (int i = 0; i < (int)g_FSEWorkspace.Quests.size(); i++) {
+            auto& quest = g_FSEWorkspace.Quests[i];
+
+            bool questMatches = false;
+            bool mainMatches = false;
+
+            if (hasFilter) {
+                std::string qName = quest.Name;
+                std::transform(qName.begin(), qName.end(), qName.begin(), ::tolower);
+                if (qName.find(filterLower) != std::string::npos) questMatches = true;
+
+                std::string mainName = quest.Name + " " + quest.File;
+                std::transform(mainName.begin(), mainName.end(), mainName.begin(), ::tolower);
+                if (mainName.find(filterLower) != std::string::npos) mainMatches = true;
+            }
+
+            // Main Quest Script
+            if (!hasFilter || questMatches || mainMatches) {
+                matchingScripts.push_back({ EFSEItemType::QuestMain, i, -1, "", quest.File });
+            }
+
+            // Extra Scripts
+            for (const auto& script : quest.ExtraScripts) {
+                if (hasFilter && !questMatches) {
+                    std::string sLo = script;
+                    std::transform(sLo.begin(), sLo.end(), sLo.begin(), ::tolower);
+                    if (sLo.find(filterLower) == std::string::npos) continue;
+                }
+                std::string relPath = quest.Name + "/" + script;
+                matchingScripts.push_back({ EFSEItemType::ExtraScript, i, -1, script, relPath });
+            }
+
+            // Entity Scripts
+            for (int j = 0; j < (int)quest.Entities.size(); j++) {
+                auto& ent = quest.Entities[j];
+                if (hasFilter && !questMatches) {
+                    std::string eLo = ent.Name + " " + ent.File;
+                    std::transform(eLo.begin(), eLo.end(), eLo.begin(), ::tolower);
+                    if (eLo.find(filterLower) == std::string::npos) continue;
+                }
+                matchingScripts.push_back({ EFSEItemType::Entity, i, j, "", ent.File });
+            }
+        }
+
+        static int s_FSEForceOpenQuestIdx = -1;
+        static bool s_FSEForceOpenEntities = false;
+        static bool s_FSEScrollToSelected = false;
+
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !matchingScripts.empty() && !ImGui::GetIO().WantTextInput) {
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+                int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+                int currentPos = -1;
+
+                for (int k = 0; k < (int)matchingScripts.size(); k++) {
+                    const auto& it = matchingScripts[k];
+                    bool match = (it.Type == g_FSEWorkspace.ActiveItemType && it.QuestIdx == g_FSEWorkspace.ActiveQuestIdx);
+                    if (match) {
+                        if (it.Type == EFSEItemType::ExtraScript && it.ExtraScriptName != g_FSEWorkspace.ActiveExtraScriptName) match = false;
+                        if (it.Type == EFSEItemType::Entity && it.EntityIdx != g_FSEWorkspace.ActiveEntityIdx) match = false;
+                    }
+                    if (!match && !g_FSEWorkspace.ActiveFilePath.empty() && g_FSEWorkspace.ActiveFilePath.find(it.RelativePath) != std::string::npos) {
+                        match = true;
+                    }
+
+                    if (match) {
+                        currentPos = k;
+                        break;
+                    }
+                }
+
+                if (currentPos == -1) {
+                    currentPos = (direction == 1) ? -1 : (int)matchingScripts.size();
+                }
+
+                int newPos = std::clamp(currentPos + direction, 0, (int)matchingScripts.size() - 1);
+                const auto& target = matchingScripts[newPos];
+
+                LoadFSEScriptContent(target.RelativePath, target.Type, target.QuestIdx, target.EntityIdx, target.ExtraScriptName);
+                s_FSEForceOpenQuestIdx = target.QuestIdx;
+                if (target.Type == EFSEItemType::Entity) {
+                    s_FSEForceOpenEntities = true;
+                }
+                s_FSEScrollToSelected = true;
+            }
+        }
+
         for (int i = 0; i < (int)g_FSEWorkspace.Quests.size(); i++) {
             auto& quest = g_FSEWorkspace.Quests[i];
 
@@ -113,7 +208,12 @@ static void DrawFSETab() {
             }
             ImGui::SameLine();
 
-            if (hasFilter) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+            if (hasFilter) {
+                ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+            }
+            else if (s_FSEForceOpenQuestIdx == i) {
+                ImGui::SetNextItemOpen(true);
+            }
             bool isNodeOpen = ImGui::TreeNodeEx(quest.Name.c_str(), 0);
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                 FSEDragPayload payload;
@@ -127,8 +227,13 @@ static void DrawFSETab() {
             if (isNodeOpen) {
                 // Main Quest Script
                 if (!hasFilter || questMatches || mainMatches) {
-                    if (ImGui::Selectable(("[Main] " + quest.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(quest.File) != std::string::npos)) {
+                    bool isMainSelected = (!g_FSEWorkspace.ActiveFilePath.empty() && g_FSEWorkspace.ActiveFilePath.find(quest.File) != std::string::npos);
+                    if (ImGui::Selectable(("[Main] " + quest.Name + ".lua").c_str(), isMainSelected)) {
                         LoadFSEScriptContent(quest.File, EFSEItemType::QuestMain, i);
+                    }
+                    if (isMainSelected && s_FSEScrollToSelected) {
+                        ImGui::SetScrollHereY(0.5f);
+                        s_FSEScrollToSelected = false;
                     }
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                         FSEDragPayload payload;
@@ -158,8 +263,13 @@ static void DrawFSETab() {
                     ImGui::SameLine();
 
                     std::string relPath = quest.Name + "/" + script;
-                    if (ImGui::Selectable((script + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(relPath) != std::string::npos)) {
+                    bool isExtraSelected = (!g_FSEWorkspace.ActiveFilePath.empty() && g_FSEWorkspace.ActiveFilePath.find(relPath) != std::string::npos);
+                    if (ImGui::Selectable((script + ".lua").c_str(), isExtraSelected)) {
                         LoadFSEScriptContent(relPath, EFSEItemType::ExtraScript, i, -1, script);
+                    }
+                    if (isExtraSelected && s_FSEScrollToSelected) {
+                        ImGui::SetScrollHereY(0.5f);
+                        s_FSEScrollToSelected = false;
                     }
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                         FSEDragPayload payload;
@@ -186,7 +296,12 @@ static void DrawFSETab() {
                 // Entities Tree
                 bool showEntitiesNode = !hasFilter || questMatches || hasMatchingEntity;
                 if (showEntitiesNode) {
-                    if (hasFilter) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+                    if (hasFilter) {
+                        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+                    }
+                    else if (s_FSEForceOpenEntities && g_FSEWorkspace.ActiveQuestIdx == i) {
+                        ImGui::SetNextItemOpen(true);
+                    }
                     if (ImGui::TreeNodeEx("Entities", 0)) {
                         for (int j = 0; j < (int)quest.Entities.size(); j++) {
                             auto& ent = quest.Entities[j];
@@ -206,8 +321,13 @@ static void DrawFSETab() {
                             }
                             ImGui::SameLine();
 
-                            if (ImGui::Selectable((ent.Name + ".lua").c_str(), g_FSEWorkspace.ActiveFilePath.find(ent.File) != std::string::npos)) {
+                            bool isEntSelected = (!g_FSEWorkspace.ActiveFilePath.empty() && g_FSEWorkspace.ActiveFilePath.find(ent.File) != std::string::npos);
+                            if (ImGui::Selectable((ent.Name + ".lua").c_str(), isEntSelected)) {
                                 LoadFSEScriptContent(ent.File, EFSEItemType::Entity, i, j);
+                            }
+                            if (isEntSelected && s_FSEScrollToSelected) {
+                                ImGui::SetScrollHereY(0.5f);
+                                s_FSEScrollToSelected = false;
                             }
                             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                                 FSEDragPayload payload;
@@ -238,6 +358,10 @@ static void DrawFSETab() {
             }
             ImGui::PopID();
         }
+        s_FSEForceOpenQuestIdx = -1;
+        s_FSEForceOpenEntities = false;
+        s_FSEScrollToSelected = false;
+
         ImGui::EndChild();
 
         ImGui::SameLine();

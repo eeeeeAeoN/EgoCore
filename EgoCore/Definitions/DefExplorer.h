@@ -563,16 +563,58 @@ static void DrawDefTab() {
 
             static int eventToDeleteIndex = -1;
             static bool triggerEventDeletePopup = false;
+            static bool s_ScrollToSelectedEvent = false;
 
-            ImGui::BeginChild("EvtList");
-            if (activeFile->IsLoaded) {
+            std::vector<int> visibleEvents;
+            if (activeFile && activeFile->IsLoaded) {
+                visibleEvents.reserve(activeFile->Events.size());
                 for (int i = 0; i < (int)activeFile->Events.size(); i++) {
-                    auto& ev = activeFile->Events[i];
                     if (!filterLower.empty()) {
-                        std::string n = ev.AnimName;
+                        std::string n = activeFile->Events[i].AnimName;
                         std::transform(n.begin(), n.end(), n.begin(), ::tolower);
                         if (n.find(filterLower) == std::string::npos) continue;
                     }
+                    visibleEvents.push_back(i);
+                }
+            }
+
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !visibleEvents.empty() && !ImGui::GetIO().WantTextInput) {
+                if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+                    int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+                    int currentPos = -1;
+                    for (int k = 0; k < (int)visibleEvents.size(); k++) {
+                        if (visibleEvents[k] == g_EventWorkspace.SelectedEventIndex) {
+                            currentPos = k;
+                            break;
+                        }
+                    }
+
+                    if (currentPos == -1) {
+                        currentPos = (direction == 1) ? -1 : (int)visibleEvents.size();
+                    }
+
+                    int newPos = std::clamp(currentPos + direction, 0, (int)visibleEvents.size() - 1);
+                    int targetIdx = visibleEvents[newPos];
+
+                    if (targetIdx != g_EventWorkspace.SelectedEventIndex) {
+                        PushDefHistory(EDefViewType::Events, g_EventWorkspace.SelectedFileType, "", g_EventWorkspace.SelectedEventIndex);
+
+                        if (g_EventWorkspace.SelectedEventIndex != -1 && g_EventWorkspace.IsDirty()) {
+                            activeFile->Events[g_EventWorkspace.SelectedEventIndex].Content = g_EventWorkspace.Editor.GetText();
+                        }
+                        g_EventWorkspace.SelectedEventIndex = targetIdx;
+                        g_EventWorkspace.Editor.SetText(activeFile->Events[targetIdx].Content);
+                        g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                        g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
+                        s_ScrollToSelectedEvent = true;
+                    }
+                }
+            }
+
+            ImGui::BeginChild("EvtList");
+            if (activeFile && activeFile->IsLoaded) {
+                for (int i : visibleEvents) {
+                    auto& ev = activeFile->Events[i];
 
                     ImGui::PushID(i);
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
@@ -618,6 +660,11 @@ static void DrawDefTab() {
                         g_EventWorkspace.Editor.SetText(ev.Content);
                         g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
                         g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
+                    }
+
+                    if (isSelected && s_ScrollToSelectedEvent) {
+                        ImGui::SetScrollHereY(0.5f);
+                        s_ScrollToSelectedEvent = false;
                     }
 
                     // --- DRAG AND DROP SOURCE FOR EVENTS ---
