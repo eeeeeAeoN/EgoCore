@@ -40,6 +40,12 @@ static bool g_TriggerPhysicsPopup = false;
 static bool g_ShowPhysicsSelectPopup = false;
 static char g_PhysicsSearchBuf[128] = "";
 static int g_SelectedPhysicsID = -1;
+static MeshRenderer g_PhysicsPickerRenderer;
+static CBBMParser g_PhysicsPickerBBMParser;
+static C3DMeshContent g_PhysicsPickerMeshContent;
+static bool g_PhysicsPickerUploadNeeded = false;
+static bool g_PhysicsPickerPreviewOpen = false;
+static int32_t g_LoadedPhysicsPickerID = -1;
 static std::map<int, ID3D11ShaderResourceView*> g_MeshTextureCache;
 static bool g_TriggerTexPopup = false;
 static bool g_ShowTextureSelectPopup = false;
@@ -1229,6 +1235,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         g_PhysicsSearchBuf[0] = '\0';
                         g_TriggerPhysicsPopup = true;
                     }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Choose Physics Mesh");
                 }
 
                 ImGui::Separator();
@@ -2018,6 +2025,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             g_EditingMaterialIndex = matIdx; g_EditingTextureType = type; g_SelectedTextureID = mapID;
                             g_TextureSearchBuf[0] = '\0'; g_TriggerTexPopup = true;
                         }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Choose Texture");
                         if (mapID > 0) {
                             ImGui::SameLine(); ID3D11ShaderResourceView* srv = LoadTextureForMesh(mapID);
                             if (srv) {
@@ -2118,6 +2126,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             g_TextureSearchBuf[0] = '\0';
                             g_TriggerTexPopup = true;
                         }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Choose Texture");
 
                         if (mapID > 0) {
                             ImGui::SameLine();
@@ -2266,5 +2275,378 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         }
 
         ImGui::EndChild();
+    }
+
+    // ==========================================
+    // MODALS: TEXTURE PICKER & PHYSICS MESH PICKER
+    // ==========================================
+    if (g_TriggerTexPopup) {
+        ImGui::OpenPopup("Select Texture");
+        g_ShowTextureSelectPopup = true;
+        g_TriggerTexPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Select Texture", &g_ShowTextureSelectPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputTextWithHint("##SearchTex", "Search Textures by ID or Name...", g_TextureSearchBuf, 128);
+        if (g_EditingTextureType == 1) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.5f, 1.0f), "[Bumpmaps Only]");
+        }
+        ImGui::Separator();
+
+        ImGui::BeginChild("TexList", ImVec2(420, 320), true);
+        LoadedBank* texBank = nullptr;
+        bool isXbox = false;
+        if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < (int)g_OpenBanks.size()) {
+            const auto& activeBank = g_OpenBanks[g_ActiveBankIndex];
+            if (activeBank.Type == EBankType::XboxGraphics) {
+                isXbox = true;
+            }
+        }
+        if (!isXbox) {
+            bool hasXboxGraphics = false;
+            bool hasPcTextures = false;
+            for (const auto& b : g_OpenBanks) {
+                if (b.Type == EBankType::XboxGraphics) hasXboxGraphics = true;
+                if (b.Type == EBankType::Textures) hasPcTextures = true;
+            }
+            if (hasXboxGraphics && !hasPcTextures) isXbox = true;
+        }
+
+        std::string filter = g_TextureSearchBuf;
+        std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+        bool isNoneSelected = (g_SelectedTextureID == 0);
+        if (ImGui::Selectable("0 - None", isNoneSelected)) {
+            g_SelectedTextureID = 0;
+        }
+        if (isNoneSelected) ImGui::SetItemDefaultFocus();
+
+        if (isXbox) {
+            bool hasAny = false;
+            for (int bIdx = 0; bIdx < (int)g_OpenBanks.size(); ++bIdx) {
+                if (g_OpenBanks[bIdx].Type == EBankType::XboxGraphics) {
+                    EnsureXboxTextureCache(bIdx);
+                    for (const auto& pair : g_XboxTexCache[bIdx]) {
+                        uint32_t tID = pair.first;
+                        const auto& meta = pair.second;
+                        if (g_EditingTextureType == 1) {
+                            if (meta.Type != TYPE_BUMPMAP && meta.Type != TYPE_BUMPMAP_SEQUENCE) {
+                                continue;
+                            }
+                        }
+                        hasAny = true;
+                        std::string nameLower = meta.Name;
+                        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                        std::string idStr = std::to_string(tID);
+
+                        if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
+                            bool isSelected = (g_SelectedTextureID == (int32_t)tID);
+                            if (ImGui::Selectable((idStr + " - " + meta.Name).c_str(), isSelected)) {
+                                g_SelectedTextureID = (int32_t)tID;
+                            }
+                            if (isSelected) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                }
+            }
+            if (!hasAny) {
+                ImGui::TextDisabled("No Xbox Graphics Bank open!");
+            }
+        }
+        else {
+            for (auto& b : g_OpenBanks) {
+                if (b.Type == EBankType::Textures) {
+                    if (b.ActiveSubBankIndex >= 0 && b.ActiveSubBankIndex < (int)b.SubBanks.size() && b.SubBanks[b.ActiveSubBankIndex].Name == "GBANK_MAIN_PC") {
+                        texBank = &b;
+                        break;
+                    }
+                    texBank = &b;
+                }
+            }
+            if (!texBank) {
+                for (auto& b : g_OpenBanks) {
+                    if (b.Type == EBankType::Textures || b.Type == EBankType::Frontend) {
+                        texBank = &b;
+                        break;
+                    }
+                }
+            }
+
+            if (texBank) {
+                for (const auto& entry : texBank->Entries) {
+                    if (g_EditingTextureType == 1) {
+                        if (entry.Type != TYPE_BUMPMAP && entry.Type != TYPE_BUMPMAP_SEQUENCE) {
+                            continue;
+                        }
+                    }
+                    std::string nameLower = entry.Name;
+                    std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                    std::string idStr = std::to_string(entry.ID);
+
+                    if (filter.empty() || nameLower.find(filter) != std::string::npos || idStr.find(filter) != std::string::npos) {
+                        bool isSelected = (g_SelectedTextureID == (int32_t)entry.ID);
+                        std::string displayName = entry.FriendlyName.empty() ? entry.Name : entry.FriendlyName;
+                        if (ImGui::Selectable((idStr + " - " + displayName).c_str(), isSelected)) {
+                            g_SelectedTextureID = (int32_t)entry.ID;
+                        }
+                        if (isSelected) ImGui::SetItemDefaultFocus();
+                    }
+                }
+            }
+            else {
+                ImGui::TextDisabled("No Texture Bank (GBANK_MAIN_PC) open!");
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+        ImGui::BeginChild("TexPreview", ImVec2(308, 320), true);
+        if (g_SelectedTextureID > 0) {
+            ID3D11ShaderResourceView* srv = LoadTextureForMesh(g_SelectedTextureID);
+            if (srv) {
+                ImGui::Image((void*)srv, ImVec2(256, 256));
+            }
+            else {
+                ImGui::TextDisabled("Preview Not Available");
+            }
+
+            ImGui::Spacing();
+            std::string tName = GetTextureNameForMesh(g_SelectedTextureID);
+            if (!tName.empty()) {
+                ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", tName.c_str());
+            }
+            ImGui::Text("Texture ID: %d", g_SelectedTextureID);
+
+            if (srv) {
+                ID3D11Resource* res = nullptr;
+                srv->GetResource(&res);
+                if (res) {
+                    ID3D11Texture2D* tex2D = nullptr;
+                    if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&tex2D))) {
+                        D3D11_TEXTURE2D_DESC desc;
+                        tex2D->GetDesc(&desc);
+                        ImGui::Text("Size: %ux%u", desc.Width, desc.Height);
+                        tex2D->Release();
+                    }
+                    res->Release();
+                }
+            }
+        }
+        else {
+            ImGui::TextDisabled("No Texture Selected");
+        }
+        ImGui::EndChild();
+
+        ImGui::Separator();
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            if (g_SelectedTextureID >= 0) {
+                if (g_BBMParser.IsParsed) {
+                    if (g_EditingMaterialIndex >= 0 && g_EditingMaterialIndex < (int)g_BBMParser.ParsedMaterials.size()) {
+                        auto& m = g_BBMParser.ParsedMaterials[g_EditingMaterialIndex];
+                        if (g_EditingTextureType == 0) m.DiffuseBank = g_SelectedTextureID;
+                        else if (g_EditingTextureType == 1) m.BumpBank = g_SelectedTextureID;
+                        else if (g_EditingTextureType == 2) m.ReflectBank = g_SelectedTextureID;
+                        else if (g_EditingTextureType == 3) m.IllumBank = g_SelectedTextureID;
+                        g_MeshUploadNeeded = true;
+                        if (saveCallback) saveCallback();
+                    }
+                }
+                else if (g_ActiveMeshContent.IsParsed) {
+                    if (g_EditingMaterialIndex >= 0 && g_EditingMaterialIndex < (int)g_ActiveMeshContent.Materials.size()) {
+                        auto& m = g_ActiveMeshContent.Materials[g_EditingMaterialIndex];
+                        if (g_EditingTextureType == 0) m.DiffuseMapID = g_SelectedTextureID;
+                        else if (g_EditingTextureType == 1) m.BumpMapID = g_SelectedTextureID;
+                        else if (g_EditingTextureType == 2) m.ReflectionMapID = g_SelectedTextureID;
+                        else if (g_EditingTextureType == 3) m.IlluminationMapID = g_SelectedTextureID;
+                        else if (g_EditingTextureType == 4) m.DecalID = g_SelectedTextureID;
+
+                        int flags = 0;
+                        if (m.DiffuseMapID > 0) flags |= 1;
+                        if (m.BumpMapID > 0) flags |= 2;
+                        if (m.ReflectionMapID > 0) flags |= 4;
+                        if (m.IlluminationMapID > 0) flags |= 8;
+                        m.MapFlags = (m.MapFlags & ~0xF) | flags;
+
+                        g_MeshUploadNeeded = true;
+                        if (saveCallback) saveCallback();
+                    }
+                }
+            }
+            g_ShowTextureSelectPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowTextureSelectPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Physics Mesh Picker Modal
+    if (g_TriggerPhysicsPopup) {
+        ImGui::OpenPopup("Select Physics Mesh");
+        g_ShowPhysicsSelectPopup = true;
+        g_TriggerPhysicsPopup = false;
+        g_LoadedPhysicsPickerID = -1;
+    }
+
+    if (ImGui::BeginPopupModal("Select Physics Mesh", &g_ShowPhysicsSelectPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputTextWithHint("##PhysSearch", "Search Physics Meshes by ID or Name...", g_PhysicsSearchBuf, 128);
+        ImGui::Separator();
+
+        if (g_SelectedPhysicsID > 0 && g_SelectedPhysicsID != g_LoadedPhysicsPickerID) {
+            g_LoadedPhysicsPickerID = g_SelectedPhysicsID;
+            bool found = false;
+            for (auto& b : g_OpenBanks) {
+                if (b.Type == EBankType::Graphics || (b.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&b))) {
+                    for (size_t j = 0; j < b.Entries.size(); j++) {
+                        if (b.Entries[j].ID == (uint32_t)g_SelectedPhysicsID) {
+                            std::vector<uint8_t> rawData;
+                            if (b.ModifiedEntryData.count((int)j)) rawData = b.ModifiedEntryData[(int)j];
+                            else if (b.Stream && b.Stream->is_open()) {
+                                b.Stream->clear();
+                                b.Stream->seekg(b.Entries[j].Offset, std::ios::beg);
+                                rawData.resize(b.Entries[j].Size);
+                                b.Stream->read((char*)rawData.data(), b.Entries[j].Size);
+                            }
+                            g_PhysicsPickerBBMParser = CBBMParser();
+                            g_PhysicsPickerMeshContent = C3DMeshContent();
+                            if (b.Entries[j].Type == 3) {
+                                g_PhysicsPickerBBMParser.Parse(rawData);
+                            }
+                            else if (IsSupportedMesh(b.Entries[j].Type)) {
+                                if (b.SubheaderCache.count((int)j)) g_PhysicsPickerMeshContent.ParseEntryMetadata(b.SubheaderCache[(int)j]);
+                                g_PhysicsPickerMeshContent.Parse(rawData, b.Entries[j].Type);
+                            }
+                            g_PhysicsPickerUploadNeeded = true;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (found) break;
+            }
+            if (!found) {
+                g_PhysicsPickerPreviewOpen = false;
+            }
+        }
+
+        ImGui::BeginChild("PhysList", ImVec2(420, 400), true);
+        std::string filterStr = g_PhysicsSearchBuf;
+        std::transform(filterStr.begin(), filterStr.end(), filterStr.begin(), ::tolower);
+
+        bool isZeroPhys = (g_SelectedPhysicsID <= 0);
+        if (ImGui::Selectable("0 - None", isZeroPhys)) {
+            g_SelectedPhysicsID = 0;
+        }
+        if (isZeroPhys) ImGui::SetItemDefaultFocus();
+
+        bool hasAny = false;
+        for (size_t i = 0; i < g_OpenBanks.size(); i++) {
+            auto& b = g_OpenBanks[i];
+            if (b.Type == EBankType::Graphics || (b.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&b))) {
+                for (size_t j = 0; j < b.Entries.size(); j++) {
+                    const auto& e = b.Entries[j];
+                    if (e.Type == TYPE_STATIC_PHYSICS_MESH || e.Type == 3) {
+                        hasAny = true;
+                        std::string mName = e.Name;
+                        std::transform(mName.begin(), mName.end(), mName.begin(), ::tolower);
+                        std::string idStr = std::to_string(e.ID);
+
+                        if (filterStr.empty() || mName.find(filterStr) != std::string::npos || idStr.find(filterStr) != std::string::npos) {
+                            bool isSelected = (g_SelectedPhysicsID == (int32_t)e.ID);
+                            std::string label = idStr + " - " + (e.FriendlyName.empty() ? e.Name : e.FriendlyName);
+                            if (ImGui::Selectable(label.c_str(), isSelected)) {
+                                g_SelectedPhysicsID = (int32_t)e.ID;
+                            }
+                            if (isSelected) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                }
+            }
+        }
+        if (!hasAny) {
+            ImGui::TextDisabled("No Graphics Bank (MBANK_ALLMESHES) open!");
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+        ImGui::BeginChild("PhysPreviewView", ImVec2(480, 400), true);
+
+        if (g_PhysicsPickerUploadNeeded && g_pd3dDevice) {
+            g_PhysicsPickerRenderer.Initialize(g_pd3dDevice);
+            if (g_PhysicsPickerBBMParser.IsParsed) {
+                g_PhysicsPickerRenderer.UploadBBM(g_pd3dDevice, g_PhysicsPickerBBMParser);
+            }
+            else if (g_PhysicsPickerMeshContent.IsParsed) {
+                g_PhysicsPickerRenderer.UploadMesh(g_pd3dDevice, g_PhysicsPickerMeshContent);
+                std::vector<MeshRenderer::RenderMaterial> materials;
+                int maxMat = 0;
+                for (const auto& m : g_PhysicsPickerMeshContent.Materials) if (m.ID > maxMat) maxMat = m.ID;
+                materials.resize(maxMat + 1);
+                for (const auto& m : g_PhysicsPickerMeshContent.Materials) {
+                    if (m.DiffuseMapID > 0) materials[m.ID].Diffuse = LoadTextureForMesh(m.DiffuseMapID);
+                    materials[m.ID].SelfIllumination = (float)m.SelfIllumination / 255.0f;
+                }
+                g_PhysicsPickerRenderer.SetMaterials(materials);
+            }
+            g_PhysicsPickerUploadNeeded = false;
+            g_PhysicsPickerPreviewOpen = true;
+        }
+
+        if (g_PhysicsPickerPreviewOpen && (g_PhysicsPickerBBMParser.IsParsed || g_PhysicsPickerMeshContent.IsParsed)) {
+            ImVec2 mAvail = ImGui::GetContentRegionAvail();
+            g_PhysicsPickerRenderer.Resize(g_pd3dDevice, mAvail.x, mAvail.y);
+
+            ID3D11DeviceContext* pCtx = nullptr;
+            g_pd3dDevice->GetImmediateContext(&pCtx);
+            if (pCtx) {
+                ID3D11ShaderResourceView* tex = g_PhysicsPickerRenderer.Render(pCtx, mAvail.x, mAvail.y, true, g_PhysicsPickerBBMParser.IsParsed);
+                pCtx->Release();
+                if (tex) ImGui::Image((void*)tex, mAvail);
+            }
+        }
+        else {
+            ImGui::TextDisabled("Select a physics mesh to preview.");
+        }
+        ImGui::EndChild();
+
+        ImGui::Separator();
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            if (g_SelectedPhysicsID >= 0) {
+                g_ActiveMeshContent.EntryMeta.HasData = true;
+                g_ActiveMeshContent.EntryMeta.PhysicsIndex = g_SelectedPhysicsID;
+                g_LoadedOverlayID = -1;
+                if (saveCallback) saveCallback();
+            }
+            g_ShowPhysicsSelectPopup = false;
+            g_PhysicsPickerPreviewOpen = false;
+            g_LoadedPhysicsPickerID = -1;
+            g_PhysicsPickerBBMParser = CBBMParser();
+            g_PhysicsPickerMeshContent = C3DMeshContent();
+            g_PhysicsPickerRenderer.Release();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_ShowPhysicsSelectPopup = false;
+            g_PhysicsPickerPreviewOpen = false;
+            g_LoadedPhysicsPickerID = -1;
+            g_PhysicsPickerBBMParser = CBBMParser();
+            g_PhysicsPickerMeshContent = C3DMeshContent();
+            g_PhysicsPickerRenderer.Release();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (!g_ShowPhysicsSelectPopup && g_PhysicsPickerPreviewOpen) {
+        g_PhysicsPickerPreviewOpen = false;
+        g_LoadedPhysicsPickerID = -1;
+        g_PhysicsPickerBBMParser = CBBMParser();
+        g_PhysicsPickerMeshContent = C3DMeshContent();
+        g_PhysicsPickerRenderer.Release();
     }
 }

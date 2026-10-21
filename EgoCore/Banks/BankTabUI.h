@@ -1290,7 +1290,7 @@ static void DrawBankTab() {
                 DrawStreamingFontProperties(&bank, bank.SelectedEntryIndex);
             }
             else {
-                DrawFontProperties(e.ID);
+                DrawFontProperties(e.ID, &bank);
             }
         }
         else if (bank.Type == EBankType::Audio) {

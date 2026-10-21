@@ -178,48 +178,104 @@ inline void DrawStreamingFontProperties(LoadedBank* bank, int entryIdx) {
         }
     }
 
-    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Dynamic Streaming Font");
     ImGui::TextDisabled("Source File: %s", g_StreamingFontParser.Metadata.SourceName.c_str());
     ImGui::TextDisabled("Base Height: %u px | Max Height: %u px", g_StreamingFontParser.Metadata.FontHeight, g_StreamingFontParser.Metadata.MaxHeight);
-
     ImGui::TextDisabled("Weight: %u | Italics: %s", g_StreamingFontParser.Metadata.FontWeight, g_StreamingFontParser.Metadata.Italics ? "Yes" : "No");
 
-    ImGui::Dummy(ImVec2(0, 10));
-    if (ImGui::Button("Replace with TTF", ImVec2(150, 30))) {
-        g_StreamingFontBakeState.TargetPixelHeight = (float)g_StreamingFontParser.Metadata.FontHeight;
-        g_StreamingFontBakeState.Italics = g_StreamingFontParser.Metadata.Italics;
-
-        g_StreamingFontBakeState.LetterSpacing = 0;
-        g_StreamingFontBakeState.BaselineOffset = 0;
-
-        g_ShowStreamingFontImporter = true;
-    }
-
+    ImGui::Dummy(ImVec2(0, 6.0f));
     ImGui::Separator();
-
-    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::Dummy(ImVec2(0, 6.0f));
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Live Font Renderer");
 
     static char testString[256] = "Fable - The Lost Chapters";
-    bool changed = ImGui::InputText("##TestString", testString, 256);
+
+    float btnSize = 24.0f;
+    float btnTotalW = btnSize + ImGui::GetStyle().FramePadding.x * 2.0f;
+    float availW = ImGui::GetContentRegionAvail().x;
+    float inputW = availW - btnTotalW - ImGui::GetStyle().ItemSpacing.x;
+    if (inputW > 50.0f) {
+        ImGui::SetNextItemWidth(inputW);
+    }
+
+    bool changed = ImGui::InputTextWithHint("##StreamingFontTestString", "Type text to preview...", testString, sizeof(testString));
+
+    ImGui::SameLine();
+
+    bool openImporter = false;
+    if (g_ImportTexture) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.85f, 0.45f, 0.3f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.85f, 0.45f, 0.5f));
+        if (ImGui::ImageButton("##ReplaceStreamingFontBtn", g_ImportTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kFontImportTint)) {
+            openImporter = true;
+        }
+        ImGui::PopStyleColor(3);
+    }
+    else {
+        if (ImGui::Button("Import", ImVec2(btnTotalW, btnSize + ImGui::GetStyle().FramePadding.y * 2.0f))) {
+            openImporter = true;
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Replace with .ttf font");
+    }
+
+    if (openImporter) {
+        g_StreamingFontBakeState.TargetPixelHeight = (float)g_StreamingFontParser.Metadata.FontHeight;
+        g_StreamingFontBakeState.Italics = g_StreamingFontParser.Metadata.Italics;
+        g_StreamingFontBakeState.LetterSpacing = 0;
+        g_StreamingFontBakeState.BaselineOffset = 0;
+        g_ShowStreamingFontImporter = true;
+    }
 
     if (changed || g_LastStreamingFontEntryID != e.ID) {
         RebuildStringTexture(testString);
         g_LastStreamingFontEntryID = e.ID;
     }
 
-    ImGui::Dummy(ImVec2(0, 10));
-    if (s_StitchedStringTex) {
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        float dispW = (float)(s_StitchedW * 2);
-        float dispH = (float)(s_StitchedH * 2);
-        ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + dispW, p.y + dispH), IM_COL32(45, 45, 48, 255));
-        ImGui::Image((void*)s_StitchedStringTex, ImVec2(dispW, dispH));
-        ImGui::Dummy(ImVec2(dispW, dispH));
+    ImGui::Dummy(ImVec2(0, 6.0f));
+
+    if (!type2Entry) {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error: No Type 2 Pixel Payload found in this bank!");
     }
     else {
-        if (!type2Entry) ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: No Type 2 Pixel Payload found in this bank!");
-        else ImGui::TextDisabled("Type text to preview...");
+        float boxWidth = ImGui::GetContentRegionAvail().x;
+        float fontH = (float)(g_StreamingFontParser.Metadata.MaxHeight > 0 ? g_StreamingFontParser.Metadata.MaxHeight : 32);
+        float minH = fontH * 2.0f + 24.0f;
+        if (minH < 70.0f) minH = 70.0f;
+
+        float dispW = s_StitchedStringTex ? (float)(s_StitchedW * 2) : 0.0f;
+        float dispH = s_StitchedStringTex ? (float)(s_StitchedH * 2) : 0.0f;
+        float boxHeight = (std::max)(minH, dispH + 20.0f);
+
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+        // Dark rounded preview background with subtle border
+        drawList->AddRectFilled(p, ImVec2(p.x + boxWidth, p.y + boxHeight), IM_COL32(24, 25, 29, 255), 4.0f);
+        drawList->AddRect(p, ImVec2(p.x + boxWidth, p.y + boxHeight), IM_COL32(50, 52, 60, 255), 4.0f);
+
+        drawList->PushClipRect(p, ImVec2(p.x + boxWidth - 4.0f, p.y + boxHeight), true);
+
+        if (s_StitchedStringTex && testString[0] != '\0') {
+            float imgX = p.x + 12.0f;
+            float imgY = p.y + (boxHeight - dispH) * 0.5f;
+            if (imgY < p.y + 10.0f) imgY = p.y + 10.0f;
+
+            drawList->AddImage(
+                (void*)s_StitchedStringTex,
+                ImVec2(imgX, imgY),
+                ImVec2(imgX + dispW, imgY + dispH)
+            );
+        }
+        else {
+            ImVec2 textPos = ImVec2(p.x + 14.0f, p.y + (boxHeight - ImGui::GetTextLineHeight()) * 0.5f);
+            drawList->AddText(textPos, IM_COL32(130, 130, 140, 255), "Type text to preview...");
+        }
+
+        drawList->PopClipRect();
+
+        ImGui::Dummy(ImVec2(boxWidth, boxHeight));
     }
 
     DrawStreamingFontRebuilderModal(bank);

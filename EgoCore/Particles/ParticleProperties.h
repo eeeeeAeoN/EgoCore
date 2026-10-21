@@ -1099,7 +1099,7 @@ inline void DrawParticleProperties(CParticleEmitter& emitter) {
         ImGui::InputTextWithHint("##SearchTex", "Search Textures by ID or Name...", g_ParticleTexSearchBuf, 128);
         ImGui::Separator();
 
-        ImGui::BeginChild("TexList", ImVec2(350, 300), true);
+        ImGui::BeginChild("TexList", ImVec2(420, 300), true);
         LoadedBank* texBank = nullptr;
         bool isXbox = false;
         if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < (int)g_OpenBanks.size()) {
@@ -1182,7 +1182,7 @@ inline void DrawParticleProperties(CParticleEmitter& emitter) {
         ImGui::EndChild();
 
         ImGui::SameLine();
-        ImGui::BeginChild("TexPreview", ImVec2(256, 350), true);
+        ImGui::BeginChild("TexPreview", ImVec2(308, 350), true);
         if (g_ParticlePreviewTexID > 0) {
             ID3D11ShaderResourceView* srv = LoadTextureForMesh(g_ParticlePreviewTexID);
             if (srv) ImGui::Image((void*)srv, ImVec2(256, 256));
@@ -1266,7 +1266,7 @@ inline void DrawParticleProperties(CParticleEmitter& emitter) {
             }
         }
 
-        ImGui::BeginChild("MeshList", ImVec2(350, 400), true);
+        ImGui::BeginChild("MeshList", ImVec2(420, 400), true);
         std::string filterStr = g_ParticleMeshSearchBuf;
         std::transform(filterStr.begin(), filterStr.end(), filterStr.begin(), ::tolower);
 
@@ -1292,7 +1292,7 @@ inline void DrawParticleProperties(CParticleEmitter& emitter) {
         ImGui::EndChild();
 
         ImGui::SameLine();
-        ImGui::BeginChild("MeshPreviewView", ImVec2(400, 400), true);
+        ImGui::BeginChild("MeshPreviewView", ImVec2(480, 400), true);
 
         if (g_ParticleMeshUploadNeeded && g_pd3dDevice) {
             g_ParticleMeshRenderer.Initialize(g_pd3dDevice);

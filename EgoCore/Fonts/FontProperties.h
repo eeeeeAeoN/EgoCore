@@ -9,6 +9,8 @@
 #include <fstream>
 
 extern ID3D11Device* g_pd3dDevice;
+extern ImTextureID g_ImportTexture;
+static const ImVec4 kFontImportTint = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
 
 inline bool LoadTextureFromMemory(const std::vector<uint8_t>& rawData, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height) {
     if (rawData.empty()) return false;
@@ -67,7 +69,7 @@ inline ID3D11ShaderResourceView* g_FontAtlasSRV = nullptr;
 inline int g_FontAtlasWidth = 0;
 inline int g_FontAtlasHeight = 0;
 
-inline void DrawFontProperties(int currentEntryID) {
+inline void DrawFontProperties(int currentEntryID, LoadedBank* activeBank = nullptr) {
     if (!g_FontParser.IsParsed) {
         ImGui::TextDisabled("No font data available or parsed.");
         return;
@@ -85,121 +87,132 @@ inline void DrawFontProperties(int currentEntryID) {
         }
         g_LastFontEntryID = currentEntryID;
     }
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Font Metadata");
+    else if (!g_FontAtlasSRV && !data.RawTGAData.empty()) {
+        LoadTextureFromMemory(data.RawTGAData, &g_FontAtlasSRV, &g_FontAtlasWidth, &g_FontAtlasHeight);
+    }
+
+    ImGui::TextDisabled("Source File: %s", data.FontName.c_str());
+    ImGui::TextDisabled("Base Height: %u px | Max Height: %u px", data.FontHeight, data.MaxHeight);
+    ImGui::TextDisabled("Weight: %u | Italics: %s", data.Weight, data.Italics ? "Yes" : "No");
+    ImGui::TextDisabled("Atlas Size: %u x %u | Char Range: %u to %u", data.TexWidth, data.TexHeight, data.MinChar, data.MaxChar);
+
+    ImGui::Dummy(ImVec2(0, 6.0f));
     ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 6.0f));
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Live Font Renderer");
 
-    ImGui::Text("Name: "); ImGui::SameLine(); ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", data.FontName.c_str());
-    ImGui::Text("Base Height: %u px", data.FontHeight);
-    ImGui::Text("Max Height: %u px", data.MaxHeight);
-    ImGui::Text("Weight: %u", data.Weight);
-    ImGui::Text("Italics: %s", data.Italics ? "Yes" : "No");
-    ImGui::Text("Texture Atlas Size: %u x %u", data.TexWidth, data.TexHeight);
-    ImGui::Text("Character Range: %u to %u", data.MinChar, data.MaxChar);
+    static char previewText[256] = "Fable - The Lost Chapters";
 
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Glyph Banks (%zu)", data.GlyphBanks.size());
-    ImGui::Separator();
-
-    for (size_t i = 0; i < data.GlyphBanks.size(); ++i) {
-        if (ImGui::TreeNode((void*)(intptr_t)i, "Bank %u (Total Glyphs: %u)", data.GlyphBanks[i].BankIndex, data.GlyphBanks[i].GlyphCount)) {
-
-            if (ImGui::BeginTable("GlyphTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 250))) {
-                ImGui::TableSetupColumn("Index");
-                ImGui::TableSetupColumn("UV Left");
-                ImGui::TableSetupColumn("UV Top");
-                ImGui::TableSetupColumn("UV Right");
-                ImGui::TableSetupColumn("UV Bottom");
-                ImGui::TableSetupColumn("Offset X");
-                ImGui::TableSetupColumn("Advance");
-                ImGui::TableHeadersRow();
-
-                for (size_t g = 0; g < data.GlyphBanks[i].Glyphs.size(); ++g) {
-                    const auto& glyph = data.GlyphBanks[i].Glyphs[g];
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::Text("%zu", g);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("%.4f", glyph.Left);
-                    ImGui::TableSetColumnIndex(2); ImGui::Text("%.4f", glyph.Top);
-                    ImGui::TableSetColumnIndex(3); ImGui::Text("%.4f", glyph.Right);
-                    ImGui::TableSetColumnIndex(4); ImGui::Text("%.4f", glyph.Bottom);
-                    ImGui::TableSetColumnIndex(5); ImGui::Text("%d", glyph.Offset);
-                    ImGui::TableSetColumnIndex(6); ImGui::Text("%d", glyph.Advance);
-                }
-                ImGui::EndTable();
-            }
-            ImGui::TreePop();
-        }
+    float btnSize = 24.0f;
+    float btnTotalW = btnSize + ImGui::GetStyle().FramePadding.x * 2.0f;
+    float availW = ImGui::GetContentRegionAvail().x;
+    float inputW = availW - btnTotalW - ImGui::GetStyle().ItemSpacing.x;
+    if (inputW > 50.0f) {
+        ImGui::SetNextItemWidth(inputW);
     }
 
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Texture Atlas Preview");
-    ImGui::Separator();
-
-    if (g_FontAtlasSRV) {
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImVec2 size = ImVec2((float)g_FontAtlasWidth, (float)g_FontAtlasHeight);
-
-        ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(20, 20, 20, 255));
-        ImGui::Image((void*)g_FontAtlasSRV, size);
-    }
-    else {
-        ImGui::TextDisabled("No texture atlas available.");
-    }
-
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Live Text Preview");
-    ImGui::Separator();
-
-    if (g_FontAtlasSRV && !data.GlyphBanks.empty()) {
-        static char previewText[256] = "Hello Fable Modders!";
-        ImGui::InputText("Type here", previewText, 256);
-
-        ImGui::Dummy(ImVec2(0, 5));
-
-        ImVec2 startPos = ImGui::GetCursorScreenPos();
-        float boxHeight = (float)data.MaxHeight + 20.0f;
-        float boxWidth = ImGui::GetContentRegionAvail().x;
-
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(startPos, ImVec2(startPos.x + boxWidth, startPos.y + boxHeight), IM_COL32(20, 20, 20, 255));
-
-        float cursorX = startPos.x + 10.0f;
-        float cursorY = startPos.y + 10.0f;
-
-        for (int i = 0; previewText[i] != '\0'; i++) {
-            unsigned char c = previewText[i];
-            int glyphIndex = c - data.MinChar;
-            if (glyphIndex >= 0 && glyphIndex < data.AllGlyphs.size()) {
-                const auto& targetGlyph = data.AllGlyphs[glyphIndex];
-
-                float charWidth = (targetGlyph.Right - targetGlyph.Left) * g_FontAtlasWidth;
-                float charHeight = (targetGlyph.Bottom - targetGlyph.Top) * g_FontAtlasHeight;
-                float drawX = cursorX + targetGlyph.Offset;
-
-                drawList->AddImage(
-                    (void*)g_FontAtlasSRV,
-                    ImVec2(drawX, cursorY),
-                    ImVec2(drawX + charWidth, cursorY + charHeight),
-                    ImVec2(targetGlyph.Left, targetGlyph.Top),
-                    ImVec2(targetGlyph.Right, targetGlyph.Bottom)
-                );
-
-                cursorX += targetGlyph.Advance;
-            }
-        }
-
-        ImGui::Dummy(ImVec2(0, boxHeight));
-    }
-
-    ImGui::Dummy(ImVec2(0, 10));
-    ImGui::Dummy(ImVec2(0, 10));
-    if (ImGui::Button("Replace with TTF", ImVec2(150, 30))) {
-        g_ShowFontImporter = true;
-    }
+    ImGui::InputTextWithHint("##RegularFontTestString", "Type text to preview...", previewText, sizeof(previewText));
 
     ImGui::SameLine();
 
-    LoadedBank* activeBank = nullptr;
-    if (g_ActiveBankIndex >= 0 && g_ActiveBankIndex < g_OpenBanks.size()) {
+    bool openImporter = false;
+    if (g_ImportTexture) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.85f, 0.45f, 0.3f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.85f, 0.45f, 0.5f));
+        if (ImGui::ImageButton("##ReplaceRegularFontBtn", g_ImportTexture, ImVec2(btnSize, btnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), kFontImportTint)) {
+            openImporter = true;
+        }
+        ImGui::PopStyleColor(3);
+    }
+    else {
+        if (ImGui::Button("Import", ImVec2(btnTotalW, btnSize + ImGui::GetStyle().FramePadding.y * 2.0f))) {
+            openImporter = true;
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Replace with .ttf font");
+    }
+
+    if (openImporter) {
+        g_FontBakeState.TargetPixelHeight = (float)data.FontHeight;
+        g_FontBakeState.Italics = data.Italics;
+        g_ShowFontImporter = true;
+    }
+
+    ImGui::Dummy(ImVec2(0, 6.0f));
+
+    float boxWidth = ImGui::GetContentRegionAvail().x;
+    float fontH = (float)(data.MaxHeight > 0 ? data.MaxHeight : (data.FontHeight > 0 ? data.FontHeight : 32));
+    float minH = fontH + 28.0f;
+    if (minH < 70.0f) minH = 70.0f;
+    float boxHeight = minH;
+
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    // Dark rounded preview background with subtle border
+    drawList->AddRectFilled(p, ImVec2(p.x + boxWidth, p.y + boxHeight), IM_COL32(24, 25, 29, 255), 4.0f);
+    drawList->AddRect(p, ImVec2(p.x + boxWidth, p.y + boxHeight), IM_COL32(50, 52, 60, 255), 4.0f);
+
+    drawList->PushClipRect(p, ImVec2(p.x + boxWidth - 4.0f, p.y + boxHeight), true);
+
+    if (g_FontAtlasSRV && !data.GlyphBanks.empty() && previewText[0] != '\0') {
+        float cursorX = p.x + 12.0f;
+        float cursorY = p.y + (boxHeight - fontH) * 0.5f;
+        if (cursorY < p.y + 10.0f) cursorY = p.y + 10.0f;
+
+        for (int i = 0; previewText[i] != '\0'; i++) {
+            unsigned char c = (unsigned char)previewText[i];
+            int glyphIndex = c - data.MinChar;
+            if (glyphIndex >= 0 && glyphIndex < (int)data.AllGlyphs.size()) {
+                const auto& targetGlyph = data.AllGlyphs[glyphIndex];
+
+                float charWidth = (targetGlyph.Right - targetGlyph.Left) * (float)g_FontAtlasWidth;
+                float charHeight = (targetGlyph.Bottom - targetGlyph.Top) * (float)g_FontAtlasHeight;
+                float drawX = cursorX + targetGlyph.Offset;
+
+                if (charWidth > 0.0f && charHeight > 0.0f) {
+                    drawList->AddImage(
+                        (void*)g_FontAtlasSRV,
+                        ImVec2(drawX, cursorY),
+                        ImVec2(drawX + charWidth, cursorY + charHeight),
+                        ImVec2(targetGlyph.Left, targetGlyph.Top),
+                        ImVec2(targetGlyph.Right, targetGlyph.Bottom)
+                    );
+                }
+
+                if (targetGlyph.Advance > 0) {
+                    cursorX += targetGlyph.Advance;
+                }
+                else if (c == ' ') {
+                    cursorX += (fontH > 0 ? fontH / 3.0f : 8.0f);
+                }
+                else {
+                    cursorX += (int)charWidth + 1;
+                }
+            }
+            else if (c == ' ') {
+                cursorX += (fontH > 0 ? fontH / 3.0f : 8.0f);
+            }
+        }
+    }
+    else {
+        if (!g_FontAtlasSRV) {
+            ImVec2 textPos = ImVec2(p.x + 14.0f, p.y + (boxHeight - ImGui::GetTextLineHeight()) * 0.5f);
+            drawList->AddText(textPos, IM_COL32(180, 80, 80, 255), "No texture atlas available.");
+        }
+        else {
+            ImVec2 textPos = ImVec2(p.x + 14.0f, p.y + (boxHeight - ImGui::GetTextLineHeight()) * 0.5f);
+            drawList->AddText(textPos, IM_COL32(130, 130, 140, 255), "Type text to preview...");
+        }
+    }
+
+    drawList->PopClipRect();
+
+    ImGui::Dummy(ImVec2(boxWidth, boxHeight));
+
+    if (!activeBank && g_ActiveBankIndex >= 0 && g_ActiveBankIndex < (int)g_OpenBanks.size()) {
         activeBank = &g_OpenBanks[g_ActiveBankIndex];
     }
     DrawFontRebuilderModal(activeBank);
