@@ -188,7 +188,7 @@ public:
 
                 // Top cell: (x, topY)
                 const auto& topCell = lev.getCell(x, topY);
-                topHeights[x + ry * width] = topCell.height;
+                topHeights[x + ry * width] = static_cast<float>(static_cast<int>(topCell.height * 128.0f)) * 0.0078125f;
                 for (int i = 0; i < 3; ++i) {
                     topThemes[3 * (x + ry * width) + i] = registerTheme(topCell.themes[i]);
                 }
@@ -197,7 +197,7 @@ public:
 
                 // Bottom cell: (x, botY)
                 const auto& botCell = lev.getCell(x, botY);
-                bottomHeights[x + ry * width] = botCell.height;
+                bottomHeights[x + ry * width] = static_cast<float>(static_cast<int>(botCell.height * 128.0f)) * 0.0078125f;
                 for (int i = 0; i < 3; ++i) {
                     bottomThemes[3 * (x + ry * width) + i] = registerTheme(botCell.themes[i]);
                 }
@@ -213,7 +213,7 @@ public:
             for (int y = 0; y < height; ++y) {
                 // Left cell: (leftX, y)
                 const auto& leftCell = lev.getCell(leftX, y);
-                leftHeights[y + rx * height] = leftCell.height;
+                leftHeights[y + rx * height] = static_cast<float>(static_cast<int>(leftCell.height * 128.0f)) * 0.0078125f;
                 for (int i = 0; i < 3; ++i) {
                     leftThemes[3 * (y + rx * height) + i] = registerTheme(leftCell.themes[i]);
                 }
@@ -222,7 +222,7 @@ public:
 
                 // Right cell: (rightX, y)
                 const auto& rightCell = lev.getCell(rightX, y);
-                rightHeights[y + rx * height] = rightCell.height;
+                rightHeights[y + rx * height] = static_cast<float>(static_cast<int>(rightCell.height * 128.0f)) * 0.0078125f;
                 for (int i = 0; i < 3; ++i) {
                     rightThemes[3 * (y + rx * height) + i] = registerTheme(rightCell.themes[i]);
                 }

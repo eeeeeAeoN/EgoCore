@@ -1,11 +1,15 @@
 #include "egostb/mesh_builder.hpp"
 #include "egostb/normal_lut.hpp"
 #include "egostb/theme_manager.hpp"
+#include "egostb/bank_resolver.hpp"
 #include "egostb/water_utils.hpp"
 #include "egostb/range_compressor.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <unordered_map>
+#include <cstdint>
 #include <iostream>
 #include <fstream>
 
@@ -79,15 +83,13 @@ struct ThemeBlend {
 };
 
 static std::vector<TerrainLayerContribution> buildThemeContributions(
-    const ThemeBlend& blend, const std::vector<ThemeMaterial>& themes) {
+    const std::array<const ThemeMaterial*, 3>& selected,
+    const std::array<uint8_t, 3>& strengths) {
     std::array<unsigned, 3> weights{};
-    std::array<const ThemeMaterial*, 3> selected{};
     unsigned total = 0;
     for (size_t slot = 0; slot < 3; ++slot) {
-        const size_t themeIndex = blend.indices[slot];
-        if (themeIndex < themes.size() && themes[themeIndex].available) {
-            selected[slot] = &themes[themeIndex];
-            weights[slot] = blend.strengths[slot];
+        if (selected[slot] != nullptr && selected[slot]->available) {
+            weights[slot] = strengths[slot];
             total += weights[slot];
         }
     }
@@ -97,9 +99,9 @@ static std::vector<TerrainLayerContribution> buildThemeContributions(
     std::array<unsigned, 3> baseWeights = weights;
     std::array<unsigned, 3> cliffWeights = weights;
     for (size_t first = 0; first < 3; ++first) {
-        if (selected[first] == nullptr) continue;
+        if (selected[first] == nullptr || !selected[first]->available) continue;
         for (size_t later = first + 1; later < 3; ++later) {
-            if (selected[later] == nullptr) continue;
+            if (selected[later] == nullptr || !selected[later]->available) continue;
             if (baseWeights[first] && baseWeights[later] &&
                 selected[first]->base.textures[0] != 0 &&
                 selected[first]->base == selected[later]->base) {
@@ -117,7 +119,7 @@ static std::vector<TerrainLayerContribution> buildThemeContributions(
 
     std::vector<TerrainLayerContribution> result;
     for (size_t slot = 0; slot < 3; ++slot) {
-        if (selected[slot] == nullptr) continue;
+        if (selected[slot] == nullptr || !selected[slot]->available) continue;
         if (selected[slot]->base.textures[0] != 0 && baseWeights[slot] > 0x10) {
             result.push_back({selected[slot]->base, 0,
                               static_cast<uint8_t>(baseWeights[slot])});
@@ -141,9 +143,7 @@ MeshBuilder::MeshBuilder(const LevData& lev, int worldX, int worldY,
 
 MeshBuilder::Vector3 MeshBuilder::mapNormal(int gx, int gy) const {
     auto sampleHeight = [this](int x, int y) -> float {
-        int cx = std::clamp(x, 0, m_lev.width - 1);
-        int cy = std::clamp(y, 0, m_lev.height - 1);
-        return m_lev.getCell(cx, cy).height;
+        return peekCell(x, y).height;
     };
     auto normalise2 = [](float a, float b) {
         float inv = fastInvSqrtEngine(a * a + b * b);
@@ -172,9 +172,7 @@ uint8_t MeshBuilder::packDirMaskByte(float component) {
 
 MeshBuilder::Vector3 MeshBuilder::buildMapDirMask(int gx, int gy) const {
     auto sampleHeight = [this](int x, int y) -> float {
-        int cx = std::clamp(x, 0, m_lev.width - 1);
-        int cy = std::clamp(y, 0, m_lev.height - 1);
-        return m_lev.getCell(cx, cy).height;
+        return peekCell(x, y).height;
     };
     const float center = sampleHeight(gx, gy);
     const float left   = sampleHeight(gx - 1, gy) - center;
@@ -251,91 +249,189 @@ bool MeshBuilder::directionActive(uint8_t direction, int gx, int gy) const {
     return (1.0f - topness) * sideness > 0.0f;
 }
 
-float MeshBuilder::peekWaterDepth(int gx, int gy) const {
-    const auto& grid = m_waterGrid ? *m_waterGrid : getMapWaterGrid(m_lev);
-    if (gx >= 0 && gx < grid.width && gy >= 0 && gy < grid.height) {
-        return grid.cells[gy * grid.width + gx].waterDepth;
+const HeightMapCell& MeshBuilder::peekCell(int gx, int gy, const LevData** outLev) const {
+    if (gx >= 0 && gx < m_lev.width && gy >= 0 && gy < m_lev.height) {
+        if (outLev) *outLev = &m_lev;
+        return m_lev.getCell(gx, gy);
     }
+    int wx = m_worldX + gx;
+    int wy = m_worldY + gy;
     if (m_neighbors) {
-        int wx = m_worldX + gx;
-        int wy = m_worldY + gy;
         for (const auto& n : *m_neighbors) {
-            if (n.containsWorld(wx, wy)) {
-                return n.getWaterDepth(wx, wy);
+            if (n.lev && wx >= n.mapX && wx < n.mapX + n.width &&
+                wy >= n.mapY && wy < n.mapY + n.height) {
+                int lx = wx - n.mapX;
+                int ly = wy - n.mapY;
+                if (outLev) *outLev = n.lev;
+                return n.lev->getCell(lx, ly);
             }
         }
     }
-    return 0.0f;
+    int cx = std::clamp(gx, 0, m_lev.width - 1);
+    int cy = std::clamp(gy, 0, m_lev.height - 1);
+    if (outLev) *outLev = &m_lev;
+    return m_lev.getCell(cx, cy);
+}
+
+float MeshBuilder::peekLandscapeHeight(int gx, int gy) const {
+    float h = peekCell(gx, gy).height;
+    return static_cast<float>(static_cast<int>(h * 128.0f)) * 0.0078125f;
+}
+
+static MeshBuilder::WaterGridCell makeWaterCellFromLev(const LevData& lev, int lx, int ly, const PrecomputedWaterGrid* extGrid = nullptr) {
+    MeshBuilder::WaterGridCell wc;
+    if (lx < 0 || lx >= lev.width || ly < 0 || ly >= lev.height) return wc;
+    const HeightMapCell& cell = lev.getCell(lx, ly);
+    float qh = static_cast<float>(static_cast<int>(cell.height * 128.0f)) * 0.0078125f;
+
+    auto getDef = [&](uint8_t thIdx) -> const EngineThemeDef* {
+        if (thIdx < lev.themePalette.size() && !lev.themePalette[thIdx].name.empty()) {
+            return ThemeManager::instance().getTheme(lev.themePalette[thIdx].name);
+        }
+        return nullptr;
+    };
+
+    const EngineThemeDef* def0 = getDef(cell.themes[0]);
+    const EngineThemeDef* def1 = getDef(cell.themes[1]);
+    const EngineThemeDef* def2 = getDef(cell.themes[2]);
+
+    // hasWaterFast (0x2d5d620): check slot 0, slot 1 (if slot 0 valid), slot 2 (if slot 0 & 1 valid)
+    if (def0 && def0->waterType > 0) {
+        wc.hasWaterFast = 1;
+    } else if (def1 && def1->waterType > 0) {
+        wc.hasWaterFast = 1;
+    } else if (def2 && def2->waterType > 0) {
+        wc.hasWaterFast = 1;
+    }
+
+    // waterType (0x2d5d780): first non-zero, non-7 across slots 0, 1, 2 (or 7 if only 7)
+    uint8_t wt = 0;
+    if (def0 && def0->waterType > 0) wt = static_cast<uint8_t>(def0->waterType);
+    if (def1 && def1->waterType > 0) {
+        if (wt == 0 || wt == 7) wt = static_cast<uint8_t>(def1->waterType);
+        if (def2 && def2->waterType > 0) {
+            if (wt == 0 || wt == 7) wt = static_cast<uint8_t>(def2->waterType);
+        }
+    }
+    wc.waterType = wt;
+    wc.hasDummyShorePoint = (wt == 7) ? 1 : 0;
+
+    // waterDepth (0x2d5e000)
+    float depth = 0.0f;
+    if (def0) {
+        float b0 = static_cast<float>(cell.blends[0]) / 255.0f;
+        depth += def0->waterHeight * b0;
+        if (def1) {
+            float b1 = static_cast<float>(cell.blends[1]) / 255.0f;
+            depth += def1->waterHeight * b1;
+            if (def2) {
+                int rem = 255 - static_cast<int>(cell.blends[0]) - static_cast<int>(cell.blends[1]);
+                if (rem > 0) {
+                    float b2 = static_cast<float>(rem) / 255.0f;
+                    depth += def2->waterHeight * b2;
+                }
+            }
+        }
+    } else if (extGrid && lx < extGrid->width && ly < extGrid->height) {
+        depth = extGrid->cells[ly * extGrid->width + lx].waterDepth;
+    }
+
+    wc.waterDepth = depth;
+    wc.hasWater = (wc.hasWaterFast && depth > 0.001f) ? 1 : 0;
+    wc.waterSurfH = (depth > 0.001f) ? (qh + depth) : 0.0f;
+    return wc;
+}
+
+const MeshBuilder::WaterGrid& MeshBuilder::ensureWaterGrid() const {
+    if (!m_internalWaterGridComputed) {
+        m_internalWaterGrid.width = m_lev.width;
+        m_internalWaterGrid.height = m_lev.height;
+        m_internalWaterGrid.cells.resize(m_lev.width * m_lev.height);
+        for (int y = 0; y < m_lev.height; ++y) {
+            for (int x = 0; x < m_lev.width; ++x) {
+                m_internalWaterGrid.cells[y * m_lev.width + x] = makeWaterCellFromLev(m_lev, x, y, m_waterGrid);
+            }
+        }
+        m_internalWaterGridComputed = true;
+    }
+    return m_internalWaterGrid;
+}
+
+MeshBuilder::WaterGridCell MeshBuilder::peekWaterCell(int gx, int gy) const {
+    if (gx >= 0 && gx < m_lev.width && gy >= 0 && gy < m_lev.height) {
+        return ensureWaterGrid().get(gx, gy);
+    }
+    int wx = m_worldX + gx;
+    int wy = m_worldY + gy;
+    if (m_neighbors) {
+        for (const auto& n : *m_neighbors) {
+            if (wx >= n.mapX && wx < n.mapX + n.width &&
+                wy >= n.mapY && wy < n.mapY + n.height) {
+                int lx = wx - n.mapX;
+                int ly = wy - n.mapY;
+                if (n.lev) {
+                    return makeWaterCellFromLev(*n.lev, lx, ly, n.waterGrid);
+                } else if (n.waterGrid) {
+                    WaterGridCell wc;
+                    const auto& c = n.waterGrid->get(lx, ly);
+                    wc.hasWater = c.hasWater;
+                    wc.hasWaterFast = (c.dominantType > 0) ? 1 : 0;
+                    wc.waterType = c.dominantType;
+                    wc.hasDummyShorePoint = (c.dominantType == 7) ? 1 : 0;
+                    wc.waterDepth = c.waterDepth;
+                    float qh = static_cast<float>(static_cast<int>(n.getLandscapeHeight(wx, wy) * 128.0f)) * 0.0078125f;
+                    wc.waterSurfH = (c.waterDepth > 0.001f) ? (qh + c.waterDepth) : 0.0f;
+                    return wc;
+                }
+            }
+        }
+    }
+    int cx = std::clamp(gx, 0, m_lev.width - 1);
+    int cy = std::clamp(gy, 0, m_lev.height - 1);
+    return ensureWaterGrid().get(cx, cy);
+}
+
+float MeshBuilder::peekWaterDepth(int gx, int gy) const {
+    return peekWaterCell(gx, gy).waterDepth;
+}
+
+float MeshBuilder::peekWaterSurfaceHeight(int gx, int gy) const {
+    return peekWaterCell(gx, gy).waterSurfH;
 }
 
 float MeshBuilder::peekInterpolatedWaterHeight(int gx, int gy, int distanceToLook) const {
-    const auto& grid = m_waterGrid ? *m_waterGrid : getMapWaterGrid(m_lev);
-    int minX = gx - distanceToLook;
-    int maxX = gx + distanceToLook;
-    int minY = gy - distanceToLook;
-    int maxY = gy + distanceToLook;
-
-    bool hasWater = (peekWaterDepth(gx, gy) > 0.001f);
-    if (!hasWater) {
+    int v18 = gx - distanceToLook;
+    int v16 = gy - distanceToLook;
+    int v14 = gx + distanceToLook;
+    int v15 = gy + distanceToLook;
+    if (!peekWaterCell(gx, gy).hasWater) {
         bool found = false;
-        int searchMinX = std::max(0, gx - distanceToLook);
-        int searchMaxX = std::min(m_lev.gridWidth - 1, gx + distanceToLook);
-        int searchMinY = std::max(0, gy - distanceToLook);
-        int searchMaxY = std::min(m_lev.gridHeight - 1, gy + distanceToLook);
-
-        for (int j = searchMinX; j <= searchMaxX && !found; ++j) {
-            for (int v5 = searchMinY; v5 <= searchMaxY && !found; ++v5) {
-                if (grid.get(j, v5).hasWater) {
-                    minX = j - distanceToLook;
-                    maxX = j + distanceToLook;
-                    minY = v5 - distanceToLook;
-                    maxY = v5 + distanceToLook;
+        for (int i = gx - distanceToLook; i <= v14 && !found; ++i) {
+            for (int j = v16; j <= v15 && !found; ++j) {
+                if (peekWaterCell(i, j).hasWaterFast) {
+                    v18 = i - distanceToLook;
+                    v16 = j - distanceToLook;
+                    v14 = i + distanceToLook;
+                    v15 = j + distanceToLook;
                     found = true;
-                    hasWater = true;
                 }
             }
         }
-        if (!hasWater) return 0.0f;
+        if (!found) return 0.0f;
     }
-
-    float totalWaterDepth = 0.0f;
-    float pointsWithWater = 0.0f;
-    for (int x = minX; x <= maxX; ++x) {
-        for (int y = minY; y <= maxY; ++y) {
-            if (x >= 0 && x < grid.width && y >= 0 && y < grid.height) {
-                const auto& wc = grid.cells[y * grid.width + x];
-                if (wc.hasWater) {
-                    totalWaterDepth += wc.waterHeight;
-                    pointsWithWater += 1.0f;
-                }
-            } else if (m_neighbors) {
-                int wx = m_worldX + x;
-                int wy = m_worldY + y;
-                for (const auto& n : *m_neighbors) {
-                    if (n.containsWorld(wx, wy)) {
-                        const auto* nwc = n.getWaterCell(wx, wy);
-                        if (nwc && nwc->hasWater) {
-                            totalWaterDepth += nwc->waterHeight;
-                            pointsWithWater += 1.0f;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                const auto& wc = grid.get(x, y);
-                if (wc.hasWater) {
-                    totalWaterDepth += wc.waterHeight;
-                    pointsWithWater += 1.0f;
-                }
+    float sum = 0.0f;
+    float count = 0.0f;
+    for (int xp = v18; xp <= v14; ++xp) {
+        for (int yp = v16; yp <= v15; ++yp) {
+            WaterGridCell wc = peekWaterCell(xp, yp);
+            if (wc.waterDepth > 0.001f) {
+                sum += wc.waterSurfH;
+                count += 1.0f;
             }
         }
     }
-    if (pointsWithWater > 0.0f) {
-        return totalWaterDepth / pointsWithWater;
-    }
-    return 0.0f;
+    return (count <= 0.0f) ? 0.0f : (sum / count);
 }
-
 
 bool MeshBuilder::findCorrectWaterLevel(const float heights[17][17], int x, int y, float* outHeight) const {
     int minX = std::max(0, x - 2);
@@ -361,118 +457,254 @@ bool MeshBuilder::findCorrectWaterLevel(const float heights[17][17], int x, int 
 }
 
 int MeshBuilder::getPatchWaterType(int startX, int startY) const {
-    if (!m_waterGrid) return 0;
-    int water_type_counts[9] = {0};
-    for (int y = startY; y <= startY + 16 && y < m_lev.gridHeight; ++y) {
-        for (int x = startX; x <= startX + 16 && x < m_lev.gridWidth; ++x) {
-            const auto& wc = m_waterGrid->get(x, y);
-            if (wc.hasWater && wc.dominantType >= 1 && wc.dominantType <= 8) {
-                water_type_counts[wc.dominantType]++;
+    int waterType = 0;
+    for (int xp = startX; xp <= startX + 16; ++xp) {
+        for (int yp = startY; yp <= startY + 16; ++yp) {
+            WaterGridCell wc = peekWaterCell(xp, yp);
+            if (waterType == 0 || waterType == 7) {
+                if (wc.waterType != 0 && wc.waterType != 7) {
+                    waterType = wc.waterType;
+                }
             }
         }
     }
-    int bestCount = 0;
-    int dominantWaterType = 0;
-    for (int wt = 1; wt <= 8; ++wt) {
-        if (wt == 7) continue;
-        if (water_type_counts[wt] > bestCount) {
-            bestCount = water_type_counts[wt];
-            dominantWaterType = wt;
-        }
-    }
-    return dominantWaterType;
+    return waterType;
 }
 
-void MeshBuilder::ensureWaterBodies() const {
-    if (m_shoreBodiesComputed) return;
-    m_shoreBodiesComputed = true;
+static int cosThetaToBufferIndex(float cosTheta, bool isLeft, int size = 512) {
+    cosTheta = std::clamp(cosTheta, -1.0f, 1.0f);
+    float angle = std::acos(cosTheta) / 6.283185482025146f;
+    if (isLeft) {
+        angle = 1.0f - angle;
+    }
+    float v = (static_cast<float>(size) - 1.0f) * angle;
+    return std::clamp(static_cast<int>(std::floor(v)), 0, size - 1);
+}
 
-    // 1. FindShorePointsInMap (0x12cd3e0)
+static void ensureBufferIsCircular(int& initialEntry, int& finalEntry) {
+    if (initialEntry - finalEntry <= finalEntry + 512 - initialEntry) {
+        if (finalEntry - initialEntry > initialEntry + 512 - finalEntry) {
+            initialEntry += 512;
+        }
+    } else {
+        finalEntry += 512;
+    }
+}
+
+static void setBufferEntriesToInterpolatedShorePointDistance(
+    float* buffer, float vx, float vy,
+    int initialEntry, int finalEntry,
+    const MeshBuilder::ShorePoint& nextPt,
+    const MeshBuilder::ShorePoint& lastPt)
+{
+    float range = static_cast<float>(finalEntry - initialEntry);
+    for (int i = initialEntry; i <= finalEntry; ++i) {
+        float interp = (range <= 0.0f) ? 0.0f : (static_cast<float>(i - initialEntry) / range);
+        interp = std::clamp(interp, 0.0f, 1.0f);
+        float x = static_cast<float>(nextPt.x - lastPt.x) * interp + static_cast<float>(lastPt.x);
+        float y = static_cast<float>(nextPt.y - lastPt.y) * interp + static_cast<float>(lastPt.y);
+        float dx = x - vx;
+        float dy = y - vy;
+        float dist = std::sqrt(dx * dx + dy * dy);
+        int idx = i % 512;
+        if (idx < 0) idx += 512;
+        if (buffer[idx] < 0.0f || dist < buffer[idx]) {
+            buffer[idx] = dist;
+        }
+    }
+}
+
+static void fillInvalidEntriesWithInterpolatedValues(float buffer[512]) {
+    int firstValid = -1;
+    for (int i = 0; i < 512; ++i) {
+        if (buffer[i] >= 0.0f) {
+            firstValid = i;
+            break;
+        }
+    }
+    if (firstValid < 0) return;
+
+    for (int i = 0; i < 512; ++i) {
+        if (buffer[i] < 0.0f) {
+            int j = i - 1;
+            int v5 = i + 1;
+            int v6 = 1;
+            if (i - 1 < 0) {
+                for (j = 511; buffer[j] < 0.0f; --j) {
+                    ++v6;
+                }
+            }
+            while (buffer[v5 % 512] < 0.0f) {
+                ++v5;
+                ++v6;
+            }
+            if (j > v5) {
+                v5 += 512;
+            }
+            for (int k = j; k < v5; ++k) {
+                float v3 = static_cast<float>(static_cast<double>(k - j) / static_cast<double>(v6));
+                buffer[k % 512] = (buffer[v5 % 512] - buffer[j]) * v3 + buffer[j];
+            }
+        }
+    }
+}
+
+static float computeShoreUCoord(float vx, float vy, const MeshBuilder::WaterBody& body, int closestShoreCoordIndex) {
+    int n = static_cast<int>(body.points.size());
+    if (n < 2) return 0.0f;
+    int startIndex = closestShoreCoordIndex;
+    if (startIndex < 0 || startIndex >= n) startIndex = 0;
+    int prevIndex = (startIndex > 0) ? (startIndex - 1) : (n - 1);
+    int nextIndex = (startIndex + 1) % n;
+
+    float rX = static_cast<float>(body.points[prevIndex].x);
+    float rY = static_cast<float>(body.points[prevIndex].y);
+    float nX = static_cast<float>(body.points[nextIndex].x);
+    float nY = static_cast<float>(body.points[nextIndex].y);
+
+    float dPrevSq = (rX - vx) * (rX - vx) + (rY - vy) * (rY - vy);
+    float dNextSq = (nX - vx) * (nX - vx) + (nY - vy) * (nY - vy);
+    if (dNextSq > dPrevSq) {
+        --startIndex;
+    }
+
+    std::vector<float> cumDist(n, 0.0f);
+    float totalDist = 0.0f;
+    float curX = static_cast<float>(body.points[0].x);
+    float curY = static_cast<float>(body.points[0].y);
+    for (int i = 1; i < n; ++i) {
+        float px = static_cast<float>(body.points[i].x);
+        float py = static_cast<float>(body.points[i].y);
+        totalDist += std::sqrt((px - curX) * (px - curX) + (py - curY) * (py - curY));
+        cumDist[i] = totalDist;
+        curX = px; curY = py;
+    }
+
+    int halfN = n / 2;
+    int v52 = startIndex - halfN;
+    if (v52 < 0) v52 += n;
+    float weightSum = 0.0f;
+    float weightedU = 0.0f;
+    for (int j = 0; j < 2 * halfN; ++j) {
+        v52 = (v52 + 1) % n;
+        float px = static_cast<float>(body.points[v52].x);
+        float py = static_cast<float>(body.points[v52].y);
+        float dSq = (px - vx) * (px - vx) + (py - vy) * (py - vy);
+        float w = (dSq <= 0.0001f) ? 1000000.0f : (1.0f / dSq);
+        weightedU += cumDist[v52] * w;
+        weightSum += w;
+    }
+    return (weightSum > 0.0f) ? (weightedU / weightSum) : 0.0f;
+}
+
+std::vector<MeshBuilder::ShorePoint> MeshBuilder::collectShorePoints() const {
     std::vector<ShorePoint> unsorted;
-    int w = m_lev.gridWidth;
-    int h = m_lev.gridHeight;
+    int w = m_lev.width;
+    int h = m_lev.height;
+
+    auto peekInterpolatedHasWater = [this](int x, int y, int dist) -> bool {
+        for (int ix = x - dist; ix <= x + dist; ++ix) {
+            for (int iy = y - dist; iy <= y + dist; ++iy) {
+                if (peekWaterCell(ix, iy).hasWater) return true;
+            }
+        }
+        return false;
+    };
+
+    auto peekInterpolatedWaterDepth = [this](int x, int y, int dist) -> float {
+        int v18 = x - dist;
+        int v16 = y - dist;
+        int v14 = x + dist;
+        int v15 = y + dist;
+        if (!peekWaterCell(x, y).hasWaterFast) {
+            bool found = false;
+            for (int i = x - dist; i <= v14 && !found; ++i) {
+                for (int j = y - dist; j <= v15 && !found; ++j) {
+                    if (peekWaterCell(i, j).hasWaterFast) {
+                        v18 = i - dist;
+                        v16 = j - dist;
+                        v14 = i + dist;
+                        v15 = j + dist;
+                        found = true;
+                    }
+                }
+            }
+            if (!found) return 0.0f;
+        }
+        float sum = 0.0f;
+        float count = 0.0f;
+        for (int k = v18; k <= v14; ++k) {
+            for (int m = v16; m <= v15; ++m) {
+                float d = peekWaterCell(k, m).waterDepth;
+                if (d > 0.001f) {
+                    sum += d;
+                    count += 1.0f;
+                }
+            }
+        }
+        return (count <= 0.0f) ? 0.0f : (sum / count);
+    };
+
+    auto containsPoint = [&](int px, int py) {
+        for (const auto& pt : unsorted) {
+            if (pt.x == px && pt.y == py) return true;
+        }
+        return false;
+    };
+
     for (int cy = 0; cy < h; ++cy) {
         for (int cx = 0; cx < w; ++cx) {
-            float d = peekWaterDepth(cx, cy);
-            if (d <= 0.001f) {
-                int minX = std::max(0, cx - 1);
-                int maxX = std::min(w - 1, cx + 1);
+            if (!peekInterpolatedHasWater(cx, cy, 1)) {
                 int minY = std::max(0, cy - 1);
                 int maxY = std::min(h - 1, cy + 1);
-                bool hasWaterNear = false;
-                for (int ny = minY; ny <= maxY && !hasWaterNear; ++ny) {
-                    for (int nx = minX; nx <= maxX && !hasWaterNear; ++nx) {
-                        if (peekWaterDepth(nx, ny) >= 0.001f) {
-                            hasWaterNear = true;
+                int minX = std::max(0, cx - 1);
+                int maxX = std::min(w - 1, cx + 1);
+                bool anyWater = false;
+                for (int ny = minY; ny <= maxY && !anyWater; ++ny) {
+                    for (int nx = minX; nx <= maxX && !anyWater; ++nx) {
+                        if (peekInterpolatedWaterDepth(nx, ny, 1) >= 0.001f) {
+                            anyWater = true;
                         }
                     }
                 }
-                if (hasWaterNear) {
-                    unsorted.push_back({m_worldX + cx, m_worldY + cy});
+                if (anyWater) {
+                    int ptX = m_worldX + cx;
+                    int ptY = m_worldY + cy;
+                    if (!containsPoint(ptX, ptY)) {
+                        unsorted.push_back({ptX, ptY, false});
+                    }
                 }
             } else {
-                if (cx == 0 || cx == w - 1 || cy == 0 || cy == h - 1) {
-                    bool neighborHasWater = false;
-                    if (m_neighbors) {
-                        int checkX = m_worldX + cx;
-                        int checkY = m_worldY + cy;
-                        if (cx == 0) checkX -= 1;
-                        else if (cx == w - 1) checkX += 1;
-                        if (cy == 0) checkY -= 1;
-                        else if (cy == h - 1) checkY += 1;
-
-                        for (const auto& n : *m_neighbors) {
-                            if (n.containsWorld(checkX, checkY) && n.getWaterDepth(checkX, checkY) > 0.001f) {
-                                neighborHasWater = true;
-                                break;
-                            }
-                        }
+                WaterGridCell wc = peekWaterCell(cx, cy);
+                if (wc.waterType == 7 || wc.hasDummyShorePoint) {
+                    int ptX = m_worldX + cx;
+                    int ptY = m_worldY + cy;
+                    if (!containsPoint(ptX, ptY)) {
+                        unsorted.push_back({ptX, ptY, false});
                     }
-                    if (!neighborHasWater) {
-                        unsorted.push_back({m_worldX + cx, m_worldY + cy});
+                } else if (cx == 0 || cx == w - 1 || cy == 0 || cy == h - 1) {
+                    int ptX = m_worldX + cx;
+                    int ptY = m_worldY + cy;
+                    if (cx == w - 1) ++ptX;
+                    else if (cy == h - 1) ++ptY;
+                    if (!containsPoint(ptX, ptY)) {
+                        unsorted.push_back({ptX, ptY, true});
                     }
                 }
             }
         }
     }
+    return unsorted;
+}
 
-    // Include real shoreline points from touching neighbors within a margin
-    if (m_neighbors) {
-        const int margin = 32;
-        int minWx = m_worldX - margin;
-        int maxWx = m_worldX + w + margin;
-        int minWy = m_worldY - margin;
-        int maxWy = m_worldY + h + margin;
-
-        for (const auto& n : *m_neighbors) {
-            if (!n.shorePoints) continue;
-            for (const auto& pt : *n.shorePoints) {
-                if (pt.first >= minWx && pt.first <= maxWx &&
-                    pt.second >= minWy && pt.second <= maxWy) {
-                    // Only add real land shore points, never boundary water points
-                    if (n.getWaterDepth(pt.first, pt.second) <= 0.001f) {
-                        unsorted.push_back({pt.first, pt.second});
-                    }
-                }
-            }
-        }
-    }
-
-    // Deduplicate unsorted shore points
-    std::sort(unsorted.begin(), unsorted.end(), [](const ShorePoint& a, const ShorePoint& b) {
-        if (a.x != b.x) return a.x < b.x;
-        return a.y < b.y;
-    });
-    unsorted.erase(std::unique(unsorted.begin(), unsorted.end(), [](const ShorePoint& a, const ShorePoint& b) {
-        return a.x == b.x && a.y == b.y;
-    }), unsorted.end());
-
-    // 2. SortShorePointsIntoWaterBodies (0x12ce190)
+std::vector<MeshBuilder::WaterBody> MeshBuilder::sortShorePointsIntoWaterBodies(std::vector<ShorePoint> unsorted) {
     const float maxDist = 2.0f;
     const float maxDistWithGap = 25.0f;
+
     std::vector<uint8_t> used(unsorted.size(), 0);
     size_t remaining = unsorted.size();
     size_t firstUnused = 0;
+    std::vector<WaterBody> bodies;
 
     while (remaining > 0) {
         while (firstUnused < unsorted.size() && used[firstUnused]) {
@@ -485,55 +717,63 @@ void MeshBuilder::ensureWaterBodies() const {
         used[firstUnused] = 1;
         --remaining;
 
-        bool done = false;
-        while (!done && remaining > 0) {
-            const ShorePoint& cur = body.points.back();
+        auto findCloserThan = [&](const ShorePoint& cur, float radius) -> int {
             int bestIdx = -1;
-            float bestDistSq = maxDist * maxDist;
+            float bestDist = 1e38f;
             for (size_t i = 0; i < unsorted.size(); ++i) {
                 if (used[i]) continue;
-                float dx = static_cast<float>(unsorted[i].x - cur.x);
-                float dy = static_cast<float>(unsorted[i].y - cur.y);
-                float d2 = dx * dx + dy * dy;
-                if (d2 <= bestDistSq) {
-                    bestDistSq = d2;
-                    bestIdx = static_cast<int>(i);
+                if (unsorted[i].x == cur.x && unsorted[i].y == cur.y) {
+                    used[i] = 1;
+                    --remaining;
+                    continue;
+                }
+                float dx = static_cast<float>(cur.x - unsorted[i].x);
+                float dy = static_cast<float>(cur.y - unsorted[i].y);
+                float d = std::sqrt(dx * dx + dy * dy);
+                if (d <= radius && d < bestDist) {
+                    bool inBody = false;
+                    for (const auto& pt : body.points) {
+                        if (pt.x == unsorted[i].x && pt.y == unsorted[i].y) {
+                            inBody = true;
+                            break;
+                        }
+                    }
+                    if (!inBody) {
+                        bestDist = d;
+                        bestIdx = static_cast<int>(i);
+                    }
                 }
             }
+            return bestIdx;
+        };
+
+        bool done = false;
+        while (!done && remaining > 0) {
+            const ShorePoint cur = body.points.back();
+            int bestIdx = findCloserThan(cur, maxDist);
             if (bestIdx >= 0) {
                 body.points.push_back(unsorted[bestIdx]);
                 used[bestIdx] = 1;
                 --remaining;
             } else {
-                float dx = static_cast<float>(body.points.front().x - cur.x);
-                float dy = static_cast<float>(body.points.front().y - cur.y);
+                const ShorePoint& front = body.points.front();
+                float dx = static_cast<float>(cur.x - front.x);
+                float dy = static_cast<float>(cur.y - front.y);
                 float d = std::sqrt(dx * dx + dy * dy);
                 if (d <= maxDistWithGap) {
-                    if (d > maxDist) {
-                        body.points.push_back({
-                            static_cast<int>(std::nearbyint((body.points.front().x + cur.x) * 0.5f)),
-                            static_cast<int>(std::nearbyint((body.points.front().y + cur.y) * 0.5f))
-                        });
+                    if (d <= maxDist || d >= maxDistWithGap) {
+                        done = true;
+                    } else {
+                        int midX = static_cast<int>(front.x + (cur.x - front.x) * 0.5);
+                        int midY = static_cast<int>(front.y + (cur.y - front.y) * 0.5);
+                        body.points.push_back({midX, midY, false});
                     }
-                    done = true;
                 } else {
-                    int gapIdx = -1;
-                    float gapDistSq = maxDistWithGap * maxDistWithGap;
-                    for (size_t i = 0; i < unsorted.size(); ++i) {
-                        if (used[i]) continue;
-                        float gdx = static_cast<float>(unsorted[i].x - cur.x);
-                        float gdy = static_cast<float>(unsorted[i].y - cur.y);
-                        float gd2 = gdx * gdx + gdy * gdy;
-                        if (gd2 <= gapDistSq) {
-                            gapDistSq = gd2;
-                            gapIdx = static_cast<int>(i);
-                        }
-                    }
+                    int gapIdx = findCloserThan(cur, maxDistWithGap);
                     if (gapIdx >= 0) {
-                        body.points.push_back({
-                            static_cast<int>(std::nearbyint((unsorted[gapIdx].x + cur.x) * 0.5f)),
-                            static_cast<int>(std::nearbyint((unsorted[gapIdx].y + cur.y) * 0.5f))
-                        });
+                        int midX = static_cast<int>(cur.x + (unsorted[gapIdx].x - cur.x) * 0.5);
+                        int midY = static_cast<int>(cur.y + (unsorted[gapIdx].y - cur.y) * 0.5);
+                        body.points.push_back({midX, midY, false});
                         body.points.push_back(unsorted[gapIdx]);
                         used[gapIdx] = 1;
                         --remaining;
@@ -543,7 +783,8 @@ void MeshBuilder::ensureWaterBodies() const {
                 }
             }
         }
-        if (body.points.size() >= 3) {
+
+        if (!body.points.empty()) {
             body.minX = body.points[0].x; body.maxX = body.points[0].x;
             body.minY = body.points[0].y; body.maxY = body.points[0].y;
             for (const auto& pt : body.points) {
@@ -555,9 +796,46 @@ void MeshBuilder::ensureWaterBodies() const {
             float spanDx = static_cast<float>(body.maxX - body.minX);
             float spanDy = static_cast<float>(body.maxY - body.minY);
             body.span = std::sqrt(spanDx * spanDx + spanDy * spanDy);
-            m_waterBodies.push_back(std::move(body));
+            bodies.push_back(std::move(body));
         }
     }
+    return bodies;
+}
+
+std::shared_ptr<const std::vector<MeshBuilder::WaterBody>> MeshBuilder::buildWorldWaterBodies(
+    const std::vector<std::vector<ShorePoint>>& perMapShorePoints)
+{
+    std::vector<ShorePoint> all;
+    for (const auto& v : perMapShorePoints) {
+        std::vector<ShorePoint> toAdd;
+        toAdd.reserve(v.size());
+        for (const auto& pt : v) {
+            if (pt.isBorder) {
+                auto it = std::find_if(all.begin(), all.end(), [&](const ShorePoint& sp) {
+                    return sp.x == pt.x && sp.y == pt.y;
+                });
+                if (it != all.end()) {
+                    all.erase(it);
+                } else {
+                    toAdd.push_back(pt);
+                }
+            } else {
+                toAdd.push_back(pt);
+            }
+        }
+        all.insert(all.end(), toAdd.begin(), toAdd.end());
+    }
+    return std::make_shared<const std::vector<WaterBody>>(sortShorePointsIntoWaterBodies(std::move(all)));
+}
+
+void MeshBuilder::ensureWaterBodies() const {
+    if (m_shoreBodiesComputed) return;
+    m_shoreBodiesComputed = true;
+    if (m_worldWaterBodies) return;
+
+    std::vector<std::vector<ShorePoint>> perMap;
+    perMap.push_back(collectShorePoints());
+    m_waterBodies = *buildWorldWaterBodies(perMap);
 }
 
 bool MeshBuilder::constructVertexDistanceToShoreArray(
@@ -565,9 +843,14 @@ bool MeshBuilder::constructVertexDistanceToShoreArray(
     float* waterBodySpan, float* shoreUCoord) const
 {
     ensureWaterBodies();
+    const std::vector<WaterBody>& bodies = m_worldWaterBodies ? *m_worldWaterBodies : m_waterBodies;
+
+    static constexpr float kZeroedShoreLookUpArray[12] = {
+        1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f
+    };
 
     const WaterBody* bodyToUse = nullptr;
-    for (const auto& body : m_waterBodies) {
+    for (const auto& body : bodies) {
         if (vx >= static_cast<float>(body.minX) && vx <= static_cast<float>(body.maxX) &&
             vy >= static_cast<float>(body.minY) && vy <= static_cast<float>(body.maxY)) {
             bodyToUse = &body;
@@ -575,147 +858,102 @@ bool MeshBuilder::constructVertexDistanceToShoreArray(
         }
     }
 
-    if (!bodyToUse && !m_waterBodies.empty()) {
-        float bestDistSq = 1e30f;
-        for (const auto& body : m_waterBodies) {
-            float cx = std::clamp(vx, static_cast<float>(body.minX), static_cast<float>(body.maxX));
-            float cy = std::clamp(vy, static_cast<float>(body.minY), static_cast<float>(body.maxY));
-            float d2 = (vx - cx) * (vx - cx) + (vy - cy) * (vy - cy);
-            if (d2 < bestDistSq) {
-                bestDistSq = d2;
-                bodyToUse = &body;
+    if (!bodyToUse) {
+        for (int i = 0; i < size && i < 12; ++i) array[i] = kZeroedShoreLookUpArray[i];
+        if (waterBodySpan) *waterBodySpan = 0.0f;
+        if (shoreUCoord) *shoreUCoord = 0.0f;
+        return false;
+    }
+
+    float buffer[512];
+    for (int i = 0; i < 512; ++i) buffer[i] = -1.0f;
+
+    int closestShoreCoordIndex = -1;
+    float closestShoreCoordDistance = 3.4028235e38f;
+
+    auto fillBuffer = [&](const WaterBody& body, bool trackClosest) {
+        int numPts = static_cast<int>(body.points.size());
+        if (numPts <= 0) return;
+
+        ShorePoint lastPt = body.points.back();
+        float dx0 = static_cast<float>(lastPt.x) - vx;
+        float dy0 = static_cast<float>(lastPt.y) - vy;
+        float dist0 = std::sqrt(dx0 * dx0 + dy0 * dy0);
+        float cosTheta0 = (dist0 <= 0.1f) ? 0.0f : (dy0 / dist0);
+        int initial_buffer_entry = cosThetaToBufferIndex(cosTheta0, dx0 < 0.0f, 512);
+
+        for (int index = 0; index < numPts; ++index) {
+            const ShorePoint& curPt = body.points[index];
+            float dx = static_cast<float>(curPt.x) - vx;
+            float dy = static_cast<float>(curPt.y) - vy;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            float cosTheta = (dist <= 0.1f) ? 0.0f : (dy / dist);
+            if (trackClosest && dist < closestShoreCoordDistance) {
+                closestShoreCoordDistance = dist;
+                closestShoreCoordIndex = index;
+            }
+            int final_buffer_entry = cosThetaToBufferIndex(cosTheta, dx < 0.0f, 512);
+
+            if (final_buffer_entry == initial_buffer_entry) {
+                int idx = final_buffer_entry % 512;
+                if (idx < 0) idx += 512;
+                if (buffer[idx] < 0.0f || dist0 < buffer[idx]) {
+                    buffer[idx] = dist0;
+                }
+            } else {
+                int initE = initial_buffer_entry;
+                int finE = final_buffer_entry;
+                ensureBufferIsCircular(initE, finE);
+                if (initE >= finE) {
+                    setBufferEntriesToInterpolatedShorePointDistance(buffer, vx, vy, finE, initE, lastPt, curPt);
+                } else {
+                    setBufferEntriesToInterpolatedShorePointDistance(buffer, vx, vy, initE, finE, curPt, lastPt);
+                }
+                initial_buffer_entry = finE % 512;
+                if (initial_buffer_entry < 0) initial_buffer_entry += 512;
+                lastPt = curPt;
+                dist0 = dist;
+            }
+        }
+    };
+
+    fillBuffer(*bodyToUse, true);
+
+    // FindPossibleIslandsInWaterBody (0x2e0a4c0)
+    for (const auto& other : bodies) {
+        if (!(other.minX == bodyToUse->minX && other.minY == bodyToUse->minY &&
+              other.maxX == bodyToUse->maxX && other.maxY == bodyToUse->maxY)) {
+            if (other.minX >= bodyToUse->minX && other.minY >= bodyToUse->minY &&
+                other.maxX <= bodyToUse->maxX && other.maxY <= bodyToUse->maxY) {
+                fillBuffer(other, true);
             }
         }
     }
 
-    if (!bodyToUse) {
-        static constexpr float kZeroedShoreLookUpArray[12] = {
-            1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f
-        };
-        for (int i = 0; i < size && i < 12; ++i) array[i] = kZeroedShoreLookUpArray[i];
-        if (waterBodySpan && *waterBodySpan == 0.0f) *waterBodySpan = 0.0f;
-        if (shoreUCoord) *shoreUCoord = 0.0f;
-        return false;
+    fillInvalidEntriesWithInterpolatedValues(buffer);
+
+    // SupersampleBufferToArray (0x2e09030)
+    int numEntries = static_cast<int>(std::floor(512.0f / static_cast<float>(size))); // 42 for size = 12
+    int bIdx = 0;
+    for (int s = 0; s < size; ++s) {
+        float sum = 0.0f;
+        int curEntries = (s == size - 1) ? (511 - bIdx) : numEntries; // 49 for s = 11
+        for (int i = 0; i < curEntries && bIdx < 512; ++i) {
+            sum += buffer[bIdx++];
+        }
+        array[s] = (curEntries > 0) ? (sum / static_cast<float>(curEntries)) : 0.0f;
+    }
+
+    for (int i = 0; i < size; ++i) {
+        for (int j = i - 1; j >= 0; --j) {
+            array[i] = array[i] - array[j];
+        }
     }
 
     float spanDx = static_cast<float>(bodyToUse->maxX - bodyToUse->minX);
     float spanDy = static_cast<float>(bodyToUse->maxY - bodyToUse->minY);
     if (waterBodySpan) *waterBodySpan = std::sqrt(spanDx * spanDx + spanDy * spanDy);
-    if (shoreUCoord) *shoreUCoord = 0.0f;
-
-    float buffer[512];
-    for (int i = 0; i < 512; ++i) buffer[i] = -1.0f;
-
-    int numPts = static_cast<int>(bodyToUse->points.size());
-    if (numPts >= 2) {
-        ShorePoint lastPt = bodyToUse->points.back();
-        float dx0 = static_cast<float>(lastPt.x) - vx;
-        float dy0 = static_cast<float>(lastPt.y) - vy;
-        float dist0 = std::sqrt(dx0 * dx0 + dy0 * dy0);
-        float cosTheta0 = (dist0 <= 0.1f) ? 0.0f : (dy0 / dist0);
-        cosTheta0 = std::clamp(cosTheta0, -1.0f, 1.0f);
-        float angle0 = std::acos(cosTheta0) / 6.283185482025146f;
-        if (dx0 < 0.0f) angle0 = 1.0f - angle0;
-        int lastEntry = static_cast<int>(std::nearbyint(angle0 * 511.0f));
-
-        for (int i = 0; i < numPts; ++i) {
-            const ShorePoint& curPt = bodyToUse->points[i];
-            float dx = static_cast<float>(curPt.x) - vx;
-            float dy = static_cast<float>(curPt.y) - vy;
-            float dist = std::sqrt(dx * dx + dy * dy);
-            float cosTheta = (dist <= 0.1f) ? 0.0f : (dy / dist);
-            cosTheta = std::clamp(cosTheta, -1.0f, 1.0f);
-            float angle = std::acos(cosTheta) / 6.283185482025146f;
-            if (dx < 0.0f) angle = 1.0f - angle;
-            int curEntry = static_cast<int>(std::nearbyint(angle * 511.0f));
-
-            if (curEntry == lastEntry) {
-                int idx = curEntry % 512;
-                if (idx < 0) idx += 512;
-                if (buffer[idx] < 0.0f || dist < buffer[idx]) {
-                    buffer[idx] = dist;
-                }
-            } else {
-                int startE = lastEntry;
-                int endE = curEntry;
-                if (endE < startE) {
-                    if (startE - endE > endE - startE + 512) {
-                        endE += 512;
-                    }
-                } else {
-                    if (endE - startE > startE - endE + 512) {
-                        startE += 512;
-                    }
-                }
-                int initialEntry = std::min(startE, endE);
-                int finalEntry = std::max(startE, endE);
-                int count = finalEntry - initialEntry;
-                for (int k = 0; k <= count; ++k) {
-                    float interp = (count <= 0) ? 0.0f : (static_cast<float>(k) / static_cast<float>(count));
-                    float sx = static_cast<float>(lastPt.x) + static_cast<float>(curPt.x - lastPt.x) * interp;
-                    float sy = static_cast<float>(lastPt.y) + static_cast<float>(curPt.y - lastPt.y) * interp;
-                    float d = std::sqrt((sx - vx) * (sx - vx) + (sy - vy) * (sy - vy));
-                    int bIdx = (initialEntry + k) % 512;
-                    if (bIdx < 0) bIdx += 512;
-                    if (buffer[bIdx] < 0.0f || d < buffer[bIdx]) {
-                        buffer[bIdx] = d;
-                    }
-                }
-            }
-            lastEntry = curEntry % 512;
-            lastPt = curPt;
-        }
-    }
-
-    int firstValid = -1;
-    for (int i = 0; i < 512; ++i) {
-        if (buffer[i] >= 0.0f) {
-            firstValid = i;
-            break;
-        }
-    }
-    if (firstValid >= 0) {
-        for (int i = 0; i < 512; ++i) {
-            if (buffer[i] < 0.0f) {
-                int prevValid = (i - 1 + 512) % 512;
-                while (buffer[prevValid] < 0.0f) {
-                    prevValid = (prevValid - 1 + 512) % 512;
-                }
-                int nextValid = (i + 1) % 512;
-                int count = 1;
-                while (buffer[nextValid] < 0.0f) {
-                    nextValid = (nextValid + 1) % 512;
-                    ++count;
-                }
-                float vPrev = buffer[prevValid];
-                float vNext = buffer[nextValid];
-                int gap = (nextValid >= prevValid) ? (nextValid - prevValid) : (nextValid + 512 - prevValid);
-                for (int k = 0; k < count; ++k) {
-                    int idx = (i + k) % 512;
-                    float t = static_cast<float>(k + 1) / static_cast<float>(gap);
-                    buffer[idx] = vPrev + t * (vNext - vPrev);
-                }
-                i += count - 1;
-            }
-        }
-    }
-
-    int bIdx = 0;
-    int numEntries = static_cast<int>(std::nearbyint(512.0f / static_cast<float>(size)));
-    for (int s = 0; s < size; ++s) {
-        float sum = 0.0f;
-        int curEntries = (s == size - 1) ? (512 - bIdx) : numEntries;
-        int end = bIdx + curEntries;
-        for (int i = bIdx; i < end && i < 512; ++i) {
-            sum += buffer[i];
-        }
-        bIdx = end;
-        array[s] = (curEntries > 0) ? (sum / static_cast<float>(curEntries)) : 0.0f;
-    }
-
-    for (int k = size - 1; k >= 1; --k) {
-        array[k] -= array[k - 1];
-    }
+    if (shoreUCoord) *shoreUCoord = computeShoreUCoord(vx, vy, *bodyToUse, closestShoreCoordIndex);
 
     return true;
 }
@@ -733,7 +971,7 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
         for (int cx = 0; cx <= 16; ++cx) {
             int gx = startX + cx;
             int gy = startY + cy;
-            const auto& cell = m_lev.getCell(gx, gy);
+            const auto& cell = peekCell(gx, gy);
             minZ = std::min(minZ, cell.height);
             maxZ = std::max(maxZ, cell.height);
 
@@ -828,17 +1066,63 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
         // CEngineLandscapeMeshBuilder::BuildLayersFromThemes -> ReadThemesAndCreateLayers
         for (int y = 0; y <= 16; ++y) {
             for (int x = 0; x <= 16; ++x) {
-                const auto& cell = m_lev.getCell(startX + x, startY + y);
-                ThemeBlend blend;
-                blend.indices[0] = cell.themes[0];
-                blend.indices[1] = cell.themes[1];
-                blend.indices[2] = cell.themes[2];
-                blend.strengths[0] = cell.blends[0];
-                blend.strengths[1] = cell.blends[1];
-                unsigned stored = unsigned(cell.blends[0]) + unsigned(cell.blends[1]);
-                blend.strengths[2] = stored >= 255 ? 0 : (255 - stored);
+                const LevData* cellLev = &m_lev;
+                const auto& cell = peekCell(startX + x, startY + y, &cellLev);
 
-                for (const auto& contribution : buildThemeContributions(blend, m_themeMaterials)) {
+                std::array<ThemeMaterial, 3> tempMaterials{};
+                std::array<const ThemeMaterial*, 3> selected{nullptr, nullptr, nullptr};
+
+                auto resolveSlotMaterial = [&](size_t slot) -> const ThemeMaterial* {
+                    uint8_t thIdx = cell.themes[slot];
+                    if (cellLev == &m_lev) {
+                        if (thIdx < m_themeMaterials.size() && m_themeMaterials[thIdx].available) {
+                            return &m_themeMaterials[thIdx];
+                        }
+                        return nullptr;
+                    }
+                    if (!cellLev || thIdx >= cellLev->themePalette.size()) return nullptr;
+                    const std::string& tName = cellLev->themePalette[thIdx].name;
+                    if (tName.empty()) return nullptr;
+
+                    for (size_t ms = 0; ms < m_lev.themePalette.size() && ms < m_themeMaterials.size(); ++ms) {
+                        if (m_lev.themePalette[ms].name == tName && m_themeMaterials[ms].available) {
+                            return &m_themeMaterials[ms];
+                        }
+                    }
+
+                    const auto* def = ThemeManager::instance().getTheme(tName);
+                    if (!def) return nullptr;
+                    auto& mat = tempMaterials[slot];
+                    mat.available = true;
+                    auto getTex = [](const std::string& name) -> uint32_t {
+                        return name.empty() ? 0 : BankResolver::instance().getTextureId(name);
+                    };
+                    mat.base.textures[0] = getTex(def->baseTexture);
+                    mat.base.textures[1] = getTex(def->backgroundTexture.empty() ? def->baseTexture : def->backgroundTexture);
+                    mat.base.textures[2] = getTex(def->baseBumpMap);
+                    mat.base.selfIllumination = def->baseSelfIllumination;
+                    mat.cliff.textures[0] = getTex(def->cliffBaseTexture);
+                    mat.cliff.textures[1] = getTex(def->cliffBackgroundTexture.empty() ? def->cliffBaseTexture : def->cliffBackgroundTexture);
+                    mat.cliff.textures[2] = getTex(def->cliffBumpMap);
+                    mat.cliff.selfIllumination = def->cliffSelfIllumination;
+                    return &mat;
+                };
+
+                selected[0] = resolveSlotMaterial(0);
+                if (selected[0] != nullptr) {
+                    selected[1] = resolveSlotMaterial(1);
+                    if (selected[1] != nullptr) {
+                        selected[2] = resolveSlotMaterial(2);
+                    }
+                }
+
+                std::array<uint8_t, 3> strengths{0, 0, 0};
+                strengths[0] = cell.blends[0];
+                strengths[1] = cell.blends[1];
+                unsigned stored = unsigned(cell.blends[0]) + unsigned(cell.blends[1]);
+                strengths[2] = stored >= 255 ? 0 : static_cast<uint8_t>(255 - stored);
+
+                for (const auto& contribution : buildThemeContributions(selected, strengths)) {
                     Pass& pass = getPass(contribution.material, contribution.mappingDirection);
                     pass.blend[size_t(y) * 17 + x] = contribution.blend;
                     addPolys(pass, x, y);
@@ -893,7 +1177,7 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
             CompiledVertex v;
             v.x = static_cast<uint16_t>(m_worldX + gx);
             v.y = static_cast<uint16_t>(m_worldY + gy);
-            v.z = m_lev.getCell(gx, gy).height;
+            v.z = peekCell(gx, gy).height;
 
             Vector3 norm = mapNormal(gx, gy);
             v.normal = packNormal(norm);
@@ -914,8 +1198,7 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
         patch.waterPatch.offsetX = startX;
         patch.waterPatch.offsetY = startY;
         patch.waterPatch.waterType = getPatchWaterType(startX, startY);
-        float span = std::sqrt(static_cast<float>(m_lev.width * m_lev.width + m_lev.height * m_lev.height));
-        patch.waterPatch.waterBodySpan = span;
+        patch.waterPatch.waterBodySpan = 0.0f;
         patch.waterPatch.vertices.resize(289);
 
         for (int cx = 0; cx <= 16; ++cx) {
@@ -932,12 +1215,13 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
                     if (findCorrectWaterLevel(patchWaterHeights, cx, cy, &correctH)) {
                         wh = correctH;
                     } else {
-                        wh = m_lev.getCell(gx, gy).height - 1.0f;
+                        wh = peekLandscapeHeight(gx, gy) - 1.0f;
                     }
                 }
 
-                float v30 = 256.0f * std::max(0.0f, wh - 0.1f);
-                float posZ = 0.00390625f * static_cast<float>(static_cast<int>(std::nearbyint(v30)));
+                float offset = (patch.waterPatch.waterType == 8) ? 0.001f : 0.1f; // 8 == WATER_TYPE_ICE
+                double v23 = (wh - offset <= 0.0f) ? 0.0 : static_cast<double>(wh - offset);
+                float posZ = static_cast<float>(static_cast<uint32_t>(static_cast<int64_t>(v23 * 256.0)) / 256.0);
 
                 float ly = worldY / 6.283185482025146f;
                 double za = std::sin(6.283185482025146 * static_cast<double>(ly));
@@ -949,7 +1233,7 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
                 float lcx = worldX / 6.283185482025146f;
                 float ca = static_cast<float>(std::cos(6.283185482025146 * static_cast<double>(lcx)) + zb);
 
-                float cell_h = m_lev.getCell(gx, gy).height;
+                float cell_h = peekLandscapeHeight(gx, gy);
                 float d = posZ + 0.1f - cell_h;
                 if (d < 0.0f) d = 0.0f;
                 if (d > 2.0f) d = 2.0f;
@@ -963,7 +1247,9 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
                 wv.depth = static_cast<int16_t>(std::nearbyint(d * 32767.0 * 0.5));
                 wv.shoreU = 0.0f;
 
-                constructVertexDistanceToShoreArray(worldX, worldY, wv.shoreDists, 12, &patch.waterPatch.waterBodySpan, &wv.shoreU);
+                float vertexSpan = 0.0f;
+                constructVertexDistanceToShoreArray(worldX, worldY, wv.shoreDists, 12, &vertexSpan, &wv.shoreU);
+                patch.waterPatch.waterBodySpan = vertexSpan;
             }
         }
     }

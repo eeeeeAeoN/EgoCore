@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <vector>
 #include <cstdint>
 #include <string>
@@ -111,6 +112,48 @@ public:
     static uint8_t packDirMaskByte(float component);
     bool directionActive(uint8_t direction, int gx, int gy) const;
 
+    // --- World-consistent shore/water bodies (fixes seams between maps) ---
+    struct ShorePoint {
+        int x = 0;
+        int y = 0;
+        bool isBorder = false;
+    };
+    struct WaterBody {
+        std::vector<ShorePoint> points;
+        int minX = 0, minY = 0, maxX = 0, maxY = 0;
+        float span = 0.0f;
+    };
+    std::vector<ShorePoint> collectShorePoints() const;
+    static std::vector<WaterBody> sortShorePointsIntoWaterBodies(std::vector<ShorePoint> unsorted);
+    static std::shared_ptr<const std::vector<WaterBody>> buildWorldWaterBodies(const std::vector<std::vector<ShorePoint>>& perMapShorePoints);
+    void setWorldWaterBodies(std::shared_ptr<const std::vector<WaterBody>> bodies) { m_worldWaterBodies = std::move(bodies); }
+
+    // Cross-map cell, height, theme, and water helpers
+    const HeightMapCell& peekCell(int gx, int gy, const LevData** outLev = nullptr) const;
+    float peekLandscapeHeight(int gx, int gy) const;
+    float peekWaterDepth(int gx, int gy) const;
+    float peekWaterSurfaceHeight(int gx, int gy) const;
+    float peekInterpolatedWaterHeight(int gx, int gy, int distanceToLook = 2) const;
+
+    struct WaterGridCell {
+        uint8_t hasWater = 0;
+        uint8_t hasWaterFast = 0;
+        uint8_t waterType = 0;
+        uint8_t hasDummyShorePoint = 0;
+        float waterDepth = 0.0f;
+        float waterSurfH = 0.0f;
+    };
+    struct WaterGrid {
+        int width = 0;
+        int height = 0;
+        std::vector<WaterGridCell> cells;
+        const WaterGridCell& get(int x, int y) const {
+            int cx = std::clamp(x, 0, width - 1);
+            int cy = std::clamp(y, 0, height - 1);
+            return cells[cy * width + cx];
+        }
+    };
+    WaterGridCell peekWaterCell(int gx, int gy) const;
 private:
     const LevData& m_lev;
     int m_worldX;
@@ -119,21 +162,13 @@ private:
     const std::vector<WorldWaterNeighbor>* m_neighbors = nullptr;
     const PrecomputedWaterGrid* m_waterGrid = nullptr;
 
-    float peekWaterDepth(int gx, int gy) const;
-    float peekInterpolatedWaterHeight(int gx, int gy, int distanceToLook = 2) const;
+    mutable bool m_internalWaterGridComputed = false;
+    mutable WaterGrid m_internalWaterGrid;
+    const WaterGrid& ensureWaterGrid() const;
     bool findCorrectWaterLevel(const float heights[17][17], int x, int y, float* outHeight) const;
     int getPatchWaterType(int startX, int startY) const;
 
-    struct ShorePoint {
-        int x = 0;
-        int y = 0;
-    };
-    struct WaterBody {
-        std::vector<ShorePoint> points;
-        int minX = 0, minY = 0, maxX = 0, maxY = 0;
-        float span = 0.0f;
-    };
-
+    std::shared_ptr<const std::vector<WaterBody>> m_worldWaterBodies;
     mutable bool m_shoreBodiesComputed = false;
     mutable std::vector<WaterBody> m_waterBodies;
     void ensureWaterBodies() const;

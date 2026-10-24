@@ -94,6 +94,7 @@ bool ThemeManager::loadFromDefFile(const std::string& path) {
                 else if (value.find("WATER_TYPE_REFLECTIVE_SEA") != std::string::npos) currentTheme.waterType = 4;
                 else if (value.find("WATER_TYPE_SEA") != std::string::npos) currentTheme.waterType = 3;
                 else if (value.find("WATER_TYPE_OLD") != std::string::npos) currentTheme.waterType = 6;
+                else if (value.find("WATER_TYPE_DUMMY_SHORE_POINT") != std::string::npos) currentTheme.waterType = 7;
                 else if (value.find("WATER_TYPE_ICE") != std::string::npos) currentTheme.waterType = 8;
             } else if (token == "LocalDetailGeneratorDef") {
                 currentTheme.localDetailGeneratorDef = value;

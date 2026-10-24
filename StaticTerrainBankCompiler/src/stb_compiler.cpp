@@ -1167,6 +1167,93 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
 
         std::vector<RetailMapSubheaderConfig> retailConfigs;
 
+        // Neighbour lookup (maps within a 32-cell margin) used for water queries.
+        auto buildNeighbors = [&](const auto& meta) {
+            std::vector<WorldWaterNeighbor> neighbors;
+            const int neighborMargin = 32;
+            int minX = meta.mapX - neighborMargin;
+            int maxX = meta.mapX + meta.width + neighborMargin;
+            int minY = meta.mapY - neighborMargin;
+            int maxY = meta.mapY + meta.height + neighborMargin;
+
+            for (const auto& other : mapMetas) {
+                if (other.id == meta.id || other.levPath.empty()) continue;
+                if (other.mapX + other.width >= minX && other.mapX <= maxX &&
+                    other.mapY + other.height >= minY && other.mapY <= maxY) {
+                    WorldWaterNeighbor n;
+                    n.mapX = other.mapX;
+                    n.mapY = other.mapY;
+                    n.width = other.width;
+                    n.height = other.height;
+                    n.lev = &other.lev;
+                    n.waterGrid = &other.waterGrid;
+                    n.shorePoints = &other.ismResult.shorePoints;
+                    neighbors.push_back(n);
+                }
+            }
+            return neighbors;
+        };
+
+        // World-consistent shore/water bodies: gathered from every map once so that
+        // vertices shared across a map seam receive identical shore data on both sides.
+        std::shared_ptr<const std::vector<MeshBuilder::WaterBody>> worldWaterBodies;
+        {
+            std::vector<std::vector<MeshBuilder::ShorePoint>> perMapShore;
+            std::vector<MeshBuilder::ShorePoint> runningUnsorted;
+            for (size_t orderIdx = 0; orderIdx < finalMapOrder.size(); ++orderIdx) {
+                auto& m = mapMetas[finalMapOrder[orderIdx] - 1];
+                if (m.levPath.empty()) continue;
+                auto nb = buildNeighbors(m);
+                MeshBuilder collector(m.lev, m.mapX, m.mapY, {}, &nb, &m.waterGrid);
+                auto shorePts = collector.collectShorePoints();
+
+                // Match CWaterGenerator::FindShorePointsInMap (0x2e07490):
+                // If a border shore point is already in runningUnsorted, erase it from
+                // runningUnsorted and do not add it to this map's saved ShorePoints.
+                std::vector<std::pair<int, int>> ismShorePts;
+                ismShorePts.reserve(shorePts.size());
+                for (const auto& pt : shorePts) {
+                    if (pt.isBorder) {
+                        auto it = std::find_if(runningUnsorted.begin(), runningUnsorted.end(),
+                            [&](const MeshBuilder::ShorePoint& sp) {
+                                return sp.x == pt.x && sp.y == pt.y;
+                            });
+                        if (it != runningUnsorted.end()) {
+                            runningUnsorted.erase(it);
+                        } else {
+                            ismShorePts.push_back({pt.x, pt.y});
+                        }
+                    } else {
+                        ismShorePts.push_back({pt.x, pt.y});
+                    }
+                }
+                for (const auto& pt : ismShorePts) {
+                    runningUnsorted.push_back({pt.first, pt.second, false});
+                }
+                m.ismResult.shorePoints = ismShorePts;
+
+                // Rewrite Part B: CEngineMap::SaveShorePointsToStream at shorePointArrayStart
+                // in m.ismResult.payload and m.ismResult.entryPayload
+                size_t start = m.ismResult.shorePointArrayStart;
+                m.ismResult.payload.resize(start);
+                auto writeI32 = [](std::vector<uint8_t>& buf, int32_t val) {
+                    size_t cur = buf.size();
+                    buf.resize(cur + 4);
+                    std::memcpy(buf.data() + cur, &val, 4);
+                };
+                writeI32(m.ismResult.payload, static_cast<int32_t>(ismShorePts.size()));
+                for (const auto& pt : ismShorePts) {
+                    writeI32(m.ismResult.payload, pt.first);
+                    writeI32(m.ismResult.payload, pt.second);
+                }
+                m.ismResult.shorePointArraySize = static_cast<uint32_t>(m.ismResult.payload.size() - start);
+                m.ismResult.entryPayload = m.ismResult.payload;
+
+                perMapShore.push_back(std::move(shorePts));
+            }
+            worldWaterBodies = MeshBuilder::buildWorldWaterBodies(perMapShore);
+            log("World water bodies: " + std::to_string(worldWaterBodies->size()));
+        }
         // 13. Pass 1: Compile each map in optimal Morton build order
         for (size_t orderIdx = 0; orderIdx < finalMapOrder.size(); ++orderIdx) {
             checkCancel();
@@ -1211,28 +1298,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             std::vector<std::vector<uint8_t>> compressedFgFrames(numFgPatches);
             std::atomic<bool> mapNeedsForeground{false};
 
-            std::vector<WorldWaterNeighbor> neighbors;
-            const int neighborMargin = 32;
-            int minX = meta.mapX - neighborMargin;
-            int maxX = meta.mapX + meta.width + neighborMargin;
-            int minY = meta.mapY - neighborMargin;
-            int maxY = meta.mapY + meta.height + neighborMargin;
-
-            for (const auto& other : mapMetas) {
-                if (other.id == meta.id || other.levPath.empty()) continue;
-                if (other.mapX + other.width >= minX && other.mapX <= maxX &&
-                    other.mapY + other.height >= minY && other.mapY <= maxY) {
-                    WorldWaterNeighbor n;
-                    n.mapX = other.mapX;
-                    n.mapY = other.mapY;
-                    n.width = other.width;
-                    n.height = other.height;
-                    n.lev = &other.lev;
-                    n.waterGrid = &other.waterGrid;
-                    n.shorePoints = &other.ismResult.shorePoints;
-                    neighbors.push_back(n);
-                }
-            }
+            std::vector<WorldWaterNeighbor> neighbors = buildNeighbors(meta);
 
             if (numFgPatches > 0) {
                 std::atomic<int> nextPatch{0};
@@ -1245,6 +1311,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
                 for (unsigned int t = 0; t < numThreads; ++t) {
                     workers.emplace_back([&]() {
                         MeshBuilder threadBuilder(lev, meta.mapX, meta.mapY, themeMaterials, &neighbors, &meta.waterGrid);
+                        threadBuilder.setWorldWaterBodies(worldWaterBodies);
                         while (true) {
                             int pIdx = nextPatch.fetch_add(1);
                             if (pIdx >= numFgPatches) break;
