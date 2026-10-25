@@ -549,6 +549,11 @@ static void DrawBankTab() {
                     if (ImGui::RadioButton("Narrator List", bank.FilterTypeMask == 2)) { bank.FilterTypeMask = 2; UpdateFilter(bank); }
                 }
                 if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank))) {
+                    ImGui::TextColored(ImVec4(1, 0.85f, 0.2f, 1), "Dev Path Display:");
+                    if (ImGui::Checkbox("Show Raw DEV Names", &bank.ShowRawDevNames)) {
+                        UpdateFilter(bank);
+                    }
+                    ImGui::Separator();
                     ImGui::TextColored(ImVec4(0, 1, 1, 1), "Texture Type:");
                     if (ImGui::RadioButton("Show All Types##Tex", bank.FilterTypeMask == -1)) { bank.FilterTypeMask = -1; UpdateFilter(bank); }
                     if (ImGui::RadioButton("Graphic Single", bank.FilterTypeMask == 0)) { bank.FilterTypeMask = 0; UpdateFilter(bank); }
@@ -739,7 +744,7 @@ static void DrawBankTab() {
                 bool isModified = bank.ModifiedEntryData.count(idx) > 0;
                 bool isMarked = ModPackageTracker::IsMarked(bank.FileName, e.Name);
 
-                std::string displayLabel = e.FriendlyName;
+                std::string displayLabel = (bank.ShowRawDevNames || e.FriendlyName.empty()) ? e.Name : e.FriendlyName;
                 if (isStaged) displayLabel += " *";
                 else if (isModified) displayLabel += " (Mod)";
 
@@ -930,20 +935,36 @@ static void DrawBankTab() {
             static char nameBuf[256];
             static int lastEditID = -1;
             static int lastBankID = -1;
-            if (lastEditID != e.ID || lastBankID != g_ActiveBankIndex) {
-                strncpy_s(nameBuf, sizeof(nameBuf), e.Name.c_str(), _TRUNCATE);
+            static bool lastShowRaw = false;
+            if (lastEditID != e.ID || lastBankID != g_ActiveBankIndex || lastShowRaw != bank.ShowRawDevNames) {
+                std::string initialName = (bank.ShowRawDevNames || e.FriendlyName.empty()) ? e.Name : e.FriendlyName;
+                strncpy_s(nameBuf, sizeof(nameBuf), initialName.c_str(), _TRUNCATE);
                 lastEditID = e.ID;
                 lastBankID = g_ActiveBankIndex;
+                lastShowRaw = bank.ShowRawDevNames;
             }
-            if (ImGui::InputText("##globalNameEdit", nameBuf, 256)) {
-                bank.Entries[bank.SelectedEntryIndex].Name = nameBuf;
-                bank.Entries[bank.SelectedEntryIndex].FriendlyName = nameBuf;
-                if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type) && e.Type != 3)
-                    g_ActiveMeshContent.MeshName = nameBuf;
-                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend)
+            bool enterPressed = ImGui::InputText("##globalNameEdit", nameBuf, 256, ImGuiInputTextFlags_EnterReturnsTrue);
+            if (enterPressed || ImGui::IsItemDeactivatedAfterEdit()) {
+                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) {
+                    if (!RenameTextureEntry(&bank, bank.SelectedEntryIndex, nameBuf)) {
+                        std::string revertName = (bank.ShowRawDevNames || e.FriendlyName.empty()) ? e.Name : e.FriendlyName;
+                        strncpy_s(nameBuf, sizeof(nameBuf), revertName.c_str(), _TRUNCATE);
+                    }
+                    g_TextureParser.PendingName = bank.Entries[bank.SelectedEntryIndex].Name;
+                }
+                else {
+                    bank.Entries[bank.SelectedEntryIndex].Name = nameBuf;
+                    bank.Entries[bank.SelectedEntryIndex].FriendlyName = nameBuf;
+                    if (bank.Type == EBankType::Graphics && IsSupportedMesh(e.Type) && e.Type != 3)
+                        g_ActiveMeshContent.MeshName = nameBuf;
+                    if (e.Type == 6 || e.Type == 7 || e.Type == 9)
+                        g_AnimParser.Data.ObjectName = nameBuf;
+                }
+            }
+            else if (ImGui::IsItemEdited()) {
+                if (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend) {
                     g_TextureParser.PendingName = nameBuf;
-                if (e.Type == 6 || e.Type == 7 || e.Type == 9)
-                    g_AnimParser.Data.ObjectName = nameBuf;
+                }
             }
             ImGui::SameLine();
         }
@@ -1413,6 +1434,25 @@ static void DrawBankTab() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(120, 0))) {
             g_ShowDeleteBankEntryPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (g_ShowNameCollisionPopup) ImGui::OpenPopup("Invalid Entry Name");
+
+    if (ImGui::BeginPopupModal("Invalid Entry Name", &g_ShowNameCollisionPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Name Collision Detected");
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(420.0f);
+        ImGui::TextWrapped("%s", g_NameCollisionMessage.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        if (ImGui::Button("OK", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            g_ShowNameCollisionPopup = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

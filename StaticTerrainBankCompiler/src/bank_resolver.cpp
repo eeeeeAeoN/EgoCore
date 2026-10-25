@@ -129,22 +129,52 @@ static bool parseBigBankEntries(const std::string& path,
             if (infoSize > 44) {
                 file.seekg(infoSize - 44, std::ios::cur);
             }
-        } else if (outTexById && infoSize >= 34) {
+        } else if (outTexById && infoSize >= 28) {
             std::vector<uint8_t> infoData(infoSize);
             file.read(reinterpret_cast<char*>(infoData.data()), infoSize);
             uint16_t w = 0, h = 0;
-            uint32_t fmt = 0;
             std::memcpy(&w, infoData.data(), 2);
             std::memcpy(&h, infoData.data() + 2, 2);
-            std::memcpy(&fmt, infoData.data() + 12, 4);
+            uint16_t frameW = 0, frameH = 0;
+            std::memcpy(&frameW, infoData.data() + 6, 2);
+            std::memcpy(&frameH, infoData.data() + 8, 2);
+            if (w == 0) w = frameW;
+            if (h == 0) h = frameH;
+
+            uint8_t transparencyType = infoData[16];
+            uint8_t colourDepth = (infoSize >= 34) ? infoData[29] : 0;
+            bool isBump = (type == 0x2 || type == 0x3);
+
+            TextureFormat fmt = TextureFormat::DXT1;
+            if (colourDepth == 32) {
+                fmt = TextureFormat::ARGB8888;
+            } else if (isBump) {
+                if (transparencyType == 0 || transparencyType == 2) {
+                    fmt = TextureFormat::NormalMap_DXT1;
+                } else {
+                    fmt = TextureFormat::NormalMap_DXT5;
+                }
+            } else {
+                switch (transparencyType) {
+                case 0: fmt = TextureFormat::DXT1; break;
+                case 1: fmt = TextureFormat::DXT3; break;
+                case 2: fmt = TextureFormat::DXT1; break;
+                case 3: fmt = TextureFormat::DXT5; break;
+                case 4: fmt = TextureFormat::DXT3; break;
+                default: fmt = TextureFormat::DXT1; break;
+                }
+            }
 
             TextureBankEntry te;
             te.id = id;
+            te.type = type;
             te.offset = offset;
             te.size = size;
             te.width = w;
             te.height = h;
-            te.format = fmt;
+            te.format = static_cast<uint32_t>(fmt);
+            te.transparencyType = transparencyType;
+            te.colourDepth = colourDepth;
 
             (*outTexById)[id] = te;
             if (outTexByName && !name.empty()) {
@@ -310,10 +340,28 @@ const DecodedTexture* BankResolver::getDecodedTexture(uint32_t id) const {
 
     uint16_t w = entry.width > 0 ? entry.width : 512;
     uint16_t h = entry.height > 0 ? entry.height : 512;
-    size_t expectedDxtLen = (static_cast<size_t>(w) * h) / 2;
-    std::vector<uint8_t> dxtData(expectedDxtLen, 0);
 
-    bool dxtReady = false;
+    TextureFormat fmt = static_cast<TextureFormat>(entry.format);
+    size_t expectedLen = 0;
+    if (fmt == TextureFormat::ARGB8888) {
+        expectedLen = static_cast<size_t>(w) * h * 4;
+    } else if (fmt == TextureFormat::DXT3 || fmt == TextureFormat::DXT5 || fmt == TextureFormat::NormalMap_DXT5) {
+        size_t blocksX = (w + 3) / 4;
+        size_t blocksY = (h + 3) / 4;
+        expectedLen = blocksX * blocksY * 16;
+    } else {
+        // DXT1 / NormalMap_DXT1
+        size_t blocksX = (w + 3) / 4;
+        size_t blocksY = (h + 3) / 4;
+        expectedLen = blocksX * blocksY * 8;
+    }
+
+    if (expectedLen == 0) {
+        return nullptr;
+    }
+
+    std::vector<uint8_t> rawData(expectedLen, 0);
+    bool dataReady = false;
 
     // Check for LZO compressed header:
     // - If uint16 at offset 0 == 0xFFFF: 6-byte header [0xFFFF][uint32 cLen], data at +6
@@ -331,84 +379,100 @@ const DecodedTexture* BankResolver::getDecodedTexture(uint32_t id) const {
             headerSize = 2;
         }
         if (headerSize > 0 && cLen > 0 && cLen <= payload.size() - headerSize) {
-            size_t outLen = expectedDxtLen;
-            auto st = albion::lzo1x::decompress(payload.data() + headerSize, cLen, dxtData.data(), &outLen);
-            if (st == albion::lzo1x::Status::Ok) {
-                dxtReady = true;
+            size_t outLen = expectedLen;
+            auto st = albion::lzo1x::decompress(payload.data() + headerSize, cLen, rawData.data(), &outLen);
+            if (st == albion::lzo1x::Status::Ok || st == albion::lzo1x::Status::InputNotConsumed) {
+                dataReady = true;
+                // Copy trailing literal bytes if LZO stopped 3 bytes early
+                if (payload.size() >= headerSize + cLen + 3 && expectedLen >= 3 && outLen < expectedLen) {
+                    size_t copyBytes = std::min<size_t>(3, expectedLen - outLen);
+                    std::memcpy(rawData.data() + outLen, payload.data() + headerSize + cLen, copyBytes);
+                }
             }
         }
     }
 
-    // Fallback: check if payload is raw uncompressed DXT1
-    if (!dxtReady && payload.size() >= expectedDxtLen) {
-        std::memcpy(dxtData.data(), payload.data(), expectedDxtLen);
-        dxtReady = true;
+    // Fallback: check if payload is raw uncompressed data
+    if (!dataReady && payload.size() >= expectedLen) {
+        std::memcpy(rawData.data(), payload.data(), expectedLen);
+        dataReady = true;
     }
 
-    if (!dxtReady) {
+    if (!dataReady) {
         return nullptr;
     }
 
-    // Decode DXT1 blocks to RGB888
+    // Decode to RGB888
     DecodedTexture dec;
     dec.width = w;
     dec.height = h;
     dec.rgb.resize(static_cast<size_t>(w) * h * 3, 0);
 
-    auto toRGB565_local = [](uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b) {
-        r = static_cast<uint8_t>(((c >> 11) & 0x1F) * 255 / 31);
-        g = static_cast<uint8_t>(((c >> 5) & 0x3F) * 255 / 63);
-        b = static_cast<uint8_t>((c & 0x1F) * 255 / 31);
-    };
+    if (fmt == TextureFormat::ARGB8888) {
+        for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
+            dec.rgb[i * 3 + 0] = rawData[i * 4 + 2]; // R
+            dec.rgb[i * 3 + 1] = rawData[i * 4 + 1]; // G
+            dec.rgb[i * 3 + 2] = rawData[i * 4 + 0]; // B
+        }
+    } else {
+        auto toRGB565_local = [](uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b) {
+            r = static_cast<uint8_t>(((c >> 11) & 0x1F) * 255 / 31);
+            g = static_cast<uint8_t>(((c >> 5) & 0x3F) * 255 / 63);
+            b = static_cast<uint8_t>((c & 0x1F) * 255 / 31);
+        };
 
-    int blocksX = (w + 3) / 4;
-    int blocksY = (h + 3) / 4;
-    size_t blockOffset = 0;
+        int blocksX = (w + 3) / 4;
+        int blocksY = (h + 3) / 4;
+        bool is16ByteBlock = (fmt == TextureFormat::DXT3 || fmt == TextureFormat::DXT5 || fmt == TextureFormat::NormalMap_DXT5);
+        size_t blockSize = is16ByteBlock ? 16 : 8;
+        size_t colorOffset = is16ByteBlock ? 8 : 0;
 
-    for (int by = 0; by < blocksY; ++by) {
-        for (int bx = 0; bx < blocksX; ++bx) {
-            if (blockOffset + 8 > dxtData.size()) break;
-            uint16_t c0, c1;
-            uint32_t indices;
-            std::memcpy(&c0, dxtData.data() + blockOffset, 2);
-            std::memcpy(&c1, dxtData.data() + blockOffset + 2, 2);
-            std::memcpy(&indices, dxtData.data() + blockOffset + 4, 4);
-            blockOffset += 8;
+        for (int by = 0; by < blocksY; ++by) {
+            for (int bx = 0; bx < blocksX; ++bx) {
+                size_t blockOffset = (static_cast<size_t>(by) * blocksX + bx) * blockSize;
+                if (blockOffset + blockSize > rawData.size()) break;
 
-            uint8_t palR[4], palG[4], palB[4];
-            toRGB565_local(c0, palR[0], palG[0], palB[0]);
-            toRGB565_local(c1, palR[1], palG[1], palB[1]);
+                uint16_t c0, c1;
+                uint32_t indices;
+                std::memcpy(&c0, rawData.data() + blockOffset + colorOffset + 0, 2);
+                std::memcpy(&c1, rawData.data() + blockOffset + colorOffset + 2, 2);
+                std::memcpy(&indices, rawData.data() + blockOffset + colorOffset + 4, 4);
 
-            if (c0 > c1) {
-                palR[2] = static_cast<uint8_t>((2 * palR[0] + palR[1]) / 3);
-                palG[2] = static_cast<uint8_t>((2 * palG[0] + palG[1]) / 3);
-                palB[2] = static_cast<uint8_t>((2 * palB[0] + palB[1]) / 3);
+                uint8_t palR[4], palG[4], palB[4];
+                toRGB565_local(c0, palR[0], palG[0], palB[0]);
+                toRGB565_local(c1, palR[1], palG[1], palB[1]);
 
-                palR[3] = static_cast<uint8_t>((palR[0] + 2 * palR[1]) / 3);
-                palG[3] = static_cast<uint8_t>((palG[0] + 2 * palG[1]) / 3);
-                palB[3] = static_cast<uint8_t>((palB[0] + 2 * palB[1]) / 3);
-            } else {
-                palR[2] = static_cast<uint8_t>((palR[0] + palR[1]) / 2);
-                palG[2] = static_cast<uint8_t>((palG[0] + palG[1]) / 2);
-                palB[2] = static_cast<uint8_t>((palB[0] + palB[1]) / 2);
+                if (is16ByteBlock || c0 > c1) {
+                    palR[2] = static_cast<uint8_t>((2 * palR[0] + palR[1]) / 3);
+                    palG[2] = static_cast<uint8_t>((2 * palG[0] + palG[1]) / 3);
+                    palB[2] = static_cast<uint8_t>((2 * palB[0] + palB[1]) / 3);
 
-                palR[3] = 0;
-                palG[3] = 0;
-                palB[3] = 0;
-            }
+                    palR[3] = static_cast<uint8_t>((palR[0] + 2 * palR[1]) / 3);
+                    palG[3] = static_cast<uint8_t>((palG[0] + 2 * palG[1]) / 3);
+                    palB[3] = static_cast<uint8_t>((palB[0] + 2 * palB[1]) / 3);
+                } else {
+                    palR[2] = static_cast<uint8_t>((palR[0] + palR[1]) / 2);
+                    palG[2] = static_cast<uint8_t>((palG[0] + palG[1]) / 2);
+                    palB[2] = static_cast<uint8_t>((palB[0] + palB[1]) / 2);
 
-            for (int py = 0; py < 4; ++py) {
-                int y = by * 4 + py;
-                if (y >= h) continue;
-                for (int px = 0; px < 4; ++px) {
-                    int x = bx * 4 + px;
-                    if (x >= w) continue;
-                    int p = py * 4 + px;
-                    int idx = (indices >> (2 * p)) & 3;
-                    size_t outPixelIdx = (static_cast<size_t>(y) * w + x) * 3;
-                    dec.rgb[outPixelIdx + 0] = palR[idx];
-                    dec.rgb[outPixelIdx + 1] = palG[idx];
-                    dec.rgb[outPixelIdx + 2] = palB[idx];
+                    palR[3] = 0;
+                    palG[3] = 0;
+                    palB[3] = 0;
+                }
+
+                for (int py = 0; py < 4; ++py) {
+                    int y = by * 4 + py;
+                    if (y >= h) continue;
+                    for (int px = 0; px < 4; ++px) {
+                        int x = bx * 4 + px;
+                        if (x >= w) continue;
+                        int p = py * 4 + px;
+                        int idx = (indices >> (2 * p)) & 3;
+                        size_t outPixelIdx = (static_cast<size_t>(y) * w + x) * 3;
+                        dec.rgb[outPixelIdx + 0] = palR[idx];
+                        dec.rgb[outPixelIdx + 1] = palG[idx];
+                        dec.rgb[outPixelIdx + 2] = palB[idx];
+                    }
                 }
             }
         }

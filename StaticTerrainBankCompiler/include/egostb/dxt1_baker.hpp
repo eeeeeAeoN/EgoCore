@@ -2,6 +2,7 @@
 
 #include "egostb/lev_reader.hpp"
 #include "egostb/theme_manager.hpp"
+#include "egostb/water_utils.hpp"
 #include <cstdint>
 #include <vector>
 
@@ -27,7 +28,8 @@ public:
         int texWidth, int texHeight,
         int worldX = 3072, int worldY = 2816,
         bool generateMipmaps = false,
-        bool highQualityDxt = false
+        bool highQualityDxt = false,
+        const std::vector<WorldWaterNeighbor>* neighbors = nullptr
     );
 
     // Encode a buffer of RGBA or RGB pixels (width x height) into raw DXT1 block bytes

@@ -24,23 +24,31 @@ EgoSTB reads Fable world definitions (`.wld`), map levels (`.lev`), terrain heig
 
 ---
 
-## Quick Start (Step-by-Step for Windows)
+## Quick Start
 
-### How to Open the Terminal
+### Graphical User Interface (Recommended)
 
-1. **Open File Explorer** and navigate to your `StaticTerrainBankCompiler` folder:
-   ```text
-   C:\Users\Emi\Desktop\EgoCore\StaticTerrainBankCompiler
-   ```
-2. **Click inside the address bar** at the top of the File Explorer window (where the folder path is shown).
-3. **Type `powershell`** (or `cmd`) directly into the address bar and press **Enter**:
-   * A terminal window will pop up immediately, already set to that folder.
+You no longer need to use a command line! Simply **double-click `stb_compiler.exe`** directly from File Explorer.
+
+A sleek interactive window will open featuring:
+* **File Explorer Browse Buttons**:
+  * Click **Browse...** next to **World File (.wld)** to select any map from your computer.
+  * Click **Browse...** next to **Fable Game Root** or let it auto-detect your game folder.
+  * Use the **Detected Worlds** dropdown to pick any world found in `Data\Levels` with one click.
+* **Graphical Sliders & Options**:
+  * Adjust Mesh Detail Factor, Foreground Distance, and Background LOD Scale with smooth sliders.
+  * Select Quality Presets (`Retail Default`, `High Quality`, `Ultra Visuals`, `Fast Draft`).
+  * Toggle options like Companion ISM generation, Mipmaps, and DXT quality with checkboxes.
+* **Live Progress & Logs**:
+  * Click the green **Compile STB** button to compile on a background thread.
+  * Watch real-time progress and stage status.
+  * When finished, click **Open in File Explorer** to view the resulting `.stb` and `.ism` files.
 
 ---
 
-### Running the Compiler
+### Command-Line Interface (Optional / Power Users)
 
-Inside that terminal window:
+If you prefer using a terminal or automating via scripts:
 
 1. **Check that it works and see available options:**
    ```powershell

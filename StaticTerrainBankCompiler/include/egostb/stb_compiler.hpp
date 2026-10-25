@@ -49,6 +49,9 @@ public:
 
     // Helper to find and read Root= from egocore_config.ini
     static std::string findGameRootFromIni(const std::string& explicitIni = "");
+
+    // Load compiler parameters from an STBconfig.ini file into config
+    static bool loadConfigFile(const std::string& iniPath, CompilerConfig& config);
 };
 
 } // namespace egostb

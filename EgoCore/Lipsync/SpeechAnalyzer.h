@@ -180,19 +180,19 @@ public:
 
         // Fable standard spoken phonemes (MM is excluded as it is the default closed-mouth base)
         // ID 0: AH (open jaw / vowel)
-        // ID 1: EE (wide / spread lips)
-        // ID 2: OH (rounded open lips)
+        // ID 1: OH (rounded open lips)
+        // ID 2: EE (wide / spread lips)
         // ID 3: SZ (fricative / sibilant)
         // ID 4: WW (puckered / rounded narrow)
         std::vector<PhonemeSignature> signatures = {
             { 0, 0.35f, 0.50f, 0.15f, 0.08f }, // AH
-            { 1, 0.20f, 0.55f, 0.25f, 0.12f }, // EE
-            { 2, 0.60f, 0.32f, 0.08f, 0.05f }, // OH
+            { 1, 0.60f, 0.32f, 0.08f, 0.05f }, // OH
+            { 2, 0.20f, 0.55f, 0.25f, 0.12f }, // EE
             { 3, 0.05f, 0.20f, 0.75f, 0.40f }, // SZ
             { 4, 0.80f, 0.16f, 0.04f, 0.03f }  // WW
         };
 
-        std::vector<std::string> symbols = { "AH", "EE", "OH", "SZ", "WW" };
+        std::vector<std::string> symbols = { "AH", "OH", "EE", "SZ", "WW" };
         for (uint8_t i = 0; i < (uint8_t)symbols.size(); i++) {
             result.Dictionary.push_back({ i, symbols[i] });
         }
@@ -288,7 +288,17 @@ public:
                 }
             }
 
-            // Silent frames remain empty (null keys, 0 weight), keeping mouth completely shut in default MM
+            // Fable pads closed-mouth frames with AH, OH, EE all at 0 weight
+            if (lsFrame.Keys.empty()) {
+                for (uint8_t i = 0; i < 3; i++) {
+                    CLipSyncFrameKey key;
+                    key.ID = i;
+                    key.WeightFloat = 0.0f;
+                    key.WeightByte = 0;
+                    lsFrame.Keys.push_back(key);
+                }
+            }
+
             result.Frames.push_back(lsFrame);
         }
 

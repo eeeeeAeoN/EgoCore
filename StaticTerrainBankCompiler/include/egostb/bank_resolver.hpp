@@ -17,13 +17,25 @@ struct MeshBounds {
     float boxMax[3] = {0.0f, 0.0f, 0.0f};
 };
 
+enum class TextureFormat : uint32_t {
+    DXT1 = 0,
+    DXT3 = 1,
+    DXT5 = 2,
+    ARGB8888 = 3,
+    NormalMap_DXT1 = 4,
+    NormalMap_DXT5 = 5
+};
+
 struct TextureBankEntry {
     uint32_t id = 0;
+    uint32_t type = 0;
     uint32_t offset = 0;
     uint32_t size = 0;
     uint16_t width = 0;
     uint16_t height = 0;
     uint32_t format = 0;
+    uint8_t transparencyType = 0;
+    uint8_t colourDepth = 0;
 };
 
 struct DecodedTexture {

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -282,6 +282,9 @@
     <ClInclude Include="Particles\ParticleCompiler.h">
       <Filter>Source Files\Particles</Filter>
     </ClInclude>
+    <ClInclude Include="Particles\ParticleRenderer.h">
+      <Filter>Source Files\Particles</Filter>
+    </ClInclude>
     <ClInclude Include="Mods\ModManagerBackend.h">
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
@@ -309,7 +312,16 @@
     <ClInclude Include="Mods\TngMerger.h">
       <Filter>Source Files\Mods</Filter>
     </ClInclude>
+    <ClInclude Include="Mods\WldMerger.h">
+      <Filter>Source Files\Mods</Filter>
+    </ClInclude>
+    <ClInclude Include="Mods\GtgMerger.h">
+      <Filter>Source Files\Mods</Filter>
+    </ClInclude>
     <ClInclude Include="Levels\WADBackend.h">
+      <Filter>Source Files\Levels</Filter>
+    </ClInclude>
+    <ClInclude Include="Levels\STBBackend.h">
       <Filter>Source Files\Levels</Filter>
     </ClInclude>
     <ClInclude Include="Definitions\NativeDefCompiler.h">
@@ -317,24 +329,6 @@
     </ClInclude>
     <ClInclude Include="Banks\AnimationEventCompiler.h">
       <Filter>Source Files\Banks</Filter>
-    </ClInclude>
-    <ClInclude Include="Meshes\BoneConfigParser.h">
-      <Filter>Source Files\Meshes</Filter>
-    </ClInclude>
-    <ClInclude Include="Particles\ParticleRenderer.h">
-      <Filter>Source Files\Particles</Filter>
-    </ClInclude>
-    <ClInclude Include="Particles\ParticleSimulator.h">
-      <Filter>Source Files\Particles</Filter>
-    </ClInclude>
-    <ClInclude Include="Levels\STBBackend.h">
-      <Filter>Source Files\Levels</Filter>
-    </ClInclude>
-    <ClInclude Include="Mods\GtgMerger.h">
-      <Filter>Source Files\Mods</Filter>
-    </ClInclude>
-    <ClInclude Include="Mods\WldMerger.h">
-      <Filter>Source Files\Mods</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

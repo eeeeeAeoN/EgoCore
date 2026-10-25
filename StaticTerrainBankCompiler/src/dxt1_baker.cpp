@@ -30,11 +30,38 @@ struct Vector3 {
     float z = 1.0f;
 };
 
-static Vector3 buildMapDirMask(const LevData& lev, int worldX, int worldY, int gx, int gy) {
+static const HeightMapCell& peekCellWithNeighbors(
+    const LevData& lev, int worldX, int worldY, int gx, int gy,
+    const std::vector<WorldWaterNeighbor>* neighbors,
+    const LevData** outLev = nullptr
+) {
+    if (gx >= 0 && gx < lev.width && gy >= 0 && gy < lev.height) {
+        if (outLev) *outLev = &lev;
+        return lev.getCell(gx, gy);
+    }
+    int wx = worldX + gx;
+    int wy = worldY + gy;
+    if (neighbors) {
+        for (const auto& n : *neighbors) {
+            if (n.lev && wx >= n.mapX && wx < n.mapX + n.width &&
+                wy >= n.mapY && wy < n.mapY + n.height) {
+                if (outLev) *outLev = n.lev;
+                return n.lev->getCell(wx - n.mapX, wy - n.mapY);
+            }
+        }
+    }
+    int cx = std::clamp(gx, 0, lev.width - 1);
+    int cy = std::clamp(gy, 0, lev.height - 1);
+    if (outLev) *outLev = &lev;
+    return lev.getCell(cx, cy);
+}
+
+static Vector3 buildMapDirMask(
+    const LevData& lev, int worldX, int worldY, int gx, int gy,
+    const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+) {
     auto sampleHeight = [&](int x, int y) -> float {
-        int cx = std::clamp(x, 0, lev.gridWidth - 1);
-        int cy = std::clamp(y, 0, lev.gridHeight - 1);
-        return lev.getCell(cx, cy).height;
+        return peekCellWithNeighbors(lev, worldX, worldY, x, y, neighbors).height;
     };
     const float center = sampleHeight(gx, gy);
     const float left   = sampleHeight(gx - 1, gy) - center;
@@ -242,7 +269,8 @@ static void initFgPatch(
     int px, int py,
     const LevData& lev,
     const std::vector<ThemeMaterial>& materials,
-    int worldX, int worldY
+    int worldX, int worldY,
+    const std::vector<WorldWaterNeighbor>* neighbors = nullptr
 ) {
     fgPatch.patchX = px;
     fgPatch.patchY = py;
@@ -253,10 +281,8 @@ static void initFgPatch(
         for (int x = 0; x <= 16; ++x) {
             int gx = fgPatch.startX + x;
             int gy = fgPatch.startY + y;
-            int cx = std::clamp(gx, 0, lev.gridWidth - 1);
-            int cy = std::clamp(gy, 0, lev.gridHeight - 1);
-            fgPatch.heights[size_t(y) * 17 + x] = lev.getCell(cx, cy).height;
-            fgPatch.normals[size_t(y) * 17 + x] = buildMapDirMask(lev, worldX, worldY, gx, gy);
+            fgPatch.heights[size_t(y) * 17 + x] = peekCellWithNeighbors(lev, worldX, worldY, gx, gy, neighbors).height;
+            fgPatch.normals[size_t(y) * 17 + x] = buildMapDirMask(lev, worldX, worldY, gx, gy, neighbors);
         }
     }
 
@@ -315,19 +341,58 @@ static void initFgPatch(
 
         for (int y = 0; y <= 16; ++y) {
             for (int x = 0; x <= 16; ++x) {
-                int cx = std::clamp(fgPatch.startX + x, 0, lev.gridWidth - 1);
-                int cy = std::clamp(fgPatch.startY + y, 0, lev.gridHeight - 1);
-                const auto& cell = lev.getCell(cx, cy);
+                const LevData* cellLev = &lev;
+                const auto& cell = peekCellWithNeighbors(lev, worldX, worldY, fgPatch.startX + x, fgPatch.startY + y, neighbors, &cellLev);
+
+                std::array<ThemeMaterial, 3> tempMaterials{};
+                std::vector<ThemeMaterial> resolvedMaterials = materials;
                 ThemeBlend blend;
-                blend.indices[0] = cell.themes[0];
-                blend.indices[1] = cell.themes[1];
-                blend.indices[2] = cell.themes[2];
+                for (size_t slot = 0; slot < 3; ++slot) {
+                    uint8_t thIdx = cell.themes[slot];
+                    if (cellLev == &lev) {
+                        blend.indices[slot] = thIdx;
+                    } else if (cellLev && thIdx < cellLev->themePalette.size()) {
+                        const std::string& tName = cellLev->themePalette[thIdx].name;
+                        uint8_t mappedIdx = 0;
+                        if (!tName.empty()) {
+                            for (size_t ms = 0; ms < lev.themePalette.size() && ms < materials.size(); ++ms) {
+                                if (lev.themePalette[ms].name == tName && materials[ms].available) {
+                                    mappedIdx = static_cast<uint8_t>(ms);
+                                    break;
+                                }
+                            }
+                            if (mappedIdx == 0) {
+                                const auto* def = ThemeManager::instance().getTheme(tName);
+                                if (def) {
+                                    ThemeMaterial mat{};
+                                    mat.available = true;
+                                    auto getTex = [](const std::string& name) -> uint32_t {
+                                        return name.empty() ? 0 : BankResolver::instance().getTextureId(name);
+                                    };
+                                    mat.base.textures[0] = getTex(def->baseTexture);
+                                    mat.base.textures[1] = getTex(def->backgroundTexture.empty() ? def->baseTexture : def->backgroundTexture);
+                                    mat.base.textures[2] = getTex(def->baseBumpMap);
+                                    mat.base.selfIllumination = def->baseSelfIllumination;
+                                    mat.cliff.textures[0] = getTex(def->cliffBaseTexture);
+                                    mat.cliff.textures[1] = getTex(def->cliffBackgroundTexture.empty() ? def->cliffBaseTexture : def->cliffBackgroundTexture);
+                                    mat.cliff.textures[2] = getTex(def->cliffBumpMap);
+                                    mat.cliff.selfIllumination = def->cliffSelfIllumination;
+                                    if (resolvedMaterials.size() < 250) {
+                                        mappedIdx = static_cast<uint8_t>(resolvedMaterials.size());
+                                        resolvedMaterials.push_back(mat);
+                                    }
+                                }
+                            }
+                        }
+                        blend.indices[slot] = mappedIdx;
+                    }
+                }
                 blend.strengths[0] = cell.blends[0];
                 blend.strengths[1] = cell.blends[1];
                 unsigned stored = unsigned(cell.blends[0]) + unsigned(cell.blends[1]);
                 blend.strengths[2] = stored >= 255 ? 0 : (255 - stored);
 
-                for (const auto& contribution : buildThemeContributions(blend, materials)) {
+                for (const auto& contribution : buildThemeContributions(blend, resolvedMaterials)) {
                     Pass& pass = getPass(contribution.material, contribution.mappingDirection);
                     pass.blend[size_t(y) * 17 + x] = contribution.blend;
                     addPolys(pass, x, y);
@@ -597,7 +662,8 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
     int texWidth, int texHeight,
     int worldX, int worldY,
     bool generateMipmaps,
-    bool highQualityDxt
+    bool highQualityDxt,
+    const std::vector<WorldWaterNeighbor>* neighbors
 ) {
     if (texWidth <= 0) texWidth = 64;
     if (texHeight <= 0) texHeight = 64;
@@ -620,7 +686,7 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
             for (int fgy = 0; fgy < countY; ++fgy) {
                 for (int fgx = 0; fgx < countX; ++fgx) {
                     initFgPatch(newGrid->patches[static_cast<size_t>(fgy) * countX + fgx],
-                                fgx, fgy, lev, materials, worldX, worldY);
+                                fgx, fgy, lev, materials, worldX, worldY, neighbors);
                 }
             }
 
@@ -640,13 +706,13 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
     for (int ty = 0; ty < texHeight; ++ty) {
         float vPatch = (texHeight > 1) ? (float(ty) / float(texHeight - 1)) : 0.0f;
         float gy = mapY + vPatch * patchH;
-        float cgy = std::clamp(gy, 0.0f, float(lev.gridHeight - 1));
+        float cgy = std::clamp(gy, 0.0f, float(lev.height));
 
         int iy = static_cast<int>(std::floor(cgy));
         float fy = 0.0f;
-        if (iy >= lev.gridHeight - 2) {
-            iy = std::max(0, lev.gridHeight - 2);
-            fy = (cgy >= float(lev.gridHeight - 1)) ? 1.0f : (cgy - iy);
+        if (iy >= lev.height - 1) {
+            iy = std::max(0, lev.height - 1);
+            fy = (cgy >= float(lev.height)) ? 1.0f : (cgy - iy);
         } else {
             fy = cgy - iy;
         }
@@ -656,13 +722,13 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
         for (int tx = 0; tx < texWidth; ++tx) {
             float uPatch = (texWidth > 1) ? (float(tx) / float(texWidth - 1)) : 0.0f;
             float gx = mapX + uPatch * patchW;
-            float cgx = std::clamp(gx, 0.0f, float(lev.gridWidth - 1));
+            float cgx = std::clamp(gx, 0.0f, float(lev.width));
 
             int ix = static_cast<int>(std::floor(cgx));
             float fx = 0.0f;
-            if (ix >= lev.gridWidth - 2) {
-                ix = std::max(0, lev.gridWidth - 2);
-                fx = (cgx >= float(lev.gridWidth - 1)) ? 1.0f : (cgx - ix);
+            if (ix >= lev.width - 1) {
+                ix = std::max(0, lev.width - 1);
+                fx = (cgx >= float(lev.width)) ? 1.0f : (cgx - ix);
             } else {
                 fx = cgx - ix;
             }

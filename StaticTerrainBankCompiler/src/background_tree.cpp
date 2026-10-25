@@ -117,14 +117,40 @@ struct BgVec3 {
     float z = 1.0f;
 };
 
+static float peekHeightWithNeighbors(
+    const LevData& lev, int worldX, int worldY, int gx, int gy,
+    const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+) {
+    if (gx >= 0 && gx < lev.width && gy >= 0 && gy < lev.height) {
+        return lev.getCell(gx, gy).height;
+    }
+    if (neighbors) {
+        int wx = worldX + gx;
+        int wy = worldY + gy;
+        for (const auto& n : *neighbors) {
+            if (n.lev && wx >= n.mapX && wx < n.mapX + n.width &&
+                wy >= n.mapY && wy < n.mapY + n.height) {
+                return n.lev->getCell(wx - n.mapX, wy - n.mapY).height;
+            }
+        }
+    }
+    int cx = std::clamp(gx, 0, lev.width - 1);
+    int cy = std::clamp(gy, 0, lev.height - 1);
+    return lev.getCell(cx, cy).height;
+}
+
 // Exact PeekMapNormal matching CEngineMap::PeekMapNormal (0x125db90)
-inline BgVec3 peekMapNormal(const LevData& lev, int gx, int gy) {
-    int cx = std::clamp(gx, 0, lev.width - 1);  // 0..127
-    int cy = std::clamp(gy, 0, lev.height - 1); // 0..127
-    float h00 = lev.getCell(cx, cy).height;
-    float h10 = lev.getCell(cx + 1, cy).height;
-    float h01 = lev.getCell(cx, cy + 1).height;
-    float h11 = lev.getCell(cx + 1, cy + 1).height;
+inline BgVec3 peekMapNormal(
+    const LevData& lev, int gx, int gy,
+    int worldX = 0, int worldY = 0,
+    const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+) {
+    int cx = neighbors ? gx : std::clamp(gx, 0, lev.width - 1);
+    int cy = neighbors ? gy : std::clamp(gy, 0, lev.height - 1);
+    float h00 = peekHeightWithNeighbors(lev, worldX, worldY, cx, cy, neighbors);
+    float h10 = peekHeightWithNeighbors(lev, worldX, worldY, cx + 1, cy, neighbors);
+    float h01 = peekHeightWithNeighbors(lev, worldX, worldY, cx, cy + 1, neighbors);
+    float h11 = peekHeightWithNeighbors(lev, worldX, worldY, cx + 1, cy + 1, neighbors);
     float nx = h00 - h11;
     float ny = h10 - h01;
     float inv = fastInvSqrtEngine(nx * nx + ny * ny + 2.0f);
@@ -133,8 +159,12 @@ inline BgVec3 peekMapNormal(const LevData& lev, int gx, int gy) {
 }
 
 // Exact normal packing matching CLandscapeBackgroundPatch::BuildVertex (0x1246a70 / 0x1246c74 / 0x1246980)
-static uint32_t calculatePackedNormal(const LevData& lev, int gx, int gy) {
-    BgVec3 n = peekMapNormal(lev, gx, gy);
+static uint32_t calculatePackedNormal(
+    const LevData& lev, int gx, int gy,
+    int worldX = 0, int worldY = 0,
+    const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+) {
+    BgVec3 n = peekMapNormal(lev, gx, gy, worldX, worldY, neighbors);
     int ix = static_cast<int>(std::nearbyint(n.x * 1023.0f));
     int iy = static_cast<int>(std::nearbyint(n.y * 1023.0f));
     int iz = static_cast<int>(std::nearbyint(n.z * 511.0f));
@@ -1067,18 +1097,17 @@ static inline BgVertexRaw buildVertex(
     int worldX, int worldY,
     int mapX, int mapY,
     int patchW, int patchH,
-    int subx, int suby
+    int subx, int suby,
+    const std::vector<WorldWaterNeighbor>* neighbors = nullptr
 ) {
     int gx = mapX + subx;
     int gy = mapY + suby;
-    int cx = std::clamp(gx, 0, lev.gridWidth - 1);
-    int cy = std::clamp(gy, 0, lev.gridHeight - 1);
 
     BgVertexRaw v;
     v.x = static_cast<uint16_t>(worldX + gx);
     v.y = static_cast<uint16_t>(worldY + gy);
-    v.z = lev.getCell(cx, cy).height;
-    v.normal = calculatePackedNormal(lev, gx, gy);
+    v.z = peekHeightWithNeighbors(lev, worldX, worldY, gx, gy, neighbors);
+    v.normal = calculatePackedNormal(lev, gx, gy, worldX, worldY, neighbors);
     v.u = static_cast<uint16_t>(std::nearbyint((subx * 255.0f) / patchW));
     v.v = static_cast<uint16_t>(std::nearbyint((suby * 255.0f) / patchH));
     return v;
@@ -1556,7 +1585,8 @@ std::vector<uint8_t> BackgroundTreeBuilder::createPatchFrame(
     int lodBand, int texW, int texH,
     const EngineLandscapeLODMap* pLodMap,
     const WaterShoreCalculator* pWaterContext,
-    const BgTreeSettings& settings
+    const BgTreeSettings& settings,
+    const std::vector<WorldWaterNeighbor>* neighbors
 ) {
     std::vector<BgVertexRaw> vb;
     std::vector<uint16_t> ib;
@@ -1581,7 +1611,7 @@ std::vector<uint8_t> BackgroundTreeBuilder::createPatchFrame(
         for (int i = 0; i < totalVerts; ++i) {
             int sx = src_verts[i].x;
             int sy = src_verts[i].y;
-            vb[i] = buildVertex(lev, worldX, worldY, mapX, mapY, patchW, patchH, sx, sy);
+            vb[i] = buildVertex(lev, worldX, worldY, mapX, mapY, patchW, patchH, sx, sy, neighbors);
             vertex_grid[sx + sy * (patchW + 1)] = i;
         }
     } else {
@@ -1594,6 +1624,13 @@ std::vector<uint8_t> BackgroundTreeBuilder::createPatchFrame(
             vb, ib, vertex_grid, mappers,
             0, 0, patchW, patchH
         );
+
+        for (auto& v : vb) {
+            int gx = static_cast<int>(v.x) - worldX;
+            int gy = static_cast<int>(v.y) - worldY;
+            v.z = peekHeightWithNeighbors(lev, worldX, worldY, gx, gy, neighbors);
+            v.normal = calculatePackedNormal(lev, gx, gy, worldX, worldY, neighbors);
+        }
 
         polyCount = static_cast<uint16_t>(ib.size() / 3);
 
@@ -1700,7 +1737,7 @@ std::vector<uint8_t> BackgroundTreeBuilder::createPatchFrame(
     // 4. Procedural texture baking
     auto textureBytes = Dxt1Baker::bakeTexture(
         lev, materials, mapX, mapY, patchW, patchH, texW, texH, worldX, worldY,
-        settings.generateMipmaps, settings.highQualityDxt
+        settings.generateMipmaps, settings.highQualityDxt, neighbors
     );
 
     // 5. Edge strips (4 strips: Left, Right, Bottom, Top matching BuildEdgeStrips 0x1246c90)
@@ -2115,7 +2152,7 @@ void BackgroundTreeBuilder::generateNodePatches(
                         lev, materials, worldX, worldY,
                         task.mapX, task.mapY, task.width, task.height,
                         task.band, task.texW, task.texH, pLodMap, &waterContext,
-                        settings
+                        settings, neighbors
                     );
                 }
             });

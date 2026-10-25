@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <regex>
 #include <set>
 #include <atomic>
 #include <mutex>
@@ -44,6 +45,67 @@ inline std::string GetLaunchStatus() {
 class ModManagerBackend {
 public:
     static inline std::vector<ModEntry> g_LoadedMods;
+
+    static bool FileContainsEnumFadeDistances(const std::string& filePath) {
+        try {
+            std::ifstream file(filePath, std::ios::binary);
+            if (!file.is_open()) return false;
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            file.close();
+
+            if (content.find("EFadeDistances") == std::string::npos) {
+                return false;
+            }
+
+            std::string masked = CreateCommentMaskedString(content);
+            std::regex enumRegex(R"(\benum\s+(?:class\s+|struct\s+)?EFadeDistances\b)");
+            return std::regex_search(masked, enumRegex);
+        }
+        catch (...) {
+            return false;
+        }
+    }
+
+    static std::string FindModSTBConfigFile(const std::string& modFolderPath) {
+        if (modFolderPath.empty()) return "";
+        std::vector<std::string> candidates = {
+            modFolderPath + "\\Data\\Levels",
+            modFolderPath + "\\Levels",
+            modFolderPath
+        };
+        for (const auto& dir : candidates) {
+            if (!fs::exists(dir)) continue;
+            try {
+                for (const auto& entry : fs::directory_iterator(dir)) {
+                    if (!entry.is_regular_file()) continue;
+                    std::string fname = entry.path().filename().string();
+                    std::string lower = fname;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    if (lower == "stbconfig.ini") {
+                        return entry.path().string();
+                    }
+                }
+            } catch (...) {}
+        }
+        return "";
+    }
+
+    static bool ModContainsEnumFadeDistances(const ModEntry& mod) {
+        try {
+            for (const auto& file : fs::recursive_directory_iterator(mod.ModFolderPath)) {
+                if (!file.is_regular_file()) continue;
+                std::string ext = file.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".def" || ext == ".h" || ext == ".txt") {
+                    if (FileContainsEnumFadeDistances(file.path().string())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (...) {}
+        return false;
+    }
 
     static void InitializeAndLoad() {
         g_LoadedMods.clear();
@@ -88,6 +150,7 @@ public:
                 mod.IsDefMod = false;
                 mod.IsTngMod = false;
                 mod.IsFSEMod = false;
+                mod.HasFadeDistances = false;
 
                 // FSE detection: simple folder check (must have "FSE" directory)
                 if (fs::exists(mod.ModFolderPath + "\\FSE") && fs::is_directory(mod.ModFolderPath + "\\FSE")) {
@@ -124,9 +187,29 @@ public:
                                 mod.IsTngMod = true;
                             }
 
+                            // EFadeDistances trigger condition: Mod contains enum EFadeDistances to be patched into the real game
+                            if ((ext == ".def" || ext == ".h" || ext == ".txt") && FileContainsEnumFadeDistances(file.path().string())) {
+                                mod.HasFadeDistances = true;
+                                mod.IsTngMod = true; // Mark as world mod as well
+                                mod.IsDefMod = true;
+                            }
+
+                            // STBconfig.ini trigger condition: Mod contains custom STB compilation parameters
+                            std::string lowerFname = filename;
+                            std::transform(lowerFname.begin(), lowerFname.end(), lowerFname.begin(), ::tolower);
+                            if (lowerFname == "stbconfig.ini") {
+                                mod.HasSTBConfig = true;
+                                mod.IsTngMod = true;
+                            }
+
                             // Loose Asset Mod Condition
                             if (!mod.IsAssetMod) {
-                                if (lowerRelPath.find("\\data\\bones\\") != std::string::npos ||
+                                if (filename == "stbconfig.ini" || filename == "config.ini" ||
+                                    filename == "_info.txt" || filename.ends_with("_info.txt") ||
+                                    ext == ".tmp") {
+                                    // Skip mod metadata and build configs
+                                }
+                                else if (lowerRelPath.find("\\data\\bones\\") != std::string::npos ||
                                     lowerRelPath.find("\\data\\enginecache\\") != std::string::npos ||
                                     (lowerRelPath.find("\\data\\levels\\") != std::string::npos &&
                                      ext != ".tng" && ext != ".wld" && ext != ".gtg" && ext != ".lev" && ext != ".stb" && ext != ".ism") ||
@@ -155,7 +238,7 @@ public:
                             }
 
                             // Optimization: Break early only if all three are found
-                            if (mod.IsAssetMod && mod.IsDefMod && mod.IsTngMod) {
+                            if (mod.IsAssetMod && mod.IsDefMod && mod.IsTngMod && mod.HasFadeDistances && mod.HasSTBConfig) {
                                 break;
                             }
                         }
@@ -1115,6 +1198,14 @@ public:
 
         bool stbCompilationNeeded = false;
 
+        // STB recompilation trigger condition: check if any active mod contains enum EFadeDistances or STBconfig.ini
+        for (const auto& m : g_LoadedMods) {
+            if (m.IsEnabled && (m.HasFadeDistances || ModContainsEnumFadeDistances(m) || m.HasSTBConfig || !FindModSTBConfigFile(m.ModFolderPath).empty())) {
+                stbCompilationNeeded = true;
+                break;
+            }
+        }
+
         if (g_AppConfig.TngSystemDirty) {
             if (hasActiveTngMods) {
                 SetLaunchStatus("Merging level (.tng, .wld, .gtg, .lev) mods...");
@@ -1152,6 +1243,10 @@ public:
                 for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
                     const auto& mod = *it;
                     if (!mod.IsEnabled || !mod.IsTngMod) continue;
+
+                    if (mod.HasFadeDistances || ModContainsEnumFadeDistances(mod) || mod.HasSTBConfig || !FindModSTBConfigFile(mod.ModFolderPath).empty()) {
+                        stbCompilationNeeded = true;
+                    }
 
                     std::string modLevelsDir = "";
                     if (fs::exists(mod.ModFolderPath + "\\Data\\Levels")) {
@@ -1346,6 +1441,31 @@ public:
             stbConfig.retailMode = true;
             stbConfig.outputIsm = true;
             stbConfig.verbose = true;
+            stbConfig.textureScale = 1;
+
+            // 1. Check if game Data\Levels\STBconfig.ini exists as base config
+            std::string gameConfigPath = g_AppConfig.GameRootPath + "\\Data\\Levels\\STBconfig.ini";
+            if (fs::exists(gameConfigPath)) {
+                egostb::StbCompiler::loadConfigFile(gameConfigPath, stbConfig);
+            }
+
+            // 2. Load active mod STBconfig.ini files in reverse load order (lowest priority first, highest overwrites)
+            for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
+                const auto& mod = *it;
+                if (!mod.IsEnabled) continue;
+                std::string cfgPath = FindModSTBConfigFile(mod.ModFolderPath);
+                if (!cfgPath.empty()) {
+                    egostb::StbCompiler::loadConfigFile(cfgPath, stbConfig);
+                }
+            }
+
+            // Ensure critical settings remain intact
+            stbConfig.fableRoot = g_AppConfig.GameRootPath;
+            stbConfig.wldName = "FinalAlbion.wld";
+            stbConfig.retailMode = true;
+            stbConfig.verbose = true;
+            stbConfig.textureScale = 1;
+
             stbConfig.progressCallback = [](float progress, const std::string& status) {
                 int pct = (int)(progress * 100.0f);
                 if (pct > 100) pct = 100;
@@ -1386,9 +1506,15 @@ public:
                             fs::copy_file(entry.path(), targetPath);
                             continue;
                         }
-                        if (ext == ".def") MergeDefFile(entry.path().string(), targetPath);
+                        if (ext == ".def") {
+                            MergeDefFile(entry.path().string(), targetPath);
+                            if (FileContainsEnumFadeDistances(entry.path().string())) stbCompilationNeeded = true;
+                        }
                         else if (ext == ".txt") MergeEventFile(entry.path().string(), targetPath);
-                        else if (ext == ".h")   MergeHeaderFile(entry.path().string(), targetPath);
+                        else if (ext == ".h") {
+                            MergeHeaderFile(entry.path().string(), targetPath);
+                            if (FileContainsEnumFadeDistances(entry.path().string())) stbCompilationNeeded = true;
+                        }
                         else if (ext == ".bin") fs::copy_file(entry.path(), targetPath, fs::copy_options::overwrite_existing);
                     }
                 }
@@ -1509,6 +1635,16 @@ public:
         for (const auto& mod : g_LoadedMods) {
             if (!mod.IsEnabled || !mod.IsDefMod) continue;
 
+            if (mod.HasFadeDistances || ModContainsEnumFadeDistances(mod)) {
+                std::string levelsDir = dataPath + "\\Levels";
+                for (const auto& f : { "\\FinalAlbion_RT.stb", "\\FinalAlbion_RT.ism", "\\FinalAlbion.stb", "\\FinalAlbion.ism" }) {
+                    std::string p = levelsDir + f;
+                    if (fs::exists(p) && !fs::exists(p + ".tmp")) {
+                        try { fs::copy_file(p, p + ".tmp"); } catch (...) {}
+                    }
+                }
+            }
+
             std::string modDataPath = mod.ModFolderPath + "\\Data";
             if (!fs::exists(modDataPath)) continue;
 
@@ -1572,7 +1708,7 @@ public:
             // WLD check
             bool hasWld = (!modLevelsDir.empty() && fs::exists(modLevelsDir + "\\FinalAlbion.wld")) ||
                           fs::exists(mod.ModFolderPath + "\\FinalAlbion.wld");
-            if (hasWld) {
+            if (hasWld || mod.HasFadeDistances || ModContainsEnumFadeDistances(mod) || mod.HasSTBConfig || !FindModSTBConfigFile(mod.ModFolderPath).empty()) {
                 backupFile(levelsDir + "\\FinalAlbion.wld");
                 backupFile(levelsDir + "\\FinalAlbion_RT.stb");
                 backupFile(levelsDir + "\\FinalAlbion_RT.ism");
@@ -1646,6 +1782,13 @@ public:
                     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
                     // --- Gatekeeper Logic ---
+                    // Exclude mod metadata, build configs, and temp files
+                    if (filename == "stbconfig.ini" || filename == "config.ini" ||
+                        filename == "_info.txt" || filename.ends_with("_info.txt") ||
+                        ext == ".tmp") {
+                        continue;
+                    }
+
                     bool isAllowed = false;
 
                     if (lowerRelPath.find("\\data\\bones\\") != std::string::npos ||

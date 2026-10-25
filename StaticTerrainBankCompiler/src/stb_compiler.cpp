@@ -550,6 +550,68 @@ std::string StbCompiler::findGameRootFromIni(const std::string& explicitIni) {
     return "";
 }
 
+bool StbCompiler::loadConfigFile(const std::string& iniPath, CompilerConfig& config) {
+    if (!fs::exists(iniPath)) return false;
+    std::ifstream file(iniPath);
+    if (!file.is_open()) return false;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        std::string t = trim(line);
+        if (t.empty() || t[0] == ';' || t[0] == '#' || t[0] == '[') {
+            continue;
+        }
+
+        size_t eqPos = t.find('=');
+        if (eqPos == std::string::npos) continue;
+
+        std::string key = toLower(trim(t.substr(0, eqPos)));
+        std::string valStr = trim(t.substr(eqPos + 1));
+
+        // Strip inline comments if present
+        size_t commentPos = valStr.find_first_of(";#");
+        if (commentPos != std::string::npos) {
+            valStr = trim(valStr.substr(0, commentPos));
+        }
+
+        // Strip quotes if wrapped
+        if (valStr.size() >= 2 && ((valStr.front() == '"' && valStr.back() == '"') || (valStr.front() == '\'' && valStr.back() == '\''))) {
+            valStr = valStr.substr(1, valStr.size() - 2);
+        }
+
+        std::string lowerVal = toLower(valStr);
+
+        auto parseBool = [&](bool current) -> bool {
+            if (lowerVal == "true" || lowerVal == "1" || lowerVal == "yes" || lowerVal == "on" || lowerVal == "enabled") return true;
+            if (lowerVal == "false" || lowerVal == "0" || lowerVal == "no" || lowerVal == "off" || lowerVal == "disabled") return false;
+            return current;
+        };
+
+        try {
+            if (key == "maxdetailerrorfactor" || key == "meshdetail" || key == "meshdetailfactor" || key == "detailerrorfactor") {
+                config.meshDetail = std::max(0.1f, std::stof(valStr));
+            } else if (key == "foregrounddistance" || key == "foregrounddistancethreshold" || key == "fgdistance" || key == "fgdist") {
+                config.fgDistanceThreshold = std::max(0.0f, std::stof(valStr));
+            } else if (key == "loddistancescale" || key == "lodscale" || key == "loddistancemultiplier") {
+                config.lodDistanceScale = std::max(0.1f, std::stof(valStr));
+            } else if (key == "maxlodband" || key == "maxlod") {
+                config.maxLodBand = std::clamp(std::stoi(valStr), 1, 7);
+            } else if (key == "generateism" || key == "outputism" || key == "generateismfile") {
+                config.outputIsm = parseBool(config.outputIsm);
+            } else if (key == "sharelodbands" || key == "sharelod" || key == "sharelodbands46") {
+                config.shareLodBands = parseBool(config.shareLodBands);
+            } else if (key == "enablerangecompression" || key == "rangecompression") {
+                config.enableRangeCompression = parseBool(config.enableRangeCompression);
+            } else if (key == "highqualitydxt1compression" || key == "highqualitydxt" || key == "highqualitydxt1") {
+                config.highQualityDxt = parseBool(config.highQualityDxt);
+            } else if (key == "generatecompletemipmapchains" || key == "generatemipmaps" || key == "generatemipmapschains") {
+                config.generateMipmaps = parseBool(config.generateMipmaps);
+            }
+        } catch (...) {}
+    }
+    return true;
+}
+
 CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
     auto startTime = std::chrono::high_resolution_clock::now();
     CompileResult result;
@@ -881,18 +943,21 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
         }
 
         // 8. Build Region Visibility Info & Observing Map sets (0xd5af10 & 0x1262630)
+        // Treat every level (both ContainsMap and SeesMap) as a ContainsMap so no seam/culling
+        // optimizations degrade SeesMap boundaries.
         std::vector<std::set<int>> mapVisibleMaps(numMaps + 1);
+        for (size_t m = 1; m <= numMaps; ++m) {
+            mapVisibleMaps[m].insert(static_cast<int>(m));
+        }
         for (const auto& r : wldRegions) {
             std::set<int> regionMaps;
             for (int cm : r.containsMapIndices) regionMaps.insert(cm);
             for (int sm : r.seesMapIndices) regionMaps.insert(sm);
 
-            for (int obsIdx : r.containsMapIndices) {
+            for (int obsIdx : regionMaps) {
                 if (obsIdx >= 1 && obsIdx <= static_cast<int>(numMaps)) {
-                    if (wldMaps[obsIdx - 1].loadedOnPlayerProximity) {
-                        for (int targetIdx : regionMaps) {
-                            mapVisibleMaps[obsIdx].insert(targetIdx);
-                        }
+                    for (int targetIdx : regionMaps) {
+                        mapVisibleMaps[obsIdx].insert(targetIdx);
                     }
                 }
             }

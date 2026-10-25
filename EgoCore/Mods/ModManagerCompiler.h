@@ -42,6 +42,8 @@ struct ModEntry {
     bool IsDefMod = false;
     bool IsTngMod = false;
     bool IsFSEMod = false;
+    bool HasFadeDistances = false;
+    bool HasSTBConfig = false;
     std::string ModFolderPath;
     std::string SettingsIniPath;
     std::vector<IniLine> SettingsLines;
@@ -310,20 +312,32 @@ public:
                 std::transform(entryNameLower.begin(), entryNameLower.end(), entryNameLower.begin(), ::tolower);
                 std::string key = lowerBankName + "/" + psb.Info.Name + "/" + entryNameLower;
 
+                std::string normNameLower = NormalizeBankEntryName(entry.Name);
+                std::transform(normNameLower.begin(), normNameLower.end(), normNameLower.begin(), ::tolower);
+                std::string normKey = lowerBankName + "/" + psb.Info.Name + "/" + normNameLower;
+
                 bool isModded = false;
                 std::string modResPath = "";
+                std::string matchedKey = "";
 
                 if (g_ActiveModAssets.count(key)) {
+                    matchedKey = key;
+                }
+                else if (g_ActiveModAssets.count(normKey)) {
+                    matchedKey = normKey;
+                }
+
+                if (!matchedKey.empty()) {
                     isModded = true;
-                    modResPath = g_ActiveModAssets[key].ResourcePath;
+                    modResPath = g_ActiveModAssets[matchedKey].ResourcePath;
                     entry.Size = (uint32_t)fs::file_size(modResPath);
-                    if (!g_ActiveModAssets[key].HeaderPath.empty()) {
-                        entry.InfoSize = (uint32_t)fs::file_size(g_ActiveModAssets[key].HeaderPath);
+                    if (!g_ActiveModAssets[matchedKey].HeaderPath.empty()) {
+                        entry.InfoSize = (uint32_t)fs::file_size(g_ActiveModAssets[matchedKey].HeaderPath);
                         metaData.resize(entry.InfoSize);
-                        std::ifstream hdrIn(g_ActiveModAssets[key].HeaderPath, std::ios::binary);
+                        std::ifstream hdrIn(g_ActiveModAssets[matchedKey].HeaderPath, std::ios::binary);
                         hdrIn.read((char*)metaData.data(), entry.InfoSize);
 
-                    if (metaData.size() >= sizeof(CGraphicHeader)) {
+                        if (metaData.size() >= sizeof(CGraphicHeader)) {
                             if (lowerBankName == "graphics.big" || lowerBankName == "xboxgraphics.big") {
                                 CGraphicHeader* hdr = (CGraphicHeader*)metaData.data();
                                 hdr->MipSize0 = 0;
@@ -331,7 +345,7 @@ public:
                         }
                     }
                     else { entry.InfoSize = 0; metaData.clear(); }
-                    g_ActiveModAssets[key].IsHandled = true;
+                    g_ActiveModAssets[matchedKey].IsHandled = true;
                 }
                 psb.Entries.push_back(entry);
                 psb.MetaList.push_back(metaData);
@@ -385,6 +399,14 @@ public:
                     std::string upperName = entry.Name;
                     std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
                     g_LiveBankIDs[upperName] = entry.ID;
+
+                    std::string normName = NormalizeBankEntryName(entry.Name);
+                    if (normName != entry.Name) {
+                        g_LiveBankIDs[normName] = entry.ID;
+                        std::string normUpper = normName;
+                        std::transform(normUpper.begin(), normUpper.end(), normUpper.begin(), ::toupper);
+                        g_LiveBankIDs[normUpper] = entry.ID;
+                    }
 
                     std::string sanitized = entry.Name;
                     for (char& c : sanitized) {
@@ -753,7 +775,7 @@ public:
                 targetFile = "particles.h"; enumName = "EParticleEmitter"; isPcPath = true;
             }
             else if (entry.BankType == EBankType::Textures || entry.BankType == EBankType::Frontend) {
-                if (entry.EntryName.size() >= 2 && entry.EntryName.substr(0, 2) == "[\\") continue;
+                if (entry.EntryName.find('\\') != std::string::npos || entry.EntryName.find('/') != std::string::npos || (entry.EntryName.size() >= 2 && entry.EntryName.substr(0, 2) == "[\\")) continue;
                 isPcPath = true; std::string sub = entry.SubBankName;
                 if (sub == "GBANK_MAIN_PC" || sub == "GBANK_MAIN") { targetFile = "textures.h"; enumName = "EEngineGraphic"; }
                 else if (sub == "GBANK_GUI_PC" || sub == "GBANK_GUI") { targetFile = "gui_bank.h"; enumName = "EGuiGraphicBank"; }
@@ -1009,7 +1031,8 @@ public:
             if (entryIndex == -1) continue;
 
             const auto& bankEntry = targetBank->Entries[entryIndex];
-            std::string resourcePath = targetDir + "\\" + entry.EntryName + ".resource";
+            std::string safeEntryName = NormalizeBankEntryName(entry.EntryName);
+            std::string resourcePath = targetDir + "\\" + safeEntryName + ".resource";
 
             std::vector<uint8_t> finalResourceData;
 
@@ -1042,7 +1065,7 @@ public:
                     }
 
                     if (meshContext.EntryMeta.HasData && meshContext.EntryMeta.LODCount > 0) {
-                        auto nameMap = BuildFriendlyNameMap("textures.h");
+                        auto nameMap = BuildTextureFriendlyNameMap();
                         std::vector<uint8_t> finalPayload;
                         size_t offset = 0;
                         bool success = true;
@@ -1098,7 +1121,7 @@ public:
                     }
 
                     if (meshContext.EntryMeta.HasData && meshContext.EntryMeta.LODCount > 0) {
-                        auto nameMap = BuildFriendlyNameMap("textures.h");
+                        auto nameMap = BuildTextureFriendlyNameMap();
                         std::string texMapContent = "";
                         size_t offset = 0;
 
@@ -1130,7 +1153,7 @@ public:
                         }
 
                         if (!texMapContent.empty()) {
-                            std::string texMapPath = targetDir + "\\" + entry.EntryName + ".texmap";
+                            std::string texMapPath = targetDir + "\\" + safeEntryName + ".texmap";
                             std::ofstream tFile(texMapPath);
                             if (tFile.is_open()) {
                                 tFile << texMapContent;
@@ -1143,7 +1166,7 @@ public:
                             CParticleStream pStream(finalResourceData);
                             emitter.Parse(pStream);
 
-                            auto texNameMap = BuildFriendlyNameMap("textures.h");
+                            auto texNameMap = BuildTextureFriendlyNameMap();
                             auto meshNameMap = BuildFriendlyNameMap("meshdata.h");
                             std::string pMapContent = "";
 
@@ -1183,7 +1206,7 @@ public:
                             }
 
                             if (!pMapContent.empty()) {
-                                std::string pMapPath = targetDir + "\\" + entry.EntryName + ".particlemap";
+                                std::string pMapPath = targetDir + "\\" + safeEntryName + ".particlemap";
                                 std::ofstream pFile(pMapPath);
                                 if (pFile.is_open()) { pFile << pMapContent; pFile.close(); }
                             }
@@ -1193,7 +1216,7 @@ public:
             }
 
             if (bankEntry.InfoSize > 0 && targetBank->SubheaderCache.count(entryIndex)) {
-                std::string headerPath = targetDir + "\\" + entry.EntryName + ".header";
+                std::string headerPath = targetDir + "\\" + safeEntryName + ".header";
                 std::ofstream hdrFile(headerPath, std::ios::binary);
                 if (hdrFile.is_open()) {
                     std::vector<uint8_t> metaData = targetBank->SubheaderCache[entryIndex];

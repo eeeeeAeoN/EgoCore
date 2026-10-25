@@ -1,4 +1,5 @@
 #include "egostb/stb_compiler.hpp"
+#include "gui.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -8,6 +9,9 @@
 static void printHelp() {
     std::cout << "Usage:\n";
     std::cout << "  stb_compiler.exe [fable_path] [wld_name] [output_stb] [options...]\n\n";
+    std::cout << "Interface Modes:\n";
+    std::cout << "  (no arguments)              Launch modern Graphical User Interface (ImGui)\n";
+    std::cout << "  --gui, -g                   Launch modern Graphical User Interface\n\n";
     std::cout << "Positional arguments (use \".\" or \"-\" for default):\n";
     std::cout << "  fable_path                  Base game root path (default: read from egocore_config.ini)\n";
     std::cout << "  wld_name                    World file name (default: dean_2003.wld)\n";
@@ -31,6 +35,11 @@ static void printHelp() {
 }
 
 int main(int argc, char* argv[]) {
+    // If launched with no arguments or with --gui, open GUI mode
+    if (argc == 1 || (argc == 2 && (std::string(argv[1]) == "--gui" || std::string(argv[1]) == "-g"))) {
+        return egostb::runCompilerGui();
+    }
+
     std::cout << "===========================================\n";
     std::cout << "   EgoSTB: Multi-Map Fable STB Compiler    \n";
     std::cout << "   (Standalone 100% Background Quadtree)   \n";

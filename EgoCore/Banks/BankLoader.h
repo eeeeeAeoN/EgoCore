@@ -38,6 +38,22 @@ inline std::map<uint32_t, std::string> BuildFriendlyNameMap(const std::string& h
     return result;
 }
 
+inline std::map<uint32_t, std::string> BuildTextureFriendlyNameMap() {
+    std::map<uint32_t, std::string> result = BuildFriendlyNameMap("textures.h");
+    for (const auto& b : g_OpenBanks) {
+        std::string lowerName = b.FileName;
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+        if (lowerName == "textures.big") {
+            for (const auto& e : b.Entries) {
+                if (result.find(e.ID) == result.end()) {
+                    result[e.ID] = NormalizeBankEntryName(e.Name);
+                }
+            }
+        }
+    }
+    return result;
+}
+
 static void LoadSystemBinaries(const std::string& gameRoot) {
     namespace fs = std::filesystem;
     g_LoadedBinaries.clear();
@@ -312,7 +328,7 @@ inline void LoadSubBankEntries(LoadedBank* bank, int subBankIndex) {
 
         e.Name = ReadBankString(*bank->Stream);
         if (friendlyNames.count(e.ID)) e.FriendlyName = friendlyNames[e.ID];
-        else e.FriendlyName = e.Name;
+        else e.FriendlyName = NormalizeBankEntryName(e.Name);
 
         bank->Stream->read((char*)&e.Timestamp, 4);
 

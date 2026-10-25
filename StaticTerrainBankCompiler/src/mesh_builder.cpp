@@ -550,51 +550,10 @@ static void fillInvalidEntriesWithInterpolatedValues(float buffer[512]) {
 }
 
 static float computeShoreUCoord(float vx, float vy, const MeshBuilder::WaterBody& body, int closestShoreCoordIndex) {
-    int n = static_cast<int>(body.points.size());
-    if (n < 2) return 0.0f;
-    int startIndex = closestShoreCoordIndex;
-    if (startIndex < 0 || startIndex >= n) startIndex = 0;
-    int prevIndex = (startIndex > 0) ? (startIndex - 1) : (n - 1);
-    int nextIndex = (startIndex + 1) % n;
-
-    float rX = static_cast<float>(body.points[prevIndex].x);
-    float rY = static_cast<float>(body.points[prevIndex].y);
-    float nX = static_cast<float>(body.points[nextIndex].x);
-    float nY = static_cast<float>(body.points[nextIndex].y);
-
-    float dPrevSq = (rX - vx) * (rX - vx) + (rY - vy) * (rY - vy);
-    float dNextSq = (nX - vx) * (nX - vx) + (nY - vy) * (nY - vy);
-    if (dNextSq > dPrevSq) {
-        --startIndex;
-    }
-
-    std::vector<float> cumDist(n, 0.0f);
-    float totalDist = 0.0f;
-    float curX = static_cast<float>(body.points[0].x);
-    float curY = static_cast<float>(body.points[0].y);
-    for (int i = 1; i < n; ++i) {
-        float px = static_cast<float>(body.points[i].x);
-        float py = static_cast<float>(body.points[i].y);
-        totalDist += std::sqrt((px - curX) * (px - curX) + (py - curY) * (py - curY));
-        cumDist[i] = totalDist;
-        curX = px; curY = py;
-    }
-
-    int halfN = n / 2;
-    int v52 = startIndex - halfN;
-    if (v52 < 0) v52 += n;
-    float weightSum = 0.0f;
-    float weightedU = 0.0f;
-    for (int j = 0; j < 2 * halfN; ++j) {
-        v52 = (v52 + 1) % n;
-        float px = static_cast<float>(body.points[v52].x);
-        float py = static_cast<float>(body.points[v52].y);
-        float dSq = (px - vx) * (px - vx) + (py - vy) * (py - vy);
-        float w = (dSq <= 0.0001f) ? 1000000.0f : (1.0f / dSq);
-        weightedU += cumDist[v52] * w;
-        weightSum += w;
-    }
-    return (weightSum > 0.0f) ? (weightedU / weightSum) : 0.0f;
+    // In FableWin.exe, CWaterGenerator::GetShoreUCoord (0x2e09ff0) returns 0.0f
+    // whenever CEngineWorldMap::PeekStaticMapQuality >= 8 (Static Map mode).
+    (void)vx; (void)vy; (void)body; (void)closestShoreCoordIndex;
+    return 0.0f;
 }
 
 std::vector<MeshBuilder::ShorePoint> MeshBuilder::collectShorePoints() const {

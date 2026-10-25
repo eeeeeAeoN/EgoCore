@@ -23,6 +23,8 @@ namespace fs = std::filesystem;
 
 inline bool g_ShowSuccessPopup = false;
 inline std::string g_SuccessMessage = "";
+inline bool g_ShowNameCollisionPopup = false;
+inline std::string g_NameCollisionMessage = "";
 
 inline std::string g_ShaderCompileError;
 inline bool g_ShowShaderErrorPopup = false;
@@ -107,6 +109,7 @@ struct LoadedBank {
     EFilterMode FilterMode = EFilterMode::Name;
     int FilterTypeMask = -1;
     int FilterTextureFormatMask = -1;
+    bool ShowRawDevNames = false;
 
     std::map<int, std::vector<uint8_t>> SubheaderCache;
     std::vector<uint8_t> CurrentEntryRawData;
@@ -179,6 +182,67 @@ inline bool IsTextureSubBank(LoadedBank* bank) {
 inline bool IsGraphicsSubBank(LoadedBank* bank) {
     if (!bank || bank->ActiveSubBankIndex < 0 || bank->ActiveSubBankIndex >= bank->SubBanks.size()) return false;
     return StartsWith(bank->SubBanks[bank->ActiveSubBankIndex].Name, "MBANK");
+}
+
+inline std::string NormalizeBankEntryName(const std::string& name) {
+    if (name.find('\\') == std::string::npos && name.find('/') == std::string::npos) {
+        return name;
+    }
+
+    std::string s = name;
+    std::string tag = "";
+    size_t tagPos = s.find("][");
+    if (tagPos != std::string::npos) {
+        tag = "_" + s.substr(tagPos + 2);
+        if (!tag.empty() && tag.back() == ']') tag.pop_back();
+        s = s.substr(0, tagPos);
+    }
+
+    if (!s.empty() && s.front() == '[') s.erase(s.begin());
+    if (!s.empty() && s.back() == ']') s.pop_back();
+
+    size_t lastSlash = s.find_last_of("\\/");
+    if (lastSlash != std::string::npos) s = s.substr(lastSlash + 1);
+
+    if (s.size() > 4) {
+        std::string ext = s.substr(s.size() - 4);
+        std::string extLower = ext;
+        std::transform(extLower.begin(), extLower.end(), extLower.begin(), ::tolower);
+        if (extLower == ".tga" || extLower == ".dds") s = s.substr(0, s.size() - 4);
+    }
+
+    std::string result = s + tag;
+    for (char& c : result) {
+        if (!std::isalnum((unsigned char)c) && c != '_') c = '_';
+    }
+    return result;
+}
+
+inline bool IsBankEntryNameAvailable(LoadedBank* bank, const std::string& candidateName, int ignoreEntryIdx = -1) {
+    if (!bank || candidateName.empty()) return false;
+
+    std::string candidateLower = candidateName;
+    std::transform(candidateLower.begin(), candidateLower.end(), candidateLower.begin(), ::tolower);
+
+    std::string candidateNorm = NormalizeBankEntryName(candidateName);
+    std::transform(candidateNorm.begin(), candidateNorm.end(), candidateNorm.begin(), ::tolower);
+
+    for (int i = 0; i < (int)bank->Entries.size(); ++i) {
+        if (i == ignoreEntryIdx) continue;
+
+        const auto& entry = bank->Entries[i];
+
+        // 1. Raw name check
+        std::string rawLower = entry.Name;
+        std::transform(rawLower.begin(), rawLower.end(), rawLower.begin(), ::tolower);
+        if (candidateLower == rawLower) return false;
+
+        // 2. Normalized name check
+        std::string normLower = NormalizeBankEntryName(entry.Name);
+        std::transform(normLower.begin(), normLower.end(), normLower.begin(), ::tolower);
+        if (candidateLower == normLower || candidateNorm == normLower) return false;
+    }
+    return true;
 }
 
 inline EBankType ResolveBankType(const std::vector<InternalBankInfo>& subBanks) {

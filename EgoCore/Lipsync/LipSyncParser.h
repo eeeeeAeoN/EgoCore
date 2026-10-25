@@ -52,7 +52,7 @@ public:
         float fpsVal = 22050.0f / 512.0f;
         uint32_t frameCount = (uint32_t)std::ceil(duration * fpsVal);
 
-        std::vector<std::string> defaults = { "AH", "EE", "MM", "OH", "SZ" };
+        std::vector<std::string> defaults = { "AH", "OH", "EE", "SZ", "WW" };
         uint32_t dictCount = (uint32_t)defaults.size();
 
         result.Raw.insert(result.Raw.end(), (uint8_t*)&dictCount, (uint8_t*)&dictCount + 4);
@@ -67,7 +67,11 @@ public:
         result.Raw.insert(result.Raw.end(), (uint8_t*)&frameCount, (uint8_t*)&frameCount + 4);
 
         for (uint32_t i = 0; i < frameCount; i++) {
-            result.Raw.push_back(0);
+            result.Raw.push_back(3);
+            for (uint8_t k = 0; k < 3; k++) {
+                result.Raw.push_back(k); // 0: AH, 1: OH, 2: EE
+                result.Raw.push_back(0); // weight 0
+            }
         }
 
         return result;

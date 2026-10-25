@@ -308,6 +308,14 @@ inline void SaveAudioBank(LoadedBank* bank) {
 bool CreateNewTextureEntry(LoadedBank* bank, const std::string& filePath, ETextureFormat format, int type, bool generateBump = false) {
     if (!bank) return false;
 
+    std::string candidateName = std::filesystem::path(filePath).stem().string();
+    if (!IsBankEntryNameAvailable(bank, candidateName)) {
+        g_BankStatus = "Import Failed: Name '" + candidateName + "' collides with an existing bank texture or dev path! Please rename the image file.";
+        g_NameCollisionMessage = "Cannot import texture as '" + candidateName + "'.\n\nThis name collides with an existing bank texture or development path in the bank.\n\nIf you wish to modify that texture, select it in the bank and use 'Replace Texture' instead, or choose a different name.";
+        g_ShowNameCollisionPopup = true;
+        return false;
+    }
+
     TextureBuilder::ImportOptions opts;
     opts.Format = format;
     opts.GenerateMipmaps = true;
@@ -580,11 +588,21 @@ inline bool CreateNewMeshEntry(LoadedBank* bank, const std::string& gltfPath, in
     return true;
 }
 
-inline void RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName) {
-    if (entryIdx < 0) return;
+inline bool RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName) {
+    if (entryIdx < 0 || !bank) return false;
+    if (newName.empty()) return false;
+
+    if (!IsBankEntryNameAvailable(bank, newName, entryIdx)) {
+        g_BankStatus = "Rename Failed: Name '" + newName + "' collides with an existing bank entry or dev path!";
+        g_NameCollisionMessage = "Cannot rename entry to '" + newName + "'.\n\nThis name collides with an existing bank entry or development path in the bank.\n\nPlease choose a different, unique name.";
+        g_ShowNameCollisionPopup = true;
+        return false;
+    }
+
     bank->Entries[entryIdx].Name = newName;
     bank->Entries[entryIdx].FriendlyName = newName;
     UpdateFilter(*bank);
+    return true;
 }
 
 inline void CreateNewDialogueEntry(LoadedBank* bank) {
@@ -1471,7 +1489,10 @@ inline void SaveEntryChanges(LoadedBank* bank) {
     }
     else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || (bank->Type == EBankType::XboxGraphics && IsTextureSubBank(bank))) {
         if (!g_TextureParser.PendingName.empty() && g_TextureParser.PendingName != e.Name) {
-            RenameTextureEntry(bank, bank->SelectedEntryIndex, g_TextureParser.PendingName);
+            if (!RenameTextureEntry(bank, bank->SelectedEntryIndex, g_TextureParser.PendingName)) {
+                g_TextureParser.PendingName = e.Name;
+                return;
+            }
         }
         if (g_TextureParser.IsParsed) {
             if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {

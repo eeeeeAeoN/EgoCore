@@ -11,7 +11,7 @@
 
 void AddTextureFrame(LoadedBank* bank, int entryIdx, const std::string& filePath, TextureBuilder::ImportOptions opts);
 void DeleteTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx);
-void RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName);
+bool RenameTextureEntry(LoadedBank* bank, int entryIdx, const std::string& newName);
 void ReplaceTextureFrame(LoadedBank* bank, int entryIdx, int frameIdx, const std::string& filePath, TextureBuilder::ImportOptions opts);
 
 extern ID3D11Device* g_pd3dDevice;

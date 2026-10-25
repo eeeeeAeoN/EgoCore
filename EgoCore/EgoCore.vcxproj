@@ -50,31 +50,29 @@
     <ClInclude Include="FSE\FSEAutosuggest.h" />
     <ClInclude Include="FSE\FSEBackend.h" />
     <ClInclude Include="FSE\FSETabUI.h" />
-    <ClInclude Include="Levels\STBBackend.h" />
     <ClInclude Include="Levels\WADBackend.h" />
+    <ClInclude Include="Levels\STBBackend.h" />
     <ClInclude Include="Lipsync\LipSyncCompiler.h" />
     <ClInclude Include="Lipsync\LipSyncParser.h" />
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
     <ClInclude Include="Lipsync\SpeechAnalyzer.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
-    <ClInclude Include="Meshes\BoneConfigParser.h" />
     <ClInclude Include="Meshes\GltfExporter.h" />
     <ClInclude Include="Meshes\GltfMeshImporter.h" />
     <ClInclude Include="Meshes\MeshCompiler.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />
-    <ClInclude Include="Mods\GtgMerger.h" />
     <ClInclude Include="Mods\ModManagerBackend.h" />
     <ClInclude Include="Mods\ModManagerCompiler.h" />
     <ClInclude Include="Mods\ModManagerUI.h" />
     <ClInclude Include="Mods\TngMerger.h" />
     <ClInclude Include="Mods\WldMerger.h" />
+    <ClInclude Include="Mods\GtgMerger.h" />
     <ClInclude Include="Particles\ParticleCompiler.h" />
     <ClInclude Include="Particles\ParticleParser.h" />
     <ClInclude Include="Particles\ParticleProperties.h" />
     <ClInclude Include="Particles\ParticleRenderer.h" />
-    <ClInclude Include="Particles\ParticleSimulator.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Shaders\ShaderCompiler.h" />
     <ClInclude Include="Shaders\ShaderParser.h" />
@@ -124,11 +122,6 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="EgoCore.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\StaticTerrainBankCompiler\StaticTerrainBank.vcxproj">
-      <Project>{a82f1043-41a5-4bc5-8851-c2e46ba90d32}</Project>
-    </ProjectReference>
   </ItemGroup>
   <!-- The FableDefCompiler static library is superseded by the native def
        compiler (extern/fable-defs) and is no longer referenced. It also required
@@ -187,10 +180,13 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>C:\Users\Emi\source\repos\EgoCore\extern\fable-defs\packages\def-compiler-sys\include;C:\Users\Emi\source\repos\EgoCore\EgoCore\Definitions;C:\Users\Emi\source\repos\EgoCore\EgoCore\TextEditor;C:\Users\Emi\source\repos\EgoCore\EgoCore\Text;C:\Users\Emi\source\repos\EgoCore\EgoCore\Textures;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
+    <IncludePath>$(SolutionDir)extern\fable-defs\packages\def-compiler-sys\include;$(ProjectDir)Definitions;$(ProjectDir)TextEditor;$(ProjectDir)Text;$(ProjectDir)Textures;$(ProjectDir)Utilities;$(ProjectDir)Meshes;$(ProjectDir)Banks;$(ProjectDir)Animations;$(ProjectDir)Utilities\ImGUI;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>$(ProjectDir)Lipsync;$(ProjectDir)Audio;$(ProjectDir)Definitions;$(ProjectDir)TextEditor;$(ProjectDir)Text;$(ProjectDir)Textures;$(ProjectDir)Utilities;$(ProjectDir)Meshes;$(ProjectDir)Banks;$(ProjectDir)Animations;$(ProjectDir)Utilities\ImGUI;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>C:\Users\Emi\source\repos\EgoCore\EgoCore\Lipsync;C:\Users\Emi\source\repos\EgoCore\EgoCore\Audio;C:\Users\Emi\source\repos\EgoCore\EgoCore\Definitions;C:\Users\Emi\source\repos\EgoCore\EgoCore\TextEditor;C:\Users\Emi\source\repos\EgoCore\EgoCore\Text;C:\Users\Emi\source\repos\EgoCore\EgoCore\Textures;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities;C:\Users\Emi\source\repos\EgoCore\EgoCore\Meshes;C:\Users\Emi\source\repos\EgoCore\EgoCore\Banks;C:\Users\Emi\source\repos\EgoCore\EgoCore\Animations;C:\Users\Emi\source\repos\EgoCore\EgoCore\Utilities\ImGUI</IncludePath>
+    <IncludePath>$(ProjectDir)Lipsync;$(ProjectDir)Audio;$(ProjectDir)Definitions;$(ProjectDir)TextEditor;$(ProjectDir)Text;$(ProjectDir)Textures;$(ProjectDir)Utilities;$(ProjectDir)Meshes;$(ProjectDir)Banks;$(ProjectDir)Animations;$(ProjectDir)Utilities\ImGUI;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -226,10 +222,16 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(SolutionDir)StaticTerrainBankCompiler\include;$(ProjectDir)Levels;$(SolutionDir)FableDefCompiler;$(ProjectDir)FSE;$(ProjectDir)Mods;$(ProjectDir)Particles;$(ProjectDir)Fonts;$(ProjectDir)Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
+      <AdditionalLibraryDirectories>$(SolutionDir)$(Platform)\$(Configuration);$(SolutionDir)StaticTerrainBankCompiler\lib;$(SolutionDir)StaticTerrainBankCompiler\$(Platform)\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>StaticTerrainBank.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -241,14 +243,22 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)StaticTerrainBankCompiler\include;C:\Users\Emi\source\repos\EgoCore\EgoCore\Levels;C:\Users\Emi\source\repos\EgoCore\FableDefCompiler;C:\Users\Emi\source\repos\EgoCore\EgoCore\FSE;C:\Users\Emi\source\repos\EgoCore\EgoCore\Mods;C:\Users\Emi\source\repos\EgoCore\EgoCore\Particles;C:\Users\Emi\source\repos\EgoCore\EgoCore\Fonts;C:\Users\Emi\source\repos\EgoCore\EgoCore\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)StaticTerrainBankCompiler\include;$(ProjectDir)Levels;$(SolutionDir)FableDefCompiler;$(ProjectDir)FSE;$(ProjectDir)Mods;$(ProjectDir)Particles;$(ProjectDir)Fonts;$(ProjectDir)Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
+      <AdditionalLibraryDirectories>$(SolutionDir)$(Platform)\$(Configuration);$(SolutionDir)StaticTerrainBankCompiler\lib;$(SolutionDir)StaticTerrainBankCompiler\$(Platform)\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>StaticTerrainBank.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\StaticTerrainBankCompiler\StaticTerrainBank.vcxproj">
+      <Project>{A82F1043-41A5-4BC5-8851-C2E46BA90D32}</Project>
+      <Name>StaticTerrainBank</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildProjectDirectory)\..\FableDefs.targets" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -205,7 +205,8 @@ public:
         int lodBand, int texW, int texH,
         const EngineLandscapeLODMap* pLodMap = nullptr,
         const WaterShoreCalculator* pWaterContext = nullptr,
-        const BgTreeSettings& settings = BgTreeSettings{}
+        const BgTreeSettings& settings = BgTreeSettings{},
+        const std::vector<WorldWaterNeighbor>* neighbors = nullptr
     );
 };
 
