@@ -471,52 +471,44 @@ BBBEntry SeaGenerator::generateSeaEntry(
 
     // 4. Split elements intersecting cutout boxes (matching 0x131de70)
     std::function<void(int, int, int, int, int)> splitWithArea = [&](int element_id, int startx, int starty, int endx, int endy) {
-        int v7 = element_id;
-        int element_ida = element_id;
-        if (startx < elements[element_ida].endX) {
-            while (true) {
-                const auto& elem = elements[element_ida];
-                if (starty >= elem.endY || endx <= elem.startX || endy <= elem.startY)
-                    return;
-                if (startx > elem.startX && startx < elem.endX)
-                    break;
-                int v11 = elem.endY;
-                if (endx >= elem.endX) {
-                    if (starty <= elem.startY) {
-                        if (endy >= v11)
-                            return;
-                        CSeaQuadElement v16(elem.startX, endy, elem.endX, v11, 0);
-                        elements.push_back(v16);
-                        elements[element_ida].endY = endy;
-                        splitWithArea(v7, startx, starty, endx, endy);
-                    } else {
-                        CSeaQuadElement v16(elem.startX, starty, elem.endX, v11, 0);
-                        elements.push_back(v16);
-                        elements[element_ida].endY = starty;
-                        splitWithArea(v7, startx, starty, endx, endy);
-                    }
-                } else {
-                    CSeaQuadElement v16(endx, elem.startY, elem.endX, v11, 0);
-                    elements.push_back(v16);
-                    elements[element_ida].endX = endx;
-                    splitWithArea(v7, startx, starty, endx, endy);
-                }
-                v7 = static_cast<int>(elements.size()) - 1;
-                element_ida = v7;
-                if (startx >= elements[v7].endX)
-                    return;
-            }
+        if (startx >= elements[element_id].endX || starty >= elements[element_id].endY ||
+            endx <= elements[element_id].startX || endy <= elements[element_id].startY) {
+            return;
+        }
 
-            CSeaQuadElement v16(startx, elements[element_ida].startY, elements[element_ida].endX, elements[element_ida].endY, 0);
-            elements.push_back(v16);
-            elements[element_ida].endX = startx;
-            splitWithArea(v7, startx, starty, endx, endy);
+        if (startx > elements[element_id].startX && startx < elements[element_id].endX) {
+            elements.emplace_back(startx, elements[element_id].startY,
+                                  elements[element_id].endX, elements[element_id].endY, 0);
+            elements[element_id].endX = startx;
+            splitWithArea(element_id, startx, starty, endx, endy);
+            splitWithArea(static_cast<int>(elements.size()) - 1, startx, starty, endx, endy);
+            return;
+        }
 
-            v7 = static_cast<int>(elements.size()) - 1;
-            element_ida = v7;
-            if (startx >= elements[v7].endX)
-                return;
-            // Otherwise, loop repeats with elements[v7]
+        if (endx > elements[element_id].startX && endx < elements[element_id].endX) {
+            elements.emplace_back(endx, elements[element_id].startY,
+                                  elements[element_id].endX, elements[element_id].endY, 0);
+            elements[element_id].endX = endx;
+            splitWithArea(element_id, startx, starty, endx, endy);
+            splitWithArea(static_cast<int>(elements.size()) - 1, startx, starty, endx, endy);
+            return;
+        }
+
+        if (starty > elements[element_id].startY && starty < elements[element_id].endY) {
+            elements.emplace_back(elements[element_id].startX, starty,
+                                  elements[element_id].endX, elements[element_id].endY, 0);
+            elements[element_id].endY = starty;
+            splitWithArea(element_id, startx, starty, endx, endy);
+            splitWithArea(static_cast<int>(elements.size()) - 1, startx, starty, endx, endy);
+            return;
+        }
+
+        if (endy > elements[element_id].startY && endy < elements[element_id].endY) {
+            elements.emplace_back(elements[element_id].startX, endy,
+                                  elements[element_id].endX, elements[element_id].endY, 0);
+            elements[element_id].endY = endy;
+            splitWithArea(element_id, startx, starty, endx, endy);
+            splitWithArea(static_cast<int>(elements.size()) - 1, startx, starty, endx, endy);
         }
     };
 

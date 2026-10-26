@@ -938,6 +938,12 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
             patchWaterHeights[cx][cy] = wh;
             if (wh >= 0.001f) {
                 patchHasWater = true;
+                // The patch bounds are used by the game for foreground
+                // culling. Water can sit above the highest terrain vertex, so
+                // terrain-only bounds make visible water patches disappear
+                // when the camera is nearly level.
+                minZ = std::min(minZ, wh);
+                maxZ = std::max(maxZ, wh);
             }
         }
     }
