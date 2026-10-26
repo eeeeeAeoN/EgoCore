@@ -817,10 +817,16 @@ struct BackgroundTreeBuilder::EngineLandscapeLODMap {
         int v5 = xp;
         int v6 = 1;
         if ((((static_cast<uint8_t>(yp) | static_cast<uint8_t>(xp)) & 1)) == 0) {
-            do {
-                if (!v6) break;
-                v6 *= 2;
-            } while (((yp | xp) & v6) == 0);
+            // Find the lowest set bit of (xp | yp). Use unsigned arithmetic so
+            // the shift is well-defined when the point is the origin (0, 0):
+            // the old signed loop relied on overflow to reach v6 == 0, which
+            // the optimizer removed, leaving an infinite loop.
+            unsigned int step = 1;
+            unsigned int bits = static_cast<unsigned int>(xp) | static_cast<unsigned int>(yp);
+            while (step != 0 && (bits & step) == 0) {
+                step <<= 1;
+            }
+            v6 = static_cast<int>(step);
         }
 
         int v7 = 0, v8 = 0, v9 = 0, v10 = 0;
