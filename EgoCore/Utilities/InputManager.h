@@ -46,15 +46,18 @@ struct ShortcutKey {
 };
 
 struct AppKeybindings {
-    ShortcutKey SwitchBankMode = { ImGuiKey_B, true, false, false };
-    ShortcutKey SwitchDefMode = { ImGuiKey_D, true, false, false };
-    ShortcutKey SwitchFSEMode = { ImGuiKey_K, true, false, false };
+    ShortcutKey SwitchBankMode = { ImGuiKey_F1, false, false, false };
+    ShortcutKey SwitchDefMode = { ImGuiKey_F2, false, false, false };
+    ShortcutKey SwitchFSEMode = { ImGuiKey_F3, false, false, false };
     ShortcutKey SaveEntry = { ImGuiKey_S, true, false, false };
     ShortcutKey Compile = { ImGuiKey_F5, false, false, false };
     ShortcutKey NavigateBack = { ImGuiKey_LeftArrow, true, false, true };
     ShortcutKey NavigateForward = { ImGuiKey_RightArrow, true, false, true };
     ShortcutKey DeleteEntry = { ImGuiKey_Delete, false, false, false };
+    ShortcutKey DuplicateEntry = { ImGuiKey_D, true, false, false };
+    ShortcutKey MarkForPackaging = { ImGuiKey_M, true, false, false };
     ShortcutKey ToggleLeftPanel = { ImGuiKey_T, true, false, false };
+    ShortcutKey ToggleRightPanel = { ImGuiKey_Y, true, false, false };
     ShortcutKey LookupDefinition = { ImGuiKey_LeftCtrl, true, false, false };
 };
 inline AppKeybindings g_Keybinds;

@@ -40,6 +40,7 @@ static bool g_ShowLeftPanel = true;
 extern ImTextureID g_SaveTexture;
 extern ImTextureID g_DeleteTexture;
 extern ImTextureID g_ImportTexture;
+extern ImTextureID g_CompileTexture;
 
 static void DrawBinaryTab() {
     static std::atomic<bool> isCompilingBins = false;
@@ -169,9 +170,8 @@ static void DrawBinaryTab() {
 }
 
 static void DrawBankTab() {
-    static float bankSidebarWidth = 300.0f;
-    if (bankSidebarWidth < 50.0f) bankSidebarWidth = 50.0f;
-    if (bankSidebarWidth > ImGui::GetWindowWidth() - 100.0f) bankSidebarWidth = ImGui::GetWindowWidth() - 100.0f;
+    if (g_SidebarWidth < 50.0f) g_SidebarWidth = 50.0f;
+    if (g_SidebarWidth > ImGui::GetWindowWidth() - 100.0f) g_SidebarWidth = ImGui::GetWindowWidth() - 100.0f;
 
     if (g_ShowSuccessPopup) {
         ImGui::OpenPopup("Success");
@@ -403,26 +403,73 @@ static void DrawBankTab() {
         }
     }
 
-    float compileBtnWidth = 130.0f;
-    ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
+    bool hasUnsavedChanges = bank.IsDirty ||
+                             !bank.ModifiedEntryData.empty() ||
+                             !bank.StagedEntries.empty() ||
+                             (bank.Type == EBankType::Audio && bank.LugParserPtr && bank.LugParserPtr->IsDirty);
 
-    std::string compileText = "RECOMPILE";
-    if (bank.Type == EBankType::Text) compileText = "RECOMPILE";
-    else if (bank.Type == EBankType::Dialogue) compileText = "RECOMPILE";
-    else if (bank.Type == EBankType::Audio) compileText = bank.LugParserPtr ? "RECOMPILE" : "RECOMPILE";
+    const float compileBtnSize = 20.0f;
+    ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnSize - 16.0f);
 
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.68f, 0.25f, 0.85f));
+    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.0f);
+    ImVec4 orangeCol = hasUnsavedChanges 
+        ? ImVec4(1.0f, 0.60f + 0.25f * pulse, 0.15f, 1.0f) 
+        : ImVec4(1.0f, 0.55f, 0.10f, 0.85f);
 
-    if (ImGui::Button(compileText.c_str(), ImVec2(compileBtnWidth, 0))) {
-        if (bank.Type == EBankType::Audio) SaveAudioBank(&bank);
-        else SaveBigBank(&bank);
+    if (g_CompileTexture) {
+        if (ImGui::ImageButton("##RecompileBankBtn", g_CompileTexture, ImVec2(compileBtnSize, compileBtnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), orangeCol)) {
+            if (bank.Type == EBankType::Audio) SaveAudioBank(&bank);
+            else SaveBigBank(&bank);
+        }
     }
-    ImGui::PopStyleColor();
+    else {
+        ImGui::PushStyleColor(ImGuiCol_Button, orangeCol);
+        if (ImGui::Button("Compile", ImVec2(60, compileBtnSize))) {
+            if (bank.Type == EBankType::Audio) SaveAudioBank(&bank);
+            else SaveBigBank(&bank);
+        }
+        ImGui::PopStyleColor();
+    }
+
+    if (hasUnsavedChanges) {
+        ImVec2 btnMin = ImGui::GetItemRectMin();
+        ImVec2 btnMax = ImGui::GetItemRectMax();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float btnRounding = 4.0f;
+        for (int i = 3; i >= 1; i--) {
+            float expand = (float)i * 1.5f;
+            float alpha = pulse * (1.0f - (float)i / 4.0f) * 0.70f;
+            ImU32 glowCol = IM_COL32(255, 140, 25, (uint32_t)(alpha * 255.0f));
+            dl->AddRect(ImVec2(btnMin.x - expand, btnMin.y - expand), ImVec2(btnMax.x + expand, btnMax.y + expand), glowCol, btnRounding + expand, 0, 1.5f);
+        }
+    }
+
+    if (ImGui::IsItemHovered()) {
+        if (hasUnsavedChanges) ImGui::SetTooltip("Recompile (Unsaved changes pending)");
+        else ImGui::SetTooltip("Recompile");
+    }
 
     ImGui::EndChild();
     ImGui::PopStyleColor();
 
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1) {
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && bank.SelectedEntryIndex != -1 && !ImGui::GetIO().WantTextInput) {
+        if (g_Keybinds.MarkForPackaging.IsPressed()) {
+            const auto& e = bank.Entries[bank.SelectedEntryIndex];
+            StagedModPackageEntry staged;
+            staged.EntryID = e.ID;
+            staged.EntryName = e.Name;
+            staged.EntryType = e.Type;
+            staged.BankType = bank.Type;
+            staged.TypeName = GetEntryTypeName(bank.Type, e.Type, bank.FileName);
+            staged.BankName = bank.FileName;
+            staged.SourceFullPath = bank.FullPath;
+            staged.SubBankName = (bank.ActiveSubBankIndex >= 0 && bank.ActiveSubBankIndex < bank.SubBanks.size()) ? bank.SubBanks[bank.ActiveSubBankIndex].Name : "N/A";
+            ModPackageTracker::ToggleMark(staged);
+        }
+        if (g_Keybinds.DuplicateEntry.IsPressed() && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts && g_LugExplorerMode == 0) {
+            DuplicateBankEntry(&bank, bank.SelectedEntryIndex);
+            g_ScrollToSelected = true;
+        }
         if (g_Keybinds.DeleteEntry.IsPressed() && bank.Type != EBankType::Shaders && bank.Type != EBankType::Fonts && g_LugExplorerMode == 0) {
             if (bank.Entries.size() > 1) {
                 if (g_AppConfig.ShowBankDeleteConfirm) {
@@ -441,7 +488,7 @@ static void DrawBankTab() {
     }
 
     if (g_ShowLeftPanel) {
-        ImGui::BeginChild("LeftPane", ImVec2(bankSidebarWidth, 0), true);
+        ImGui::BeginChild("LeftPane", ImVec2(g_SidebarWidth, 0), true);
 
         float searchAvail = ImGui::GetContentRegionAvail().x;
         bool showFilterBtn = (bank.Type == EBankType::Text || bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || bank.Type == EBankType::Graphics || bank.Type == EBankType::XboxGraphics);
@@ -449,6 +496,7 @@ static void DrawBankTab() {
 
         float inputWidth = searchAvail;
         if (showFilterBtn) inputWidth -= (65.0f + ImGui::GetStyle().ItemSpacing.x);
+        else inputWidth -= (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
         if (canAdd) inputWidth -= (30.0f + ImGui::GetStyle().ItemSpacing.x);
 
         ImGui::SetNextItemWidth(inputWidth);
@@ -531,6 +579,12 @@ static void DrawBankTab() {
             if (ImGui::Button("Filters", ImVec2(60, 0))) ImGui::OpenPopup("FilterOptionsPopup");
             if (ImGui::BeginPopup("FilterOptionsPopup")) {
 
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Packaging Filter:");
+                if (ImGui::Checkbox("Show Marked Entries Only", &bank.ShowMarkedOnly)) {
+                    UpdateFilter(bank);
+                }
+                ImGui::Separator();
+
                 ImGui::TextColored(ImVec4(1, 1, 0, 1), "Search Mode:");
                 if (ImGui::RadioButton("Search by Name", bank.FilterMode == EFilterMode::Name)) { bank.FilterMode = EFilterMode::Name; UpdateFilter(bank); }
                 if (ImGui::RadioButton("Search by ID", bank.FilterMode == EFilterMode::ID)) { bank.FilterMode = EFilterMode::ID; UpdateFilter(bank); }
@@ -590,6 +644,13 @@ static void DrawBankTab() {
                 ImGui::EndPopup();
             }
         }
+        else {
+            ImGui::SameLine();
+            if (ImGui::Checkbox("##BankMarked", &bank.ShowMarkedOnly)) {
+                UpdateFilter(bank);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Marked Entries Only");
+        }
 
         if (ImGui::BeginPopupModal("Add Entry Type", &g_ShowAddEntryPopup, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("Select Entry Type:");
@@ -644,6 +705,9 @@ static void DrawBankTab() {
             std::transform(filterStr.begin(), filterStr.end(), filterStr.begin(), ::tolower);
 
             for (int i = 0; i < scripts.size(); i++) {
+                if (bank.ShowMarkedOnly) {
+                    if (!ModPackageTracker::IsMarked(bank.FileName, scripts[i].Name)) continue;
+                }
                 if (!filterStr.empty()) {
                     std::string nameLower = scripts[i].Name;
                     std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
@@ -829,7 +893,7 @@ static void DrawBankTab() {
         ImGui::SameLine();
         ImGui::InvisibleButton("vsplitter", ImVec2(4.0f, -1.0f));
         if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        if (ImGui::IsItemActive()) bankSidebarWidth += ImGui::GetIO().MouseDelta.x;
+        if (ImGui::IsItemActive()) g_SidebarWidth += ImGui::GetIO().MouseDelta.x;
         ImGui::SameLine();
     }
 
@@ -844,6 +908,22 @@ static void DrawBankTab() {
 
         if (g_Keybinds.ToggleLeftPanel.IsPressed()) {
             g_ShowLeftPanel = !g_ShowLeftPanel;
+        }
+
+        if (g_Keybinds.ToggleRightPanel.IsPressed() && bank.SelectedEntryIndex != -1) {
+            const auto& e = bank.Entries[bank.SelectedEntryIndex];
+            if (bank.Type == EBankType::Dialogue) {
+                g_ShowLipSyncRenderer = !g_ShowLipSyncRenderer;
+            }
+            else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && IsSupportedMesh(e.Type)) {
+                g_ShowRightPanel = !g_ShowRightPanel;
+            }
+            else if (bank.Type == EBankType::Effects) {
+                g_ShowParticleRenderer = !g_ShowParticleRenderer;
+            }
+            else if ((bank.Type == EBankType::Graphics || (bank.Type == EBankType::XboxGraphics && IsGraphicsSubBank(&bank))) && (e.Type == 6 || e.Type == 7 || e.Type == 9)) {
+                g_ShowAnimRenderer = !g_ShowAnimRenderer;
+            }
         }
     }
 

@@ -67,7 +67,7 @@ public:
     }
 
     static std::string FindModSTBConfigFile(const std::string& modFolderPath) {
-        if (modFolderPath.empty()) return "";
+        if (modFolderPath.empty() || modFolderPath == g_AppConfig.GameRootPath) return "";
         std::vector<std::string> candidates = {
             modFolderPath + "\\Data\\Levels",
             modFolderPath + "\\Levels",
@@ -91,12 +91,13 @@ public:
     }
 
     static bool ModContainsEnumFadeDistances(const ModEntry& mod) {
+        if (mod.IsCoreMod || mod.ModFolderPath.empty() || mod.ModFolderPath == g_AppConfig.GameRootPath) return false;
         try {
             for (const auto& file : fs::recursive_directory_iterator(mod.ModFolderPath)) {
                 if (!file.is_regular_file()) continue;
                 std::string ext = file.path().extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext == ".def" || ext == ".h" || ext == ".txt") {
+                if (ext == ".def" || ext == ".tpl" || ext == ".h" || ext == ".txt") {
                     if (FileContainsEnumFadeDistances(file.path().string())) {
                         return true;
                     }
@@ -176,7 +177,7 @@ public:
                             }
 
                             // Def Mod Condition
-                            if (ext == ".def" ||
+                            if (ext == ".def" || ext == ".tpl" ||
                                 filename.find("sound_animation_events") != std::string::npos ||
                                 filename.find("game_animation_events") != std::string::npos) {
                                 mod.IsDefMod = true;
@@ -188,7 +189,7 @@ public:
                             }
 
                             // EFadeDistances trigger condition: Mod contains enum EFadeDistances to be patched into the real game
-                            if ((ext == ".def" || ext == ".h" || ext == ".txt") && FileContainsEnumFadeDistances(file.path().string())) {
+                            if ((ext == ".def" || ext == ".tpl" || ext == ".h" || ext == ".txt") && FileContainsEnumFadeDistances(file.path().string())) {
                                 mod.HasFadeDistances = true;
                                 mod.IsTngMod = true; // Mark as world mod as well
                                 mod.IsDefMod = true;
@@ -1121,6 +1122,21 @@ public:
             return;
         }
 
+        // Defs depend directly on symbols in banks (meshes, textures, sounds, text).
+
+
+        // If defs are dirty and there are active asset mods, the banks must be repatched and their enums synced.
+
+
+        if (g_AppConfig.DefSystemDirty && hasActiveAssetMods) {
+
+
+            g_AppConfig.ModSystemDirty = true;
+
+
+        }
+
+
         if (!g_AppConfig.ModSystemDirty && !g_AppConfig.DefSystemDirty && !g_AppConfig.TngSystemDirty && !g_AppConfig.FSESystemDirty) {
             LaunchGame();
             return;
@@ -1173,6 +1189,7 @@ public:
 
             g_LiveBankIDs.clear();
 
+            bool anyBankPatched = false;
             for (auto& bank : g_OpenBanks) {
                 std::string bankFileName = fs::path(bank.FullPath).filename().string();
                 std::transform(bankFileName.begin(), bankFileName.end(), bankFileName.begin(), ::tolower);
@@ -1181,15 +1198,27 @@ public:
                     if (bank.Type == EBankType::Audio) {
                         bank.ModifiedEntryData.clear();
                         ImplantAudioMods(&bank);
-                        if (bank.IsDirty) { SaveAudioBank(&bank); bank.IsDirty = false; }
+                        if (bank.IsDirty) {
+                            SaveAudioBank(&bank);
+                            bank.IsDirty = false;
+                            anyBankPatched = true;
+                        }
+                        SyncBankEnums(&bank);
                     }
                     else {
-                        if (ModBankPatcher::PatchBankForLaunch(&bank)) ReloadBankInPlace(&bank);
+                        if (ModBankPatcher::PatchBankForLaunch(&bank)) {
+                            ReloadBankInPlace(&bank);
+                            SyncBankEnums(&bank);
+                            anyBankPatched = true;
+                        }
                     }
                 }
                 else {
                     ReloadBankInPlace(&bank);
                 }
+            }
+            if (anyBankPatched) {
+                g_AppConfig.DefSystemDirty = true;
             }
             SetLaunchStatus("Deploying loose asset mods...");
             DeployLooseAssetMods();
@@ -1197,14 +1226,6 @@ public:
         g_AppConfig.ModSystemDirty = false;
 
         bool stbCompilationNeeded = false;
-
-        // STB recompilation trigger condition: check if any active mod contains enum EFadeDistances or STBconfig.ini
-        for (const auto& m : g_LoadedMods) {
-            if (m.IsEnabled && (m.HasFadeDistances || ModContainsEnumFadeDistances(m) || m.HasSTBConfig || !FindModSTBConfigFile(m.ModFolderPath).empty())) {
-                stbCompilationNeeded = true;
-                break;
-            }
-        }
 
         if (g_AppConfig.TngSystemDirty) {
             if (hasActiveTngMods) {
@@ -1317,6 +1338,7 @@ public:
                                 if (!targetExisted) {
                                     if (manifestOut.is_open()) manifestOut << targetFilePath << "\n";
                                 }
+                                stbCompilationNeeded = true;
                             }
                             else if (ext == ".tng") {
                                 auto itVanilla = vanillaTngByName.find(lowerFilename);
@@ -1358,6 +1380,7 @@ public:
                                 fs::create_directories(fs::path(targetFilePath).parent_path());
                                 fs::copy_file(entry.path(), targetFilePath, fs::copy_options::overwrite_existing);
                                 if (!targetExisted && manifestOut.is_open()) manifestOut << targetFilePath << "\n";
+                                stbCompilationNeeded = true;
                             }
                             else if (ext == ".tng") {
                                 auto itVanilla = vanillaTngByName.find(lowerFilename);
@@ -1495,18 +1518,22 @@ public:
                         std::string ext = entry.path().extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-                        if (ext != ".def" && ext != ".txt" && ext != ".h" && ext != ".bin") continue;
+                        if (ext != ".def" && ext != ".tpl" && ext != ".txt" && ext != ".h" && ext != ".bin") continue;
 
                         std::string relPath = entry.path().string().substr(modDataPath.length());
                         std::string targetPath = dataPath + relPath;
 
                         fs::create_directories(fs::path(targetPath).parent_path());
 
+                        if (ext == ".h" && IsBankHeader(entry.path().filename().string())) {
+                            continue;
+                        }
+
                         if (!fs::exists(targetPath)) {
                             fs::copy_file(entry.path(), targetPath);
                             continue;
                         }
-                        if (ext == ".def") {
+                        if (ext == ".def" || ext == ".tpl") {
                             MergeDefFile(entry.path().string(), targetPath);
                             if (FileContainsEnumFadeDistances(entry.path().string())) stbCompilationNeeded = true;
                         }
@@ -1588,12 +1615,13 @@ public:
             std::transform(origExt.begin(), origExt.end(), origExt.begin(), ::tolower);
 
             bool isBank = (origExt == ".big" || origExt == ".lut" || origExt == ".lug");
-            bool isDef = (origExt == ".def" || origExt == ".txt" || origExt == ".h" || origExt == ".bin");
+            bool isBankHeader = (origExt == ".h" && IsBankHeader(fs::path(originalPath).filename().string()));
+            bool isDef = (origExt == ".def" || origExt == ".tpl" || origExt == ".txt" || (origExt == ".h" && !isBankHeader) || origExt == ".bin");
             bool isLevelFile = (origExt == ".tng" || origExt == ".wld" || origExt == ".gtg" || origExt == ".lev" || origExt == ".stb" || origExt == ".ism");
-            bool isLooseAsset = (!isBank && !isDef && !isLevelFile && origExt != ".qst" && origExt != ".lua" && origExt != ".ini");
+            bool isLooseAsset = (!isBank && !isBankHeader && !isDef && !isLevelFile && origExt != ".qst" && origExt != ".lua" && origExt != ".ini");
 
-            // Group Loose Assets with Bank restoration (Asset Mods)
-            if ((restoreBanks && (isBank || isLooseAsset)) || (restoreDefs && isDef) || (restoreTngs && isLevelFile)) {
+            // Group Loose Assets and Bank Headers with Bank restoration (Asset Mods)
+            if ((restoreBanks && (isBank || isBankHeader || isLooseAsset)) || (restoreDefs && isDef) || (restoreTngs && isLevelFile)) {
                 try {
                     if (fs::exists(originalPath)) fs::remove(originalPath);
                     fs::rename(tmpPath, originalPath);
@@ -1653,7 +1681,7 @@ public:
 
                 std::string ext = entry.path().extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext != ".def" && ext != ".txt" && ext != ".h" && ext != ".bin") continue;
+                if (ext != ".def" && ext != ".tpl" && ext != ".txt" && ext != ".h" && ext != ".bin") continue;
 
                 std::string relPath = entry.path().string().substr(modDataPath.length());
                 std::string targetPath = dataPath + relPath;

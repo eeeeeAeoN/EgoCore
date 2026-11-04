@@ -2,14 +2,15 @@
 #include "imgui.h"
 #include "FSEBackend.h"
 #include "FSEAutosuggest.h"
+#include "ModPackageTracker.h"
 #include <algorithm> 
 
 extern ImTextureID g_SaveTexture;
 extern ImTextureID g_DeleteTexture;
 
 static void DrawFSETab() {
-    static float leftPaneWidth = 250.0f;
-    if (leftPaneWidth < 50.0f) leftPaneWidth = 50.0f;
+    if (g_SidebarWidth < 50.0f) g_SidebarWidth = 50.0f;
+    if (g_SidebarWidth > ImGui::GetWindowWidth() - 100.0f) g_SidebarWidth = ImGui::GetWindowWidth() - 100.0f;
 
     static bool showLeftPanel = true;
 
@@ -19,9 +20,7 @@ static void DrawFSETab() {
         FSEAutosuggest::LoadDictionaries("LookupTable/FSEAPI.ini", "LookupTable/APIEnums.ini");
     }
 
-    if (!ImGui::GetIO().WantTextInput && g_Keybinds.ToggleLeftPanel.IsPressed()) {
-        showLeftPanel = !showLeftPanel;
-    }
+
 
     static bool showCreateQuest = false;
     static bool showCreateEntity = false;
@@ -30,6 +29,73 @@ static void DrawFSETab() {
     static int targetQuestIdx = -1;
     static char inputName[128] = "";
     static char questFilter[128] = "";
+
+    if (!ImGui::GetIO().WantTextInput) {
+        if (g_Keybinds.ToggleLeftPanel.IsPressed()) {
+            showLeftPanel = !showLeftPanel;
+        }
+
+        if (g_FSEWorkspace.ActiveQuestIdx >= 0 && g_FSEWorkspace.ActiveQuestIdx < (int)g_FSEWorkspace.Quests.size()) {
+            auto& quest = g_FSEWorkspace.Quests[g_FSEWorkspace.ActiveQuestIdx];
+
+            if (g_Keybinds.MarkForPackaging.IsPressed()) {
+                if (g_FSEWorkspace.ActiveItemType == EFSEItemType::QuestMain) {
+                    std::string mainFileName = fs::path(quest.File).filename().string() + ".lua";
+                    StagedModPackageEntry staged;
+                    staged.Category = EModAssetCategory::FSEScript;
+                    staged.EntryID = (uint32_t)quest.ID;
+                    staged.EntryName = mainFileName;
+                    staged.TypeName = "FSE Quest Script";
+                    staged.BankName = "FSE";
+                    staged.SubBankName = quest.Name;
+                    staged.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / (quest.File + ".lua")).string();
+                    ModPackageTracker::ToggleMark(staged);
+                }
+                else if (g_FSEWorkspace.ActiveItemType == EFSEItemType::ExtraScript && !g_FSEWorkspace.ActiveExtraScriptName.empty()) {
+                    std::string extraFile = g_FSEWorkspace.ActiveExtraScriptName + ".lua";
+                    StagedModPackageEntry staged;
+                    staged.Category = EModAssetCategory::FSEScript;
+                    staged.EntryName = extraFile;
+                    staged.TypeName = "FSE Extra Script";
+                    staged.BankName = "FSE";
+                    staged.SubBankName = quest.Name;
+                    staged.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / quest.Name / extraFile).string();
+                    ModPackageTracker::ToggleMark(staged);
+                }
+                else if (g_FSEWorkspace.ActiveItemType == EFSEItemType::Entity && g_FSEWorkspace.ActiveEntityIdx >= 0 && g_FSEWorkspace.ActiveEntityIdx < (int)quest.Entities.size()) {
+                    auto& ent = quest.Entities[g_FSEWorkspace.ActiveEntityIdx];
+                    std::string entFile = ent.Name + ".lua";
+                    StagedModPackageEntry staged;
+                    staged.Category = EModAssetCategory::FSEScript;
+                    staged.EntryID = (uint32_t)ent.ID;
+                    staged.EntryName = entFile;
+                    staged.TypeName = "FSE Entity Script";
+                    staged.BankName = "FSE";
+                    staged.SubBankName = quest.Name + "\\Entities";
+                    staged.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / (ent.File + ".lua")).string();
+                    ModPackageTracker::ToggleMark(staged);
+                }
+            }
+
+            if (g_Keybinds.DuplicateEntry.IsPressed()) {
+                if (g_FSEWorkspace.ActiveItemType == EFSEItemType::QuestMain) {
+                    DuplicateFSEQuest(g_FSEWorkspace.ActiveQuestIdx);
+                }
+                else if (g_FSEWorkspace.ActiveItemType == EFSEItemType::ExtraScript && !g_FSEWorkspace.ActiveExtraScriptName.empty()) {
+                    DuplicateFSEScript(g_FSEWorkspace.ActiveQuestIdx, g_FSEWorkspace.ActiveExtraScriptName);
+                }
+                else if (g_FSEWorkspace.ActiveItemType == EFSEItemType::Entity && g_FSEWorkspace.ActiveEntityIdx >= 0) {
+                    DuplicateFSEEntity(g_FSEWorkspace.ActiveQuestIdx, g_FSEWorkspace.ActiveEntityIdx);
+                }
+            }
+
+            if (g_Keybinds.DeleteEntry.IsPressed()) {
+                showDeleteConfirm = true;
+            }
+        }
+    }
+
+
 
     auto DrawMinusButton = []() -> bool {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
@@ -41,7 +107,7 @@ static void DrawFSETab() {
         };
 
     if (showLeftPanel) {
-        ImGui::BeginChild("FSELeftPane", ImVec2(leftPaneWidth, 0), true);
+        ImGui::BeginChild("FSELeftPane", ImVec2(g_SidebarWidth, 0), true);
 
         if (ImGui::Button("+ Add Quest", ImVec2(-1, 0))) {
             memset(inputName, 0, sizeof(inputName));
@@ -49,10 +115,17 @@ static void DrawFSETab() {
         }
 
         ImGui::Separator();
-        ImGui::InputText("Filter", questFilter, sizeof(questFilter));
+        float availFW = ImGui::GetContentRegionAvail().x;
+        float checkFW = ImGui::GetFrameHeight();
+        ImGui::SetNextItemWidth(availFW - checkFW - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::InputTextWithHint("##FSEFilter", "Filter...", questFilter, sizeof(questFilter));
+        ImGui::SameLine();
+        ImGui::Checkbox("##FSEMarked", &g_FSEWorkspace.ShowMarkedOnly);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Marked Entries Only");
+
         std::string filterLower = questFilter;
         std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
-        bool hasFilter = !filterLower.empty();
+        bool hasFilter = !filterLower.empty() || g_FSEWorkspace.ShowMarkedOnly;
 
         // When filter is cleared, reset the pane's state storage so all trees collapse again
         static bool wasFiltering = false;
@@ -89,14 +162,23 @@ static void DrawFSETab() {
                 if (mainName.find(filterLower) != std::string::npos) mainMatches = true;
             }
 
+            std::string mainFileName = fs::path(quest.File).filename().string() + ".lua";
+            bool isMainMarked = ModPackageTracker::IsMarked("FSE", mainFileName);
+
             // Main Quest Script
-            if (!hasFilter || questMatches || mainMatches) {
-                matchingScripts.push_back({ EFSEItemType::QuestMain, i, -1, "", quest.File });
+            if (!g_FSEWorkspace.ShowMarkedOnly || isMainMarked) {
+                if (!hasFilter || questMatches || mainMatches) {
+                    matchingScripts.push_back({ EFSEItemType::QuestMain, i, -1, "", quest.File });
+                }
             }
 
             // Extra Scripts
             for (const auto& script : quest.ExtraScripts) {
-                if (hasFilter && !questMatches) {
+                std::string extraFileName = script + ".lua";
+                bool isExtraMarked = ModPackageTracker::IsMarked("FSE", extraFileName);
+                if (g_FSEWorkspace.ShowMarkedOnly && !isExtraMarked) continue;
+
+                if (!filterLower.empty() && !questMatches) {
                     std::string sLo = script;
                     std::transform(sLo.begin(), sLo.end(), sLo.begin(), ::tolower);
                     if (sLo.find(filterLower) == std::string::npos) continue;
@@ -108,7 +190,11 @@ static void DrawFSETab() {
             // Entity Scripts
             for (int j = 0; j < (int)quest.Entities.size(); j++) {
                 auto& ent = quest.Entities[j];
-                if (hasFilter && !questMatches) {
+                std::string entFileName = ent.Name + ".lua";
+                bool isEntMarked = ModPackageTracker::IsMarked("FSE", entFileName);
+                if (g_FSEWorkspace.ShowMarkedOnly && !isEntMarked) continue;
+
+                if (!filterLower.empty() && !questMatches) {
                     std::string eLo = ent.Name + " " + ent.File;
                     std::transform(eLo.begin(), eLo.end(), eLo.begin(), ::tolower);
                     if (eLo.find(filterLower) == std::string::npos) continue;
@@ -199,6 +285,23 @@ static void DrawFSETab() {
                 }
             }
 
+            if (g_FSEWorkspace.ShowMarkedOnly) {
+                std::string mainFileName = fs::path(quest.File).filename().string() + ".lua";
+                bool isMainMarked = ModPackageTracker::IsMarked("FSE", mainFileName);
+                bool hasAnyMarked = isMainMarked;
+                if (!hasAnyMarked) {
+                    for (const auto& s : quest.ExtraScripts) {
+                        if (ModPackageTracker::IsMarked("FSE", s + ".lua")) { hasAnyMarked = true; break; }
+                    }
+                }
+                if (!hasAnyMarked) {
+                    for (const auto& e : quest.Entities) {
+                        if (ModPackageTracker::IsMarked("FSE", e.Name + ".lua")) { hasAnyMarked = true; break; }
+                    }
+                }
+                if (!hasAnyMarked) continue;
+            }
+
             ImGui::PushID(i);
 
             if (DrawMinusButton()) {
@@ -214,7 +317,16 @@ static void DrawFSETab() {
             else if (s_FSEForceOpenQuestIdx == i) {
                 ImGui::SetNextItemOpen(true);
             }
-            bool isNodeOpen = ImGui::TreeNodeEx(quest.Name.c_str(), 0);
+            std::string mainFileName = fs::path(quest.File).filename().string() + ".lua";
+            bool isQuestMarked = ModPackageTracker::IsMarked("FSE", mainFileName);
+
+            std::string questNodeLabel = quest.Name;
+            if (isQuestMarked) questNodeLabel += " [M]";
+
+            if (isQuestMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
+            bool isNodeOpen = ImGui::TreeNodeEx(questNodeLabel.c_str(), 0);
+            if (isQuestMarked) ImGui::PopStyleColor();
+
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                 FSEDragPayload payload;
                 payload.QuestIndex = i;
@@ -224,11 +336,84 @@ static void DrawFSETab() {
                 ImGui::EndDragDropSource();
             }
 
+            if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::MenuItem(isQuestMarked ? "Unmark Quest for Packaging" : "Mark Quest for Packaging (Tracker)")) {
+                    if (isQuestMarked) {
+                        for (int k = (int)ModPackageTracker::g_MarkedEntries.size() - 1; k >= 0; --k) {
+                            const auto& me = ModPackageTracker::g_MarkedEntries[k];
+                            if (me.BankName == "FSE" && (me.SubBankName == quest.Name || me.SubBankName == quest.Name + "\\Entities")) {
+                                ModPackageTracker::g_MarkedEntries.erase(ModPackageTracker::g_MarkedEntries.begin() + k);
+                            }
+                        }
+                        ModPackageTracker::SaveMarkedState();
+                    }
+                    else {
+                        StagedModPackageEntry stagedMain;
+                        stagedMain.Category = EModAssetCategory::FSEScript;
+                        stagedMain.EntryID = (uint32_t)quest.ID;
+                        stagedMain.EntryName = mainFileName;
+                        stagedMain.TypeName = "FSE Quest";
+                        stagedMain.BankName = "FSE";
+                        stagedMain.SubBankName = quest.Name;
+                        stagedMain.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / (quest.File + ".lua")).string();
+                        if (!ModPackageTracker::IsMarked("FSE", stagedMain.EntryName)) ModPackageTracker::ToggleMark(stagedMain);
+
+                        for (const auto& extra : quest.ExtraScripts) {
+                            std::string extraFile = extra + ".lua";
+                            StagedModPackageEntry stagedExtra;
+                            stagedExtra.Category = EModAssetCategory::FSEScript;
+                            stagedExtra.EntryName = extraFile;
+                            stagedExtra.TypeName = "FSE Extra Script";
+                            stagedExtra.BankName = "FSE";
+                            stagedExtra.SubBankName = quest.Name;
+                            stagedExtra.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / quest.Name / extraFile).string();
+                            if (!ModPackageTracker::IsMarked("FSE", extraFile)) ModPackageTracker::ToggleMark(stagedExtra);
+                        }
+
+                        for (const auto& ent : quest.Entities) {
+                            std::string entFile = ent.Name + ".lua";
+                            StagedModPackageEntry stagedEnt;
+                            stagedEnt.Category = EModAssetCategory::FSEScript;
+                            stagedEnt.EntryID = (uint32_t)ent.ID;
+                            stagedEnt.EntryName = entFile;
+                            stagedEnt.TypeName = "FSE Entity Script";
+                            stagedEnt.BankName = "FSE";
+                            stagedEnt.SubBankName = quest.Name + "\\Entities";
+                            stagedEnt.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / (ent.File + ".lua")).string();
+                            if (!ModPackageTracker::IsMarked("FSE", entFile)) ModPackageTracker::ToggleMark(stagedEnt);
+                        }
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Duplicate Quest")) {
+                    DuplicateFSEQuest(i);
+                    ImGui::EndPopup();
+                    if (isNodeOpen) ImGui::TreePop();
+                    ImGui::EndChild();
+                    return;
+                }
+                if (ImGui::MenuItem("Delete Quest")) {
+                    g_FSEWorkspace.ActiveItemType = EFSEItemType::QuestMain;
+                    g_FSEWorkspace.ActiveQuestIdx = i;
+                    showDeleteConfirm = true;
+                }
+                ImGui::EndPopup();
+            }
+
             if (isNodeOpen) {
                 // Main Quest Script
-                if (!hasFilter || questMatches || mainMatches) {
+                std::string mainFileName = fs::path(quest.File).filename().string() + ".lua";
+                bool isMainMarked = ModPackageTracker::IsMarked("FSE", mainFileName);
+
+                if ((!hasFilter || questMatches || mainMatches) && (!g_FSEWorkspace.ShowMarkedOnly || isMainMarked)) {
                     bool isMainSelected = (!g_FSEWorkspace.ActiveFilePath.empty() && g_FSEWorkspace.ActiveFilePath.find(quest.File) != std::string::npos);
-                    if (ImGui::Selectable(("[Main] " + quest.Name + ".lua").c_str(), isMainSelected)) {
+
+                    std::string mainLabel = "[Main] " + quest.Name + ".lua";
+                    if (isMainMarked) mainLabel += " [M]";
+
+                    if (isMainMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
+
+                    if (ImGui::Selectable(mainLabel.c_str(), isMainSelected)) {
                         LoadFSEScriptContent(quest.File, EFSEItemType::QuestMain, i);
                     }
                     if (isMainSelected && s_FSEScrollToSelected) {
@@ -243,10 +428,44 @@ static void DrawFSETab() {
                         ImGui::Text("Stage FSE Script: [Main] %s.lua", quest.Name.c_str());
                         ImGui::EndDragDropSource();
                     }
+
+                    if (isMainMarked) ImGui::PopStyleColor();
+
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::MenuItem(isMainMarked ? "Unmark for Packaging" : "Mark for Packaging (Tracker)")) {
+                            StagedModPackageEntry staged;
+                            staged.Category = EModAssetCategory::FSEScript;
+                            staged.EntryID = (uint32_t)quest.ID;
+                            staged.EntryName = mainFileName;
+                            staged.TypeName = "FSE Quest Script";
+                            staged.BankName = "FSE";
+                            staged.SubBankName = quest.Name;
+                            staged.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / (quest.File + ".lua")).string();
+                            ModPackageTracker::ToggleMark(staged);
+                        }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("Duplicate Quest")) {
+                            DuplicateFSEQuest(i);
+                            ImGui::EndPopup();
+                            ImGui::TreePop();
+                            ImGui::EndChild();
+                            return;
+                        }
+                        if (ImGui::MenuItem("Delete Quest")) {
+                            g_FSEWorkspace.ActiveItemType = EFSEItemType::QuestMain;
+                            g_FSEWorkspace.ActiveQuestIdx = i;
+                            showDeleteConfirm = true;
+                        }
+                        ImGui::EndPopup();
+                    }
                 }
 
                 // Extra Scripts
                 for (const auto& script : quest.ExtraScripts) {
+                    std::string extraFileName = script + ".lua";
+                    bool isExtraMarked = ModPackageTracker::IsMarked("FSE", extraFileName);
+                    if (g_FSEWorkspace.ShowMarkedOnly && !isExtraMarked) continue;
+
                     if (hasFilter && !questMatches) {
                         std::string sLo = script;
                         std::transform(sLo.begin(), sLo.end(), sLo.begin(), ::tolower);
@@ -263,8 +482,14 @@ static void DrawFSETab() {
                     ImGui::SameLine();
 
                     std::string relPath = quest.Name + "/" + script;
+
+                    std::string extraLabel = script + ".lua";
+                    if (isExtraMarked) extraLabel += " [M]";
+
+                    if (isExtraMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
+
                     bool isExtraSelected = (!g_FSEWorkspace.ActiveFilePath.empty() && g_FSEWorkspace.ActiveFilePath.find(relPath) != std::string::npos);
-                    if (ImGui::Selectable((script + ".lua").c_str(), isExtraSelected)) {
+                    if (ImGui::Selectable(extraLabel.c_str(), isExtraSelected)) {
                         LoadFSEScriptContent(relPath, EFSEItemType::ExtraScript, i, -1, script);
                     }
                     if (isExtraSelected && s_FSEScrollToSelected) {
@@ -280,10 +505,41 @@ static void DrawFSETab() {
                         ImGui::Text("Stage FSE Script: %s.lua", script.c_str());
                         ImGui::EndDragDropSource();
                     }
+
+                    if (isExtraMarked) ImGui::PopStyleColor();
+
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::MenuItem(isExtraMarked ? "Unmark for Packaging" : "Mark for Packaging (Tracker)")) {
+                            StagedModPackageEntry staged;
+                            staged.Category = EModAssetCategory::FSEScript;
+                            staged.EntryName = extraFileName;
+                            staged.TypeName = "FSE Extra Script";
+                            staged.BankName = "FSE";
+                            staged.SubBankName = quest.Name;
+                            staged.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / quest.Name / extraFileName).string();
+                            ModPackageTracker::ToggleMark(staged);
+                        }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("Duplicate Script")) {
+                            DuplicateFSEScript(i, script);
+                            ImGui::EndPopup();
+                            ImGui::PopID();
+                            ImGui::TreePop();
+                            ImGui::EndChild();
+                            return;
+                        }
+                        if (ImGui::MenuItem("Delete Script")) {
+                            g_FSEWorkspace.ActiveItemType = EFSEItemType::ExtraScript;
+                            g_FSEWorkspace.ActiveQuestIdx = i;
+                            g_FSEWorkspace.ActiveExtraScriptName = script;
+                            showDeleteConfirm = true;
+                        }
+                        ImGui::EndPopup();
+                    }
                     ImGui::PopID();
                 }
 
-                if (!hasFilter) {
+                if (!hasFilter && !g_FSEWorkspace.ShowMarkedOnly) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
                     if (ImGui::Selectable("+ Create Script")) {
                         targetQuestIdx = i;
@@ -294,7 +550,16 @@ static void DrawFSETab() {
                 }
 
                 // Entities Tree
-                bool showEntitiesNode = !hasFilter || questMatches || hasMatchingEntity;
+                bool hasAnyMarkedEntity = false;
+                if (g_FSEWorkspace.ShowMarkedOnly) {
+                    for (const auto& ent : quest.Entities) {
+                        if (ModPackageTracker::IsMarked("FSE", ent.Name + ".lua")) {
+                            hasAnyMarkedEntity = true;
+                            break;
+                        }
+                    }
+                }
+                bool showEntitiesNode = (!g_FSEWorkspace.ShowMarkedOnly || hasAnyMarkedEntity) && (!hasFilter || questMatches || hasMatchingEntity);
                 if (showEntitiesNode) {
                     if (hasFilter) {
                         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
@@ -305,6 +570,9 @@ static void DrawFSETab() {
                     if (ImGui::TreeNodeEx("Entities", 0)) {
                         for (int j = 0; j < (int)quest.Entities.size(); j++) {
                             auto& ent = quest.Entities[j];
+                            std::string entFileName = ent.Name + ".lua";
+                            bool isEntMarked = ModPackageTracker::IsMarked("FSE", entFileName);
+                            if (g_FSEWorkspace.ShowMarkedOnly && !isEntMarked) continue;
 
                             if (hasFilter && !questMatches) {
                                 std::string eLo = ent.Name + " " + ent.File;
@@ -321,8 +589,13 @@ static void DrawFSETab() {
                             }
                             ImGui::SameLine();
 
+                            std::string entLabel = ent.Name + ".lua";
+                            if (isEntMarked) entLabel += " [M]";
+
+                            if (isEntMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
+
                             bool isEntSelected = (!g_FSEWorkspace.ActiveFilePath.empty() && g_FSEWorkspace.ActiveFilePath.find(ent.File) != std::string::npos);
-                            if (ImGui::Selectable((ent.Name + ".lua").c_str(), isEntSelected)) {
+                            if (ImGui::Selectable(entLabel.c_str(), isEntSelected)) {
                                 LoadFSEScriptContent(ent.File, EFSEItemType::Entity, i, j);
                             }
                             if (isEntSelected && s_FSEScrollToSelected) {
@@ -337,6 +610,39 @@ static void DrawFSETab() {
                                 ImGui::SetDragDropPayload("FSE_SCRIPT_PAYLOAD", &payload, sizeof(FSEDragPayload));
                                 ImGui::Text("Stage FSE Entity: %s.lua", ent.Name.c_str());
                                 ImGui::EndDragDropSource();
+                            }
+
+                            if (isEntMarked) ImGui::PopStyleColor();
+
+                            if (ImGui::BeginPopupContextItem()) {
+                                if (ImGui::MenuItem(isEntMarked ? "Unmark for Packaging" : "Mark for Packaging (Tracker)")) {
+                                    StagedModPackageEntry staged;
+                                    staged.Category = EModAssetCategory::FSEScript;
+                                    staged.EntryID = (uint32_t)ent.ID;
+                                    staged.EntryName = entFileName;
+                                    staged.TypeName = "FSE Entity Script";
+                                    staged.BankName = "FSE";
+                                    staged.SubBankName = quest.Name + "\\Entities";
+                                    staged.SourceFullPath = (fs::path(g_FSEWorkspace.FSERoot) / (ent.File + ".lua")).string();
+                                    ModPackageTracker::ToggleMark(staged);
+                                }
+                                ImGui::Separator();
+                                if (ImGui::MenuItem("Duplicate Entity")) {
+                                    DuplicateFSEEntity(i, j);
+                                    ImGui::EndPopup();
+                                    ImGui::PopID();
+                                    ImGui::TreePop(); // entities
+                                    ImGui::TreePop(); // quest
+                                    ImGui::EndChild();
+                                    return;
+                                }
+                                if (ImGui::MenuItem("Delete Entity")) {
+                                    g_FSEWorkspace.ActiveItemType = EFSEItemType::Entity;
+                                    g_FSEWorkspace.ActiveQuestIdx = i;
+                                    g_FSEWorkspace.ActiveEntityIdx = j;
+                                    showDeleteConfirm = true;
+                                }
+                                ImGui::EndPopup();
                             }
                             ImGui::PopID();
                         }
@@ -367,7 +673,7 @@ static void DrawFSETab() {
         ImGui::SameLine();
         ImGui::InvisibleButton("vsplitterFSE", ImVec2(4.0f, -1.0f));
         if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        if (ImGui::IsItemActive()) leftPaneWidth += ImGui::GetIO().MouseDelta.x;
+        if (ImGui::IsItemActive()) g_SidebarWidth += ImGui::GetIO().MouseDelta.x;
         ImGui::SameLine();
     }
 

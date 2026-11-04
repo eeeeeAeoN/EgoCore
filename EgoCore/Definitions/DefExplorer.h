@@ -5,6 +5,7 @@
 #include "ConfigBackend.h" 
 #include "CompilerBackend.h"
 #include "EventBackend.h"
+#include "ModPackageTracker.h"
 #include <algorithm>
 #include "InputManager.h"
 
@@ -14,18 +15,110 @@ struct EventDragPayload { int FileType; int EventIndex; };
 
 extern ImTextureID g_SaveTexture;
 extern ImTextureID g_DeleteTexture;
+extern ImTextureID g_CompileTexture;
 
 static void DrawDefTab() {
-    static float leftPaneWidth = 350.0f;
-    if (leftPaneWidth < 50.0f) leftPaneWidth = 50.0f;
-    if (leftPaneWidth > ImGui::GetWindowWidth() - 100.0f) leftPaneWidth = ImGui::GetWindowWidth() - 100.0f;
+    if (g_SidebarWidth < 50.0f) g_SidebarWidth = 50.0f;
+    if (g_SidebarWidth > ImGui::GetWindowWidth() - 100.0f) g_SidebarWidth = ImGui::GetWindowWidth() - 100.0f;
 
     static bool showLeftPanel = true;
 
     static DefEntry entryToDeleteCopy;
     static bool triggerDeletePopup = false;
     static std::string typeToAddPending = "";
+    static DefEntry s_DefToDuplicate;
+    static bool s_TriggerDuplicateDef = false;
+    static DefEntry s_DefToDelete;
+    static bool s_TriggerDirectDeleteDef = false;
+    static EventEntry s_EventToDuplicate;
+    static bool s_TriggerDuplicateEvent = false;
     static bool triggerAddPopup = false;
+    static int eventToDeleteIndex = -1;
+    static bool triggerEventDeletePopup = false;
+
+    if (!ImGui::GetIO().WantTextInput) {
+        if (g_CurrentDefView == EDefViewType::Defs) {
+            if (!g_DefWorkspace.SelectedType.empty() && g_DefWorkspace.SelectedEntryIndex != -1) {
+                if (g_DefWorkspace.CategorizedDefs.count(g_DefWorkspace.SelectedType) &&
+                    g_DefWorkspace.SelectedEntryIndex < (int)g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType].size()) {
+                    auto& curEntry = g_DefWorkspace.CategorizedDefs[g_DefWorkspace.SelectedType][g_DefWorkspace.SelectedEntryIndex];
+                    if (g_Keybinds.MarkForPackaging.IsPressed()) {
+                        StagedModPackageEntry staged;
+                        staged.Category = EModAssetCategory::Definition;
+                        staged.EntryName = curEntry.Name;
+                        staged.TypeName = "Definition";
+                        staged.BankName = std::filesystem::path(curEntry.SourceFile).filename().string();
+                        staged.SubBankName = g_DefWorkspace.SelectedType;
+                        staged.SourceFullPath = curEntry.SourceFile;
+                        ModPackageTracker::ToggleMark(staged);
+                    }
+                    if (g_Keybinds.DuplicateEntry.IsPressed()) {
+                        s_DefToDuplicate = curEntry;
+                        s_TriggerDuplicateDef = true;
+                    }
+                    if (g_Keybinds.DeleteEntry.IsPressed()) {
+                        if (g_AppConfig.ShowDeleteConfirm) {
+                            entryToDeleteCopy = curEntry;
+                            triggerDeletePopup = true;
+                        }
+                        else {
+                            s_DefToDelete = curEntry;
+                            s_TriggerDirectDeleteDef = true;
+                        }
+                    }
+                }
+            }
+        }
+        else if (g_CurrentDefView == EDefViewType::Headers) {
+            if (g_DefWorkspace.SelectedEnumIndex != -1 && g_DefWorkspace.SelectedEnumIndex < (int)g_DefWorkspace.AllEnums.size()) {
+                auto& curEnum = g_DefWorkspace.AllEnums[g_DefWorkspace.SelectedEnumIndex];
+                if (g_Keybinds.MarkForPackaging.IsPressed()) {
+                    StagedModPackageEntry staged;
+                    staged.Category = EModAssetCategory::Header;
+                    staged.EntryName = curEnum.Name;
+                    staged.TypeName = "C++ Header";
+                    staged.BankName = std::filesystem::path(curEnum.FilePath).filename().string();
+                    staged.SubBankName = "Defs";
+                    staged.SourceFullPath = curEnum.FilePath;
+                    ModPackageTracker::ToggleMark(staged);
+                }
+            }
+        }
+        else if (g_CurrentDefView == EDefViewType::Events) {
+            EventFile* curEvtFile = g_EventWorkspace.GetActiveFile();
+            if (curEvtFile && g_EventWorkspace.SelectedEventIndex != -1 && g_EventWorkspace.SelectedEventIndex < (int)curEvtFile->Events.size()) {
+                auto& curEvt = curEvtFile->Events[g_EventWorkspace.SelectedEventIndex];
+                if (g_Keybinds.MarkForPackaging.IsPressed()) {
+                    StagedModPackageEntry staged;
+                    staged.Category = EModAssetCategory::AnimationEvent;
+                    staged.EntryName = curEvt.AnimName;
+                    staged.TypeName = (g_EventWorkspace.SelectedFileType == 0) ? "Sound Event" : "Game Event";
+                    staged.BankName = curEvtFile->FileName;
+                    staged.SubBankName = "Misc";
+                    staged.SourceFullPath = curEvtFile->FilePath;
+                    ModPackageTracker::ToggleMark(staged);
+                }
+                if (g_Keybinds.DuplicateEntry.IsPressed()) {
+                    s_EventToDuplicate = curEvt;
+                    s_TriggerDuplicateEvent = true;
+                }
+                if (g_Keybinds.DeleteEntry.IsPressed()) {
+                    if (g_AppConfig.ShowDeleteConfirm) {
+                        eventToDeleteIndex = g_EventWorkspace.SelectedEventIndex;
+                        triggerEventDeletePopup = true;
+                    }
+                    else {
+                        int delIdx = g_EventWorkspace.SelectedEventIndex;
+                        ModPackageTracker::RemoveMark(curEvtFile->FileName, curEvtFile->Events[delIdx].AnimName);
+                        curEvtFile->Events.erase(curEvtFile->Events.begin() + delIdx);
+                        g_EventWorkspace.SelectedEventIndex = -1;
+                        g_EventWorkspace.Editor.SetText("");
+                        curEvtFile->Save();
+                    }
+                }
+            }
+        }
+    }
 
     if (!ImGui::GetIO().WantTextInput && g_Keybinds.ToggleLeftPanel.IsPressed()) {
         showLeftPanel = !showLeftPanel;
@@ -131,19 +224,51 @@ static void DrawDefTab() {
         }
     }
 
-    float compileBtnWidth = 130.0f;
+    bool hasUnsavedChanges = g_DefWorkspace.IsDirty();
 
-    ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnWidth - 15.0f);
+    const float compileBtnSize = 20.0f;
+    ImGui::SameLine(ImGui::GetWindowWidth() - compileBtnSize - 16.0f);
 
     // --- RECOMPILE BUTTON ---
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.3f, 0.3f, 1.0f));
-    if (ImGui::Button("RECOMPILE", ImVec2(compileBtnWidth, 0))) {
-        if (!g_IsCompiling) {
-            CompileAllDefs_Native();
+    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.0f);
+    ImVec4 orangeCol = hasUnsavedChanges 
+        ? ImVec4(1.0f, 0.60f + 0.25f * pulse, 0.15f, 1.0f) 
+        : ImVec4(1.0f, 0.55f, 0.10f, 0.85f);
+
+    if (g_CompileTexture) {
+        if (ImGui::ImageButton("##CompileDefsBtn", g_CompileTexture, ImVec2(compileBtnSize, compileBtnSize), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), orangeCol)) {
+            if (!g_IsCompiling) {
+                CompileAllDefs_Native();
+            }
         }
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compiles game definitions and sound binaries into their respective .bin files.\n(Does not require ego_r.exe.)");
-    ImGui::PopStyleColor();
+    else {
+        ImGui::PushStyleColor(ImGuiCol_Button, orangeCol);
+        if (ImGui::Button("Compile", ImVec2(60, compileBtnSize))) {
+            if (!g_IsCompiling) {
+                CompileAllDefs_Native();
+            }
+        }
+        ImGui::PopStyleColor();
+    }
+
+    if (hasUnsavedChanges) {
+        ImVec2 btnMin = ImGui::GetItemRectMin();
+        ImVec2 btnMax = ImGui::GetItemRectMax();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float btnRounding = 4.0f;
+        for (int i = 3; i >= 1; i--) {
+            float expand = (float)i * 1.5f;
+            float alpha = pulse * (1.0f - (float)i / 4.0f) * 0.70f;
+            ImU32 glowCol = IM_COL32(255, 140, 25, (uint32_t)(alpha * 255.0f));
+            dl->AddRect(ImVec2(btnMin.x - expand, btnMin.y - expand), ImVec2(btnMax.x + expand, btnMax.y + expand), glowCol, btnRounding + expand, 0, 1.5f);
+        }
+    }
+
+    if (ImGui::IsItemHovered()) {
+        if (hasUnsavedChanges) ImGui::SetTooltip("Recompile (Unsaved changes pending)");
+        else ImGui::SetTooltip("Recompile");
+    }
 
     if (g_CurrentMode == EAppMode::Defs && !g_IsCompiling && g_Keybinds.Compile.IsPressed() && !ImGui::GetIO().WantTextInput) {
         CompileAllDefs_Native();
@@ -154,7 +279,7 @@ static void DrawDefTab() {
 
     if (g_CurrentDefView == EDefViewType::Defs) {
         if (showLeftPanel) {
-            ImGui::BeginChild("DefLeftPane", ImVec2(leftPaneWidth, 0), true);
+            ImGui::BeginChild("DefLeftPane", ImVec2(g_SidebarWidth, 0), true);
 
             if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
                 if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
@@ -171,10 +296,17 @@ static void DrawDefTab() {
                 }
             }
 
-            ImGui::InputText("Filter", g_DefWorkspace.FilterText, 128);
+            float availW = ImGui::GetContentRegionAvail().x;
+            float checkW = ImGui::GetFrameHeight();
+            ImGui::SetNextItemWidth(availW - checkW - ImGui::GetStyle().ItemSpacing.x);
+            ImGui::InputTextWithHint("##DefFilter", "Filter...", g_DefWorkspace.FilterText, 128);
+            ImGui::SameLine();
+            ImGui::Checkbox("##DefMarked", &g_DefWorkspace.ShowMarkedOnly);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Marked Entries Only");
+
             std::string filterLower = g_DefWorkspace.FilterText;
             std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
-            bool hasFilter = !filterLower.empty();
+            bool hasFilter = !filterLower.empty() || g_DefWorkspace.ShowMarkedOnly;
             ImGui::Separator();
 
             std::string typeToAdd = "";
@@ -183,12 +315,20 @@ static void DrawDefTab() {
                 if (hasFilter) {
                     std::string typeLower = type;
                     std::transform(typeLower.begin(), typeLower.end(), typeLower.begin(), ::tolower);
-                    if (typeLower.find(filterLower) != std::string::npos) showFolder = true;
+                    if (!filterLower.empty() && typeLower.find(filterLower) != std::string::npos && !g_DefWorkspace.ShowMarkedOnly) showFolder = true;
                     if (!showFolder) {
                         for (auto& e : entries) {
-                            std::string nameLo = e.Name;
-                            std::transform(nameLo.begin(), nameLo.end(), nameLo.begin(), ::tolower);
-                            if (nameLo.find(filterLower) != std::string::npos) { showFolder = true; break; }
+                            if (g_DefWorkspace.ShowMarkedOnly) {
+                                std::string bankFileName = std::filesystem::path(e.SourceFile).filename().string();
+                                if (!ModPackageTracker::IsMarked(bankFileName, e.Name)) continue;
+                            }
+                            if (!filterLower.empty()) {
+                                std::string nameLo = e.Name;
+                                std::transform(nameLo.begin(), nameLo.end(), nameLo.begin(), ::tolower);
+                                if (nameLo.find(filterLower) == std::string::npos) continue;
+                            }
+                            showFolder = true;
+                            break;
                         }
                     }
                 }
@@ -205,7 +345,11 @@ static void DrawDefTab() {
 
                 if (ImGui::TreeNode(type.c_str())) {
                     for (int k = 0; k < (int)entries.size(); k++) {
-                        if (hasFilter) {
+                        std::string bankFileName = std::filesystem::path(entries[k].SourceFile).filename().string();
+                        bool isMarked = ModPackageTracker::IsMarked(bankFileName, entries[k].Name);
+                        if (g_DefWorkspace.ShowMarkedOnly && !isMarked) continue;
+
+                        if (!filterLower.empty()) {
                             std::string n = entries[k].Name;
                             std::transform(n.begin(), n.end(), n.begin(), ::tolower);
                             if (n.find(filterLower) == std::string::npos) continue;
@@ -217,14 +361,19 @@ static void DrawDefTab() {
                         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
                         if (ImGui::SmallButton("-")) {
                             if (g_AppConfig.ShowDeleteConfirm) { entryToDeleteCopy = entries[k]; triggerDeletePopup = true; }
-                            else { DeleteDefEntry(entries[k]); ImGui::PopStyleColor(3); ImGui::PopID(); ImGui::TreePop(); ImGui::EndChild(); return; }
+                            else { s_DefToDelete = entries[k]; s_TriggerDirectDeleteDef = true; }
                         }
                         ImGui::PopStyleColor(3);
                         ImGui::PopID();
 
                         ImGui::SameLine();
 
-                        std::string label = entries[k].Name + "##" + type + std::to_string(k);
+                        std::string label = entries[k].Name;
+                        if (isMarked) label += " [M]";
+                        label += "##" + type + std::to_string(k);
+
+                        if (isMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
+
                         bool isSelected = (g_DefWorkspace.SelectedType == type && g_DefWorkspace.SelectedEntryIndex == k);
                         if (ImGui::Selectable(label.c_str(), isSelected)) {
                             RequestLoadDef(type, k);
@@ -241,11 +390,51 @@ static void DrawDefTab() {
                             ImGui::Text("Stage Def: %s", entries[k].Name.c_str());
                             ImGui::EndDragDropSource();
                         }
+
+                        if (isMarked) ImGui::PopStyleColor();
+
+                        if (ImGui::BeginPopupContextItem()) {
+                            if (ImGui::MenuItem(isMarked ? "Unmark for Packaging" : "Mark for Packaging (Tracker)")) {
+                                StagedModPackageEntry staged;
+                                staged.Category = EModAssetCategory::Definition;
+                                staged.EntryName = entries[k].Name;
+                                staged.TypeName = "Definition";
+                                staged.BankName = bankFileName;
+                                staged.SubBankName = type;
+                                staged.SourceFullPath = entries[k].SourceFile;
+                                ModPackageTracker::ToggleMark(staged);
+                            }
+                            ImGui::Separator();
+                            if (ImGui::MenuItem("Duplicate Entry")) {
+                                s_DefToDuplicate = entries[k];
+                                s_TriggerDuplicateDef = true;
+                            }
+                            if (ImGui::MenuItem("Delete Entry")) {
+                                if (g_AppConfig.ShowDeleteConfirm) {
+                                    entryToDeleteCopy = entries[k];
+                                    triggerDeletePopup = true;
+                                }
+                                else {
+                                    s_DefToDelete = entries[k];
+                                    s_TriggerDirectDeleteDef = true;
+                                }
+                            }
+                            ImGui::EndPopup();
+                        }
                     }
                     ImGui::TreePop();
                 }
             }
             if (!typeToAdd.empty()) CreateNewDef(typeToAdd);
+
+            if (s_TriggerDirectDeleteDef) {
+                DeleteDefEntry(s_DefToDelete);
+                s_TriggerDirectDeleteDef = false;
+            }
+            if (s_TriggerDuplicateDef) {
+                DuplicateDefEntry(s_DefToDuplicate);
+                s_TriggerDuplicateDef = false;
+            }
 
             if (triggerDeletePopup) { ImGui::OpenPopup("DeleteConfirmation"); triggerDeletePopup = false; }
             if (ImGui::BeginPopupModal("DeleteConfirmation", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -277,7 +466,7 @@ static void DrawDefTab() {
             ImGui::SameLine();
             ImGui::InvisibleButton("vsplitterDef", ImVec2(4.0f, -1.0f));
             if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-            if (ImGui::IsItemActive()) leftPaneWidth += ImGui::GetIO().MouseDelta.x;
+            if (ImGui::IsItemActive()) g_SidebarWidth += ImGui::GetIO().MouseDelta.x;
             ImGui::SameLine();
         }
 
@@ -408,7 +597,7 @@ static void DrawDefTab() {
     }
     else if (g_CurrentDefView == EDefViewType::Headers) {
         if (showLeftPanel) {
-            ImGui::BeginChild("HeadLeftPane", ImVec2(leftPaneWidth, 0), true);
+            ImGui::BeginChild("HeadLeftPane", ImVec2(g_SidebarWidth, 0), true);
 
             if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
                 if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
@@ -423,20 +612,37 @@ static void DrawDefTab() {
                 }
             }
 
-            ImGui::InputText("Filter", g_DefWorkspace.HeaderFilter, 128);
+            float availHW = ImGui::GetContentRegionAvail().x;
+            float checkHW = ImGui::GetFrameHeight();
+            ImGui::SetNextItemWidth(availHW - checkHW - ImGui::GetStyle().ItemSpacing.x);
+            ImGui::InputTextWithHint("##HeaderFilter", "Filter...", g_DefWorkspace.HeaderFilter, 128);
+            ImGui::SameLine();
+            ImGui::Checkbox("##HeadMarked", &g_DefWorkspace.ShowMarkedHeadersOnly);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Marked Entries Only");
+
             std::string hFilter = g_DefWorkspace.HeaderFilter;
             std::transform(hFilter.begin(), hFilter.end(), hFilter.begin(), ::tolower);
             ImGui::Separator();
 
             if (ImGui::BeginListBox("##headerList", ImVec2(-FLT_MIN, -FLT_MIN))) {
                 for (int i = 0; i < g_DefWorkspace.AllEnums.size(); i++) {
+                    auto& enumEntry = g_DefWorkspace.AllEnums[i];
+                    std::string bankFileName = std::filesystem::path(enumEntry.FilePath).filename().string();
+                    bool isMarked = ModPackageTracker::IsMarked(bankFileName, enumEntry.Name);
+                    if (g_DefWorkspace.ShowMarkedHeadersOnly && !isMarked) continue;
+
                     if (!hFilter.empty()) {
                         std::string nameLo = g_DefWorkspace.AllEnums[i].Name;
                         std::transform(nameLo.begin(), nameLo.end(), nameLo.begin(), ::tolower);
                         if (nameLo.find(hFilter) == std::string::npos) continue;
                     }
 
-                    std::string label = g_DefWorkspace.AllEnums[i].Name + "##" + std::to_string(i);
+                    std::string label = enumEntry.Name;
+                    if (isMarked) label += " [M]";
+                    label += "##" + std::to_string(i);
+
+                    if (isMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
+
                     bool isSelected = (g_DefWorkspace.SelectedEnumIndex == i);
 
                     if (ImGui::Selectable(label.c_str(), isSelected)) {
@@ -448,8 +654,32 @@ static void DrawDefTab() {
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                         HeaderDragPayload payload = { i };
                         ImGui::SetDragDropPayload("HEADER_ENTRY_PAYLOAD", &payload, sizeof(HeaderDragPayload));
-                        ImGui::Text("Stage Header: %s", g_DefWorkspace.AllEnums[i].Name.c_str());
+                        ImGui::Text("Stage Header: %s", enumEntry.Name.c_str());
                         ImGui::EndDragDropSource();
+                    }
+
+                    if (isMarked) ImGui::PopStyleColor();
+
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::MenuItem(isMarked ? "Unmark for Packaging" : "Mark for Packaging (Tracker)")) {
+                            StagedModPackageEntry staged;
+                            staged.Category = EModAssetCategory::Header;
+                            staged.EntryName = enumEntry.Name;
+                            staged.TypeName = "C++ Header";
+                            staged.BankName = bankFileName;
+                            staged.SubBankName = "Defs";
+                            staged.SourceFullPath = enumEntry.FilePath;
+                            ModPackageTracker::ToggleMark(staged);
+                        }
+                        ImGui::Separator();
+                        ImGui::BeginDisabled(true);
+                        ImGui::MenuItem("Duplicate Entry");
+                        ImGui::MenuItem("Delete Entry");
+                        ImGui::EndDisabled();
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                            ImGui::SetTooltip("Headers cannot be duplicated or deleted.");
+                        }
+                        ImGui::EndPopup();
                     }
                 }
                 ImGui::EndListBox();
@@ -458,7 +688,7 @@ static void DrawDefTab() {
             ImGui::SameLine();
             ImGui::InvisibleButton("vsplitterHead", ImVec2(4.0f, -1.0f));
             if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-            if (ImGui::IsItemActive()) leftPaneWidth += ImGui::GetIO().MouseDelta.x;
+            if (ImGui::IsItemActive()) g_SidebarWidth += ImGui::GetIO().MouseDelta.x;
             ImGui::SameLine();
         }
 
@@ -538,7 +768,7 @@ static void DrawDefTab() {
         EventFile* activeFile = g_EventWorkspace.GetActiveFile();
 
         if (showLeftPanel) {
-            ImGui::BeginChild("EvtLeftPane", ImVec2(leftPaneWidth, 0), true);
+            ImGui::BeginChild("EvtLeftPane", ImVec2(g_SidebarWidth, 0), true);
 
             if (ImGui::Button("+", ImVec2(24, 0))) {
                 EventEntry newEvent;
@@ -554,21 +784,30 @@ static void DrawDefTab() {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Event");
 
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 45.0f);
-            ImGui::InputText("Filter", g_EventWorkspace.FilterText, 128);
+            float availEW = ImGui::GetContentRegionAvail().x;
+            float checkEW = ImGui::GetFrameHeight();
+            ImGui::SetNextItemWidth(availEW - checkEW - ImGui::GetStyle().ItemSpacing.x);
+            ImGui::InputTextWithHint("##EvtFilter", "Filter...", g_EventWorkspace.FilterText, 128);
+            ImGui::SameLine();
+            ImGui::Checkbox("##EvtMarked", &g_EventWorkspace.ShowMarkedOnly);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show Marked Entries Only");
 
             std::string filterLower = g_EventWorkspace.FilterText;
             std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
             ImGui::Separator();
 
-            static int eventToDeleteIndex = -1;
-            static bool triggerEventDeletePopup = false;
+            
             static bool s_ScrollToSelectedEvent = false;
 
             std::vector<int> visibleEvents;
             if (activeFile && activeFile->IsLoaded) {
                 visibleEvents.reserve(activeFile->Events.size());
                 for (int i = 0; i < (int)activeFile->Events.size(); i++) {
+                    if (g_EventWorkspace.ShowMarkedOnly) {
+                        bool isMarked = ModPackageTracker::IsMarked(activeFile->FileName, activeFile->Events[i].AnimName);
+                        if (!isMarked) continue;
+                    }
+
                     if (!filterLower.empty()) {
                         std::string n = activeFile->Events[i].AnimName;
                         std::transform(n.begin(), n.end(), n.begin(), ::tolower);
@@ -647,7 +886,13 @@ static void DrawDefTab() {
                     ImGui::SameLine();
 
                     std::string prefix = g_EventWorkspace.SelectedFileType == 0 ? "SoundEvent" : "GameEvent";
-                    std::string label = prefix + std::to_string(i + 1) + ": " + ev.AnimName + "##" + std::to_string(i);
+                    bool isMarked = ModPackageTracker::IsMarked(activeFile->FileName, ev.AnimName);
+
+                    std::string label = prefix + std::to_string(i + 1) + ": " + ev.AnimName;
+                    if (isMarked) label += " [M]";
+                    label += "##" + std::to_string(i);
+
+                    if (isMarked) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 1.0f, 1.0f));
 
                     bool isSelected = (g_EventWorkspace.SelectedEventIndex == i);
                     if (ImGui::Selectable(label.c_str(), isSelected)) {
@@ -674,12 +919,70 @@ static void DrawDefTab() {
                         ImGui::Text("Stage Event: %s", ev.AnimName.c_str());
                         ImGui::EndDragDropSource();
                     }
+
+                    if (isMarked) ImGui::PopStyleColor();
+
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::MenuItem(isMarked ? "Unmark for Packaging" : "Mark for Packaging (Tracker)")) {
+                            StagedModPackageEntry staged;
+                            staged.Category = EModAssetCategory::AnimationEvent;
+                            staged.EntryName = ev.AnimName;
+                            staged.TypeName = (g_EventWorkspace.SelectedFileType == 0) ? "Sound Event" : "Game Event";
+                            staged.BankName = activeFile->FileName;
+                            staged.SubBankName = "Misc";
+                            staged.SourceFullPath = activeFile->FilePath;
+                            ModPackageTracker::ToggleMark(staged);
+                        }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("Duplicate Entry")) {
+                            s_EventToDuplicate = ev;
+                            s_TriggerDuplicateEvent = true;
+                        }
+                        if (ImGui::MenuItem("Delete Entry")) {
+                            if (g_AppConfig.ShowDeleteConfirm) {
+                                eventToDeleteIndex = i;
+                                triggerEventDeletePopup = true;
+                            }
+                            else {
+                                ModPackageTracker::RemoveMark(activeFile->FileName, activeFile->Events[i].AnimName);
+                                activeFile->Events.erase(activeFile->Events.begin() + i);
+                                if (g_EventWorkspace.SelectedEventIndex == i) {
+                                    g_EventWorkspace.SelectedEventIndex = -1;
+                                    g_EventWorkspace.Editor.SetText("");
+                                }
+                                else if (g_EventWorkspace.SelectedEventIndex > i) {
+                                    g_EventWorkspace.SelectedEventIndex--;
+                                }
+                                activeFile->Save();
+                            }
+                        }
+                        ImGui::EndPopup();
+                    }
                 }
             }
             else {
                 ImGui::TextDisabled("File not found or loaded.");
             }
             ImGui::EndChild();
+
+            if (s_TriggerDuplicateEvent && activeFile) {
+                std::string newAnimName = GenerateDuplicateName(s_EventToDuplicate.AnimName, [&](const std::string& candidate) {
+                    for (const auto& existingEv : activeFile->Events) {
+                        if (existingEv.AnimName == candidate) return true;
+                    }
+                    return false;
+                });
+                EventEntry newEv = s_EventToDuplicate;
+                newEv.AnimName = newAnimName;
+                activeFile->Events.push_back(newEv);
+                activeFile->Save();
+                g_EventWorkspace.SelectedEventIndex = (int)activeFile->Events.size() - 1;
+                g_EventWorkspace.Editor.SetText(newEv.Content);
+                g_EventWorkspace.OriginalContent = g_EventWorkspace.Editor.GetText();
+                g_EventWorkspace.SavedUndoIndex = g_EventWorkspace.Editor.GetUndoIndex();
+                s_ScrollToSelectedEvent = true;
+                s_TriggerDuplicateEvent = false;
+            }
 
             if (triggerEventDeletePopup) { ImGui::OpenPopup("DeleteEventConfirmation"); triggerEventDeletePopup = false; }
             if (ImGui::BeginPopupModal("DeleteEventConfirmation", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -689,6 +992,7 @@ static void DrawDefTab() {
                 if (ImGui::Button("Yes", ImVec2(100, 0))) {
                     if (dontShowDelete) { g_AppConfig.ShowDeleteConfirm = false; SaveConfig(); }
 
+                    ModPackageTracker::RemoveMark(activeFile->FileName, activeFile->Events[eventToDeleteIndex].AnimName);
                     activeFile->Events.erase(activeFile->Events.begin() + eventToDeleteIndex);
                     if (g_EventWorkspace.SelectedEventIndex == eventToDeleteIndex) {
                         g_EventWorkspace.SelectedEventIndex = -1;
@@ -710,7 +1014,7 @@ static void DrawDefTab() {
             ImGui::SameLine();
             ImGui::InvisibleButton("vsplitterEvt", ImVec2(4.0f, -1.0f));
             if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-            if (ImGui::IsItemActive()) leftPaneWidth += ImGui::GetIO().MouseDelta.x;
+            if (ImGui::IsItemActive()) g_SidebarWidth += ImGui::GetIO().MouseDelta.x;
             ImGui::SameLine();
         }
 

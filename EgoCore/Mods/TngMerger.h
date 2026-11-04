@@ -22,7 +22,14 @@ public:
 
         size_t settingsStart = mContent.find("[Settings]");
         if (settingsStart != std::string::npos) {
-            size_t settingsEnd = mContent.find("XXXSectionStart", settingsStart);
+            size_t verPos = mContent.find("Version", settingsStart);
+            size_t secPos = mContent.find("XXXSectionStart", settingsStart);
+            size_t settingsEnd = std::string::npos;
+            if (verPos != std::string::npos && (secPos == std::string::npos || verPos < secPos)) {
+                settingsEnd = verPos;
+            } else {
+                settingsEnd = secPos;
+            }
             if (settingsEnd == std::string::npos) settingsEnd = mContent.length();
 
             std::string settingsBlock = mContent.substr(settingsStart, settingsEnd - settingsStart);
@@ -64,9 +71,14 @@ public:
             size_t secEnd = cleanedModContent.find("XXXSectionEnd;", secStart);
             if (secEnd == std::string::npos) break;
 
-            size_t nameStart = secStart + 16;
+            size_t nameStart = secStart + 15;
+            while (nameStart < cleanedModContent.length() && (cleanedModContent[nameStart] == ' ' || cleanedModContent[nameStart] == '\t')) nameStart++;
             size_t nameEnd = cleanedModContent.find(";", nameStart);
+            if (nameEnd == std::string::npos) break;
             std::string secName = cleanedModContent.substr(nameStart, nameEnd - nameStart);
+            size_t f = secName.find_first_not_of(" \t\r\n");
+            size_t l = secName.find_last_not_of(" \t\r\n");
+            if (f != std::string::npos) secName = secName.substr(f, l - f + 1);
 
             std::string modSection = cleanedModContent.substr(nameEnd + 1, secEnd - (nameEnd + 1));
 
@@ -97,7 +109,12 @@ private:
     static void MergeSection(std::string& targetContent, const std::string& secName, const std::string& modSection) {
         std::string searchSec = "XXXSectionStart " + secName + ";";
         size_t tSecStart = targetContent.find(searchSec);
-        if (tSecStart == std::string::npos) return;
+        if (tSecStart == std::string::npos) {
+            // Append missing section to target
+            if (!targetContent.empty() && targetContent.back() != '\n') targetContent += "\n";
+            targetContent += "XXXSectionStart " + secName + ";\n" + modSection + "XXXSectionEnd;\n\n";
+            return;
+        }
 
         size_t tSecEnd = targetContent.find("XXXSectionEnd;", tSecStart);
         if (tSecEnd == std::string::npos) return;

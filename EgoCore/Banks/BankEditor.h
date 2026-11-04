@@ -1,5 +1,66 @@
 #pragma once
 #include "BankLoader.h"
+#include "ModPackageTracker.h"
+
+inline void UpdateFilter(LoadedBank& bank) {
+    bank.FilteredIndices.clear();
+    std::string filter = bank.FilterText;
+    std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+    bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank)));
+
+    for (size_t i = 0; i < bank.Entries.size(); i++) {
+        if (bank.ShowMarkedOnly) {
+            if (!ModPackageTracker::IsMarked(bank.FileName, bank.Entries[i].Name)) continue;
+        }
+        if (bank.FilterTypeMask != -1) {
+            if (bank.Entries[i].Type != bank.FilterTypeMask) continue;
+        }
+
+        if (isTextureBank && bank.FilterTextureFormatMask != -1) {
+            ETextureFormat fmt = PeekTextureFormatFast(bank, (int)i);
+            int mappedFmt = -1;
+            if (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) mappedFmt = 0;
+            else if (fmt == ETextureFormat::DXT3) mappedFmt = 1;
+            else if (fmt == ETextureFormat::DXT5 || fmt == ETextureFormat::NormalMap_DXT5) mappedFmt = 2;
+            else if (fmt == ETextureFormat::ARGB8888) mappedFmt = 3;
+
+            if (mappedFmt != bank.FilterTextureFormatMask) continue;
+        }
+
+        if (filter.empty()) {
+            bank.FilteredIndices.push_back((int)i);
+            continue;
+        }
+
+        bool match = false;
+
+        if (bank.FilterMode == EFilterMode::ID) {
+            std::string idStr = std::to_string(bank.Entries[i].ID);
+            if (idStr.find(filter) != std::string::npos) match = true;
+        }
+        else if (bank.FilterMode == EFilterMode::Speaker && bank.Type == EBankType::Text) {
+            if (bank.Entries[i].Type == 0) {
+                std::string spk = PeekSpeakerFast(bank, (int)i);
+                std::transform(spk.begin(), spk.end(), spk.begin(), ::tolower);
+                if (spk.find(filter) != std::string::npos) match = true;
+            }
+        }
+        else {
+            std::string name = bank.Entries[i].Name;
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            std::string friendly = bank.Entries[i].FriendlyName;
+            std::transform(friendly.begin(), friendly.end(), friendly.begin(), ::tolower);
+
+            if (name.find(filter) != std::string::npos || friendly.find(filter) != std::string::npos) {
+                match = true;
+            }
+        }
+
+        if (match) bank.FilteredIndices.push_back((int)i);
+    }
+}
+
 #include "TextureBuilder.h"
 #include "BigBankCompiler.h"
 #include "ParticleCompiler.h"
@@ -25,6 +86,31 @@ inline std::string SanitizeEnumName(std::string name) {
     return res;
 }
 
+inline bool IsBankHeader(const std::string& fileName) {
+    std::string fn = fileName;
+    std::transform(fn.begin(), fn.end(), fn.begin(), ::tolower);
+    size_t lastSlash = fn.find_last_of("\\/");
+    if (lastSlash != std::string::npos) fn = fn.substr(lastSlash + 1);
+
+    return (fn == "meshdata.h" ||
+            fn == "engmesh.h" ||
+            fn == "textures.h" ||
+            fn == "front_end_bank.h" ||
+            fn == "gui_bank.h" ||
+            fn == "text.h" ||
+            fn == "particles.h" ||
+            fn == "particles_frontend.h" ||
+            fn == "dialogue_lipsync.h" ||
+            fn == "dialogue_lipsync2.h" ||
+            fn == "script_lipsync.h" ||
+            fn == "script_lipsync2.h" ||
+            fn == "gamesnds.h" ||
+            fn == "dialoguesnds.h" ||
+            fn == "dialoguesnds2.h" ||
+            fn == "scriptdialoguesnds.h" ||
+            fn == "scriptdialoguesnds2.h");
+}
+
 inline void SyncBankEnums(LoadedBank* bank) {
     if (!bank) return;
 
@@ -34,72 +120,86 @@ inline void SyncBankEnums(LoadedBank* bank) {
 
     auto RebuildEnum = [&](const std::string& enumName, const std::vector<BankEntry>& entries, std::function<bool(const BankEntry&)> filter) {
         std::string body;
+        std::set<std::string> seenNames;
         for (const auto& e : entries) {
             if (filter(e)) {
-                body += "\t" + SanitizeEnumName(e.Name) + " = " + std::to_string(e.ID) + ",\n";
+                std::string sName = SanitizeEnumName(e.Name);
+                if (sName.empty() || seenNames.count(sName)) continue;
+                seenNames.insert(sName);
+                body += "\t" + sName + " = " + std::to_string(e.ID) + ",\n";
+
+                std::string upperName = sName;
+                std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
+                if (upperName != sName && !seenNames.count(upperName)) {
+                    seenNames.insert(upperName);
+                    body += "\t" + upperName + " = " + std::to_string(e.ID) + ",\n";
+                }
             }
         }
         ReplaceAndSaveEnum(enumName, body);
-        };
+    };
 
     if (!bank->SubBanks.empty()) {
-        if (bank->Type == EBankType::Textures) {
-            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-                if (bank->SubBanks[i].Name == "GBANK_MAIN_PC" && bank->ActiveSubBankIndex == i) {
+        int originalSubBank = bank->ActiveSubBankIndex;
+
+        for (int s = 0; s < (int)bank->SubBanks.size(); s++) {
+            if (bank->ActiveSubBankIndex != s) {
+                LoadSubBankEntries(bank, s);
+            }
+
+            const std::string& sbName = bank->SubBanks[s].Name;
+            std::string sbUpper = sbName;
+            std::transform(sbUpper.begin(), sbUpper.end(), sbUpper.begin(), ::toupper);
+
+            if (bank->Type == EBankType::Textures) {
+                if (sbUpper == "GBANK_MAIN_PC" || sbUpper == "GBANK_MAIN") {
                     RebuildEnum("EEngineGraphic", bank->Entries, [](const BankEntry& e) { return !e.Name.empty() && e.Name[0] != '['; });
                 }
-                else if (bank->SubBanks[i].Name == "GBANK_GUI_PC" && bank->ActiveSubBankIndex == i) {
+                else if (sbUpper == "GBANK_GUI_PC" || sbUpper == "GBANK_GUI") {
                     RebuildEnum("EGuiGraphicBank", bank->Entries, [](const BankEntry& e) { return true; });
                 }
             }
-        }
-        else if (bank->Type == EBankType::Frontend) {
-            if (bank->ActiveSubBankIndex >= 0) RebuildEnum("EFrontEndGraphicBank", bank->Entries, [](const BankEntry& e) { return true; });
-        }
-        else if (bank->Type == EBankType::Graphics) {
-            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-                if (bank->SubBanks[i].Name == "MBANK_ALLMESHES" && bank->ActiveSubBankIndex == i) {
+            else if (bank->Type == EBankType::Frontend) {
+                RebuildEnum("EFrontEndGraphicBank", bank->Entries, [](const BankEntry& e) { return true; });
+            }
+            else if (bank->Type == EBankType::Graphics) {
+                if (sbUpper == "MBANK_ALLMESHES") {
                     RebuildEnum("EAnimType2", bank->Entries, [](const BankEntry& e) { return e.Type == 6 || e.Type == 7 || e.Type == 9; });
                     RebuildEnum("EMeshType2", bank->Entries, [](const BankEntry& e) {
                         if (e.Type == 6 || e.Type == 7 || e.Type == 9) return false;
                         if (e.Type == 3) return StartsWith(e.Name, "CMESH");
                         return true;
-                        });
+                    });
                 }
-                else if (bank->SubBanks[i].Name == "MBANK_ENGINE" && bank->ActiveSubBankIndex == i) {
+                else if (sbUpper == "MBANK_ENGINE") {
                     RebuildEnum("EEngineMeshType", bank->Entries, [](const BankEntry& e) { return true; });
                 }
             }
-        }
-        else if (bank->Type == EBankType::Text) {
-            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-                if (bank->ActiveSubBankIndex == i) {
-                    std::string sbName = bank->SubBanks[i].Name;
-                    std::transform(sbName.begin(), sbName.end(), sbName.begin(), ::toupper);
-                    if (sbName.find("TEXT_") == 0 && sbName.find("_MAIN") != std::string::npos) {
-                        RebuildEnum("EGameText", bank->Entries, [](const BankEntry& e) { return e.Type != 2; });
-                    }
+            else if (bank->Type == EBankType::Text) {
+                if (sbUpper.find("TEXT_") == 0 && sbUpper.find("_MAIN") != std::string::npos) {
+                    RebuildEnum("EGameText", bank->Entries, [](const BankEntry& e) { return e.Type == 0 || (e.Type != 1 && e.Type != 2); });
+                    RebuildEnum("ETextGroup", bank->Entries, [](const BankEntry& e) { return e.Type == 1; });
                 }
             }
-        }
-        else if (bank->Type == EBankType::Dialogue) {
-            for (int i = 0; i < (int)bank->SubBanks.size(); i++) {
-                if (bank->ActiveSubBankIndex == i) {
-                    std::string sbName = bank->SubBanks[i].Name;
-                    std::transform(sbName.begin(), sbName.end(), sbName.begin(), ::toupper);
-                    std::string targetEnum = "";
-                    if (sbName.find("LIPSYNC_") == 0) {
-                        if (sbName.find("_MAIN_2") != std::string::npos) targetEnum = "ELipSync3";
-                        else if (sbName.find("_MAIN") != std::string::npos) targetEnum = "ELipSync";
-                        else if (sbName.find("_SCRIPT_2") != std::string::npos) targetEnum = "ELipSync4";
-                        else if (sbName.find("_SCRIPT") != std::string::npos) targetEnum = "ELipSync2";
-                    }
-                    if (!targetEnum.empty()) RebuildEnum(targetEnum, bank->Entries, [](const BankEntry& e) { return true; });
+            else if (bank->Type == EBankType::Dialogue) {
+                std::string targetEnum = "";
+                if (sbUpper.find("LIPSYNC_") == 0) {
+                    if (sbUpper.find("_MAIN_2") != std::string::npos) targetEnum = "ELipSync3";
+                    else if (sbUpper.find("_MAIN") != std::string::npos) targetEnum = "ELipSync";
+                    else if (sbUpper.find("_SCRIPT_2") != std::string::npos) targetEnum = "ELipSync4";
+                    else if (sbUpper.find("_SCRIPT") != std::string::npos) targetEnum = "ELipSync2";
+                }
+                if (!targetEnum.empty()) {
+                    RebuildEnum(targetEnum, bank->Entries, [](const BankEntry& e) { return true; });
                 }
             }
+            else if (bank->Type == EBankType::Effects) {
+                RebuildEnum("EParticleEmitter", bank->Entries, [](const BankEntry& e) { return true; });
+            }
         }
-        else if (bank->Type == EBankType::Effects) {
-            if (bank->ActiveSubBankIndex >= 0) RebuildEnum("EParticleEmitter", bank->Entries, [](const BankEntry& e) { return true; });
+
+        if (originalSubBank >= 0 && originalSubBank < (int)bank->SubBanks.size() && bank->ActiveSubBankIndex != originalSubBank) {
+            LoadSubBankEntries(bank, originalSubBank);
         }
     }
 
@@ -111,7 +211,7 @@ inline void SyncBankEnums(LoadedBank* bank) {
             std::vector<LugParser::ParsedLugEntry> sortedEntries = bank->LugParserPtr->Entries;
             std::sort(sortedEntries.begin(), sortedEntries.end(), [](const LugParser::ParsedLugEntry& a, const LugParser::ParsedLugEntry& b) {
                 return a.SoundID < b.SoundID;
-                });
+            });
 
             std::string body;
             uint32_t maxID = 0;
@@ -137,6 +237,10 @@ inline void SyncBankEnums(LoadedBank* bank) {
             body += "\tSND_LAST = " + std::to_string(maxID + 1) + "\n";
 
             ReplaceAndSaveEnum("SND", body);
+
+            std::string log;
+            std::string defsPath = g_AppConfig.GameRootPath + "\\Data\\Defs";
+            BinaryParser::CompileSoundBinaries(defsPath, log);
         }
     }
 }
@@ -981,6 +1085,9 @@ inline void DeleteBankEntry(LoadedBank* bank, int index) {
         return;
     }
 
+    std::string entryNameToDelete = bank->Entries[index].Name;
+    ModPackageTracker::RemoveMark(bank->FileName, entryNameToDelete);
+
     uint32_t targetID = bank->Entries[index].ID;
 
     if (bank->Type == EBankType::Audio) {
@@ -1409,13 +1516,13 @@ inline void SaveBigBank(LoadedBank* bank) {
 
             if (g_LipSyncState.Stream->is_open()) {
                 if (LipSyncCompiler::CompileLipSyncFromState(g_LipSyncState)) {
-                    SyncBankEnums(bank);
-                    g_BankStatus = "Dialogue Bank Recompiled Successfully.";
                     g_LipSyncState.PendingAdds.clear();
                     g_LipSyncState.PendingDeletes.clear();
                     g_LipSyncState.CachedSubBankIndex = -1;
                     g_LipSyncState.Stream->close();
                     ReloadBankInPlace(bank);
+                    SyncBankEnums(bank);
+                    g_BankStatus = "Dialogue Bank Recompiled Successfully.";
                     g_ShowSuccessPopup = true;
                     g_SuccessMessage = "Dialogue Bank Compiled Successfully!";
                 }
@@ -1431,9 +1538,9 @@ inline void SaveBigBank(LoadedBank* bank) {
     }
     else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || bank->Type == EBankType::Graphics || bank->Type == EBankType::Effects || bank->Type == EBankType::Fonts || bank->Type == EBankType::Shaders) {
         if (BigBankCompiler::Compile(bank)) {
+            ReloadBankInPlace(bank);
             SyncBankEnums(bank);
             g_BankStatus = "Bank Recompiled Successfully.";
-            ReloadBankInPlace(bank);
             g_ShowSuccessPopup = true;
             g_SuccessMessage = "Bank & Headers Compiled Successfully!";
         }

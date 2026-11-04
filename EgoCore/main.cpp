@@ -43,6 +43,7 @@ ImTextureID g_ZoomInTexture = 0;
 ImTextureID g_ZoomOutTexture = 0;
 ImTextureID g_ChangeTexture = 0;
 ImTextureID g_SettingsTexture = 0;
+ImTextureID g_CompileTexture = 0;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
@@ -81,29 +82,53 @@ bool LoadTextureFromFile(const char* filename, ID3D11Device* d3dDevice, ID3D11Sh
     ZeroMemory(&desc, sizeof(desc));
     desc.Width = image_width;
     desc.Height = image_height;
-    desc.MipLevels = 1;
+    desc.MipLevels = 0; // 0 = allocate full mipmap chain
     desc.ArraySize = 1;
     desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
     desc.CPUAccessFlags = 0;
 
     ID3D11Texture2D* pTexture = NULL;
-    D3D11_SUBRESOURCE_DATA subResource;
-    subResource.pSysMem = image_data;
-    subResource.SysMemPitch = desc.Width * 4;
-    subResource.SysMemSlicePitch = 0;
-    d3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+    HRESULT hr = d3dDevice->CreateTexture2D(&desc, NULL, &pTexture);
+    if (SUCCEEDED(hr) && pTexture) {
+        ID3D11DeviceContext* pContext = nullptr;
+        d3dDevice->GetImmediateContext(&pContext);
+        pContext->UpdateSubresource(pTexture, 0, NULL, image_data, desc.Width * 4, 0);
 
-    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-    ZeroMemory(&srvDesc, sizeof(srvDesc));
-    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = desc.MipLevels;
-    srvDesc.Texture2D.MostDetailedMip = 0;
-    d3dDevice->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
-    pTexture->Release();
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        ZeroMemory(&srvDesc, sizeof(srvDesc));
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = (UINT)-1;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        d3dDevice->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
+        pContext->GenerateMips(*out_srv);
+        pContext->Release();
+        pTexture->Release();
+    }
+    else {
+        // Fallback to single mip level if render target / autogen is unsupported
+        desc.MipLevels = 1;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.MiscFlags = 0;
+        D3D11_SUBRESOURCE_DATA subResource;
+        subResource.pSysMem = image_data;
+        subResource.SysMemPitch = desc.Width * 4;
+        subResource.SysMemSlicePitch = 0;
+        d3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        ZeroMemory(&srvDesc, sizeof(srvDesc));
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        d3dDevice->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
+        if (pTexture) pTexture->Release();
+    }
 
     *out_width = image_width;
     *out_height = image_height;
@@ -165,7 +190,7 @@ int main(int, char**) {
     int iconWidth = 0, iconHeight = 0;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvMusicOn, srvMusicOff, srvSearch, srvSave, srvDelete;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvPlay, srvPause, srvStop, srvLoop, srvImport;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvExport, srvAdd, srvResize, srvZoomIn, srvZoomOut, srvChange, srvSettings;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srvExport, srvAdd, srvResize, srvZoomIn, srvZoomOut, srvChange, srvSettings, srvCompile;
 
     auto LoadIcon = [&](const char* path, Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& srv, ImTextureID& targetTex) {
         if (std::filesystem::exists(path)) {
@@ -192,6 +217,7 @@ int main(int, char**) {
     LoadIcon("Assets/ZoomOut.png", srvZoomOut, g_ZoomOutTexture);
     LoadIcon("Assets/Change.png", srvChange, g_ChangeTexture);
     LoadIcon("Assets/Settings.png", srvSettings, g_SettingsTexture);
+    LoadIcon("Assets/Compile.png", srvCompile, g_CompileTexture);
 
     bool done = false;
     while (!done) {

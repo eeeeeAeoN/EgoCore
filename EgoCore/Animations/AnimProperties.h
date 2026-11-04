@@ -22,6 +22,8 @@ extern ImTextureID g_ExportTexture;
 extern ImTextureID g_ChangeTexture;
 
 
+inline bool g_ShowAnimRenderer = true;
+
 static const ImVec4 kChangeIconTint = ImVec4(0.95f, 0.82f, 0.45f, 1.0f);
 
 static MeshRenderer g_StandaloneRenderer;
@@ -135,12 +137,24 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
     static float rightPanelWidth = 546.0f;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float splitterWidth = 4.0f;
-    float leftWidth = avail.x - rightPanelWidth - splitterWidth;
-    if (leftWidth < 260.0f) leftWidth = 260.0f;
+    float leftWidth = avail.x;
+    if (g_ShowAnimRenderer) {
+        leftWidth = avail.x - rightPanelWidth - splitterWidth;
+        if (leftWidth < 260.0f) leftWidth = 260.0f;
+    }
 
     ImGui::BeginChild("AnimLeftPanel", ImVec2(leftWidth, avail.y), false);
     {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Overview");
+        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 24.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+        if (ImGui::Button(g_ShowAnimRenderer ? ">##AnimToggle" : "<##AnimToggle", ImVec2(24, 20))) {
+            g_ShowAnimRenderer = !g_ShowAnimRenderer;
+        }
+        ImGui::PopStyleVar(2);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowAnimRenderer ? "Collapse Viewport" : "Expand Viewport");
+
         ImGui::Separator();
 
         ImGui::Checkbox("Is Cyclic (Looping Animation)", &anim.IsCyclic);
@@ -310,8 +324,9 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
     }
     ImGui::EndChild();
 
-    ImGui::SameLine(0, 0);
-    ImVec2 splitterMin = ImGui::GetCursorScreenPos();
+    if (g_ShowAnimRenderer) {
+        ImGui::SameLine(0, 0);
+        ImVec2 splitterMin = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("AnimVSplitter", ImVec2(splitterWidth, avail.y));
     if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     if (ImGui::IsItemActive()) {
@@ -814,4 +829,5 @@ inline void DrawAnimProperties(std::string& entryName, uint32_t entryID, int32_t
         }
     }
     ImGui::EndChild();
+    }
 }

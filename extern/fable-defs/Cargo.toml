@@ -1,0 +1,13 @@
+[workspace]
+members = ["packages/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Zlib"
+repository = "https://github.com/jamen/fable-defs"
+homepage = "https://github.com/jamen/fable-defs"
+readme = "README.md"
+publish = false

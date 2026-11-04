@@ -330,6 +330,12 @@
     <ClInclude Include="Banks\AnimationEventCompiler.h">
       <Filter>Source Files\Banks</Filter>
     </ClInclude>
+    <ClInclude Include="Banks\BankTypes.h">
+      <Filter>Source Files\Banks</Filter>
+    </ClInclude>
+    <ClInclude Include="Mods\ModPackageTracker.h">
+      <Filter>Source Files\Mods</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Utilities\ImGUI\imgui.cpp">

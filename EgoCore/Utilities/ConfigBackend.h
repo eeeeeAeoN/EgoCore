@@ -5,6 +5,8 @@
 #include <sstream>
 #include <filesystem>
 #include "InputManager.h"
+#include <functional>
+#include <regex>
 
 namespace fs = std::filesystem;
 
@@ -45,6 +47,7 @@ struct RawMarkedEntry {
 };
 inline std::vector<std::pair<std::string, bool>> g_SavedModOrder;
 inline std::vector<RawMarkedEntry>               g_SavedMarkedEntries;
+inline float                                      g_SidebarWidth = 300.0f;
 
 inline std::vector<std::string> GetDefaultBanks(const std::string& root) {
     const char* langs[] = { "English", "French", "Italian", "Chinese", "German", "Korean", "Japanese", "Spanish" };
@@ -105,7 +108,10 @@ inline void SaveConfig() {
         SaveKey("Key_NavigateBack", g_Keybinds.NavigateBack);
         SaveKey("Key_NavigateForward", g_Keybinds.NavigateForward);
         SaveKey("Key_DeleteEntry", g_Keybinds.DeleteEntry);
+        SaveKey("Key_DuplicateEntry", g_Keybinds.DuplicateEntry);
+        SaveKey("Key_MarkForPackaging", g_Keybinds.MarkForPackaging);
         SaveKey("Key_ToggleLeftPanel", g_Keybinds.ToggleLeftPanel);
+        SaveKey("Key_ToggleRightPanel", g_Keybinds.ToggleRightPanel);
         SaveKey("Key_LookupDefinition", g_Keybinds.LookupDefinition);
 
         file << "[ModOrder]\n";
@@ -249,9 +255,33 @@ inline void LoadConfig() {
             else if (line.find("Key_NavigateBack=") == 0) ParseKey(line.substr(17), g_Keybinds.NavigateBack);
             else if (line.find("Key_NavigateForward=") == 0) ParseKey(line.substr(20), g_Keybinds.NavigateForward);
             else if (line.find("Key_DeleteEntry=") == 0) ParseKey(line.substr(16), g_Keybinds.DeleteEntry);
+            else if (line.find("Key_DuplicateEntry=") == 0) ParseKey(line.substr(19), g_Keybinds.DuplicateEntry);
+            else if (line.find("Key_MarkForPackaging=") == 0) ParseKey(line.substr(21), g_Keybinds.MarkForPackaging);
             else if (line.find("Key_ToggleLeftPanel=") == 0) ParseKey(line.substr(20), g_Keybinds.ToggleLeftPanel);
+            else if (line.find("Key_ToggleRightPanel=") == 0) ParseKey(line.substr(21), g_Keybinds.ToggleRightPanel);
             else if (line.find("Key_LookupDefinition=") == 0) ParseKey(line.substr(21), g_Keybinds.LookupDefinition);
         }
         file.close();
     }
+}
+
+
+inline std::string GenerateDuplicateName(const std::string& originalName, const std::function<bool(const std::string&)>& existsFn) {
+    std::string base = originalName;
+    std::regex copyRegex(R"((.*)_COPY(_\d+)?$)", std::regex::icase);
+    std::smatch match;
+    if (std::regex_match(originalName, match, copyRegex)) {
+        base = match[1].str();
+    }
+
+    std::string candidate = base + "_COPY";
+    if (!existsFn(candidate)) return candidate;
+
+    for (int i = 2; i < 1000; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "_COPY_%02d", i);
+        candidate = base + buf;
+        if (!existsFn(candidate)) return candidate;
+    }
+    return base + "_COPY_NEW";
 }

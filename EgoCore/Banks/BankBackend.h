@@ -18,7 +18,6 @@
 #include <set>
 #include <memory>
 #include "ShaderParser.h"
-
 namespace fs = std::filesystem;
 
 inline bool g_ShowSuccessPopup = false;
@@ -29,9 +28,7 @@ inline std::string g_NameCollisionMessage = "";
 inline std::string g_ShaderCompileError;
 inline bool g_ShowShaderErrorPopup = false;
 
-enum class EBankType {
-    Unknown, Graphics, Textures, Frontend, Effects, Text, Dialogue, Fonts, Shaders, Audio, XboxGraphics
-};
+#include "BankTypes.h"
 
 struct BankEntry {
     uint32_t ID = 0;
@@ -91,6 +88,7 @@ struct LoadedBank {
 
     uint32_t FileVersion = 2;
     bool IsDirty = false;
+    bool ShowMarkedOnly = false;
 
     std::vector<InternalBankInfo> SubBanks;
     int ActiveSubBankIndex = -1;
@@ -337,61 +335,7 @@ inline ETextureFormat PeekTextureFormatFast(LoadedBank& bank, int index) {
     }
 }
 
-inline void UpdateFilter(LoadedBank& bank) {
-    bank.FilteredIndices.clear();
-    std::string filter = bank.FilterText;
-    std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
-
-    bool isTextureBank = (bank.Type == EBankType::Textures || bank.Type == EBankType::Frontend || (bank.Type == EBankType::XboxGraphics && IsTextureSubBank(&bank)));
-
-    for (size_t i = 0; i < bank.Entries.size(); i++) {
-        if (bank.FilterTypeMask != -1) {
-            if (bank.Entries[i].Type != bank.FilterTypeMask) continue;
-        }
-
-        if (isTextureBank && bank.FilterTextureFormatMask != -1) {
-            ETextureFormat fmt = PeekTextureFormatFast(bank, (int)i);
-            int mappedFmt = -1;
-            if (fmt == ETextureFormat::DXT1 || fmt == ETextureFormat::NormalMap_DXT1) mappedFmt = 0;
-            else if (fmt == ETextureFormat::DXT3) mappedFmt = 1;
-            else if (fmt == ETextureFormat::DXT5 || fmt == ETextureFormat::NormalMap_DXT5) mappedFmt = 2;
-            else if (fmt == ETextureFormat::ARGB8888) mappedFmt = 3;
-
-            if (mappedFmt != bank.FilterTextureFormatMask) continue;
-        }
-
-        if (filter.empty()) {
-            bank.FilteredIndices.push_back((int)i);
-            continue;
-        }
-
-        bool match = false;
-
-        if (bank.FilterMode == EFilterMode::ID) {
-            std::string idStr = std::to_string(bank.Entries[i].ID);
-            if (idStr.find(filter) != std::string::npos) match = true;
-        }
-        else if (bank.FilterMode == EFilterMode::Speaker && bank.Type == EBankType::Text) {
-            if (bank.Entries[i].Type == 0) {
-                std::string spk = PeekSpeakerFast(bank, (int)i);
-                std::transform(spk.begin(), spk.end(), spk.begin(), ::tolower);
-                if (spk.find(filter) != std::string::npos) match = true;
-            }
-        }
-        else {
-            std::string name = bank.Entries[i].Name;
-            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-            std::string friendly = bank.Entries[i].FriendlyName;
-            std::transform(friendly.begin(), friendly.end(), friendly.begin(), ::tolower);
-
-            if (name.find(filter) != std::string::npos || friendly.find(filter) != std::string::npos) {
-                match = true;
-            }
-        }
-
-        if (match) bank.FilteredIndices.push_back((int)i);
-    }
-}
+inline void UpdateFilter(LoadedBank& bank);
 
 // -- I know a project of all headers isn't even remotely how one should program. I don't care, bite me! --
 inline void FlushStagedEntries(LoadedBank* bank);

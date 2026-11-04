@@ -34,6 +34,7 @@
     <ClInclude Include="Banks\BankExplorer.h" />
     <ClInclude Include="Banks\BankLoader.h" />
     <ClInclude Include="Banks\BankTabUI.h" />
+    <ClInclude Include="Banks\BankTypes.h" />
     <ClInclude Include="Banks\BigBankCompiler.h" />
     <ClInclude Include="Banks\BinaryParser.h" />
     <ClInclude Include="Definitions\CompilerBackend.h" />
@@ -66,6 +67,7 @@
     <ClInclude Include="Mods\ModManagerBackend.h" />
     <ClInclude Include="Mods\ModManagerCompiler.h" />
     <ClInclude Include="Mods\ModManagerUI.h" />
+    <ClInclude Include="Mods\ModPackageTracker.h" />
     <ClInclude Include="Mods\TngMerger.h" />
     <ClInclude Include="Mods\WldMerger.h" />
     <ClInclude Include="Mods\GtgMerger.h" />

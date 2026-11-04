@@ -1,0 +1,146 @@
+name: CI
+
+# Everything runs inside `nix develop .#ci`, so CI uses the exact toolchain
+# flake.lock pins. rustup's rolling `stable` drifts — clippy gains lints between
+# releases and fails on code that is clean locally, a false failure this project
+# has already hit once.
+#
+# `.#ci` is the trimmed shell: same rustc and same targets as the interactive
+# `default` shell, minus rust-analyzer, rust-src and rust-docs. That is ~700 MB
+# less to fetch and cache (1.5 GB vs 2.2 GB closure). Both are defined in
+# flake.nix from one helper so they cannot drift apart.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Superseded pushes are pointless to finish. Tags are excluded so a release
+# build cannot be cancelled by a follow-up push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # One job: check and build share the nix store, the cargo cache and the
+  # compiled dependencies, so splitting them would pay the setup cost twice to
+  # save nothing.
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # nix-quick-install rather than cachix/install-nix-action: the latter does a
+      # multi-user install where /nix/store is root-owned and managed by
+      # nix-daemon, and cache-nix-action then cannot untar into it ("Cannot mkdir"
+      # on every path). This installer keeps the store owned by the runner, which
+      # is what cache-nix-action requires.
+      - uses: nixbuild/nix-quick-install-action@v30
+        with:
+          nix_conf: |
+            experimental-features = nix-command flakes
+            keep-outputs = true
+
+      # Restores /nix/store so the devshell closure is not re-fetched each run.
+      # Keyed on flake.lock: a new key is written only when the pinned inputs
+      # actually change.
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          # Keep the cache bounded — without this it grows every time an input moves.
+          gc-max-store-size-linux: 2G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 604800
+
+      # Compiled dependencies and the cargo registry.
+      - uses: Swatinem/rust-cache@v2
+
+      # cargo-xwin fetches the Windows SDK and CRT import libraries on first use.
+      # flake.nix points XWIN_CACHE_DIR at target/xwin.
+      - uses: actions/cache@v4
+        with:
+          path: target/xwin
+          key: xwin-${{ runner.os }}
+
+      - name: Toolchain
+        run: nix develop .#ci --command bash -c 'rustc --version && cargo clippy --version'
+
+      - run: nix develop .#ci --command cargo fmt --all --check
+
+      # `-- -D warnings` rather than RUSTFLAGS: it applies only to workspace
+      # crates, so a warning in a dependency cannot fail the build and cached
+      # dependency artifacts stay valid.
+      #
+      # --all-targets covers examples: verify/probe_field/probe_counter are the
+      # divergence-investigation tooling (AGENTS.md §5) and rot silently otherwise.
+      - run: nix develop .#ci --command cargo clippy --workspace --all-targets -- -D warnings
+
+      # The golden byte-determinism test skips when OA_TEXT_DIR is unset, because
+      # the Fable corpus is not redistributable. So this runs the unit tests only
+      # and golden stays a local gate — see AGENTS.md §5.
+      - run: nix develop .#ci --command cargo test --workspace
+
+      # musl, not the default gnu target: gnu bakes the build machine's glibc
+      # loader path into the ELF interpreter, so the artifact cannot start on a
+      # machine lacking that exact path. musl links libc statically and needs no
+      # interpreter. Pure-Rust workspace (miniz_oxide, no libz-sys), so no C
+      # cross-toolchain is needed.
+      - name: Build Linux (musl, static)
+        run: nix develop .#ci --command cargo build --release --locked -p defc --target x86_64-unknown-linux-musl
+
+      # MSVC ABI, matching what EgoCore links against (FableDefs.targets).
+      # Cross-linked so it uses the same pinned rustc as everything else.
+      - name: Build Windows (MSVC, cross-linked)
+        run: nix develop .#ci --command cargo xwin build --release --locked -p defc --target x86_64-pc-windows-msvc
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/defc dist/defc
+          cp target/x86_64-pc-windows-msvc/release/defc.exe dist/defc.exe
+          # Most of the size is debug info, and the embedded toolchain paths it
+          # carries are also what makes builds irreproducible.
+          strip dist/defc
+          cd dist && sha256sum defc defc.exe | tee SHA256SUMS
+          file defc defc.exe
+
+      # The Linux binary must start with no interpreter — the failure this target
+      # choice exists to prevent does not appear at link time. `defc.exe` is
+      # cross-built and goes unexecuted; running it would need a Windows runner,
+      # not worth the cost until there is a sample corpus to compile.
+      - name: Smoke test (Linux)
+        run: dist/defc --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: defc-binaries
+          path: dist/
+          if-no-files-found: error
+
+  # Separate only so `contents: write` is not granted to the job that builds.
+  # Downloads the artifact the `ci` job already produced — no nix, no rebuild.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: defc-binaries
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

@@ -63,6 +63,8 @@ public:
         std::string tContent((std::istreambuf_iterator<char>(tIn)), std::istreambuf_iterator<char>());
         tIn.close();
 
+        std::string originalContent = tContent;
+
         // 1. Process INITIAL_QUESTS section
         ProcessQuests(cleanedModContent, tContent);
 
@@ -71,6 +73,10 @@ public:
 
         // 3. Process NewRegion entries
         ProcessRegions(cleanedModContent, tContent);
+
+        if (tContent != originalContent) {
+            result.mapsChanged = true;
+        }
 
         std::ofstream out(targetFile, std::ios::binary | std::ios::trunc);
         out << tContent;

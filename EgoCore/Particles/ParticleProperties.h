@@ -49,7 +49,7 @@ static int g_TargetSystemIndexForAdd = -1;
 static int g_SelectedNewCompType = 0;
 
 // --- SIMULATOR & VIEWPORT STATE ---
-static bool g_ShowParticleRenderer = true;
+inline bool g_ShowParticleRenderer = true;
 static ParticleRenderer g_ParticleRenderer;
 static ParticleSimulator g_ParticleSimulator;
 static const CParticleEmitter* g_LastSimulatedEmitter = nullptr;

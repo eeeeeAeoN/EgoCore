@@ -1,5 +1,8 @@
 #pragma once
 #include "imgui.h"
+#include <atomic>
+#include <thread>
+#include <mutex>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -17,7 +20,6 @@ extern ImFont* g_TitleFont;
 inline int g_ModToDeleteIndex = -1;
 inline bool g_TriggerDeleteModPopup = false;
 inline bool g_ShowModPackageWindow = false;
-inline std::vector<StagedModPackageEntry> g_ModPackageEntries;
 inline char g_ModNameBuffer[128] = "";
 
 extern ImTextureID g_SearchTexture;
@@ -563,7 +565,7 @@ inline void DrawModManagerWindow() {
                         ModManagerBackend::UpdateGlobalModsIni();
 
                         if (wasAsset) g_AppConfig.ModSystemDirty = true;
-                        if (wasDef) g_AppConfig.DefSystemDirty = true;
+                        if (wasDef) { g_AppConfig.DefSystemDirty = true; g_AppConfig.ModSystemDirty = true; }
                         if (wasTng) g_AppConfig.TngSystemDirty = true;
                         if (wasFSE) g_AppConfig.FSESystemDirty = true;
                         SaveConfig();
@@ -637,7 +639,7 @@ inline void DrawModManagerWindow() {
                 ModManagerBackend::UpdateGlobalModsIni();
                 ModManagerBackend::SaveLoadOrder();
                 if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true;
-                if (mod.IsDefMod)   g_AppConfig.DefSystemDirty = true;
+                if (mod.IsDefMod) { g_AppConfig.DefSystemDirty = true; g_AppConfig.ModSystemDirty = true; }
                 if (mod.IsTngMod)   g_AppConfig.TngSystemDirty = true;
                 if (mod.IsFSEMod)   g_AppConfig.FSESystemDirty = true;
                 SaveConfig();
@@ -860,7 +862,7 @@ inline void DrawModManagerWindow() {
                     if (file) {
                         file << newContent;
                         if (mod.IsAssetMod) g_AppConfig.ModSystemDirty = true;
-                        if (mod.IsDefMod)   g_AppConfig.DefSystemDirty = true;
+                        if (mod.IsDefMod) { g_AppConfig.DefSystemDirty = true; g_AppConfig.ModSystemDirty = true; }
                         if (mod.IsTngMod)   g_AppConfig.TngSystemDirty = true;
                         SaveConfig();
                     }
@@ -1037,6 +1039,23 @@ static void DrawAssetCategoryBadge(EModAssetCategory cat) {
     ImGui::Dummy(ImVec2(w, h + 2.0f));
 }
 
+struct ModPackageBuildState {
+    std::atomic<bool> IsBuilding{false};
+    std::atomic<bool> Finished{false};
+    std::atomic<bool> Success{false};
+    std::atomic<float> Progress{0.0f};
+    std::atomic<int> CurrentItem{0};
+    std::atomic<int> TotalItems{0};
+    std::mutex Mutex;
+    std::string StageText;
+    std::string ItemText;
+    std::string ErrorMessage;
+    std::string OutputPath;
+    std::string ModName;
+};
+
+inline ModPackageBuildState s_ModBuildState;
+inline bool s_TriggerBuildProgressModal = false;
 static bool s_ShowModPackagePopup = false;
 static std::string s_ModPackagePopupMsg = "";
 static std::string s_LastExportedModPath = "";
@@ -1164,19 +1183,7 @@ inline void DrawModPackageWindow() {
             ImGui::TableSetupColumn("Del", ImGuiTableColumnFlags_WidthFixed, 32.0f);
             ImGui::TableHeadersRow();
 
-            if (g_ModPackageEntries.empty()) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Dummy(ImVec2(0, 24.0f));
-                ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.35f, 1.0f), "No assets staged for package.");
-                ImGui::Dummy(ImVec2(0, 4.0f));
-                ImGui::TextColored(ImVec4(0.70f, 0.72f, 0.78f, 1.0f), "Drag & drop entries here from Bank Explorer, Defs, Headers, Events, or FSE Quests.");
-                ImGui::Dummy(ImVec2(0, 4.0f));
-                ImGui::TextDisabled("Or use 'Auto-Add' buttons above to pull your modified assets.");
-                ImGui::Dummy(ImVec2(0, 24.0f));
-            }
-            else {
-                for (size_t i = 0; i < g_ModPackageEntries.size(); i++) {
+            for (size_t i = 0; i < g_ModPackageEntries.size(); i++) {
                     auto& e = g_ModPackageEntries[i];
                     ImGui::TableNextRow();
 
@@ -1203,7 +1210,6 @@ inline void DrawModPackageWindow() {
                     }
                     ImGui::PopStyleColor(3);
                     ImGui::PopID();
-                }
             }
             ImGui::EndTable();
         }
@@ -1608,10 +1614,14 @@ inline void DrawModPackageWindow() {
         // Bottom Controls Row
         bool hasName = (strlen(g_ModNameBuffer) > 0);
         bool hasEntries = !g_ModPackageEntries.empty();
-        bool canBuild = hasName && hasEntries;
+        bool isBuilding = s_ModBuildState.IsBuilding.load();
+        bool canBuild = hasName && hasEntries && !isBuilding;
 
         ImGui::AlignTextToFramePadding();
-        if (!hasName && !hasEntries) {
+        if (isBuilding) {
+            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.35f, 1.0f), "Packaging in progress...");
+        }
+        else if (!hasName && !hasEntries) {
             ImGui::TextColored(ImVec4(0.60f, 0.62f, 0.68f, 1.0f), "Enter a mod name and stage at least one asset to build.");
         }
         else if (!hasName) {
@@ -1635,54 +1645,252 @@ inline void DrawModPackageWindow() {
             canBuild ? ImVec4(0.18f, 0.48f, 0.28f, 0.90f) : ImVec4(0.20f, 0.22f, 0.25f, 0.50f),
             ImVec4(0.24f, 0.65f, 0.36f, 1.00f)))
         {
-            ModManagerCompiler::BuildPackageStructure(g_ModNameBuffer, g_ModPackageEntries);
-            s_LastExportedModPath = fs::current_path().string() + "\\ExportedMods\\" + g_ModNameBuffer;
-            s_ModPackagePopupMsg = std::string("Mod package '") + g_ModNameBuffer + "' was created successfully!\nAll staged assets and folders were generated.";
-            s_ShowModPackagePopup = true;
+            std::string modName = g_ModNameBuffer;
+            std::vector<StagedModPackageEntry> entries = g_ModPackageEntries;
+
+            s_ModBuildState.IsBuilding = true;
+            s_ModBuildState.Finished = false;
+            s_ModBuildState.Success = false;
+            s_ModBuildState.Progress = 0.0f;
+            s_ModBuildState.CurrentItem = 0;
+            s_ModBuildState.TotalItems = (int)entries.size();
+            {
+                std::lock_guard<std::mutex> lock(s_ModBuildState.Mutex);
+                s_ModBuildState.ModName = modName;
+                s_ModBuildState.StageText = "Initializing...";
+                s_ModBuildState.ItemText = "Preparing staged assets";
+                s_ModBuildState.ErrorMessage = "";
+                s_ModBuildState.OutputPath = fs::current_path().string() + "\\ExportedMods\\" + modName;
+            }
+
+            s_TriggerBuildProgressModal = true;
+
+            std::thread([modName, entries]() {
+                try {
+                    ModManagerCompiler::BuildPackageStructure(modName, entries, [](float p, const std::string& stage, const std::string& item, int cur, int tot) {
+                        s_ModBuildState.Progress = p;
+                        s_ModBuildState.CurrentItem = cur;
+                        s_ModBuildState.TotalItems = tot;
+                        {
+                            std::lock_guard<std::mutex> lock(s_ModBuildState.Mutex);
+                            s_ModBuildState.StageText = stage;
+                            s_ModBuildState.ItemText = item;
+                        }
+                    });
+
+                    s_ModBuildState.Progress = 1.0f;
+                    s_ModBuildState.Success = true;
+                    {
+                        std::lock_guard<std::mutex> lock(s_ModBuildState.Mutex);
+                        s_ModBuildState.StageText = "Package build complete!";
+                        s_ModBuildState.ItemText = "All staged assets compiled and written.";
+                    }
+                }
+                catch (const std::exception& e) {
+                    s_ModBuildState.Success = false;
+                    std::lock_guard<std::mutex> lock(s_ModBuildState.Mutex);
+                    s_ModBuildState.ErrorMessage = e.what();
+                    s_ModBuildState.StageText = "Build failed";
+                }
+                catch (...) {
+                    s_ModBuildState.Success = false;
+                    std::lock_guard<std::mutex> lock(s_ModBuildState.Mutex);
+                    s_ModBuildState.ErrorMessage = "An unknown error occurred during packaging.";
+                    s_ModBuildState.StageText = "Build failed";
+                }
+
+                s_ModBuildState.Finished = true;
+                s_ModBuildState.IsBuilding = false;
+            }).detach();
         }
         ImGui::EndDisabled();
 
-        // Notification Modal Popup with "Open Folder in Explorer"
+        // Async Build Progress Modal Popup
+        if (s_TriggerBuildProgressModal) {
+            ImGui::OpenPopup("ModPackageBuildProgressModal");
+            s_TriggerBuildProgressModal = false;
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.98f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
+
+        ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+        if (ImGui::BeginPopupModal("ModPackageBuildProgressModal", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings)) {
+            bool building = s_ModBuildState.IsBuilding.load();
+            bool finished = s_ModBuildState.Finished.load();
+            bool success = s_ModBuildState.Success.load();
+            float progress = s_ModBuildState.Progress.load();
+            int curItem = s_ModBuildState.CurrentItem.load();
+            int totalItems = s_ModBuildState.TotalItems.load();
+
+            std::string modName, stageText, itemText, errorMsg, outputPath;
+            {
+                std::lock_guard<std::mutex> lock(s_ModBuildState.Mutex);
+                modName = s_ModBuildState.ModName;
+                stageText = s_ModBuildState.StageText;
+                itemText = s_ModBuildState.ItemText;
+                errorMsg = s_ModBuildState.ErrorMessage;
+                outputPath = s_ModBuildState.OutputPath;
+            }
+
+            const char* title = finished ? (success ? "PACKAGE COMPLETE" : "BUILD FAILED") : "BUILDING MOD PACKAGE";
+            DrawGoldModalHeader(title);
+
+            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.35f, 1.0f), "Mod Package:");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.90f, 0.92f, 0.96f, 1.0f), "%s", modName.c_str());
+
+            ImGui::Dummy(ImVec2(0, 4.0f));
+
+            if (building) {
+                static const char* dots[] = { "", ".", "..", "..." };
+                int dotIdx = (int)(ImGui::GetTime() * 3.0) % 4;
+                ImGui::TextColored(ImVec4(0.70f, 0.85f, 0.95f, 1.0f), "%s%s", stageText.c_str(), dots[dotIdx]);
+            }
+            else if (success) {
+                ImGui::TextColored(ImVec4(0.40f, 0.88f, 0.55f, 1.0f), "[SUCCESS] Mod package created successfully!");
+            }
+            else {
+                ImGui::TextColored(ImVec4(0.92f, 0.40f, 0.40f, 1.0f), "[ERROR] Build failed:");
+            }
+
+            ImGui::Dummy(ImVec2(0, 4.0f));
+
+            // Progress Bar
+            char overlayBuf[128];
+            if (finished) {
+                if (success) {
+                    snprintf(overlayBuf, sizeof(overlayBuf), "Complete (%d / %d assets)", totalItems, totalItems);
+                } else {
+                    snprintf(overlayBuf, sizeof(overlayBuf), "Build Failed");
+                }
+            } else {
+                if (totalItems > 0 && curItem > 0) {
+                    snprintf(overlayBuf, sizeof(overlayBuf), "%.0f%% (%d / %d assets)", progress * 100.0f, curItem, totalItems);
+                } else {
+                    snprintf(overlayBuf, sizeof(overlayBuf), "%.0f%%", progress * 100.0f);
+                }
+            }
+
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, (success || building) ? ImVec4(0.95f, 0.78f, 0.35f, 0.90f) : ImVec4(0.85f, 0.28f, 0.28f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.13f, 0.17f, 0.85f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
+            ImGui::ProgressBar(progress, ImVec2(480.0f, 24.0f), overlayBuf);
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(2);
+
+            ImGui::Dummy(ImVec2(0, 6.0f));
+
+            if (building) {
+                // Smooth rotating arc spinner next to item info
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                ImVec2 curPos = ImGui::GetCursorScreenPos();
+                float time = (float)ImGui::GetTime();
+                float spinRadius = 7.0f;
+                ImVec2 spinCenter = ImVec2(curPos.x + spinRadius + 2.0f, curPos.y + spinRadius + 2.0f);
+
+                float aMin = time * 6.0f;
+                float aMax = aMin + 1.8f;
+                dl->PathClear();
+                dl->PathArcTo(spinCenter, spinRadius, aMin, aMax, 16);
+                dl->PathStroke(IM_COL32(242, 193, 78, 220), 0, 2.0f);
+
+                ImGui::SetCursorScreenPos(ImVec2(curPos.x + spinRadius * 2.0f + 10.0f, curPos.y));
+                ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + 450.0f);
+                if (!itemText.empty()) {
+                    ImGui::TextDisabled("Item: %s", itemText.c_str());
+                } else {
+                    ImGui::TextDisabled("Processing assets...");
+                }
+                ImGui::PopTextWrapPos();
+
+                ImGui::Dummy(ImVec2(0, 8.0f));
+                ImGui::TextColored(ImVec4(0.60f, 0.62f, 0.68f, 0.85f), "Please wait while assets are compiled and written...");
+            }
+            else if (success) {
+                if (!outputPath.empty()) {
+                    ImGui::TextDisabled("Output Directory:");
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + 480.0f);
+                    ImGui::TextWrapped("%s", outputPath.c_str());
+                    ImGui::PopTextWrapPos();
+                }
+            }
+            else {
+                if (!errorMsg.empty()) {
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + 480.0f);
+                    ImGui::TextWrapped("%s", errorMsg.c_str());
+                    ImGui::PopTextWrapPos();
+                }
+            }
+
+            ImGui::Dummy(ImVec2(0, 10.0f));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 8.0f));
+
+            if (finished) {
+                if (success && !outputPath.empty() && fs::exists(outputPath)) {
+                    if (DrawAccentButton("Open Folder in Explorer", ImVec2(190, 30),
+                        ImVec4(0.18f, 0.35f, 0.60f, 0.90f), ImVec4(0.25f, 0.48f, 0.80f, 1.00f))) {
+                        ShellExecuteA(NULL, "open", outputPath.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                    }
+                    ImGui::SameLine(0, 10.0f);
+                }
+
+                if (DrawAccentButton("Close", ImVec2(100, 30),
+                    ImVec4(0.20f, 0.22f, 0.26f, 0.90f), ImVec4(0.30f, 0.33f, 0.38f, 1.00f))) {
+                    s_ModBuildState.Finished = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            else {
+                ImGui::TextDisabled("Background build in progress - EgoCore is responsive.");
+            }
+
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(3);
+
+        // Notification Modal Popup (drag-and-drop notices)
         if (s_ShowModPackagePopup) {
             ImGui::OpenPopup("Mod Package Notification");
             s_ShowModPackagePopup = false;
         }
 
-        if (ImGui::BeginPopupModal("Mod Package Notification", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Dummy(ImVec2(0, 4.0f));
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.75f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.11f, 0.98f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.70f, 0.30f, 0.35f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
 
-            if (!s_LastExportedModPath.empty()) {
-                ImGui::TextColored(ImVec4(0.40f, 0.88f, 0.55f, 1.0f), "[SUCCESS]");
-                ImGui::SameLine();
-                ImGui::Text("%s", s_ModPackagePopupMsg.c_str());
-                ImGui::Dummy(ImVec2(0, 6.0f));
-                ImGui::TextDisabled("Output Directory:");
-                ImGui::TextWrapped("%s", s_LastExportedModPath.c_str());
-            }
-            else {
-                ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "[NOTICE]");
-                ImGui::SameLine();
-                ImGui::TextWrapped("%s", s_ModPackagePopupMsg.c_str());
-            }
+        ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-            ImGui::Dummy(ImVec2(0, 6.0f));
+        if (ImGui::BeginPopupModal("Mod Package Notification", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings)) {
+            DrawGoldModalHeader("NOTICE");
+
+            ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + 440.0f);
+            ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "%s", s_ModPackagePopupMsg.c_str());
+            ImGui::PopTextWrapPos();
+
+            ImGui::Dummy(ImVec2(0, 10.0f));
             ImGui::Separator();
-            ImGui::Dummy(ImVec2(0, 6.0f));
+            ImGui::Dummy(ImVec2(0, 8.0f));
 
-            if (!s_LastExportedModPath.empty() && fs::exists(s_LastExportedModPath)) {
-                if (DrawAccentButton("Open Folder in Explorer", ImVec2(190, 28), ImVec4(0.18f, 0.35f, 0.60f, 0.90f), ImVec4(0.25f, 0.48f, 0.80f, 1.00f))) {
-                    ShellExecuteA(NULL, "open", s_LastExportedModPath.c_str(), NULL, NULL, SW_SHOWNORMAL);
-                }
-                ImGui::SameLine(0, 10.0f);
-            }
-
-            if (ImGui::Button("Close", ImVec2(100, 28))) {
-                s_LastExportedModPath.clear();
+            if (DrawAccentButton("OK", ImVec2(100, 28),
+                ImVec4(0.20f, 0.22f, 0.26f, 0.90f), ImVec4(0.30f, 0.33f, 0.38f, 1.00f))) {
                 ImGui::CloseCurrentPopup();
             }
 
             ImGui::EndPopup();
         }
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(3);
     }
     ImGui::End();
 }

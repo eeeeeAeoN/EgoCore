@@ -6,6 +6,7 @@
 #include <fstream>
 #include <algorithm>
 #include <regex>
+#include <functional>
 #include "ConfigBackend.h"
 #include "BankBackend.h"
 #include "BigBankCompiler.h"
@@ -14,16 +15,11 @@
 #include "MeshCompiler.h"
 #include "ParticleCompiler.h"
 #include "FSEBackend.h"
+#include "ModPackageTracker.h"
 
 namespace fs = std::filesystem;
 
-enum class EModAssetCategory {
-    BankEntry,
-    Definition,
-    Header,
-    AnimationEvent,
-    FSEScript
-};
+using ModBuildProgressCallback = std::function<void(float progress, const std::string& stage, const std::string& item, int current, int total)>;
 
 struct IniLine {
     std::string Raw;
@@ -57,122 +53,7 @@ struct ModAssetOverride {
     bool IsHandled = false;
 };
 
-struct StagedModPackageEntry {
-    EModAssetCategory Category = EModAssetCategory::BankEntry;
-    uint32_t EntryID = 0;
-    std::string EntryName;
-    int32_t EntryType = 0;
-    EBankType BankType = (EBankType)0;
-    std::string TypeName;
-    std::string BankName;
-    std::string SubBankName;
-    std::string SourceFullPath; 
-};
-
 inline std::map<std::string, uint32_t> g_LiveBankIDs;
-
-inline std::string GetEntryTypeName(EBankType bankType, int32_t type, const std::string& bankName) {
-    if (bankType == EBankType::Graphics || bankType == EBankType::XboxGraphics) {
-        switch (type) {
-        case 1: return "Static Mesh"; case 2: return "Repeated Mesh";
-        case 3: return "Physics (BBM)"; case 4: return "Particle Mesh";
-        case 5: return "Animated Mesh"; case 6: return "Animation";
-        case 7: return "Delta Animation"; case 8: return "Lipsync Animation";
-        case 9: return "Partial Animation"; case 10: return "Relative Animation";
-        default: return "Gfx " + std::to_string(type);
-        }
-    }
-    if (bankType == EBankType::Textures || bankType == EBankType::Frontend) {
-        switch (type) {
-        case 0: return "Graphic Single"; case 1: return "Graphic Sequence";
-        case 2: return "Bumpmap"; case 3: return "Bumpmap Sequence";
-        case 4: return "Volume Texture"; case 5: return "Sprite Sheet";
-        default: return "Tex " + std::to_string(type);
-        }
-    }
-    if (bankType == EBankType::Shaders) {
-        switch (type) { case 0: return "Vertex Shader"; case 1: return "Pixel Shader"; default: return "Shader " + std::to_string(type); }
-    }
-    if (bankType == EBankType::Effects) {
-        switch (type) { case 0: return "Particle Entry"; default: return "Effect " + std::to_string(type); }
-    }
-    if (bankType == EBankType::Dialogue) {
-        switch (type) { case 1: return "Lipsync Entry"; default: return "Dialogue " + std::to_string(type); }
-    }
-    if (bankType == EBankType::Fonts) {
-        switch (type) { case 0: return "PC Font"; case 1: return "Xbox Font"; case 2: return "GlyphData"; default: return "Font " + std::to_string(type); }
-    }
-    if (bankType == EBankType::Text) {
-        switch (type) { case 0: return "Text Entry"; case 1: return "Group Text Entry"; case 2: return "Narrator List"; default: return "Text " + std::to_string(type); }
-    }
-    if (bankType == EBankType::Audio) {
-        std::string lowerName = bankName;
-        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
-        if (lowerName.find(".lut") != std::string::npos) return "Audio Clip (.lut)";
-        if (lowerName.find(".lug") != std::string::npos) return "Scripted Audio (.lug)";
-        return "Audio Entry";
-    }
-    return "Type " + std::to_string(type);
-}
-
-class ModPackageTracker {
-public:
-    inline static std::vector<StagedModPackageEntry> g_MarkedEntries;
-
-    static void LoadMarkedState() {
-        g_MarkedEntries.clear();
-        for (const auto& raw : g_SavedMarkedEntries) {
-            StagedModPackageEntry e;
-            e.EntryID = raw.EntryID;
-            e.EntryName = raw.EntryName;
-            e.EntryType = raw.EntryType;
-            e.BankType = (EBankType)raw.BankType;
-            e.TypeName = raw.TypeName;
-            e.BankName = raw.BankName;
-            e.SubBankName = raw.SubBankName;
-            e.SourceFullPath = raw.SourceFullPath;
-            g_MarkedEntries.push_back(e);
-        }
-    }
-
-    static void SaveMarkedState() {
-        g_SavedMarkedEntries.clear();
-        for (const auto& e : g_MarkedEntries) {
-            RawMarkedEntry raw;
-            raw.EntryID = e.EntryID;
-            raw.EntryName = e.EntryName;
-            raw.EntryType = e.EntryType;
-            raw.BankType = (int32_t)e.BankType;
-            raw.TypeName = e.TypeName;
-            raw.BankName = e.BankName;
-            raw.SubBankName = e.SubBankName;
-            raw.SourceFullPath = e.SourceFullPath;
-            g_SavedMarkedEntries.push_back(raw);
-        }
-        SaveConfig();
-    }
-
-    static bool IsMarked(const std::string& bankName, const std::string& entryName) {
-        for (const auto& existing : g_MarkedEntries) {
-            if (existing.EntryName == entryName && existing.BankName == bankName) return true;
-        }
-        return false;
-    }
-
-    static void ToggleMark(const StagedModPackageEntry& entry) {
-        for (size_t i = 0; i < g_MarkedEntries.size(); i++) {
-            if (g_MarkedEntries[i].EntryName == entry.EntryName && g_MarkedEntries[i].BankName == entry.BankName) {
-                g_MarkedEntries.erase(g_MarkedEntries.begin() + i);
-                SaveMarkedState();
-                return;
-            }
-        }
-        g_MarkedEntries.push_back(entry);
-        SaveMarkedState();
-    }
-
-    static void ClearAll() { g_MarkedEntries.clear(); SaveMarkedState(); }
-};
 
 class ModBankPatcher {
 public:
@@ -920,8 +801,19 @@ public:
         }
     }
 
-    static void BuildPackageStructure(const std::string& modName, const std::vector<StagedModPackageEntry>& entries) {
+    static void BuildPackageStructure(const std::string& modName, const std::vector<StagedModPackageEntry>& entries,
+        ModBuildProgressCallback progressCb = nullptr) {
         if (modName.empty() || entries.empty()) return;
+
+        const int totalWork = (int)entries.size();
+
+        if (progressCb) progressCb(0.02f, "Initializing...", "Loading game definitions", 0, totalWork);
+
+        if (!g_DefWorkspace.IsLoaded && !g_AppConfig.GameRootPath.empty()) {
+            LoadDefsFromFolder(g_AppConfig.GameRootPath);
+        }
+
+        if (progressCb) progressCb(0.05f, "Preparing banks...", "Saving pending bank modifications", 0, totalWork);
 
         for (auto& bank : g_OpenBanks) {
             if (!bank.StagedEntries.empty() || !bank.ModifiedEntryData.empty()) {
@@ -937,7 +829,21 @@ public:
         std::map<std::string, std::string> headerFiles;
         std::map<std::string, std::string> eventFiles;
 
-        for (const auto& entry : entries) {
+        for (size_t entryIdx = 0; entryIdx < entries.size(); ++entryIdx) {
+            const auto& entry = entries[entryIdx];
+            float baseProgress = 0.05f + 0.85f * ((float)entryIdx / (float)(totalWork > 0 ? totalWork : 1));
+
+            if (progressCb) {
+                std::string catDesc = "Packaging asset";
+                if (entry.Category == EModAssetCategory::BankEntry) catDesc = "Processing bank entry";
+                else if (entry.Category == EModAssetCategory::Definition) catDesc = "Extracting definition";
+                else if (entry.Category == EModAssetCategory::Header) catDesc = "Extracting header";
+                else if (entry.Category == EModAssetCategory::AnimationEvent) catDesc = "Exporting anim event";
+                else if (entry.Category == EModAssetCategory::FSEScript) catDesc = "Exporting script";
+
+                progressCb(baseProgress, catDesc, entry.EntryName, (int)(entryIdx + 1), totalWork);
+            }
+
             if (entry.Category != EModAssetCategory::BankEntry) {
                 if (entry.Category == EModAssetCategory::FSEScript) continue;
 
@@ -967,7 +873,16 @@ public:
                                         std::replace(defSrc.begin(), defSrc.end(), '/', '\\');
                                         std::replace(entSrc.begin(), entSrc.end(), '/', '\\');
 
-                                        if (defSrc == entSrc) {
+                                        bool match = (defSrc == entSrc);
+                                        if (!match) {
+                                            size_t defData = defSrc.find("\\data\\");
+                                            size_t entData = entSrc.find("\\data\\");
+                                            if (defData != std::string::npos && entData != std::string::npos) {
+                                                match = (defSrc.substr(defData) == entSrc.substr(entData));
+                                            }
+                                        }
+
+                                        if (match) {
                                             std::ifstream inFile(def.SourceFile, std::ios::binary | std::ios::ate);
                                             if (inFile.is_open()) {
                                                 std::streamsize fileSize = inFile.tellg();
@@ -1071,6 +986,10 @@ public:
                         bool success = true;
 
                         for (uint32_t lod = 0; lod < meshContext.EntryMeta.LODCount; lod++) {
+                            if (progressCb && meshContext.EntryMeta.LODCount > 1) {
+                                float lodFraction = ((float)lod / (float)meshContext.EntryMeta.LODCount) * (0.85f / (float)(totalWork > 0 ? totalWork : 1));
+                                progressCb(baseProgress + lodFraction, "Compiling mesh LODs...", entry.EntryName + " (LOD " + std::to_string(lod + 1) + "/" + std::to_string(meshContext.EntryMeta.LODCount) + ")", (int)(entryIdx + 1), totalWork);
+                            }
                             uint32_t sz = meshContext.EntryMeta.LODSizes[lod];
                             if (offset + sz <= finalResourceData.size()) {
                                 std::vector<uint8_t> slice(finalResourceData.begin() + offset, finalResourceData.begin() + offset + sz);
@@ -1126,6 +1045,10 @@ public:
                         size_t offset = 0;
 
                         for (uint32_t lod = 0; lod < meshContext.EntryMeta.LODCount; lod++) {
+                            if (progressCb && meshContext.EntryMeta.LODCount > 1) {
+                                float lodFraction = ((float)lod / (float)meshContext.EntryMeta.LODCount) * (0.85f / (float)(totalWork > 0 ? totalWork : 1));
+                                progressCb(baseProgress + lodFraction, "Compiling mesh LODs...", entry.EntryName + " (LOD " + std::to_string(lod + 1) + "/" + std::to_string(meshContext.EntryMeta.LODCount) + ")", (int)(entryIdx + 1), totalWork);
+                            }
                             uint32_t sz = meshContext.EntryMeta.LODSizes[lod];
                             if (offset + sz <= finalResourceData.size()) {
                                 std::vector<uint8_t> slice(finalResourceData.begin() + offset, finalResourceData.begin() + offset + sz);
@@ -1253,14 +1176,19 @@ public:
             }
             };
 
+        if (progressCb) progressCb(0.92f, "Writing definition files...", "Mapped defs and headers", totalWork, totalWork);
         WriteMappedFiles(defFiles, "", "");
         WriteMappedFiles(headerFiles, "#pragma once\n\n", "");
         WriteMappedFiles(eventFiles, "BEGIN_ANIMATION_EVENTS\n\n", "END_ANIMATION_EVENTS\n");
 
-        GenerateEnumHeaders(modName, entries);
-        GenerateAudioDefs(modName, entries);
+        // Bank headers (RetailHeaders and audio definitions) are generated dynamically
+        // by SyncBankEnums when the mod's bank assets are patched on the user's system.
+        // Static bank header stubs are no longer exported into mod packages to prevent ID conflicts.
+        // GenerateEnumHeaders(modName, entries);
+        // GenerateAudioDefs(modName, entries);
 
         // --- HANDLE FSE SCRIPT ENTRIES ---
+        if (progressCb) progressCb(0.98f, "Exporting FSE scripts...", "Generating quest and entity scripts", totalWork, totalWork);
         std::set<std::string> fseQuestsToExport;
         bool hasFSEEntries = false;
 
@@ -1343,5 +1271,7 @@ public:
                 info.close();
             }
         }
+
+        if (progressCb) progressCb(1.0f, "Package build complete!", "All files written successfully", totalWork, totalWork);
     }
 };

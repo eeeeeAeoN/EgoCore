@@ -30,7 +30,7 @@ static MeshRenderer g_MeshRenderer;
 static bool g_ShowWireframe = false;
 static bool g_ShowHelpers = false;
 static bool g_ShowBounds = false;
-static bool g_ShowRightPanel = true;
+inline bool g_ShowRightPanel = true;
 static bool g_ShowSkeleton = false;
 static MeshRenderer g_PhysicsOverlayRenderer;
 static CBBMParser g_OverlayBBMParser;

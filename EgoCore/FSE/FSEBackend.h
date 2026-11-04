@@ -7,6 +7,7 @@
 #include <iostream>
 #include "TextEditor.h"
 #include "ConfigBackend.h"
+#include "ModPackageTracker.h"
 
 namespace fs = std::filesystem;
 
@@ -42,6 +43,7 @@ struct FSEWorkspace {
     std::string ActiveFilePath;
     std::string OriginalContent;
     bool IsLoaded = false;
+    bool ShowMarkedOnly = false;
 
     float EditorFontScale = 1.0f;
     bool IsSearchOpen = false;
@@ -300,59 +302,226 @@ inline void SaveActiveFSEScript() {
     g_FSEWorkspace.SavedUndoIndex = g_FSEWorkspace.Editor.GetUndoIndex();
 }
 
+inline void DeleteFSEQuest(int questIdx) {
+    if (questIdx < 0 || questIdx >= (int)g_FSEWorkspace.Quests.size()) return;
+    auto& q = g_FSEWorkspace.Quests[questIdx];
+    std::string questNameToDelete = q.Name;
+    ModPackageTracker::RemoveMarksForQuest(questNameToDelete);
+    ModPackageTracker::RemoveMark("FSE", questNameToDelete + ".lua");
+
+    std::error_code ec;
+    fs::remove_all(fs::path(g_FSEWorkspace.FSERoot) / q.Name, ec);
+    g_FSEWorkspace.Quests.erase(g_FSEWorkspace.Quests.begin() + questIdx);
+    SaveQuestsLua();
+
+    std::string qstPath = (fs::path(g_AppConfig.GameRootPath) / "Data" / "Levels" / "FinalAlbion.qst").string();
+    if (fs::exists(qstPath)) {
+        std::ifstream qstIn(qstPath);
+        std::vector<std::string> lines;
+        std::string line;
+
+        std::string targetPrefix = "AddQuest(\"" + questNameToDelete + "\"";
+
+        while (std::getline(qstIn, line)) {
+            if (line.find(targetPrefix) == std::string::npos) {
+                lines.push_back(line);
+            }
+        }
+        qstIn.close();
+
+        std::ofstream qstOut(qstPath);
+        for (const auto& l : lines) {
+            qstOut << l << "\n";
+        }
+        qstOut.close();
+    }
+
+    if (g_FSEWorkspace.ActiveQuestIdx == questIdx) {
+        g_FSEWorkspace.ActiveFilePath = "";
+        g_FSEWorkspace.Editor.SetText("");
+        g_FSEWorkspace.ActiveItemType = EFSEItemType::None;
+        g_FSEWorkspace.ActiveQuestIdx = -1;
+    }
+    else if (g_FSEWorkspace.ActiveQuestIdx > questIdx) {
+        g_FSEWorkspace.ActiveQuestIdx--;
+    }
+}
+
+inline void DeleteFSEEntity(int questIdx, int entityIdx) {
+    if (questIdx < 0 || questIdx >= (int)g_FSEWorkspace.Quests.size()) return;
+    auto& q = g_FSEWorkspace.Quests[questIdx];
+    if (entityIdx < 0 || entityIdx >= (int)q.Entities.size()) return;
+    auto& e = q.Entities[entityIdx];
+    ModPackageTracker::RemoveMark("FSE", e.Name + ".lua");
+    std::error_code ec;
+    fs::remove(fs::path(g_FSEWorkspace.FSERoot) / (e.File + ".lua"), ec);
+    q.Entities.erase(q.Entities.begin() + entityIdx);
+    SaveQuestsLua();
+
+    if (g_FSEWorkspace.ActiveQuestIdx == questIdx && g_FSEWorkspace.ActiveEntityIdx == entityIdx) {
+        g_FSEWorkspace.ActiveFilePath = "";
+        g_FSEWorkspace.Editor.SetText("");
+        g_FSEWorkspace.ActiveItemType = EFSEItemType::None;
+        g_FSEWorkspace.ActiveEntityIdx = -1;
+    }
+    else if (g_FSEWorkspace.ActiveQuestIdx == questIdx && g_FSEWorkspace.ActiveEntityIdx > entityIdx) {
+        g_FSEWorkspace.ActiveEntityIdx--;
+    }
+}
+
+inline void DeleteFSEScript(int questIdx, const std::string& scriptName) {
+    if (questIdx < 0 || questIdx >= (int)g_FSEWorkspace.Quests.size()) return;
+    auto& q = g_FSEWorkspace.Quests[questIdx];
+    ModPackageTracker::RemoveMark("FSE", scriptName + ".lua");
+    std::error_code ec;
+    fs::remove(fs::path(g_FSEWorkspace.FSERoot) / q.Name / (scriptName + ".lua"), ec);
+    auto it = std::find(q.ExtraScripts.begin(), q.ExtraScripts.end(), scriptName);
+    if (it != q.ExtraScripts.end()) q.ExtraScripts.erase(it);
+    SaveQuestsLua();
+
+    if (g_FSEWorkspace.ActiveQuestIdx == questIdx && g_FSEWorkspace.ActiveExtraScriptName == scriptName) {
+        g_FSEWorkspace.ActiveFilePath = "";
+        g_FSEWorkspace.Editor.SetText("");
+        g_FSEWorkspace.ActiveItemType = EFSEItemType::None;
+        g_FSEWorkspace.ActiveExtraScriptName = "";
+    }
+}
+
+inline void DuplicateFSEQuest(int questIdx) {
+    if (questIdx < 0 || questIdx >= (int)g_FSEWorkspace.Quests.size()) return;
+    const FSEQuest orig = g_FSEWorkspace.Quests[questIdx];
+
+    std::string newQuestName = GenerateDuplicateName(orig.Name, [&](const std::string& candidate) {
+        for (const auto& q : g_FSEWorkspace.Quests) {
+            if (q.Name == candidate) return true;
+        }
+        return false;
+    });
+
+    fs::path origDir = fs::path(g_FSEWorkspace.FSERoot) / orig.Name;
+    fs::path newDir = fs::path(g_FSEWorkspace.FSERoot) / newQuestName;
+
+    std::error_code ec;
+    if (fs::exists(origDir)) {
+        fs::copy(origDir, newDir, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    }
+    else {
+        fs::create_directories(newDir, ec);
+    }
+
+    fs::path oldMainFile = newDir / (orig.Name + ".lua");
+    fs::path newMainFile = newDir / (newQuestName + ".lua");
+    if (fs::exists(oldMainFile) && oldMainFile != newMainFile) {
+        fs::rename(oldMainFile, newMainFile, ec);
+    }
+
+    FSEQuest newQ;
+    newQ.Name = newQuestName;
+    newQ.File = newQuestName + "/" + newQuestName;
+    newQ.ID = GetNextQuestID();
+    newQ.ExtraScripts = orig.ExtraScripts;
+
+    for (const auto& e : orig.Entities) {
+        FSEEntity newEnt;
+        newEnt.Name = e.Name;
+        newEnt.File = newQuestName + "/Entities/" + e.Name;
+        newEnt.ID = GetNextEntityID();
+        newQ.Entities.push_back(newEnt);
+    }
+
+    g_FSEWorkspace.Quests.push_back(newQ);
+    SaveQuestsLua();
+
+    std::string qstPath = (fs::path(g_AppConfig.GameRootPath) / "Data" / "Levels" / "FinalAlbion.qst").string();
+    std::ofstream qstFile(qstPath, std::ios::app);
+    if (qstFile.is_open()) {
+        qstFile << "AddQuest(\"" << newQuestName << "\",\t\t\tFALSE);\n";
+        qstFile.close();
+    }
+
+    int newIdx = (int)g_FSEWorkspace.Quests.size() - 1;
+    LoadFSEScriptContent(newQ.File, EFSEItemType::QuestMain, newIdx);
+}
+
+inline void DuplicateFSEEntity(int questIdx, int entityIdx) {
+    if (questIdx < 0 || questIdx >= (int)g_FSEWorkspace.Quests.size()) return;
+    FSEQuest& q = g_FSEWorkspace.Quests[questIdx];
+    if (entityIdx < 0 || entityIdx >= (int)q.Entities.size()) return;
+    const FSEEntity orig = q.Entities[entityIdx];
+
+    std::string newName = GenerateDuplicateName(orig.Name, [&](const std::string& candidate) {
+        for (const auto& e : q.Entities) {
+            if (e.Name == candidate) return true;
+        }
+        return false;
+    });
+
+    FSEEntity newEnt;
+    newEnt.Name = newName;
+    newEnt.File = q.Name + "/Entities/" + newName;
+    newEnt.ID = GetNextEntityID();
+
+    std::string oldPath = (fs::path(g_FSEWorkspace.FSERoot) / (orig.File + ".lua")).string();
+    std::string newPath = (fs::path(g_FSEWorkspace.FSERoot) / (newEnt.File + ".lua")).string();
+
+    std::error_code ec;
+    fs::create_directories(fs::path(newPath).parent_path(), ec);
+    if (fs::exists(oldPath)) {
+        fs::copy_file(oldPath, newPath, fs::copy_options::overwrite_existing, ec);
+    }
+    else {
+        std::string defaultContent = "-- Entity: " + newName + "\n\nfunction Init(questObject, meObject)\nend\n\nfunction Main(questObject, meObject)\nend\n";
+        CreateFSEFileIfMissing(newPath, defaultContent);
+    }
+
+    q.Entities.push_back(newEnt);
+    SaveQuestsLua();
+
+    int newEntIdx = (int)q.Entities.size() - 1;
+    LoadFSEScriptContent(newEnt.File, EFSEItemType::Entity, questIdx, newEntIdx);
+}
+
+inline void DuplicateFSEScript(int questIdx, const std::string& scriptName) {
+    if (questIdx < 0 || questIdx >= (int)g_FSEWorkspace.Quests.size()) return;
+    FSEQuest& q = g_FSEWorkspace.Quests[questIdx];
+
+    std::string newName = GenerateDuplicateName(scriptName, [&](const std::string& candidate) {
+        for (const auto& s : q.ExtraScripts) {
+            if (s == candidate) return true;
+        }
+        return false;
+    });
+
+    std::string oldPath = (fs::path(g_FSEWorkspace.FSERoot) / q.Name / (scriptName + ".lua")).string();
+    std::string newPath = (fs::path(g_FSEWorkspace.FSERoot) / q.Name / (newName + ".lua")).string();
+
+    std::error_code ec;
+    fs::create_directories(fs::path(newPath).parent_path(), ec);
+    if (fs::exists(oldPath)) {
+        fs::copy_file(oldPath, newPath, fs::copy_options::overwrite_existing, ec);
+    }
+    else {
+        std::string defaultContent = "-- Script: " + newName + "\n\nfunction Init(Quest)\nend\n";
+        CreateFSEFileIfMissing(newPath, defaultContent);
+    }
+
+    q.ExtraScripts.push_back(newName);
+    SaveQuestsLua();
+
+    LoadFSEScriptContent(q.Name + "/" + newName, EFSEItemType::ExtraScript, questIdx, -1, newName);
+}
+
 inline void DeleteActiveFSEItem() {
     if (g_FSEWorkspace.ActiveItemType == EFSEItemType::None) return;
 
-    std::error_code ec;
-
     if (g_FSEWorkspace.ActiveItemType == EFSEItemType::QuestMain) {
-        if (g_FSEWorkspace.ActiveQuestIdx >= 0 && g_FSEWorkspace.ActiveQuestIdx < g_FSEWorkspace.Quests.size()) {
-            auto& q = g_FSEWorkspace.Quests[g_FSEWorkspace.ActiveQuestIdx];
-            std::string questNameToDelete = q.Name;
-
-            fs::remove_all(fs::path(g_FSEWorkspace.FSERoot) / q.Name, ec);
-            g_FSEWorkspace.Quests.erase(g_FSEWorkspace.Quests.begin() + g_FSEWorkspace.ActiveQuestIdx);
-            SaveQuestsLua();
-
-            std::string qstPath = (fs::path(g_AppConfig.GameRootPath) / "Data" / "Levels" / "FinalAlbion.qst").string();
-            if (fs::exists(qstPath)) {
-                std::ifstream qstIn(qstPath);
-                std::vector<std::string> lines;
-                std::string line;
-
-                std::string targetPrefix = "AddQuest(\"" + questNameToDelete + "\"";
-
-                while (std::getline(qstIn, line)) {
-                    if (line.find(targetPrefix) == std::string::npos) {
-                        lines.push_back(line);
-                    }
-                }
-                qstIn.close();
-
-                std::ofstream qstOut(qstPath);
-                for (const auto& l : lines) {
-                    qstOut << l << "\n";
-                }
-                qstOut.close();
-            }
-        }
+        DeleteFSEQuest(g_FSEWorkspace.ActiveQuestIdx);
     }
     else if (g_FSEWorkspace.ActiveItemType == EFSEItemType::Entity) {
-        if (g_FSEWorkspace.ActiveQuestIdx >= 0 && g_FSEWorkspace.ActiveEntityIdx >= 0) {
-            auto& q = g_FSEWorkspace.Quests[g_FSEWorkspace.ActiveQuestIdx];
-            auto& e = q.Entities[g_FSEWorkspace.ActiveEntityIdx];
-            fs::remove(fs::path(g_FSEWorkspace.FSERoot) / (e.File + ".lua"), ec);
-            q.Entities.erase(q.Entities.begin() + g_FSEWorkspace.ActiveEntityIdx);
-            SaveQuestsLua();
-        }
+        DeleteFSEEntity(g_FSEWorkspace.ActiveQuestIdx, g_FSEWorkspace.ActiveEntityIdx);
     }
     else if (g_FSEWorkspace.ActiveItemType == EFSEItemType::ExtraScript) {
-        if (g_FSEWorkspace.ActiveQuestIdx >= 0) {
-            auto& q = g_FSEWorkspace.Quests[g_FSEWorkspace.ActiveQuestIdx];
-            fs::remove(fs::path(g_FSEWorkspace.FSERoot) / q.Name / (g_FSEWorkspace.ActiveExtraScriptName + ".lua"), ec);
-            auto it = std::find(q.ExtraScripts.begin(), q.ExtraScripts.end(), g_FSEWorkspace.ActiveExtraScriptName);
-            if (it != q.ExtraScripts.end()) q.ExtraScripts.erase(it);
-        }
+        DeleteFSEScript(g_FSEWorkspace.ActiveQuestIdx, g_FSEWorkspace.ActiveExtraScriptName);
     }
 
     g_FSEWorkspace.ActiveFilePath = "";

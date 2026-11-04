@@ -103,7 +103,9 @@ inline int FindHeaderIndex(const std::string& headerName) {
         std::string path = g_DefWorkspace.AllEnums[i].FilePath;
         std::string fname = std::filesystem::path(path).filename().string();
         std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
-        if (fname == headerName) return i;
+        std::string hLower = headerName;
+        std::transform(hLower.begin(), hLower.end(), hLower.begin(), ::tolower);
+        if (fname == hLower) return i;
     }
     return -1;
 }

@@ -119,6 +119,7 @@ struct MainMenuAudio {
 extern MainMenuAudio g_MenuAudio;
 extern ImTextureID g_MusicOnTexture;
 extern ImTextureID g_MusicOffTexture;
+extern ImTextureID g_CompileTexture;
 
 enum class EAppState {
     Setup,
@@ -127,21 +128,7 @@ enum class EAppState {
     ModsManager
 };
 
-// --- This must be included here to avoid compiler errors. This is what happens when you make a project out of all headers. 
-#include "ModManagerUI.h"
-
-inline EAppState g_CurrentAppState = EAppState::Setup;
-
-static void UpdateUIScale(float scale) {
-    ImGuiIO& io = ImGui::GetIO();
-    io.FontGlobalScale = scale;
-
-    ImGuiStyle& style = ImGui::GetStyle();
-    style = ImGuiStyle();
-    style.ScaleAllSizes(scale);
-}
-
-static void DrawGoldModalHeader(const char* title, float headerHeight = 58.0f) {
+inline void DrawGoldModalHeader(const char* title, float headerHeight = 58.0f) {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     ImVec2 winPos = ImGui::GetWindowPos();
     ImVec2 winSize = ImGui::GetWindowSize();
@@ -180,6 +167,20 @@ static void DrawGoldModalHeader(const char* title, float headerHeight = 58.0f) {
         IM_COL32(242, 193, 78, 110), 1.2f
     );
     ImGui::Dummy(ImVec2(0, 12));
+}
+
+// --- This must be included here to avoid compiler errors. This is what happens when you make a project out of all headers. 
+#include "ModManagerUI.h"
+
+inline EAppState g_CurrentAppState = EAppState::Setup;
+
+static void UpdateUIScale(float scale) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = scale;
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = ImGuiStyle();
+    style.ScaleAllSizes(scale);
 }
 
 inline void ApplyModEnvironmentFix(const std::string& gameRoot) {
@@ -667,6 +668,112 @@ static bool DrawCardButton(const char* id, const char* title, const char* subtit
 // sized to sit inside a normal menu-bar row instead of a big hub tile.
 //
 // ---------------------------------------------------------------------------
+static void AddRectFilledGradientRounded(ImDrawList* drawList, const ImVec2& pMin, const ImVec2& pMax, ImU32 colTop, ImU32 colBottom, float rounding) {
+    if (rounding < 0.5f) {
+        drawList->AddRectFilledMultiColor(pMin, pMax, colTop, colTop, colBottom, colBottom);
+        return;
+    }
+
+    drawList->PathRect(pMin, pMax, rounding);
+    int count = drawList->_Path.Size;
+    if (count < 3) {
+        drawList->_Path.Size = 0;
+        return;
+    }
+
+    int vtx_count = count + 1;
+    int idx_count = count * 3;
+    drawList->PrimReserve(idx_count, vtx_count);
+
+    float height = pMax.y - pMin.y;
+    if (height <= 0.0f) height = 1.0f;
+
+    ImVec4 cTop = ImGui::ColorConvertU32ToFloat4(colTop);
+    ImVec4 cBot = ImGui::ColorConvertU32ToFloat4(colBottom);
+
+    ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+    ImDrawIdx center_idx = (ImDrawIdx)drawList->_VtxCurrentIdx;
+
+    ImVec2 center = ImVec2((pMin.x + pMax.x) * 0.5f, (pMin.y + pMax.y) * 0.5f);
+    ImVec4 cMid = ImVec4((cTop.x + cBot.x) * 0.5f, (cTop.y + cBot.y) * 0.5f, (cTop.z + cBot.z) * 0.5f, (cTop.w + cBot.w) * 0.5f);
+    drawList->PrimWriteVtx(center, uv, ImGui::ColorConvertFloat4ToU32(cMid));
+
+    for (int i = 0; i < count; i++) {
+        ImVec2 pos = drawList->_Path[i];
+        float t = (pos.y - pMin.y) / height;
+        if (t < 0.0f) t = 0.0f; else if (t > 1.0f) t = 1.0f;
+        ImVec4 c = ImVec4(
+            cTop.x + (cBot.x - cTop.x) * t,
+            cTop.y + (cBot.y - cTop.y) * t,
+            cTop.z + (cBot.z - cTop.z) * t,
+            cTop.w + (cBot.w - cTop.w) * t
+        );
+        drawList->PrimWriteVtx(pos, uv, ImGui::ColorConvertFloat4ToU32(c));
+    }
+
+    for (int i = 0; i < count; i++) {
+        ImDrawIdx next_idx = (ImDrawIdx)(center_idx + 1 + ((i + 1) % count));
+        drawList->PrimWriteIdx(center_idx);
+        drawList->PrimWriteIdx((ImDrawIdx)(center_idx + 1 + i));
+        drawList->PrimWriteIdx(next_idx);
+    }
+
+    drawList->_Path.Size = 0;
+}
+
+static bool DrawModeSquareButton(const char* id, bool active, 
+                                ImU32 baseTop, ImU32 baseBot, 
+                                ImU32 hoverTop, ImU32 hoverBot, 
+                                float size, const char* tooltip) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size));
+    bool hovered = ImGui::IsItemHovered();
+    bool held = ImGui::IsItemActive();
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const float rounding = 6.0f;
+    ImVec2 pMin = pos;
+    ImVec2 pMax = ImVec2(pos.x + size, pos.y + size);
+
+    ImU32 colTop, colBot, borderColor;
+    if (active) {
+        colTop = hoverTop;
+        colBot = hoverBot;
+        borderColor = IM_COL32(255, 255, 255, 240);
+        for (int i = 2; i >= 1; i--) {
+            float expand = (float)i * 1.2f;
+            float glowAlpha = (1.0f - (float)i / 3.0f) * 0.45f;
+            ImU32 glowCol = (hoverTop & 0x00FFFFFF) | ((uint32_t)(glowAlpha * 255.0f) << 24);
+            drawList->AddRect(ImVec2(pMin.x - expand, pMin.y - expand), ImVec2(pMax.x + expand, pMax.y + expand), glowCol, rounding + expand, 0, 1.2f);
+        }
+    }
+    else if (hovered) {
+        colTop = hoverTop;
+        colBot = hoverBot;
+        borderColor = IM_COL32(255, 255, 255, 200);
+        for (int i = 2; i >= 1; i--) {
+            float expand = (float)i * 1.0f;
+            float glowAlpha = (1.0f - (float)i / 3.0f) * 0.35f;
+            ImU32 glowCol = (hoverTop & 0x00FFFFFF) | ((uint32_t)(glowAlpha * 255.0f) << 24);
+            drawList->AddRect(ImVec2(pMin.x - expand, pMin.y - expand), ImVec2(pMax.x + expand, pMax.y + expand), glowCol, rounding + expand, 0, 1.0f);
+        }
+    }
+    else {
+        colTop = baseTop;
+        colBot = baseBot;
+        borderColor = (baseTop & 0x00FFFFFF) | 0x55000000;
+    }
+
+    AddRectFilledGradientRounded(drawList, pMin, pMax, colTop, colBot, rounding);
+    drawList->AddRect(pMin, pMax, borderColor, rounding, 0, active ? 1.5f : 1.0f);
+
+    if (hovered && tooltip && tooltip[0] != '\0') {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+
+    return pressed;
+}
+
 // DrawModeTabButton: pill-style toggle button designed to sit inside the
 // menu bar, pixel-aligned with the menu titles and centered vertically.
 // ---------------------------------------------------------------------------
@@ -961,7 +1068,7 @@ static void DrawFrontendHub() {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 0.90f), "AlbionSecrets");
         if (g_TitleFont) ImGui::PopFont();
 
-        const char* verStr = "25.10.26";
+        const char* verStr = "04.11.26";
         float verWidth = ImGui::CalcTextSize(verStr).x;
         float winWidth = ImGui::GetWindowWidth();
 
@@ -1448,7 +1555,7 @@ static void DrawBankExplorer() {
         if (g_TitleFont) ImGui::PopFont();
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
-        ImGui::TextDisabled("Version: 25.10.26");
+        ImGui::TextDisabled("Version: 04.11.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -2049,33 +2156,45 @@ static void DrawBankExplorer() {
             ImGui::EndMenu();
         }
 
-        // ---- Right-side mode switcher: Banks / Defs / FSE
+        // ---- Right-side mode switcher: Banks (Yellow) / Defs (Red) / FSE (Green)
         const float btnHeight = ImGui::GetFrameHeight();
-        const float tabPad = 28.0f; // matches DrawModeTabButton's internal padding*2 (14.0f * 2)
-        const float tabSpacing = ImGui::GetStyle().ItemSpacing.x;
+        const float squareSize = 18.0f;
+        const float tabSpacing = 7.0f;
 
-        float banksW = ImGui::CalcTextSize("Banks").x + tabPad;
-        float defsW = ImGui::CalcTextSize("Defs").x + tabPad;
-        float fseW = g_FSEWorkspace.IsInstalled ? (ImGui::CalcTextSize("FSE").x + tabPad) : 0.0f;
-
-        float groupWidth = banksW + tabSpacing + defsW;
-        if (g_FSEWorkspace.IsInstalled) groupWidth += tabSpacing + fseW;
+        float groupWidth = squareSize + tabSpacing + squareSize;
+        if (g_FSEWorkspace.IsInstalled) groupWidth += tabSpacing + squareSize;
 
         float rightAlign = ImGui::GetWindowWidth() - groupWidth - 12.0f;
         if (rightAlign > 0) ImGui::SameLine(rightAlign);
 
-        if (DrawModeTabButton("##mode_banks", "Banks", g_CurrentMode == EAppMode::Banks, IM_COL32(216, 168, 62, 255), btnHeight)) {
+        ImGui::SetCursorPosY((btnHeight - squareSize) * 0.5f);
+
+        std::string bankTip = "Bank Editing Mode - " + g_Keybinds.SwitchBankMode.ToString();
+        if (DrawModeSquareButton("##mode_banks", g_CurrentMode == EAppMode::Banks, 
+            IM_COL32(135, 110, 45, 190), IM_COL32(75, 58, 20, 210), 
+            IM_COL32(255, 235, 75, 255), IM_COL32(230, 165, 15, 255), 
+            squareSize, bankTip.c_str())) {
             g_CurrentMode = EAppMode::Banks;
         }
 
-        ImGui::SameLine();
-        if (DrawModeTabButton("##mode_defs", "Defs", g_CurrentMode == EAppMode::Defs, IM_COL32(196, 60, 84, 255), btnHeight)) {
+        ImGui::SameLine(0, tabSpacing);
+        ImGui::SetCursorPosY((btnHeight - squareSize) * 0.5f);
+        std::string defTip = "Defs Editing Mode - " + g_Keybinds.SwitchDefMode.ToString();
+        if (DrawModeSquareButton("##mode_defs", g_CurrentMode == EAppMode::Defs, 
+            IM_COL32(135, 48, 58, 190), IM_COL32(75, 22, 28, 210), 
+            IM_COL32(255, 75, 95, 255), IM_COL32(215, 25, 45, 255), 
+            squareSize, defTip.c_str())) {
             g_CurrentMode = EAppMode::Defs;
         }
 
         if (g_FSEWorkspace.IsInstalled) {
-            ImGui::SameLine();
-            if (DrawModeTabButton("##mode_fse", "FSE", g_CurrentMode == EAppMode::FSE, IM_COL32(56, 176, 96, 255), btnHeight)) {
+            ImGui::SameLine(0, tabSpacing);
+            ImGui::SetCursorPosY((btnHeight - squareSize) * 0.5f);
+            std::string fseTip = "FSE Editing Mode - " + g_Keybinds.SwitchFSEMode.ToString();
+            if (DrawModeSquareButton("##mode_fse", g_CurrentMode == EAppMode::FSE, 
+                IM_COL32(45, 115, 65, 190), IM_COL32(20, 65, 32, 210), 
+                IM_COL32(50, 245, 110, 255), IM_COL32(25, 185, 75, 255), 
+                squareSize, fseTip.c_str())) {
                 g_CurrentMode = EAppMode::FSE;
             }
         }
@@ -2098,7 +2217,7 @@ static void DrawBankExplorer() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
 
-    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(480, 396), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     if (ImGui::BeginPopupModal("General Settings", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
@@ -2210,7 +2329,10 @@ static void DrawBankExplorer() {
         DrawBindRow("Navigate Back", g_Keybinds.NavigateBack);
         DrawBindRow("Navigate Forward", g_Keybinds.NavigateForward);
         DrawBindRow("Delete Entry", g_Keybinds.DeleteEntry);
+        DrawBindRow("Duplicate Entry", g_Keybinds.DuplicateEntry);
+        DrawBindRow("Mark for Packaging", g_Keybinds.MarkForPackaging);
         DrawBindRow("Toggle Left Panel", g_Keybinds.ToggleLeftPanel);
+        DrawBindRow("Toggle Right Panel", g_Keybinds.ToggleRightPanel);
         DrawBindRow("Lookup Definition", g_Keybinds.LookupDefinition);
 
         if (g_ListeningForRebind) {

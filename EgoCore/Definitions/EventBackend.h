@@ -81,6 +81,7 @@ struct EventWorkspace {
     int SelectedEventIndex = -1;
     TextEditor Editor;
     char FilterText[128] = "";
+    bool ShowMarkedOnly = false;
     std::string OriginalContent;
 
     EventWorkspace() {

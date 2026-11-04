@@ -12,6 +12,7 @@
 #include <shlobj.h> 
 #include "TextEditor.h"
 #include "ConfigBackend.h"
+#include "ModPackageTracker.h"
 
 namespace fs = std::filesystem;
 
@@ -68,10 +69,12 @@ struct DefWorkspace {
     std::string SelectedType;
     int SelectedEntryIndex = -1;
     char FilterText[128] = "";
+    bool ShowMarkedOnly = false;
 
     std::vector<EnumEntry> AllEnums;
     int SelectedEnumIndex = -1;
     char HeaderFilter[128] = "";
+    bool ShowMarkedHeadersOnly = false;
 
     std::unordered_map<std::string, std::vector<int>> EnumMemberLookup;
     std::unordered_map<std::string, std::vector<std::pair<std::string, int>>> DefEntryLookup;
@@ -436,6 +439,9 @@ inline void CreateNewDef(const std::string& type) {
 }
 
 inline void DeleteDefEntry(const DefEntry& entry) {
+    std::string bankFileName = std::filesystem::path(entry.SourceFile).filename().string();
+    ModPackageTracker::RemoveMark(bankFileName, entry.Name);
+
     std::ifstream inFile(entry.SourceFile, std::ios::binary);
     if (!inFile.is_open()) return;
     std::string content((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
@@ -577,6 +583,57 @@ inline void SaveHeaderEntry(EnumEntry& entry) {
     g_DefWorkspace.SavedUndoIndex = g_DefWorkspace.Editor.GetUndoIndex();
 }
 
+inline void LoadDefContent(DefEntry& entry);
+
+inline void DuplicateDefEntry(DefEntry entry) {
+    if (entry.SourceFile.empty() || !fs::exists(entry.SourceFile)) return;
+
+    std::ifstream inFile(entry.SourceFile, std::ios::binary);
+    if (!inFile.is_open()) return;
+    std::string content((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
+    inFile.close();
+
+    if (content.size() < entry.EndOffset || entry.StartOffset >= entry.EndOffset) return;
+
+    std::string entryBlock = content.substr(entry.StartOffset, entry.EndOffset - entry.StartOffset);
+    std::string entryType = entry.Type;
+    std::string entryName = entry.Name;
+    std::string sourceFile = entry.SourceFile;
+
+    auto& entries = g_DefWorkspace.CategorizedDefs[entryType];
+    std::string newName = GenerateDuplicateName(entryName, [&](const std::string& candidate) {
+        for (const auto& e : entries) {
+            if (e.Name == candidate) return true;
+        }
+        return false;
+    });
+
+    size_t firstLineEnd = entryBlock.find('\n');
+    std::string headerLine = (firstLineEnd != std::string::npos) ? entryBlock.substr(0, firstLineEnd) : entryBlock;
+    size_t namePos = headerLine.rfind(entryName);
+    std::string replacedBlock = entryBlock;
+    if (namePos != std::string::npos) {
+        replacedBlock.replace(namePos, entryName.length(), newName);
+    }
+
+    std::ofstream outFile(sourceFile, std::ios::app | std::ios::binary);
+    if (outFile.is_open()) {
+        outFile << "\n\n" << replacedBlock << "\n";
+        outFile.close();
+    }
+
+    LoadDefsFromFolder(g_DefWorkspace.RootPath, true);
+    g_DefWorkspace.SelectedType = entryType;
+    auto& newEntries = g_DefWorkspace.CategorizedDefs[entryType];
+    for (int i = 0; i < (int)newEntries.size(); ++i) {
+        if (newEntries[i].Name == newName) {
+            g_DefWorkspace.SelectedEntryIndex = i;
+            LoadDefContent(newEntries[i]);
+            break;
+        }
+    }
+}
+
 inline void LoadDefContent(DefEntry& entry) {
     std::ifstream file(entry.SourceFile, std::ios::binary);
     if (!file.is_open()) return;
@@ -635,6 +692,13 @@ inline bool ReplaceAndSaveEnum(const std::string& enumName, const std::string& n
     if (idx == -1) return false;
 
     EnumEntry& entry = g_DefWorkspace.AllEnums[idx];
+
+    // Ensure .tmp backup exists before modifying
+    std::string tmpPath = entry.FilePath + ".tmp";
+    if (!fs::exists(tmpPath)) {
+        std::error_code ec;
+        fs::copy_file(entry.FilePath, tmpPath, ec);
+    }
 
     std::string newContent = "enum " + enumName + "\n{\n" + newBody + "};";
 

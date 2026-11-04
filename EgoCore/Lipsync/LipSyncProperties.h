@@ -370,7 +370,7 @@ static const std::vector<LipSyncHeadPreset> kLipSyncPresets = {
 };
 
 static MeshRenderer g_LipSyncRenderer;
-static bool g_ShowLipSyncRenderer = true;
+inline bool g_ShowLipSyncRenderer = true;
 static float g_LipSyncTime = 0.0f;
 static bool g_LipSyncPlaying = false;
 static bool g_LipSyncLoop = true;
