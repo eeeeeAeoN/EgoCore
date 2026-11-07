@@ -8,11 +8,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 add_library(FableDefs STATIC
+    src/binary_reader.cpp
     src/build.cpp
     src/build_index.cpp
     src/build_pipeline.cpp
     src/definitions.cpp
+    src/def_reader.cpp
+    src/decompiler.cpp
     src/diagnostic.cpp
+    src/inflate.cpp
     src/lexer.cpp
     src/lower.cpp
     src/names.cpp
@@ -26,12 +30,17 @@ target_compile_features(FableDefs PUBLIC cxx_std_20)
 add_executable(fable-defc tools/defc_main.cpp)
 target_link_libraries(fable-defc PRIVATE FableDefs)
 
+add_executable(fable-def-decompiler tools/def_decompiler_main.cpp)
+target_link_libraries(fable-def-decompiler PRIVATE FableDefs)
+
 if(MSVC)
     target_compile_options(FableDefs PRIVATE /W4)
     target_compile_options(fable-defc PRIVATE /W4)
+    target_compile_options(fable-def-decompiler PRIVATE /W4)
 else()
     target_compile_options(FableDefs PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(fable-defc PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(fable-def-decompiler PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(BUILD_TESTING)
@@ -52,4 +61,5 @@ if(BUILD_TESTING)
     fable_defs_test(fable-defs-wire-test wire_test.cpp)
     fable_defs_test(fable-defs-corpus-test corpus_test.cpp)
     fable_defs_test(fable-defs-build-test build_test.cpp)
+    fable_defs_test(fable-defs-decompiler-test decompiler_test.cpp)
 endif()

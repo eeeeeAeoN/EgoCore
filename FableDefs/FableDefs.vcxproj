@@ -98,11 +98,15 @@
     <ClInclude Include="include\fable\defs\transfer.hpp" />
     <ClInclude Include="include\fable\defs\visit.hpp" />
     <ClInclude Include="include\fable\defs\compiler\ast.hpp" />
+    <ClInclude Include="include\fable\defs\compiler\binary_reader.hpp" />
     <ClInclude Include="include\fable\defs\compiler\build.hpp" />
     <ClInclude Include="include\fable\defs\compiler\build_index.hpp" />
     <ClInclude Include="include\fable\defs\compiler\build_pipeline.hpp" />
+    <ClInclude Include="include\fable\defs\compiler\def_reader.hpp" />
+    <ClInclude Include="include\fable\defs\compiler\decompiler.hpp" />
     <ClInclude Include="include\fable\defs\compiler\definitions.hpp" />
     <ClInclude Include="include\fable\defs\compiler\diagnostic.hpp" />
+    <ClInclude Include="include\fable\defs\compiler\inflate.hpp" />
     <ClInclude Include="include\fable\defs\compiler\lexer.hpp" />
     <ClInclude Include="include\fable\defs\compiler\lower.hpp" />
     <ClInclude Include="include\fable\defs\compiler\manifest.hpp" />
@@ -115,11 +119,15 @@
     <ClInclude Include="include\fable\defs\compiler\wire.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\binary_reader.cpp" />
     <ClCompile Include="src\build.cpp" />
     <ClCompile Include="src\build_index.cpp" />
     <ClCompile Include="src\build_pipeline.cpp" />
+    <ClCompile Include="src\def_reader.cpp" />
+    <ClCompile Include="src\decompiler.cpp" />
     <ClCompile Include="src\definitions.cpp" />
     <ClCompile Include="src\diagnostic.cpp" />
+    <ClCompile Include="src\inflate.cpp" />
     <ClCompile Include="src\lexer.cpp" />
     <ClCompile Include="src\lower.cpp" />
     <ClCompile Include="src\names.cpp" />

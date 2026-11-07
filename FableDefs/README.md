@@ -4,8 +4,8 @@ The native Fable def compiler and C++ def data model.
 
 It compiles the text `.def` / `.tpl` / `.h` corpus into the retail binaries
 `game.bin`, `frontend.bin`, `script.bin` and `names.bin`. The same package
-contains the compiler library, the `fable-defc` command-line front end and the
-generated def model.
+contains the compiler library, the `fable-defc` command-line front end, an
+in-progress def decompiler, and the generated def model.
 
 ## Layout
 
@@ -16,6 +16,7 @@ generated def model.
 | `include/fable/defs/compiler/` | lexer, parser, lowering and build pipeline headers |
 | `src/` | compiler library sources |
 | `tools/defc_main.cpp` | `fable-defc` command-line front end |
+| `tools/def_decompiler_main.cpp` | `fable-def-decompiler` front end |
 | `tests/` | compiler and model tests |
 | `FableDefs.vcxproj` | Windows static-library project used by EgoCore |
 | `CMakeLists.txt` | cross-platform library, CLI and test build |
@@ -28,6 +29,8 @@ cmake --build --preset release
 ctest --preset release
 
 build/release/bin/fable-defc build <Defs-dir> <out-dir>
+build/release/bin/fable-def-decompiler dump <bin-dir> <out.def>
+build/release/bin/fable-def-decompiler diff <orig-dir> <mod-dir> <out.def>
 ```
 
 Debug and Visual Studio presets are also available in `CMakePresets.json`.
@@ -51,6 +54,21 @@ if (!report.ok) {
 
 `build_directory` performs discovery, parsing, symbol evaluation and all four
 binary writes. It never prints to stdout or stderr.
+
+## Decompiler
+
+The decompiler reads `names.bin` and the compiled binary container directly,
+including zlib-compressed chunks. It currently provides:
+
+- zlib/DEFLATE inflate
+- binary container and `names.bin` loading
+- typed `DefBody` parsing through the generated C++ model
+- generic `.def` text emission against each type's NULLDEF defaults
+- named-definition diffing between two compiled builds
+
+Still to port from the upstream Rust decompiler: header-driven symbol
+resolution (texture, mesh, sound, enum names), the special animation/morph
+statement reconstruction, and in-place patching of the existing `.def` files.
 
 ## License
 
