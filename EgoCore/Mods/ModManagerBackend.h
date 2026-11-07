@@ -1504,6 +1504,10 @@ public:
                 SetLaunchStatus("Merging definition mods...");
                 std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
 
+                // Manifest file for brand-new deployed def files
+                std::string defManifestPath = dataPath + "\\Defs\\.egocore_deployed_def_files.txt";
+                std::ofstream defManifestOut(defManifestPath, std::ios::app);
+
                 for (auto it = g_LoadedMods.rbegin(); it != g_LoadedMods.rend(); ++it) {
                     const auto& mod = *it;
                     if (!mod.IsEnabled)   continue;
@@ -1531,6 +1535,7 @@ public:
 
                         if (!fs::exists(targetPath)) {
                             fs::copy_file(entry.path(), targetPath);
+                            if (defManifestOut.is_open()) defManifestOut << targetPath << "\n";
                             continue;
                         }
                         if (ext == ".def" || ext == ".tpl") {
@@ -1545,6 +1550,7 @@ public:
                         else if (ext == ".bin") fs::copy_file(entry.path(), targetPath, fs::copy_options::overwrite_existing);
                     }
                 }
+                if (defManifestOut.is_open()) defManifestOut.close();
                 CompileAudioBinFiles();
             }
 
@@ -1595,12 +1601,55 @@ public:
                                     fs::remove(parent);
                                 }
                             }
+                            std::string tmpPath = filePath + ".tmp";
+                            if (fs::exists(tmpPath)) {
+                                fs::remove(tmpPath);
+                            }
                         }
                         catch (...) {}
                     }
                     mf.close();
                 }
                 try { fs::remove(manifestPath); } catch (...) {}
+            }
+        }
+
+        // 2. Clean up brand-new deployed def files recorded in manifest
+        if (restoreDefs) {
+            std::string defManifestPath = dataPath + "\\Defs\\.egocore_deployed_def_files.txt";
+            if (fs::exists(defManifestPath)) {
+                std::ifstream mf(defManifestPath);
+                if (mf.is_open()) {
+                    std::string line;
+                    while (std::getline(mf, line)) {
+                        size_t first = line.find_first_not_of(" \t\r\n");
+                        if (first == std::string::npos) continue;
+                        size_t last = line.find_last_not_of(" \t\r\n");
+                        std::string filePath = line.substr(first, last - first + 1);
+
+                        try {
+                            if (fs::exists(filePath)) {
+                                fs::remove(filePath);
+                            }
+                            std::string tmpPath = filePath + ".tmp";
+                            if (fs::exists(tmpPath)) {
+                                fs::remove(tmpPath);
+                            }
+                            // Clean up parent directory if empty (excluding Data/Defs, ScriptDefs, FrontEndDefs)
+                            fs::path parent = fs::path(filePath).parent_path();
+                            fs::path defsDir = fs::path(dataPath) / "Defs";
+                            fs::path scriptDefsDir = defsDir / "ScriptDefs";
+                            fs::path frontEndDefsDir = defsDir / "FrontEndDefs";
+                            if (parent != defsDir && parent != scriptDefsDir && parent != frontEndDefsDir &&
+                                fs::is_directory(parent) && fs::is_empty(parent)) {
+                                fs::remove(parent);
+                            }
+                        }
+                        catch (...) {}
+                    }
+                    mf.close();
+                }
+                try { fs::remove(defManifestPath); } catch (...) {}
             }
         }
 
@@ -1660,6 +1709,23 @@ public:
         std::string dataPath = g_AppConfig.GameRootPath + "\\Data";
         if (!fs::exists(dataPath)) return;
 
+        // Load manifest of already-deployed brand new files so we never back them up into .tmp
+        std::string defManifestPath = dataPath + "\\Defs\\.egocore_deployed_def_files.txt";
+        std::set<std::string> deployedDefFiles;
+        if (fs::exists(defManifestPath)) {
+            std::ifstream mf(defManifestPath);
+            if (mf.is_open()) {
+                std::string line;
+                while (std::getline(mf, line)) {
+                    size_t first = line.find_first_not_of(" \t\r\n");
+                    if (first == std::string::npos) continue;
+                    size_t last = line.find_last_not_of(" \t\r\n");
+                    deployedDefFiles.insert(line.substr(first, last - first + 1));
+                }
+                mf.close();
+            }
+        }
+
         for (const auto& mod : g_LoadedMods) {
             if (!mod.IsEnabled || !mod.IsDefMod) continue;
 
@@ -1686,6 +1752,9 @@ public:
                 std::string relPath = entry.path().string().substr(modDataPath.length());
                 std::string targetPath = dataPath + relPath;
 
+                // Never backup brand-new files tracked in manifest
+                if (deployedDefFiles.count(targetPath)) continue;
+
                 // Only backup files that actually exist in the game directory.
                 // New files (vanilla doesn't have them) don't need a backup.
                 if (!fs::exists(targetPath)) continue;
@@ -1703,7 +1772,24 @@ public:
         std::string levelsDir = g_AppConfig.GameRootPath + "\\Data\\Levels";
         if (!fs::exists(levelsDir)) return;
 
-        auto backupFile = [](const std::string& path) {
+        std::string manifestPath = levelsDir + "\\.egocore_deployed_level_files.txt";
+        std::set<std::string> deployedLevelFiles;
+        if (fs::exists(manifestPath)) {
+            std::ifstream mf(manifestPath);
+            if (mf.is_open()) {
+                std::string line;
+                while (std::getline(mf, line)) {
+                    size_t first = line.find_first_not_of(" \t\r\n");
+                    if (first == std::string::npos) continue;
+                    size_t last = line.find_last_not_of(" \t\r\n");
+                    deployedLevelFiles.insert(line.substr(first, last - first + 1));
+                }
+                mf.close();
+            }
+        }
+
+        auto backupFile = [&](const std::string& path) {
+            if (deployedLevelFiles.count(path)) return;
             if (!fs::exists(path)) return;
             std::string tmpPath = path + ".tmp";
             if (!fs::exists(tmpPath)) {

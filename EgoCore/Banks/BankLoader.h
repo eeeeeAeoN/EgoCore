@@ -54,6 +54,128 @@ inline std::map<uint32_t, std::string> BuildTextureFriendlyNameMap() {
     return result;
 }
 
+inline std::map<uint32_t, std::string> BuildTextureDevNameMap() {
+    std::map<uint32_t, std::string> result;
+    namespace fs = std::filesystem;
+
+    for (const auto& b : g_OpenBanks) {
+        std::string lowerName = b.FileName;
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+        if (b.Type == EBankType::Textures || lowerName == "textures.big" || b.Type == EBankType::XboxGraphics || lowerName == "xboxgraphics.big") {
+            // Read TOC directly from disk across all subbanks to ensure complete mapping of raw dev names
+            std::ifstream diskStream;
+            std::istream* activeStream = nullptr;
+            std::streampos savedPos = 0;
+
+            if (b.Stream && b.Stream->is_open()) {
+                activeStream = b.Stream.get();
+                activeStream->clear();
+                savedPos = activeStream->tellg();
+            }
+            else if (!b.FullPath.empty() && fs::exists(b.FullPath)) {
+                diskStream.open(b.FullPath, std::ios::binary);
+                if (diskStream.is_open()) activeStream = &diskStream;
+            }
+
+            if (activeStream) {
+                activeStream->seekg(0, std::ios::beg);
+                struct BIGHeader { char m[4]; uint32_t v; uint32_t fOff; uint32_t fSize; } header;
+                activeStream->read((char*)&header, sizeof(header));
+
+                if (activeStream->good() && header.fOff > 0) {
+                    activeStream->seekg(header.fOff, std::ios::beg);
+                    uint32_t bankCount = 0;
+                    activeStream->read((char*)&bankCount, 4);
+
+                    struct SubInfo { std::string Name; uint32_t Offset; uint32_t EntryCount; };
+                    std::vector<SubInfo> subInfos;
+                    for (uint32_t i = 0; i < bankCount && activeStream->good(); i++) {
+                        SubInfo si;
+                        std::getline(*activeStream, si.Name, '\0');
+                        uint32_t ver, sz, align;
+                        activeStream->read((char*)&ver, 4);
+                        activeStream->read((char*)&si.EntryCount, 4);
+                        activeStream->read((char*)&si.Offset, 4);
+                        activeStream->read((char*)&sz, 4);
+                        activeStream->read((char*)&align, 4);
+                        subInfos.push_back(si);
+                    }
+
+                    for (const auto& si : subInfos) {
+                        activeStream->seekg(si.Offset, std::ios::beg);
+                        uint32_t numTypes = 0;
+                        activeStream->read((char*)&numTypes, 4);
+                        if (numTypes < 1000) activeStream->seekg(numTypes * 8, std::ios::cur);
+                        else activeStream->seekg(-4, std::ios::cur);
+
+                        for (uint32_t e = 0; e < si.EntryCount && activeStream->good(); ++e) {
+                            uint32_t magic, id, type, size, offset, crc;
+                            activeStream->read((char*)&magic, 4);
+                            activeStream->read((char*)&id, 4);
+                            activeStream->read((char*)&type, 4);
+                            activeStream->read((char*)&size, 4);
+                            activeStream->read((char*)&offset, 4);
+                            activeStream->read((char*)&crc, 4);
+
+                            uint32_t nameLen = 0;
+                            activeStream->read((char*)&nameLen, 4);
+                            std::string entryName;
+                            if (nameLen > 0 && nameLen < 4096) {
+                                entryName.resize(nameLen, '\0');
+                                activeStream->read(&entryName[0], nameLen);
+                                entryName.erase(std::remove(entryName.begin(), entryName.end(), '\0'), entryName.end());
+                            }
+
+                            activeStream->seekg(4, std::ios::cur); // timestamp
+
+                            uint32_t depCount = 0;
+                            activeStream->read((char*)&depCount, 4);
+                            for (uint32_t d = 0; d < depCount && activeStream->good(); d++) {
+                                uint32_t dLen = 0;
+                                activeStream->read((char*)&dLen, 4);
+                                if (dLen > 0 && dLen < 4096) activeStream->seekg(dLen, std::ios::cur);
+                            }
+
+                            uint32_t infoSize = 0;
+                            activeStream->read((char*)&infoSize, 4);
+                            if (infoSize > 0) activeStream->seekg(infoSize, std::ios::cur);
+
+                            if (!entryName.empty()) {
+                                result[id] = entryName;
+                            }
+                        }
+                    }
+                }
+
+                if (activeStream == b.Stream.get()) {
+                    activeStream->clear();
+                    activeStream->seekg(savedPos, std::ios::beg);
+                }
+                else if (diskStream.is_open()) {
+                    diskStream.close();
+                }
+            }
+
+            // In-memory entries (e.g. newly added/staged entries in active subbank) take precedence
+            for (const auto& e : b.Entries) {
+                if (!e.Name.empty()) {
+                    result[e.ID] = e.Name;
+                }
+            }
+        }
+    }
+
+    // Fallback to friendly names if any IDs weren't resolved from dev names
+    auto friendly = BuildTextureFriendlyNameMap();
+    for (const auto& [id, fname] : friendly) {
+        if (result.find(id) == result.end()) {
+            result[id] = fname;
+        }
+    }
+
+    return result;
+}
+
 static void LoadSystemBinaries(const std::string& gameRoot) {
     namespace fs = std::filesystem;
     g_LoadedBinaries.clear();

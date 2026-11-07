@@ -130,6 +130,19 @@ public:
     }
 
 private:
+    static size_t FindThingUID(const std::string& content, const std::string& uid, size_t startPos = 0, size_t endPos = std::string::npos) {
+        std::string searchStr = "UID " + uid + ";";
+        size_t pos = startPos;
+        while ((pos = content.find(searchStr, pos)) != std::string::npos) {
+            if (endPos != std::string::npos && pos >= endPos) return std::string::npos;
+            if (pos == 0 || (!isalnum((unsigned char)content[pos - 1]) && content[pos - 1] != '_')) {
+                return pos;
+            }
+            pos += searchStr.length();
+        }
+        return std::string::npos;
+    }
+
     static void FindMapBlock(const std::string& content, int mapId, size_t& outStart, size_t& outEnd) {
         outStart = std::string::npos;
         outEnd = std::string::npos;
@@ -201,7 +214,7 @@ private:
     // Hierarchy Step 3: NewThing matching and replacement / appending by UID
     static void MergeSectionThings(std::string& targetContent, size_t tSecStart, size_t& tSecEnd, size_t& tMapEnd, const std::string& modSectionContent) {
         size_t modCursor = 0;
-        std::regex uidRegex(R"(UID\s+(\d+);)");
+        std::regex uidRegex(R"(\bUID\s+(\d+);)");
 
         while (true) {
             size_t nThingStart = modSectionContent.find("NewThing", modCursor);
@@ -215,15 +228,14 @@ private:
             std::smatch match;
             if (std::regex_search(modThing, match, uidRegex)) {
                 std::string uid = match[1].str();
-                std::string uidSearch = "UID " + uid + ";";
-
-                size_t tUidPos = targetContent.find(uidSearch, tSecStart);
+                size_t tUidPos = FindThingUID(targetContent, uid, tSecStart, tSecEnd);
 
                 if (tUidPos != std::string::npos && tUidPos < tSecEnd) {
                     // Existing UID: Replace existing NewThing block
                     size_t tNewThing = targetContent.rfind("NewThing", tUidPos);
                     size_t tEndThing = targetContent.find("EndThing;", tUidPos);
-                    if (tNewThing >= tSecStart && tEndThing <= tSecEnd) {
+                    if (tNewThing != std::string::npos && tNewThing >= tSecStart &&
+                        tEndThing != std::string::npos && tEndThing <= tSecEnd) {
                         size_t oldLen = (tEndThing + 9) - tNewThing;
                         targetContent.replace(tNewThing, oldLen, modThing);
 
@@ -244,9 +256,8 @@ private:
     }
 
     static void DeleteThingByUID(std::string& targetContent, const std::string& uid) {
-        std::string searchStr = "UID " + uid + ";";
         size_t uidPos = 0;
-        while ((uidPos = targetContent.find(searchStr, uidPos)) != std::string::npos) {
+        while ((uidPos = FindThingUID(targetContent, uid, uidPos)) != std::string::npos) {
             size_t newThingPos = targetContent.rfind("NewThing", uidPos);
             size_t endThingPos = targetContent.find("EndThing;", uidPos);
 
@@ -254,7 +265,7 @@ private:
                 targetContent.erase(newThingPos, (endThingPos + 9) - newThingPos);
                 uidPos = newThingPos;
             } else {
-                uidPos += searchStr.length();
+                uidPos += 4 + uid.length() + 1;
             }
         }
     }

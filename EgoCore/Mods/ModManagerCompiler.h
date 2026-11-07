@@ -48,8 +48,12 @@ struct ModEntry {
 struct ModAssetOverride {
     std::string ResourcePath;
     std::string HeaderPath;
+    std::string MetaPath;
     std::string TexMapPath;
     std::string ParticleMapPath;
+    std::string DevName;
+    int32_t EntryType = -1;
+    uint32_t EntryID = 0;
     bool IsHandled = false;
 };
 
@@ -71,6 +75,7 @@ public:
                 if (entry.is_regular_file() && entry.path().extension() == ".resource") {
                     std::string resPath = entry.path().string();
                     std::string hdrPath = resPath.substr(0, resPath.find_last_of('.')) + ".header";
+                    std::string metaPath = resPath.substr(0, resPath.find_last_of('.')) + ".meta";
                     std::string entryName = entry.path().stem().string();
                     std::transform(entryName.begin(), entryName.end(), entryName.begin(), ::tolower);
 
@@ -94,6 +99,25 @@ public:
                         ModAssetOverride asset;
                         asset.ResourcePath = resPath;
                         if (fs::exists(hdrPath)) asset.HeaderPath = hdrPath;
+                        if (fs::exists(metaPath)) {
+                            asset.MetaPath = metaPath;
+                            std::ifstream metaIn(metaPath);
+                            if (metaIn.is_open()) {
+                                std::string line;
+                                while (std::getline(metaIn, line)) {
+                                    if (line.rfind("Type=", 0) == 0) {
+                                        try { asset.EntryType = std::stoi(line.substr(5)); } catch (...) {}
+                                    }
+                                    else if (line.rfind("ID=", 0) == 0) {
+                                        try { asset.EntryID = (uint32_t)std::stoul(line.substr(3)); } catch (...) {}
+                                    }
+                                    else if (line.rfind("DevName=", 0) == 0) {
+                                        asset.DevName = line.substr(8);
+                                    }
+                                }
+                                metaIn.close();
+                            }
+                        }
 
                         std::string texMapPath = resPath.substr(0, resPath.find_last_of('.')) + ".texmap";
                         if (fs::exists(texMapPath)) asset.TexMapPath = texMapPath;
@@ -212,6 +236,9 @@ public:
                     isModded = true;
                     modResPath = g_ActiveModAssets[matchedKey].ResourcePath;
                     entry.Size = (uint32_t)fs::file_size(modResPath);
+                    if (g_ActiveModAssets[matchedKey].EntryType != -1) {
+                        entry.Type = g_ActiveModAssets[matchedKey].EntryType;
+                    }
                     if (!g_ActiveModAssets[matchedKey].HeaderPath.empty()) {
                         entry.InfoSize = (uint32_t)fs::file_size(g_ActiveModAssets[matchedKey].HeaderPath);
                         metaData.resize(entry.InfoSize);
@@ -235,6 +262,13 @@ public:
             }
         }
 
+        struct PendingNewEntry {
+            std::string Key;
+            ModAssetOverride* Asset;
+            uint32_t ResolvedID;
+        };
+        std::map<std::string, std::vector<PendingNewEntry>> pendingPerSubbank;
+
         for (auto& [key, asset] : g_ActiveModAssets) {
             if (asset.IsHandled) continue;
             size_t firstSlash = key.find('/'); size_t lastSlash = key.find_last_of('/');
@@ -244,32 +278,64 @@ public:
             if (bName != lowerBankName) continue;
             std::string sbName = key.substr(firstSlash + 1, lastSlash - firstSlash - 1);
 
+            PendingNewEntry pne;
+            pne.Key = key;
+            pne.Asset = &asset;
+            pne.ResolvedID = asset.EntryID;
+            pendingPerSubbank[sbName].push_back(pne);
+        }
+
+        for (auto& [sbName, pendingList] : pendingPerSubbank) {
             PatchSubBank* targetPSB = nullptr;
             for (auto& psb : subBanks) { if (psb.Info.Name == sbName) { targetPSB = &psb; break; } }
             if (!targetPSB) continue;
 
-            highestID++;
-            BankEntry newEntry;
-            newEntry.ID = highestID;
-            newEntry.Name = fs::path(asset.ResourcePath).stem().string();
-            if (lowerBankName == "graphics.big" || lowerBankName == "xboxgraphics.big") newEntry.Type = 1; else newEntry.Type = 0;
-            newEntry.Size = (uint32_t)fs::file_size(asset.ResourcePath);
-            newEntry.Offset = 0; newEntry.CRC = 0; newEntry.Timestamp = 0;
-
-            std::vector<uint8_t> newMeta;
-            if (!asset.HeaderPath.empty() && fs::exists(asset.HeaderPath)) {
-                newEntry.InfoSize = (uint32_t)fs::file_size(asset.HeaderPath);
-                newMeta.resize(newEntry.InfoSize);
-                std::ifstream hdrIn(asset.HeaderPath, std::ios::binary);
-                hdrIn.read((char*)newMeta.data(), newEntry.InfoSize);
+            for (auto& item : pendingList) {
+                if (item.ResolvedID == 0) {
+                    highestID++;
+                    item.ResolvedID = highestID;
+                } else if (item.ResolvedID > highestID) {
+                    highestID = item.ResolvedID;
+                }
             }
-            else { newEntry.InfoSize = 0; }
 
-            targetPSB->Entries.push_back(newEntry);
-            targetPSB->MetaList.push_back(newMeta);
-            targetPSB->IsModded.push_back(true);
-            targetPSB->ModResPath.push_back(asset.ResourcePath);
-            asset.IsHandled = true;
+            std::sort(pendingList.begin(), pendingList.end(), [](const PendingNewEntry& a, const PendingNewEntry& b) {
+                return a.ResolvedID < b.ResolvedID;
+            });
+
+            for (auto& item : pendingList) {
+                auto& asset = *item.Asset;
+                BankEntry newEntry;
+                newEntry.ID = item.ResolvedID;
+                if (!asset.DevName.empty()) newEntry.Name = asset.DevName;
+                else newEntry.Name = fs::path(asset.ResourcePath).stem().string();
+                if (asset.EntryType != -1) {
+                    newEntry.Type = asset.EntryType;
+                }
+                else if (lowerBankName == "graphics.big" || lowerBankName == "xboxgraphics.big") {
+                    newEntry.Type = 1;
+                }
+                else {
+                    newEntry.Type = 0;
+                }
+                newEntry.Size = (uint32_t)fs::file_size(asset.ResourcePath);
+                newEntry.Offset = 0; newEntry.CRC = 0; newEntry.Timestamp = 0;
+
+                std::vector<uint8_t> newMeta;
+                if (!asset.HeaderPath.empty() && fs::exists(asset.HeaderPath)) {
+                    newEntry.InfoSize = (uint32_t)fs::file_size(asset.HeaderPath);
+                    newMeta.resize(newEntry.InfoSize);
+                    std::ifstream hdrIn(asset.HeaderPath, std::ios::binary);
+                    hdrIn.read((char*)newMeta.data(), newEntry.InfoSize);
+                }
+                else { newEntry.InfoSize = 0; }
+
+                targetPSB->Entries.push_back(newEntry);
+                targetPSB->MetaList.push_back(newMeta);
+                targetPSB->IsModded.push_back(true);
+                targetPSB->ModResPath.push_back(asset.ResourcePath);
+                asset.IsHandled = true;
+            }
         }
 
         for (const auto& psb : subBanks) {
@@ -371,11 +437,26 @@ public:
                                                         if (textureMap.count(lookup)) {
                                                             std::string targetTex = textureMap[lookup];
 
+                                                            std::string altSlash = targetTex;
+                                                            for (char& c : altSlash) { if (c == '/') c = '\\'; }
+                                                            std::string altSlashFwd = targetTex;
+                                                            for (char& c : altSlashFwd) { if (c == '\\') c = '/'; }
                                                             if (g_LiveBankIDs.count(targetTex)) {
                                                                 outID = g_LiveBankIDs[targetTex];
                                                                 mat.UseFilenames = false;
                                                                 meshChanged = true;
                                                             }
+                                                            else if (g_LiveBankIDs.count(altSlash)) {
+                                                                outID = g_LiveBankIDs[altSlash];
+                                                                mat.UseFilenames = false;
+                                                                meshChanged = true;
+                                                            }
+                                                            else if (g_LiveBankIDs.count(altSlashFwd)) {
+                                                                outID = g_LiveBankIDs[altSlashFwd];
+                                                                mat.UseFilenames = false;
+                                                                meshChanged = true;
+                                                            }
+
 
                                                         }
                                                     };
@@ -949,6 +1030,20 @@ public:
             std::string safeEntryName = NormalizeBankEntryName(entry.EntryName);
             std::string resourcePath = targetDir + "\\" + safeEntryName + ".resource";
 
+            std::string metaPath = targetDir + "\\" + safeEntryName + ".meta";
+            std::ofstream metaFile(metaPath);
+            if (metaFile.is_open()) {
+                metaFile << "Type=" << bankEntry.Type << "\n";
+                metaFile << "ID=" << bankEntry.ID << "\n";
+                if (!entry.TypeName.empty()) {
+                    metaFile << "TypeName=" << entry.TypeName << "\n";
+                }
+                if (!entry.EntryName.empty()) {
+                    metaFile << "DevName=" << entry.EntryName << "\n";
+                }
+                metaFile.close();
+            }
+
             std::vector<uint8_t> finalResourceData;
 
             if (targetBank->ModifiedEntryData.count(entryIndex)) {
@@ -980,7 +1075,7 @@ public:
                     }
 
                     if (meshContext.EntryMeta.HasData && meshContext.EntryMeta.LODCount > 0) {
-                        auto nameMap = BuildTextureFriendlyNameMap();
+                        auto nameMap = BuildTextureDevNameMap();
                         std::vector<uint8_t> finalPayload;
                         size_t offset = 0;
                         bool success = true;
@@ -1040,7 +1135,7 @@ public:
                     }
 
                     if (meshContext.EntryMeta.HasData && meshContext.EntryMeta.LODCount > 0) {
-                        auto nameMap = BuildTextureFriendlyNameMap();
+                        auto nameMap = BuildTextureDevNameMap();
                         std::string texMapContent = "";
                         size_t offset = 0;
 
@@ -1089,7 +1184,7 @@ public:
                             CParticleStream pStream(finalResourceData);
                             emitter.Parse(pStream);
 
-                            auto texNameMap = BuildTextureFriendlyNameMap();
+                            auto texNameMap = BuildTextureDevNameMap();
                             auto meshNameMap = BuildFriendlyNameMap("meshdata.h");
                             std::string pMapContent = "";
 
