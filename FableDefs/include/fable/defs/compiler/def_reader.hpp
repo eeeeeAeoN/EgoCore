@@ -478,9 +478,13 @@ bool read_value(T &value, Reader &reader, Value &out) {
         case 11: return add_defstr("NextFilter", value.NextFilter);
         case 12: {
             std::uint32_t length = 0;
-            if (!reader.u32(length) || !reader.bytes(length, out.bytes)) return false;
-            value.ResponseAnimName.assign(out.bytes.begin(), out.bytes.end());
-            out.kind = ValueKind::PString;
+            std::vector<std::uint8_t> bytes;
+            if (!reader.u32(length) || !reader.bytes(length, bytes)) return false;
+            value.ResponseAnimName.assign(bytes.begin(), bytes.end());
+            Value child;
+            child.kind = ValueKind::PString;
+            child.bytes = std::move(bytes);
+            out.fields.emplace_back("ResponseAnimName", std::move(child));
             return true;
         }
         default:

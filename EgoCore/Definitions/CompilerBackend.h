@@ -76,7 +76,7 @@ static void CompileAllDefs_Native() {
         // 2. Now safe to clear workspace state ahead of the def recompile.
         ResetWorkspaceForCompile();
 
-        // 3. Def compilation via the native (Rust) compiler.
+        // 3. Def compilation via the embedded native C++ compiler.
         SetCompileStatus("Compiling Definitions...");
         std::string defLog;
         const bool ok = NativeDefs::CompileAllDefs(g_AppConfig.GameRootPath, defLog);

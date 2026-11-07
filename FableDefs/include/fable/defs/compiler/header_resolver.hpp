@@ -38,6 +38,8 @@ struct SymDomain {
         OpinionAttitudeType,
         OpinionTargetingConditionType,
         OpinionDeedType,
+        HeroExperienceStatCategory,
+        TargetingType,
         AttackHistoryType,
         DamageAttribute,
         Blend,

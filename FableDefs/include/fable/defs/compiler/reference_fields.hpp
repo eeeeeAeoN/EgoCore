@@ -90,6 +90,7 @@ inline bool is_reference_field(std::string_view name) {
     if (name == "HeroCombatPCDef") return true;
     if (name == "HeroLevelTitles") return true;
     if (name == "HeroSuit") return true;
+    if (name == "SuitParts") return true;
     if (name == "HitLocations") return true;
     if (name == "IcicleAssaultTrapIndex") return true;
     if (name == "IcicleAttackIndex") return true;

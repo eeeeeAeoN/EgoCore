@@ -165,6 +165,12 @@ bool build_context(const DefBinary &binary, const Names &names,
     return true;
 }
 
+std::string normalized_path(const std::filesystem::path &path) {
+    std::string text = path.string();
+    std::replace(text.begin(), text.end(), '\\', '/');
+    return text;
+}
+
 std::map<std::string, std::string> build_parent_map(const std::string &defs_directory) {
     std::map<std::string, std::string> parents;
     if (defs_directory.empty()) {
@@ -276,8 +282,10 @@ std::string resolve_integer(std::int64_t value, const std::string &field_name,
                             const std::string &scope, const Context &ctx) {
     std::string resolved = ctx.headers.resolve_field(
         scope, field_name, static_cast<std::int32_t>(value));
-    if (resolved == std::to_string(value) && value != 0 &&
-        is_reference_field(field_name)) {
+    if (resolved == std::to_string(value) && is_reference_field(field_name)) {
+        if (value == 0) {
+            return "NULL";
+        }
         const auto it = ctx.idx_to_name.find(static_cast<std::int32_t>(value));
         if (it != ctx.idx_to_name.end()) {
             return valid_identifier(it->second) ? it->second : quote(it->second);
@@ -301,6 +309,18 @@ std::string format_float(std::uint32_t bits) {
         text += ".0";
     }
     return text;
+}
+
+std::string format_float_plain(std::uint32_t bits) {
+    float value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(value));
+    if (!std::isfinite(value)) {
+        return "0";
+    }
+    char buffer[64];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value,
+                                      std::chars_format::general);
+    return std::string(buffer, result.ptr);
 }
 
 std::string format_expr(const Value &value, const std::string &field_name,
@@ -528,14 +548,15 @@ void emit_animation_set(const Value &set, const Value *base, const Context &ctx,
                     const Value *x = find_value_field(component, "TargetOffsetVectorX");
                     const Value *y = find_value_field(component, "TargetOffsetVectorY");
                     if (x && y) {
-                        args.push_back("TargetOffset(" + format_float(x->f32_bits) + ", " +
-                                       format_float(y->f32_bits) + ")");
+                        args.push_back("TargetOffset(" + format_float_plain(x->f32_bits) +
+                                       ", " + format_float_plain(y->f32_bits) + ")");
                     }
                     break;
                 }
                 case 9:
                     value = find_value_field(component, "AnimationSpeedMultiplier");
-                    if (value) args.push_back("SpeedMultiplier(" + format_float(value->f32_bits) + ")");
+                    if (value) args.push_back("SpeedMultiplier(" +
+                                              format_float_plain(value->f32_bits) + ")");
                     break;
                 case 11:
                     value = find_value_field(component, "NextFilter");
@@ -543,7 +564,10 @@ void emit_animation_set(const Value &set, const Value *base, const Context &ctx,
                     break;
                 case 12:
                     value = find_value_field(component, "ResponseAnimName");
-                    if (value) args.push_back("StrikeResponseAnim(" + quote(value->text) + ")");
+                    if (value) {
+                        const std::string text(value->bytes.begin(), value->bytes.end());
+                        args.push_back("StrikeResponseAnim(" + quote(text) + ")");
+                    }
                     break;
                 default:
                     break;
@@ -681,7 +705,15 @@ void unlower_list(const std::string &path, const std::string &field_name,
         const std::string item_path = path + "[" + std::to_string(i) + "]";
         const Value &item = value.list[i];
         if (struct_elements) {
-            unlower_struct(item_path, item, scope, ctx, out, indent, true);
+            if (auto constructor = compound_constructor(item, scope, ctx)) {
+                out.append(static_cast<std::size_t>(indent) * 4, ' ');
+                out += path;
+                out += ".Add(";
+                out += *constructor;
+                out += ");\n";
+            } else {
+                unlower_struct(item_path, item, scope, ctx, out, indent, true);
+            }
         } else {
             out.append(static_cast<std::size_t>(indent) * 4, ' ');
             out += path;
@@ -708,7 +740,13 @@ void unlower_map(const std::string &path, const std::string &field_name,
             key_text = format_expr(key, field_name, scope, ctx);
         }
         const std::string item_path = path + "[" + key_text + "]";
-        if (mapped.kind == ValueKind::Struct || mapped.kind == ValueKind::Variant) {
+        if (mapped.kind == ValueKind::Struct) {
+            if (auto constructor = compound_constructor(mapped, scope, ctx)) {
+                emit_line(out, indent, item_path, *constructor);
+            } else {
+                unlower_struct(item_path, mapped, scope, ctx, out, indent, true);
+            }
+        } else if (mapped.kind == ValueKind::Variant) {
             unlower_struct(item_path, mapped, scope, ctx, out, indent, true);
         } else {
             emit_line(out, indent, item_path, format_expr(mapped, field_name, scope, ctx));
@@ -878,7 +916,7 @@ void emit_wound_morphs(const Value &set, const Context &ctx, std::string &out,
         args.push_back(std::to_string(field_i32(*entry, "FadeToScarDuration")));
         args.push_back(std::to_string(field_i32(*entry, "TotalDuration")));
         const Value *permanent = find_value_field(*entry, "PermanentScarStrength");
-        args.push_back(permanent == nullptr ? "0.0" : format_float(permanent->f32_bits));
+        args.push_back(permanent == nullptr ? "0" : format_float_plain(permanent->f32_bits));
         emit_method(out, indent, "WoundMorphs", "AddWoundAndScar", args);
     }
 }
@@ -1190,6 +1228,61 @@ std::optional<std::string> compound_constructor(const Value &value,
                                                 const std::string &scope,
                                                 const Context &ctx) {
     const auto field = [&](const char *name) { return find_value_field(value, name); };
+    if (value.fields.size() == 1 && value.fields[0].first == "IntValue" &&
+        value.fields[0].second.kind == ValueKind::Int) {
+        const std::uint32_t packed =
+            static_cast<std::uint32_t>(value.fields[0].second.integer);
+        std::string expr = "CRGBColour(" + std::to_string((packed >> 16) & 0xff) + ", " +
+                           std::to_string((packed >> 8) & 0xff) + ", " +
+                           std::to_string(packed & 0xff);
+        const int alpha = (packed >> 24) & 0xff;
+        if (alpha != 255) {
+            expr += ", " + std::to_string(alpha);
+        }
+        expr += ")";
+        return expr;
+    }
+    if (has_field(value, "NormalMusicID") && has_field(value, "DangerMusicID") &&
+        has_field(value, "LoopCount")) {
+        return "CMusicSetEntry(" +
+               value_expr(field("NormalMusicID"), "NormalMusicID", scope, ctx) + ", " +
+               value_expr(field("DangerMusicID"), "DangerMusicID", scope, ctx) + ", " +
+               value_expr(field("LoopCount"), "LoopCount", scope, ctx) + ")";
+    }
+    if (has_field(value, "ID") && has_field(value, "Filename") &&
+        has_field(value, "Gain") && has_field(value, "CacheToHD")) {
+        return "CMusicEntry(" + value_expr(field("ID"), "ID", scope, ctx) + ", " +
+               value_expr(field("Filename"), "Filename", scope, ctx) + ", " +
+               value_expr(field("Gain"), "Gain", scope, ctx) + ", " +
+               (field("CacheToHD") != nullptr && field("CacheToHD")->boolean ? "TRUE"
+                                                                            : "FALSE") +
+               ")";
+    }
+    if (has_field(value, "ID") && has_field(value, "Filename") &&
+        has_field(value, "SymbolFilename") && has_field(value, "LipSyncBankHandle") &&
+        has_field(value, "DVD")) {
+        return "CSoundBankEntry(" + value_expr(field("ID"), "ID", scope, ctx) + ", " +
+               value_expr(field("Filename"), "Filename", scope, ctx) + ", " +
+               value_expr(field("SymbolFilename"), "SymbolFilename", scope, ctx) + ", " +
+               value_expr(field("LipSyncBankHandle"), "LipSyncBankHandle", scope, ctx) +
+               ", " +
+               (field("DVD") != nullptr && field("DVD")->boolean ? "TRUE" : "FALSE") + ")";
+    }
+    if (value.fields.size() == 2 && has_field(value, "ID") &&
+        has_field(value, "Filename")) {
+        return "CAtmosBankEntry(" + value_expr(field("ID"), "ID", scope, ctx) + ", " +
+               value_expr(field("Filename"), "Filename", scope, ctx) + ")";
+    }
+    if (value.fields.size() == 2 && has_field(value, "X") && has_field(value, "Y")) {
+        return "CVector2D(" + value_expr(field("X"), "X", scope, ctx) + ", " +
+               value_expr(field("Y"), "Y", scope, ctx) + ")";
+    }
+    if (value.fields.size() == 3 && has_field(value, "X") && has_field(value, "Y") &&
+        has_field(value, "Z")) {
+        return "CVector3D(" + value_expr(field("X"), "X", scope, ctx) + ", " +
+               value_expr(field("Y"), "Y", scope, ctx) + ", " +
+               value_expr(field("Z"), "Z", scope, ctx) + ")";
+    }
     if (has_field(value, "Particle1Index") && has_field(value, "Particle2Index") &&
         has_field(value, "Particle1Value") && has_field(value, "Particle2Value")) {
         return "CBlendedParticleEffectSet(" +
@@ -1245,11 +1338,65 @@ std::optional<std::string> compound_constructor(const Value &value,
                ", " + (field("DummyObject") != nullptr && field("DummyObject")->boolean
                            ? "TRUE" : "FALSE") + ")";
     }
+    if (has_field(value, "HighValue") && has_field(value, "LowValue") &&
+        value.fields.size() == 2) {
+        return "CFloatRange(" + value_expr(field("HighValue"), "HighValue", scope, ctx) +
+               ", " + value_expr(field("LowValue"), "LowValue", scope, ctx) + ")";
+    }
+    if (has_field(value, "ExperienceMultiplierNumSecondsForAttenuation") &&
+        has_field(value, "ExperienceMultiplierParamDecayDeltaPerSecond") &&
+        has_field(value, "ComboMultiplier")) {
+        std::string expr = "CComboMultiplierData(" +
+            value_expr(field("ExperienceMultiplierNumSecondsForAttenuation"),
+                       "ExperienceMultiplierNumSecondsForAttenuation", scope, ctx) + ", " +
+            value_expr(field("ExperienceMultiplierParamDecayDeltaPerSecond"),
+                       "ExperienceMultiplierParamDecayDeltaPerSecond", scope, ctx);
+        const Value *map = field("ComboMultiplier");
+        if (map != nullptr) {
+            for (const auto &[key, mapped] : map->map) {
+                expr += ", Add(" +
+                    ctx.headers.resolve_domain(
+                        SymDomain::named(SymDomain::Kind::DamageAttribute),
+                        static_cast<std::int32_t>(key.integer)) + ", " +
+                    value_expr(&mapped, "ComboMultiplier", scope, ctx) + ")";
+            }
+        }
+        expr += ")";
+        return expr;
+    }
+    if (value.fields.size() == 1 && value.fields[0].first == "StatIncreases" &&
+        value.fields[0].second.kind == ValueKind::Map) {
+        std::string expr = "CHeroStatIncreaseData(";
+        bool first = true;
+        const auto &map = value.fields[0].second.map;
+        for (const auto &[key, mapped] : map) {
+            if (!first) expr += ", ";
+            first = false;
+            expr += "Add(" +
+                ctx.headers.resolve_domain(
+                    SymDomain::named(SymDomain::Kind::HeroExperienceStatCategory),
+                    static_cast<std::int32_t>(key.integer)) + ", " +
+                value_expr(&mapped, "StatIncreases", scope, ctx) + ")";
+        }
+        expr += ")";
+        return expr;
+    }
     if (has_field(value, "Attack") && has_field(value, "Knockdown") &&
         value.fields.size() == 2) {
         return "CWeaponTrailGraphicSet(" +
                value_expr(field("Attack"), "Attack", scope, ctx) + ", " +
                value_expr(field("Knockdown"), "Knockdown", scope, ctx) + ")";
+    }
+    if (value.fields.size() == 1 && value.fields[0].first == "Params" &&
+        value.fields[0].second.kind == ValueKind::List) {
+        std::string expr = "CReverbEnvironmentEntry(";
+        const auto &params = value.fields[0].second.list;
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            if (i) expr += ", ";
+            expr += value_expr(&params[i], "Params", scope, ctx);
+        }
+        expr += ")";
+        return expr;
     }
     if (has_field(value, "AttackCombo") && has_field(value, "Multiplier")) {
         std::string expr = "CAttackHistoryCombo(" +
@@ -1410,8 +1557,11 @@ void emit_reaction_matches(const Value &matches, const Context &ctx, std::string
 
 void emit_flammable(const Value &flammable, const Context &ctx, std::string &out,
                     int indent) {
-    const Value *set = find_value_field(flammable, "EffectCreationSet");
-    const Value *map = set == nullptr ? nullptr : find_value_field(*set, "ContainmentMap");
+    const Value *map = find_value_field(flammable, "ContainmentMap");
+    if (map == nullptr) {
+        const Value *set = find_value_field(flammable, "EffectCreationSet");
+        map = set == nullptr ? nullptr : find_value_field(*set, "ContainmentMap");
+    }
     if (map == nullptr) {
         return;
     }
@@ -1431,9 +1581,12 @@ void emit_flammable(const Value &flammable, const Context &ctx, std::string &out
 
 void emit_opinion_personality(const Value &personality, const Value *base,
                               std::string &out, int indent) {
-    const Value *traits = find_value_field(personality, "PersonalityTraits");
-    if (traits == nullptr) {
-        return;
+    const Value *traits = &personality;
+    if (find_value_field(personality, "Data") == nullptr) {
+        traits = find_value_field(personality, "PersonalityTraits");
+        if (traits == nullptr) {
+            return;
+        }
     }
     const Value *data = find_value_field(*traits, "Data");
     if (data == nullptr || data->list.size() < 180) {
@@ -1476,10 +1629,9 @@ void emit_opinion_personality(const Value &personality, const Value *base,
         for (int slot = 0; slot < 9; ++slot) {
             std::uint32_t bits = 0;
             std::memcpy(&bits, &slots[slot], sizeof(bits));
-            args.push_back(format_float(bits));
+            args.push_back(format_float_plain(bits));
         }
         std::swap(args[7], args[8]);
-        std::swap(args[6], args[7]);
         emit_method(out, indent, "PersonalityTraits", "Set", args);
     }
 }
@@ -1526,10 +1678,10 @@ void emit_opinion_deed_effects(const Value &definition, const Context &ctx,
         emit_method(out, indent, "Effects", "Add",
                     {ctx.headers.resolve_domain(SymDomain::named(SymDomain::Kind::Opinion),
                                                 opinion),
-                     [&] { float f = peak; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float(b); }(),
-                     [&] { float f = run_in_secs; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float(b); }(),
-                     [&] { float f = run_out_secs; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float(b); }(),
-                     [&] { float f = persist; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float(b); }()});
+                     [&] { float f = peak; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float_plain(b); }(),
+                     [&] { float f = run_in_secs; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float_plain(b); }(),
+                     [&] { float f = run_out_secs; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float_plain(b); }(),
+                     [&] { float f = persist; std::uint32_t b; std::memcpy(&b, &f, 4); return format_float_plain(b); }()});
     }
 }
 
@@ -1545,7 +1697,7 @@ void emit_degradable(const Value &definition, const Context &ctx, std::string &o
         }
         const Value *health = find_value_field(degradation, "HealthPercentage");
         emit_method(out, indent, "Degradations", "Add",
-                    {health == nullptr ? "0.0" : format_float(health->f32_bits),
+                    {health == nullptr ? "0" : format_float_plain(health->f32_bits),
                      ctx.headers.resolve_domain(SymDomain::named(SymDomain::Kind::Mesh),
                                                 field_i32(degradation, "BankIndex")),
                      ctx.headers.resolve_domain(SymDomain::named(SymDomain::Kind::Particle),
@@ -1722,11 +1874,11 @@ void emit_appearance_graphics(const Value &graphics_field, const Context &ctx,
                     {ctx.headers.resolve_domain(SymDomain::named(SymDomain::Kind::EngineGraphicType),
                                                 type),
                      ctx.headers.resolve_domain(SymDomain::named(bank_domain), bank),
-                     size == nullptr ? "0.0" : format_float(size->f32_bits),
+                     size == nullptr ? "0.0" : format_float_plain(size->f32_bits),
                      ctx.headers.resolve_domain(SymDomain::named(SymDomain::Kind::HeroMorph),
                                                 morph),
-                     start == nullptr ? "0.0" : format_float(start->f32_bits),
-                     end == nullptr ? "0.0" : format_float(end->f32_bits)});
+                     start == nullptr ? "0.0" : format_float_plain(start->f32_bits),
+                     end == nullptr ? "0.0" : format_float_plain(end->f32_bits)});
     }
 }
 
@@ -1735,6 +1887,26 @@ void emit_hero_morph(const Value &hero, const Context &ctx, std::string &out,
     const auto resolve = [&](SymDomain::Kind kind, int32_t value) {
         return ctx.headers.resolve_domain(SymDomain::named(kind), value);
     };
+    if (const Value *skeletal = find_value_field(hero, "SkeletalMorphs")) {
+        if (const Value *entries = find_value_field(*skeletal, "Morphs")) {
+            for (const Value &item : entries->list) {
+                if (item.kind != ValueKind::Struct) {
+                    continue;
+                }
+                const Value *key = find_value_field(item, "first");
+                const Value *entry = find_value_field(item, "second");
+                if (entry == nullptr) {
+                    continue;
+                }
+                const int32_t morph = key == nullptr ? 0 : static_cast<int32_t>(key->integer);
+                emit_method(out, indent, "SkeletalMorphs", "Add",
+                            {resolve(SymDomain::Kind::HeroMorph, morph),
+                             quote(field_string(*entry, "MorphName", ctx)),
+                             std::to_string(field_i32(*entry, "Priority")),
+                             field_bool(*entry, "SupressesLowerMorphs") ? "TRUE" : "FALSE"});
+            }
+        }
+    }
     if (const Value *morphs = find_value_field(hero, "TextureMorphs")) {
         if (const Value *entries = find_value_field(*morphs, "Morphs")) {
             for (const Value &item : entries->list) {
@@ -1787,8 +1959,8 @@ void emit_hero_morph(const Value &hero, const Context &ctx, std::string &out,
             std::vector<std::string> args = {
                 resolve(SymDomain::Kind::HeroMorph, morph),
                 resolve(SymDomain::Kind::Particle, particle_index),
-                start == nullptr ? "0.0" : format_float(start->f32_bits),
-                end == nullptr ? "0.0" : format_float(end->f32_bits),
+                start == nullptr ? "0.0" : format_float_plain(start->f32_bits),
+                end == nullptr ? "0.0" : format_float_plain(end->f32_bits),
                 resolve(SymDomain::Kind::MeshLocation, location), quote(location_name),
                 std::to_string(location_index)};
             if (entry != nullptr && find_value_field(*entry, "Blending") != nullptr &&
@@ -1857,8 +2029,8 @@ void unlower_body(const ParsedEntry &entry, const ParsedEntry *base,
             }
         }
         if (scope == "CHeroMorphDef") {
-            if (name == "TextureMorphs" || name == "ParticleMorphs" ||
-                name == "IdleParticleMorphs") {
+            if (name == "SkeletalMorphs" || name == "TextureMorphs" ||
+                name == "ParticleMorphs" || name == "IdleParticleMorphs") {
                 continue;
             }
         }
@@ -1995,6 +2167,107 @@ bool decompile_binary_to_text(const std::string &directory, const std::string &b
     return true;
 }
 
+bool diff_one_binary_to_text(const std::string &original_directory,
+                             const std::string &modified_directory,
+                             const std::string &defs_directory,
+                             const std::string &binary, const Names &original_names,
+                             const Names &modified_names, const HeaderResolver &headers,
+                             const std::map<std::string, std::string> &parents,
+                             std::string &out, DecompileStats &stats, std::string &error) {
+    namespace fs = std::filesystem;
+    const std::string original_path = original_directory + "/" + binary + ".bin";
+    const std::string modified_path = modified_directory + "/" + binary + ".bin";
+    if (!fs::exists(original_path) || !fs::exists(modified_path)) {
+        return true;
+    }
+    DefBinary original_bin;
+    DefBinary modified_bin;
+    if (!DefBinary::load(original_path, original_names,
+                         original_bin, error) ||
+        !DefBinary::load(modified_path, modified_names, modified_bin, error)) {
+        return false;
+    }
+    Context original_ctx;
+    Context modified_ctx;
+    build_context(original_bin, original_names, headers, defs_directory, original_ctx, stats);
+    build_context(modified_bin, modified_names, headers, defs_directory, modified_ctx, stats);
+
+    std::map<std::string, const BinaryEntry *> original_by_name;
+    std::map<std::string, const ParsedEntry *> original_defs;
+    for (std::size_t i = 0; i < original_bin.entries.size(); ++i) {
+        const BinaryEntry &entry = original_bin.entries[i];
+        if (entry.file_name.empty() || entry.file_name.rfind("NULLDEF_", 0) == 0) {
+            continue;
+        }
+        original_by_name[entry.file_name] = &entry;
+        original_defs[entry.file_name] = &original_ctx.entries[i];
+    }
+
+    for (std::size_t i = 0; i < modified_bin.entries.size(); ++i) {
+        const BinaryEntry &entry = modified_bin.entries[i];
+        if (entry.file_name.empty() || entry.file_name.rfind("NULLDEF_", 0) == 0) {
+            continue;
+        }
+        const auto original_entry = original_by_name.find(entry.file_name);
+        bool changed = original_entry == original_by_name.end();
+        if (!changed) {
+            const ParsedEntry &original_def = *original_defs[entry.file_name];
+            const ParsedEntry &modified_def = modified_ctx.entries[i];
+            Value modified_value;
+            modified_value.kind = ValueKind::Struct;
+            modified_value.fields = modified_def.fields;
+            Value original_value;
+            original_value.kind = ValueKind::Struct;
+            original_value.fields = original_def.fields;
+            changed = !sem_equal(modified_value, original_value, "", modified_ctx,
+                                 original_ctx);
+
+            if (!changed) {
+                const auto &modified_subs = entry.sub_defs;
+                const auto &original_subs = original_entry->second->sub_defs;
+                if (modified_subs.has_value() != original_subs.has_value()) {
+                    changed = true;
+                } else if (modified_subs) {
+                    if (modified_subs->size() != original_subs->size()) {
+                        changed = true;
+                    } else {
+                        for (std::size_t sub = 0; sub < modified_subs->size(); ++sub) {
+                            const SubDefRecord &m = (*modified_subs)[sub];
+                            const SubDefRecord &o = (*original_subs)[sub];
+                            if (m.name_crc != o.name_crc ||
+                                m.def_index >= modified_ctx.entries.size() ||
+                                o.def_index >= original_ctx.entries.size()) {
+                                changed = true;
+                                break;
+                            }
+                            Value mv;
+                            mv.kind = ValueKind::Struct;
+                            mv.fields = modified_ctx.entries[m.def_index].fields;
+                            Value ov;
+                            ov.kind = ValueKind::Struct;
+                            ov.fields = original_ctx.entries[o.def_index].fields;
+                            if (!sem_equal(mv, ov, "", modified_ctx, original_ctx)) {
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (!changed) {
+            continue;
+        }
+        if (original_entry == original_by_name.end()) {
+            ++stats.added;
+        } else {
+            ++stats.modified;
+        }
+        emit_definition(entry, modified_ctx.entries[i], modified_ctx, parents, out);
+    }
+    return true;
+}
+
 bool diff_binaries_to_text(const std::string &original_directory,
                            const std::string &modified_directory,
                            const std::string &defs_directory, std::string &out,
@@ -2005,131 +2278,35 @@ bool diff_binaries_to_text(const std::string &original_directory,
         !Names::load(modified_directory + "/names.bin", modified_names, error)) {
         return false;
     }
-
     const HeaderResolver headers = HeaderResolver::build(defs_directory);
     const auto parents = build_parent_map(defs_directory);
     out.clear();
     for (const std::string binary : {"game", "frontend", "script"}) {
-        DefBinary original_bin;
-        DefBinary modified_bin;
-        if (!DefBinary::load(original_directory + "/" + binary + ".bin",
-                             original_names, original_bin, error) ||
-            !DefBinary::load(modified_directory + "/" + binary + ".bin",
-                             modified_names, modified_bin, error)) {
+        if (!diff_one_binary_to_text(original_directory, modified_directory, defs_directory,
+                                     binary, original_names, modified_names, headers,
+                                     parents, out, stats, error)) {
             return false;
-        }
-        Context original_ctx;
-        Context modified_ctx;
-        build_context(original_bin, original_names, headers, defs_directory, original_ctx, stats);
-        build_context(modified_bin, modified_names, headers, defs_directory, modified_ctx, stats);
-
-        std::map<std::string, const BinaryEntry *> original_by_name;
-        std::map<std::string, const ParsedEntry *> original_defs;
-        for (std::size_t i = 0; i < original_bin.entries.size(); ++i) {
-            const BinaryEntry &entry = original_bin.entries[i];
-            if (entry.file_name.empty() || entry.file_name.rfind("NULLDEF_", 0) == 0) {
-                continue;
-            }
-            original_by_name[entry.file_name] = &entry;
-            original_defs[entry.file_name] = &original_ctx.entries[i];
-        }
-
-        for (std::size_t i = 0; i < modified_bin.entries.size(); ++i) {
-            const BinaryEntry &entry = modified_bin.entries[i];
-            if (entry.file_name.empty() || entry.file_name.rfind("NULLDEF_", 0) == 0) {
-                continue;
-            }
-            const auto original_entry = original_by_name.find(entry.file_name);
-            bool changed = original_entry == original_by_name.end();
-            if (!changed) {
-                const ParsedEntry &original_def = *original_defs[entry.file_name];
-                const ParsedEntry &modified_def = modified_ctx.entries[i];
-                Value modified_value;
-                modified_value.kind = ValueKind::Struct;
-                modified_value.fields = modified_def.fields;
-                Value original_value;
-                original_value.kind = ValueKind::Struct;
-                original_value.fields = original_def.fields;
-                changed = !sem_equal(modified_value, original_value, "", modified_ctx,
-                                     original_ctx);
-
-                if (!changed) {
-                    const auto &modified_subs = entry.sub_defs;
-                    const auto &original_subs = original_entry->second->sub_defs;
-                    if (modified_subs.has_value() != original_subs.has_value()) {
-                        changed = true;
-                    } else if (modified_subs) {
-                        if (modified_subs->size() != original_subs->size()) {
-                            changed = true;
-                        } else {
-                            for (std::size_t sub = 0; sub < modified_subs->size(); ++sub) {
-                                const SubDefRecord &m = (*modified_subs)[sub];
-                                const SubDefRecord &o = (*original_subs)[sub];
-                                if (m.name_crc != o.name_crc ||
-                                    m.def_index >= modified_ctx.entries.size() ||
-                                    o.def_index >= original_ctx.entries.size()) {
-                                    changed = true;
-                                    break;
-                                }
-                                Value mv;
-                                mv.kind = ValueKind::Struct;
-                                mv.fields = modified_ctx.entries[m.def_index].fields;
-                                Value ov;
-                                ov.kind = ValueKind::Struct;
-                                ov.fields = original_ctx.entries[o.def_index].fields;
-                                if (!sem_equal(mv, ov, "", modified_ctx, original_ctx)) {
-                                    changed = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if (!changed) {
-                continue;
-            }
-            if (original_entry == original_by_name.end()) {
-                ++stats.added;
-            } else {
-                ++stats.modified;
-            }
-            emit_definition(entry, modified_ctx.entries[i], modified_ctx, parents, out);
         }
     }
     return true;
 }
 
+namespace {
 
-bool patch_binaries(const std::string &original_directory,
-                    const std::string &modified_directory,
-                    const std::string &defs_directory, DecompileStats &stats,
-                    std::string &error) {
-    std::string diff_text;
-    if (!diff_binaries_to_text(original_directory, modified_directory, defs_directory,
-                               diff_text, stats, error)) {
-        return false;
-    }
-    ParseResult parsed_diff = parse_source(diff_text, FileId::anonymous());
-    if (std::holds_alternative<ParseError>(parsed_diff)) {
-        error = "cannot parse generated decompiler text";
-        return false;
-    }
-    const SourceAst &diff_ast = std::get<SourceAst>(parsed_diff);
-    std::map<std::string, std::string> replacements;
-    for (const auto &item : diff_ast.items) {
-        if (item.kind != Item::Kind::Definition) {
-            continue;
-        }
-        const auto &definition = item.definition;
-        const std::size_t start = definition.span.start;
-        const std::size_t end = definition.span.end;
-        if (start >= end || end > diff_text.size()) {
-            continue;
-        }
-        replacements[definition.value.name] = diff_text.substr(start, end - start);
-    }
+bool file_in_scope(const std::string &path, const std::string &binary) {
+    std::string normalized = path;
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    const bool script = normalized.find("/ScriptDefs/") != std::string::npos ||
+                        normalized.rfind("ScriptDefs/", 0) == 0;
+    const bool frontend = normalized.find("/FrontEndDefs/") != std::string::npos ||
+                          normalized.rfind("FrontEndDefs/", 0) == 0;
+    if (binary == "script") return script;
+    if (binary == "frontend") return frontend;
+    return !script && !frontend;
+}
 
+void patch_scope(const std::string &defs_directory, const std::string &binary,
+                 std::map<std::string, std::string> &replacements, std::string &error) {
     namespace fs = std::filesystem;
     std::error_code ec;
     for (fs::recursive_directory_iterator it(defs_directory, ec), end;
@@ -2138,6 +2315,9 @@ bool patch_binaries(const std::string &original_directory,
             continue;
         }
         const fs::path path = it->path();
+        if (!file_in_scope(normalized_path(path), binary)) {
+            continue;
+        }
         const std::string extension = path.extension().string();
         if (extension != ".def" && extension != ".tpl") {
             continue;
@@ -2168,7 +2348,15 @@ bool patch_binaries(const std::string &original_directory,
             if (found == replacements.end()) {
                 continue;
             }
-            edits.push_back({{definition.span.start, definition.span.end}, found->second});
+            std::string replacement = found->second;
+            if (definition.value.is_template) {
+                if (replacement.rfind("#definition ", 0) == 0) {
+                    replacement.replace(0, 12, "#definition_template ");
+                }
+            } else if (replacement.rfind("#definition_template ", 0) == 0) {
+                replacement.replace(0, 21, "#definition ");
+            }
+            edits.push_back({{definition.span.start, definition.span.end}, replacement});
             replacements.erase(found);
         }
         if (edits.empty()) {
@@ -2182,36 +2370,106 @@ bool patch_binaries(const std::string &original_directory,
         std::ofstream out(path, std::ios::binary);
         if (!out) {
             error = "cannot write " + path.string();
-            return false;
+            return;
         }
         out.write(text.data(), static_cast<std::streamsize>(text.size()));
         if (!out) {
             error = "cannot write " + path.string();
-            return false;
+            return;
         }
     }
+}
 
-    const fs::path added_path = fs::path(defs_directory) / "z_mod_decompiled.def";
-    if (replacements.empty()) {
-        fs::remove(added_path, ec);
-        return true;
+std::string added_path(const std::string &defs_directory, const std::string &binary) {
+    if (binary == "script") {
+        return defs_directory + "/ScriptDefs/z_mod_decompiled.def";
     }
-    std::string added_text;
-    for (const auto &[name, block] : replacements) {
-        (void)name;
-        added_text += block;
-        if (!added_text.empty() && added_text.back() != '\n') {
-            added_text.push_back('\n');
-        }
-        added_text.push_back('\n');
+    if (binary == "frontend") {
+        return defs_directory + "/FrontEndDefs/z_mod_decompiled.def";
     }
-    std::ofstream out(added_path, std::ios::binary);
-    if (!out) {
-        error = "cannot write " + added_path.string();
+    return defs_directory + "/z_mod_decompiled.def";
+}
+
+} // namespace
+
+bool patch_binaries(const std::string &original_directory,
+                    const std::string &modified_directory,
+                    const std::string &defs_directory, DecompileStats &stats,
+                    std::string &error) {
+    Names original_names;
+    Names modified_names;
+    if (!Names::load(original_directory + "/names.bin", original_names, error) ||
+        !Names::load(modified_directory + "/names.bin", modified_names, error)) {
         return false;
     }
-    out.write(added_text.data(), static_cast<std::streamsize>(added_text.size()));
-    return static_cast<bool>(out);
+    const HeaderResolver headers = HeaderResolver::build(defs_directory);
+    const auto parents = build_parent_map(defs_directory);
+
+    for (const std::string binary : {"game", "frontend", "script"}) {
+        std::string diff_text;
+        DecompileStats local;
+        if (!diff_one_binary_to_text(original_directory, modified_directory, defs_directory,
+                                     binary, original_names, modified_names, headers,
+                                     parents, diff_text, local, error)) {
+            return false;
+        }
+        stats.modified += local.modified;
+        stats.added += local.added;
+        stats.errors.insert(stats.errors.end(), local.errors.begin(), local.errors.end());
+
+        std::map<std::string, std::string> replacements;
+        if (!diff_text.empty()) {
+            ParseResult parsed = parse_source(diff_text, FileId::anonymous());
+            if (std::holds_alternative<ParseError>(parsed)) {
+                error = "cannot parse generated decompiler text";
+                return false;
+            }
+            const SourceAst &ast = std::get<SourceAst>(parsed);
+            for (const auto &item : ast.items) {
+                if (item.kind != Item::Kind::Definition) {
+                    continue;
+                }
+                const auto &definition = item.definition;
+                const std::size_t start = definition.span.start;
+                const std::size_t end = definition.span.end;
+                if (start >= end || end > diff_text.size()) {
+                    continue;
+                }
+                replacements[definition.value.name] =
+                    diff_text.substr(start, end - start);
+            }
+        }
+
+        patch_scope(defs_directory, binary, replacements, error);
+        if (!error.empty()) {
+            return false;
+        }
+
+        const std::string path = added_path(defs_directory, binary);
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        if (replacements.empty()) {
+            fs::remove(path, ec);
+            continue;
+        }
+        if (const auto parent = fs::path(path).parent_path(); !parent.empty()) {
+            fs::create_directories(parent, ec);
+        }
+        std::ofstream out(path, std::ios::binary);
+        if (!out) {
+            error = "cannot write " + path;
+            return false;
+        }
+        for (const auto &[name, block] : replacements) {
+            (void)name;
+            out << block;
+            if (block.empty() || block.back() != '\n') {
+                out << '\n';
+            }
+            out << '\n';
+        }
+    }
+    return true;
 }
 
 } // namespace fable::defs::compiler

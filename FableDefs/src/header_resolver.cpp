@@ -198,6 +198,10 @@ std::optional<std::string> EnumGroupTable::resolve(std::int32_t value,
                                             : std::optional<std::string>(zero->second);
         }
         if (value > 0 && !bit_flags.empty()) {
+            const auto exact = val_to_sym.find(value);
+            if (exact != val_to_sym.end() && !is_sentinel_symbol(exact->second)) {
+                return exact->second;
+            }
             std::int32_t remaining = value;
             std::vector<std::string> terms;
             for (const auto &[bit, symbol] : bit_flags) {
@@ -475,6 +479,10 @@ void HeaderResolver::record_enum(const std::string &relative_path, const EnumDec
         named(SymDomain::Kind::OpinionTargetingConditionType);
     } else if (enum_name == "EOpinionDeedType") {
         named(SymDomain::Kind::OpinionDeedType);
+    } else if (enum_name == "EHeroExperienceStatCategory") {
+        named(SymDomain::Kind::HeroExperienceStatCategory);
+    } else if (enum_name == "ETargetingType") {
+        named(SymDomain::Kind::TargetingType);
     } else if (enum_name == "EAttackHistoryType") {
         named(SymDomain::Kind::AttackHistoryType);
     } else if (enum_name == "EDamageAttribute") {
@@ -505,7 +513,8 @@ void HeaderResolver::record_enum(const std::string &relative_path, const EnumDec
 std::string HeaderResolver::resolve_domain(SymDomain domain,
                                            std::int32_t value) const {
     const bool bitflags = domain.kind == SymDomain::Kind::AnimFlags ||
-                          domain.kind == SymDomain::Kind::ObjectAugmentation;
+                          domain.kind == SymDomain::Kind::ObjectAugmentation ||
+                          domain.kind == SymDomain::Kind::TargetingType;
     if (domain.kind == SymDomain::Kind::EnumGroup) {
         if (domain.group < enum_groups_.size()) {
             if (auto resolved = enum_groups_[domain.group].resolve(value, false)) {
@@ -531,7 +540,8 @@ std::string HeaderResolver::resolve_field(const std::string &scope,
         found = field_domains_.find({"*", field_name});
     }
     if (found != field_domains_.end()) {
-        const auto &[domain, is_bitflags] = found->second;
+        const auto &[domain, configured_bitflags] = found->second;
+        const bool is_bitflags = configured_bitflags && field_name != "Type";
         if (domain.kind == SymDomain::Kind::EnumGroup) {
             if (domain.group < enum_groups_.size()) {
                 if (auto resolved = enum_groups_[domain.group].resolve(value, is_bitflags)) {
@@ -548,6 +558,9 @@ std::string HeaderResolver::resolve_field(const std::string &scope,
         }
     }
 
+    if (field_name == "Type" && scope == "CTargetingDef") {
+        return resolve_domain(SymDomain::named(SymDomain::Kind::TargetingType), value);
+    }
     if (field_name == "PhonemeAnim") {
         return resolve_domain(SymDomain::named(SymDomain::Kind::Anim), value);
     }

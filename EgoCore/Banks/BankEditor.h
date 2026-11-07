@@ -77,11 +77,6 @@ inline void UpdateFilter(LoadedBank& bank) {
 extern float g_ImportBumpFactor;
 
 inline std::string SanitizeEnumName(std::string name) {
-    size_t first = name.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return "";
-    size_t last = name.find_last_not_of(" \t\r\n");
-    name = name.substr(first, last - first + 1);
-
     std::string res;
     for (char c : name) {
         if (std::isalnum((unsigned char)c) || c == '_') res += c;
