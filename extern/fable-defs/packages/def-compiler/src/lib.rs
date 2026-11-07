@@ -37,7 +37,7 @@ pub use self::build::{
 
 pub use self::reader::{Args, Body, DefReader, DefReaderError, EvalError, Evaluator};
 
-pub use self::lower::{LowerError, chain_runs, lower_def, specialization_chain};
+pub use self::lower::{LowerError, LowerWarning, chain_runs, lower_def, specialization_chain};
 
 use std::path::{Path, PathBuf};
 

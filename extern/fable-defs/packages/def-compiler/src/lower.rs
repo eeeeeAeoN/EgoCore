@@ -72,6 +72,12 @@ fn from_i32_strict<T: defs::def::enums::DefEnum>(value: i32) -> Result<T, LowerE
     })
 }
 
+#[derive(Debug, Clone)]
+pub struct LowerWarning {
+    pub message: String,
+    pub span: Span,
+}
+
 #[derive(Debug)]
 pub enum LowerError {
     Unsupported(String),
@@ -2073,9 +2079,20 @@ fn build_random_appearance_morph<'a>(
     body: Body<'a>,
     symbols: &SymbolTable,
     names: &RefCell<NamesBuilder>,
+    warnings: &mut Vec<LowerWarning>,
 ) -> (RandomAppearanceMorph, Vec<&'a Spanned<Statement>>) {
     let eval = Evaluator::new(symbols);
     let mut filtered = Vec::new();
+    let mut eval_i32 = |e: &Spanned<Expr>| match eval.i32(e) {
+        Ok(v) => v,
+        Err(err) => {
+            warnings.push(LowerWarning {
+                message: format!("{err}"),
+                span: e.span,
+            });
+            0
+        }
+    };
     // Collected `AddTextureToMesh(mesh, N, original, replace0[, replace1…])` calls,
     // in text order, for post-processing into per-mesh texture-morph maps.
     let mut tex_calls: Vec<TexMeshCall> = Vec::new();
@@ -2087,13 +2104,16 @@ fn build_random_appearance_morph<'a>(
             && matches!(&mc.object.segments[0], PathSegment::Field(n) if n == "RandomAppearanceMorph")
         {
             let a = &mc.call.arguments;
-            let ev = |i: usize| a.get(i).and_then(|e| eval.i32(e).ok()).unwrap_or(0);
+            let mut ev = |i: usize| match a.get(i) {
+                Some(e) => eval_i32(e),
+                None => 0,
+            };
             match mc.call.name.as_str() {
                 "AddBodyPart" => {
                     // (body_part, priority, mesh0, mesh1, …) → one mesh entry per mesh.
                     let (bp, priority) = (ev(0), ev(1));
                     for mesh in a.iter().skip(2) {
-                        let mesh_id = eval.i32(mesh).unwrap_or(0);
+                        let mesh_id = eval_i32(mesh);
                         match bp {
                             0 => ram.body_parts0.meshes.push(
                                 RandomAppearanceMorphBodyParts0MeshesEntry {
@@ -2130,7 +2150,7 @@ fn build_random_appearance_morph<'a>(
                         mesh_id: ev(0),
                         n,
                         original: ev(2),
-                        replacements: a.iter().skip(3).map(|e| eval.i32(e).unwrap_or(0)).collect(),
+                        replacements: a.iter().skip(3).map(&mut eval_i32).collect(),
                     });
                     continue;
                 }
@@ -2157,7 +2177,7 @@ fn build_random_appearance_morph<'a>(
                         mesh_id: -1,
                         n: 0,
                         original,
-                        replacements: a.iter().skip(1).map(|e| eval.i32(e).unwrap_or(0)).collect(),
+                        replacements: a.iter().skip(1).map(&mut eval_i32).collect(),
                     });
                     continue;
                 }
@@ -2455,10 +2475,11 @@ fn lower_creature_def(
     symbols: &SymbolTable,
     def_indices: &HashMap<String, u32>,
     names: &RefCell<NamesBuilder>,
+    warnings: &mut Vec<LowerWarning>,
 ) -> Result<DefBody, LowerError> {
     let base = base_or_default!(base_opt, CreatureDef);
     let (ram, filtered) =
-        build_random_appearance_morph(base.random_appearance_morph.clone(), body, symbols, names);
+        build_random_appearance_morph(base.random_appearance_morph.clone(), body, symbols, names, warnings);
     // `Expressions.Add(EXPRESSION_X, ANIM_X)` → `CExpressionSet.Expressions`,
     // a `CVectorMap<EExpressionType, CEntry{Type, AnimIndex}>` sorted by
     // key (expression_set.hpp). Wire entry = [key][Type][AnimIndex]; key ==
@@ -3369,6 +3390,7 @@ pub fn lower_def(
     symbols: &SymbolTable,
     def_indices: &HashMap<String, u32>,
     names: &RefCell<NamesBuilder>,
+    warnings: &mut Vec<LowerWarning>,
 ) -> Result<DefBody, LowerError> {
     let body = match name {
         "CAnimatingObjectDef" => {
@@ -3382,7 +3404,7 @@ pub fn lower_def(
         | "CCombatAbilityBlockUnarmedAttackDef" => {
             lower_combat_ability_block_def(base, body, symbols, def_indices, names)?
         }
-        "CCreatureDef" => lower_creature_def(base, body, symbols, def_indices, names)?,
+        "CCreatureDef" => lower_creature_def(base, body, symbols, def_indices, names, warnings)?,
         "CEntitySoundDef" => lower_entity_sound_def(base, body, symbols, def_indices, names)?,
         "CFlammableDef" => lower_flammable_def(base, body, symbols, def_indices, names)?,
         "CHeroMorphDef" => lower_hero_morph_def(base, body, symbols, def_indices, names)?,
