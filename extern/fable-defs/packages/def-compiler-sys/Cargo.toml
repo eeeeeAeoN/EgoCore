@@ -1,0 +1,17 @@
+[package]
+name = "def-compiler-sys"
+description = "C library for the Fable def compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+def-compiler = { path = "../def-compiler" }
+codespan-reporting = "0.13"
