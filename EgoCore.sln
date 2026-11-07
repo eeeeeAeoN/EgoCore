@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EgoCore", "EgoCore\EgoCore.
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "StaticTerrainBank", "StaticTerrainBankCompiler\StaticTerrainBank.vcxproj", "{A82F1043-41A5-4BC5-8851-C2E46BA90D32}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FableDefs", "FableDefs\FableDefs.vcxproj", "{135E859A-4530-4F7F-9069-4257C89B266E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,6 +33,14 @@ Global
 		{A82F1043-41A5-4BC5-8851-C2E46BA90D32}.Release|x64.Build.0 = Release|x64
 		{A82F1043-41A5-4BC5-8851-C2E46BA90D32}.Release|x86.ActiveCfg = Release|x64
 		{A82F1043-41A5-4BC5-8851-C2E46BA90D32}.Release|x86.Build.0 = Release|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Debug|x64.ActiveCfg = Debug|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Debug|x64.Build.0 = Debug|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Debug|x86.ActiveCfg = Debug|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Debug|x86.Build.0 = Debug|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Release|x64.ActiveCfg = Release|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Release|x64.Build.0 = Release|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Release|x86.ActiveCfg = Release|x64
+		{135E859A-4530-4F7F-9069-4257C89B266E}.Release|x86.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

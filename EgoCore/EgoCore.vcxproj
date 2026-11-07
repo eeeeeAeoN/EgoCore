@@ -125,10 +125,9 @@
   <ItemGroup>
     <ResourceCompile Include="EgoCore.rc" />
   </ItemGroup>
-  <!-- The FableDefCompiler static library is superseded by the native def
-       compiler (extern/fable-defs) and is no longer referenced. It also required
-       a vcpkg zlib, which EgoCore no longer needs. The project itself is still
-       in the solution if you want it back. -->
+  <!-- The old FableDefCompiler project is superseded by the native FableDefs
+       compiler at the repository root. It also required a vcpkg zlib, which
+       EgoCore no longer needs. -->
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -182,7 +181,7 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>$(SolutionDir)extern\fable-defs\packages\def-compiler-sys\include;$(ProjectDir)Definitions;$(ProjectDir)TextEditor;$(ProjectDir)Text;$(ProjectDir)Textures;$(ProjectDir)Utilities;$(ProjectDir)Meshes;$(ProjectDir)Banks;$(ProjectDir)Animations;$(ProjectDir)Utilities\ImGUI;$(IncludePath)</IncludePath>
+    <IncludePath>$(SolutionDir)FableDefs\include;$(ProjectDir)Definitions;$(ProjectDir)TextEditor;$(ProjectDir)Text;$(ProjectDir)Textures;$(ProjectDir)Utilities;$(ProjectDir)Meshes;$(ProjectDir)Banks;$(ProjectDir)Animations;$(ProjectDir)Utilities\ImGUI;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <IncludePath>$(ProjectDir)Lipsync;$(ProjectDir)Audio;$(ProjectDir)Definitions;$(ProjectDir)TextEditor;$(ProjectDir)Text;$(ProjectDir)Textures;$(ProjectDir)Utilities;$(ProjectDir)Meshes;$(ProjectDir)Banks;$(ProjectDir)Animations;$(ProjectDir)Utilities\ImGUI;$(IncludePath)</IncludePath>
@@ -196,6 +195,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(SolutionDir)FableDefs\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -211,6 +211,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(SolutionDir)FableDefs\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -225,7 +226,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)StaticTerrainBankCompiler\include;$(ProjectDir)Levels;$(SolutionDir)FableDefCompiler;$(ProjectDir)FSE;$(ProjectDir)Mods;$(ProjectDir)Particles;$(ProjectDir)Fonts;$(ProjectDir)Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)FableDefs\include;$(SolutionDir)StaticTerrainBankCompiler\include;$(ProjectDir)Levels;$(SolutionDir)FableDefCompiler;$(ProjectDir)FSE;$(ProjectDir)Mods;$(ProjectDir)Particles;$(ProjectDir)Fonts;$(ProjectDir)Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -233,7 +234,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
       <AdditionalLibraryDirectories>$(SolutionDir)$(Platform)\$(Configuration);$(SolutionDir)StaticTerrainBankCompiler\lib;$(SolutionDir)StaticTerrainBankCompiler\$(Platform)\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>StaticTerrainBank.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>FableDefs.lib;StaticTerrainBank.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -245,23 +246,26 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)StaticTerrainBankCompiler\include;$(ProjectDir)Levels;$(SolutionDir)FableDefCompiler;$(ProjectDir)FSE;$(ProjectDir)Mods;$(ProjectDir)Particles;$(ProjectDir)Fonts;$(ProjectDir)Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)FableDefs\include;$(SolutionDir)StaticTerrainBankCompiler\include;$(ProjectDir)Levels;$(SolutionDir)FableDefCompiler;$(ProjectDir)FSE;$(ProjectDir)Mods;$(ProjectDir)Particles;$(ProjectDir)Fonts;$(ProjectDir)Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
       <AdditionalLibraryDirectories>$(SolutionDir)$(Platform)\$(Configuration);$(SolutionDir)StaticTerrainBankCompiler\lib;$(SolutionDir)StaticTerrainBankCompiler\$(Platform)\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>StaticTerrainBank.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>FableDefs.lib;StaticTerrainBank.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ProjectReference Include="..\FableDefs\FableDefs.vcxproj">
+      <Project>{135E859A-4530-4F7F-9069-4257C89B266E}</Project>
+      <Name>FableDefs</Name>
+    </ProjectReference>
     <ProjectReference Include="..\StaticTerrainBankCompiler\StaticTerrainBank.vcxproj">
       <Project>{A82F1043-41A5-4BC5-8851-C2E46BA90D32}</Project>
       <Name>StaticTerrainBank</Name>
     </ProjectReference>
   </ItemGroup>
-  <Import Project="$(MSBuildProjectDirectory)\..\FableDefs.targets" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
