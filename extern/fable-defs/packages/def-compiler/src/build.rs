@@ -37,7 +37,7 @@ use defs::text::{
     symbols::{Redefinition, SymbolEvalError},
 };
 
-use crate::lower::{LowerError, LowerWarning, chain_runs, lower_def, specialization_chain};
+use crate::lower::{LowerError, chain_runs, lower_def, specialization_chain};
 use crate::manifest;
 use crate::reader::Body;
 use crate::reader::{DefReaderError, EvalError};
@@ -1147,53 +1147,6 @@ fn lowering_error_diagnostic(
     }
 }
 
-fn lowering_warning_diagnostic(
-    def_name: &str,
-    warning: &LowerWarning,
-    ctx: &BuildCtx,
-) -> BuildDiagnostic {
-    let source = ctx.def_to_source.get(def_name).copied();
-    let Some(sid) = source else {
-        return BuildDiagnostic::bare(Severity::Warning, format!("{def_name}: {}", warning.message));
-    };
-    let mut labels = Vec::new();
-    if warning.span != Span::SYNTHETIC {
-        labels.push(DiagnosticLabel {
-            source: warning.span.file.0 as usize,
-            primary: true,
-            span: warning.span,
-            message: None,
-        });
-    }
-
-    let own_statement = warning.span != Span::SYNTHETIC
-        && ctx
-            .def_spans
-            .get(def_name)
-            .is_some_and(|d| d.contains(warning.span));
-    if own_statement && let Some(dspan) = ctx.def_spans.get(def_name) {
-        let text = &ctx.sources[sid].text;
-        let header_line = &text[dspan.start..def_header_end(text, dspan.start)];
-        if let Some(name_pos) = header_line.find(def_name) {
-            let start = dspan.start + name_pos;
-            labels.push(DiagnosticLabel {
-                source: sid,
-                primary: false,
-                span: Span::new(dspan.file, start, start + def_name.len()),
-                message: Some("in this definition".to_string()),
-            });
-        }
-    }
-    BuildDiagnostic {
-        severity: Severity::Warning,
-        message: warning.message.clone(),
-        labels,
-        notes: vec![
-            "defaulting value to 0; constants come from `enum` / `#define` declarations".to_string(),
-        ],
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Shared helper functions
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1247,17 +1200,8 @@ fn build_nulldefs(
         }
         // A NULLDEF body is `def_default()` with no statements applied, so this
         // can only fail if the type is missing from the schema entirely.
-        let mut dummy_warnings = Vec::new();
-        let body = lower_def(
-            dn,
-            None,
-            Body::EMPTY,
-            symbols,
-            def_indices,
-            names,
-            &mut dummy_warnings,
-        )
-        .map_err(|e| format!("NULLDEF lowering failed for {dn}: {e}"))?;
+        let body = lower_def(dn, None, Body::EMPTY, symbols, def_indices, names)
+            .map_err(|e| format!("NULLDEF lowering failed for {dn}: {e}"))?;
         map.insert(dn.to_string(), body);
     }
     Ok(map)
@@ -1389,7 +1333,6 @@ fn emit_nulldef_and_named<'a>(
         // own statements in clones, all of it discarded after lowering.
         let runs = chain_runs(&chain);
 
-        let mut warnings = Vec::new();
         let lowered = match lower_def(
             &def_type,
             ctx.nulldefs.get(def_type.as_str()).as_ref().copied(),
@@ -1397,7 +1340,6 @@ fn emit_nulldef_and_named<'a>(
             ctx.symbols,
             ctx.def_indices,
             ctx.names,
-            &mut warnings,
         ) {
             Ok(b) => {
                 n_ok += 1;
@@ -1410,10 +1352,6 @@ fn emit_nulldef_and_named<'a>(
                 continue;
             }
         };
-        for w in warnings {
-            ctx.diagnostics
-                .push(lowering_warning_diagnostic(name, &w, ctx));
-        }
         let counter = next_class_index(class_index, &def_type);
         let has_sub_defs = def_name_has_subdef_table(&def_type);
         // `build_subdefs` has to run after every named entry exists — sub-def
@@ -1594,7 +1532,6 @@ fn build_subdefs(
                 });
                 continue;
             }
-            let mut warnings = Vec::new();
             let lowered = match lower_def(
                 tag,
                 ctx.nulldefs.get(tag).as_ref().copied(),
@@ -1602,7 +1539,6 @@ fn build_subdefs(
                 ctx.symbols,
                 ctx.def_indices,
                 ctx.names,
-                &mut warnings,
             ) {
                 Ok(b) => {
                     sub_ok += 1;
@@ -1632,10 +1568,6 @@ fn build_subdefs(
                     continue;
                 }
             };
-            for w in warnings {
-                ctx.diagnostics
-                    .push(lowering_warning_diagnostic(name, &w, ctx));
-            }
             let mut bytes = vec![0u8; lowered.byte_size()];
             {
                 let mut o = &mut bytes[..];

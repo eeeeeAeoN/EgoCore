@@ -48,6 +48,7 @@ know what changed when, read the git log.
 | Resource | Path |
 |---|---|
 | Fable decompilation | `~/git/fable-decomp` — the `Transfer<T>` type/order oracle (§6). **Absent at time of writing** |
+| PDB class declarations | `~/git/fable-decomp-engine` — `decomp-cli tree` output fed the `fable-defs-cpp` bootstrap |
 | Retail binaries (ground truth) | `~/Fable/data/CompiledDefs/backup-retail-verified/` |
 | Anniversary debug build (text defs) | `~/doc/Fable_Anniversary-2013-02-25/Fable/Data/` |
 | Live game install (ships **both** header sets, §4.1) | `~/Fable/data/Defs/` |
@@ -1373,6 +1374,15 @@ time ./target/release/defc -i $TEXT/Defs -o /tmp/out
 # path can be rebuilt phase by phase with an `Instant` between each. Delete it
 # afterwards.
 
+# Re-bootstrap the C++ def classes (one-time tool; needs fable-decomp-engine + the debug PDB)
+cargo run --manifest-path tools/fable-defs-bootstrap/Cargo.toml -- --decomp-cli ~/git/fable-decomp-engine/target/release/decomp-cli
+
+# C++ port: configure/build/test (root presets) and run the front end
+cmake --preset debug && cmake --build --preset debug && ctest --preset debug
+build/cpp-debug/bin/fable-defc parse ~/fable-ref/Data/Defs
+build/cpp-debug/bin/fable-defc build ~/fable-ref/Data/Defs /tmp/fable-out
+
+
 # In-game test — deploy all four; ROLLBACK from $REF if it won't load
 cp <out_dir>/{game,frontend,script,names}.bin ~/Fable/data/CompiledDefs/
 cp $REF/{game,frontend,script,names}.bin ~/Fable/data/CompiledDefs/   # rollback
@@ -1399,8 +1409,44 @@ cp $REF/{game,frontend,script,names}.bin ~/Fable/data/CompiledDefs/   # rollback
 | `packages/defc/src/main.rs` | CLI + diagnostic rendering |
 | `packages/defc/tests/golden.rs` | **Byte-determinism gate** |
 | `packages/def-compiler/examples/verify.rs` | Semantic ledger — the divergence oracle |
+| `cpp/fable-defs/include/fable/defs.hpp` | Curated C++ def model (header-only; `fable::defs`) |
+| `cpp/fable-defs/include/fable/defs/classes.hpp` | The original def classes and compound dependencies |
+| `cpp/fable-defs/include/fable/defs/enums.hpp` | Original def enums with their C++ symbols |
+| `tools/fable-defs-bootstrap` | One-time PDB → cleaned header extractor; not part of the package |
+| `cpp/fable-defs-compiler/src/lexer.cpp` | C++ port: unified def/header lexer |
+| `cpp/fable-defs-compiler/src/parser.cpp` | C++ port: AST and parser for definitions, statements, enums, namespaces, conditionals |
+| `cpp/fable-defs-compiler/src/symbols.cpp` | C++ port: symbol table and redefinition reporting |
+| `cpp/fable-defs-compiler/src/defc_main.cpp` | C++ `fable-defc` CLI (`parse`, `symbols`) |
+| `cpp/fable-defs-compiler/tests/parser_test.cpp` | C++ front-end tests |
+| `cpp/fable-defs/include/fable/defs/visit.hpp` | Generated field reflection (`visit_fields`) for the C++ model |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/lower.hpp` | Generic lowering into the C++ model |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/definitions.hpp` | Definition index, `specialises` chains and flattening |
+| `cpp/fable-defs-compiler/src/definitions.cpp` | C++ port: definition index and specialization chain |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/model_registry.hpp` | Generated class-name dispatch for the CLI |
+| `cpp/fable-defs-compiler/tests/lower_test.cpp` | C++ lowering tests |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/wire.hpp` | Wire value/control serialization |
+| `cpp/fable-defs/include/fable/defs/transfer.hpp` | Generated Transfer wire names/member paths/defaults |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/type_registry.hpp` | Generated text def-type -> class dispatch |
+| `tools/gen_transfer.py` | Generates `transfer.hpp` from lifted Transfer bodies |
+| `tools/lift_transfers.py` | Harvests `<Class>::Transfer` bodies from `fable-decomp-engine` |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/build_index.hpp` | Manifest-driven NULLDEF/named index space |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/build_pipeline.hpp` | Corpus -> binary pipeline (NULLDEFs, named, sub-defs, chunks) |
+| `cpp/fable-defs-compiler/src/build_pipeline.cpp` | Binary emitter and anonymous sub-def dedup |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/manifest.hpp` | Generated NULLDEF lists |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/names.hpp` | names.bin interning |
+| `cpp/fable-defs-compiler/src/build_index.cpp` | Index allocation |
+| `cpp/fable-defs-compiler/src/names.cpp` | NamesBuilder |
+| `tools/gen_manifest_header.py` | Generates the manifest header from the Rust manifest |
+| `tools/gen_type_registry.py` | Generates the def-type -> class registry |
+| `cpp/fable-defs-compiler/src/wire.cpp` | crc32 |
+| `cpp/fable-defs-compiler/tests/wire_test.cpp` | Wire serialization tests |
+| `tools/gen_model_visit.py` | Generates `visit.hpp` and `model_registry.hpp` from the C++ model |
+| `cpp/fable-defs-compiler/include/fable/defs/compiler/build.hpp` | C++ embedding API used by EgoCore |
+| `cpp/fable-defs-compiler/src/build.cpp` | Directory discovery, parsing, symbol evaluation and build orchestration |
+| `CMakeLists.txt` | Root C++ build entry (adds `cpp/`) |
+| `CMakePresets.json` | Debug/release and Visual Studio 2022/MSBuild presets |
 
-Test counts: `defs` 129, `def-compiler` 41, `defc` 1 (golden), plus doctests.
+Test counts: `defs` 129, `def-compiler` 41, `defc` 1 (golden), plus doctests. C++ CTest: 6 targets.
 
 ### Load-bearing gotchas
 

@@ -86,15 +86,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "def-decompiler"
-version = "0.5.0"
-dependencies = [
- "argh",
- "def-compiler",
- "defs",
-]
-
-[[package]]
 name = "defc"
 version = "0.5.0"
 dependencies = [

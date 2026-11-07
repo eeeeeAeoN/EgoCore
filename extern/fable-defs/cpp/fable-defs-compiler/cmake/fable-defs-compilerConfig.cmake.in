@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(fable-defs)
+
+include("${CMAKE_CURRENT_LIST_DIR}/fable-defs-compiler-targets.cmake")
+
+check_required_components(fable-defs-compiler)

@@ -1,2 +1,5 @@
+/build/
 /target
+tools/*/target
+tools/fable-defs-bootstrap/out
 .direnv
