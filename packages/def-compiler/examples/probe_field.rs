@@ -103,7 +103,9 @@ fn render(field: &FieldRef<'_>, names: &Names) -> String {
 fn load(dir: &str, bin: &str) -> (DefBinary, Names) {
     let names = Names::load(&Path::new(dir).join("names.bin")).unwrap();
     let file = format!("{bin}.bin");
-    let b = DefBinary::load_with_names(&Path::new(dir).join(&file), &names).unwrap();
+    let b = defs::wire::with_lenient_control_ids(|| {
+        DefBinary::load_with_names(&Path::new(dir).join(&file), &names)
+    }).unwrap();
     (b, names)
 }
 

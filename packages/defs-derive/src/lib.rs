@@ -755,6 +755,10 @@ pub fn derive_def_enum(input: TokenStream) -> TokenStream {
                 *self = Self::from_i32(value).ok_or(value)?;
                 Ok(())
             }
+
+            fn symbol(&self) -> &'static str {
+                (*self).symbol()
+            }
         }
 
         #as_field
@@ -854,6 +858,32 @@ pub fn derive_def_flags(input: TokenStream) -> TokenStream {
                 }
             }
 
+            /// Decompose a bitmask into one or more C++ flag symbols if all bits are covered.
+            pub fn decompose_symbols(self) -> Option<Vec<&'static str>> {
+                if let Some(s) = self.symbol() {
+                    return Some(vec![s]);
+                }
+                if self.0 == 0 {
+                    return None;
+                }
+                let mut rem = self.0;
+                let mut out = Vec::new();
+                #(
+                    {
+                        let v: i32 = #values;
+                        if v != 0 && (rem & v) == v {
+                            out.push(#symbols);
+                            rem &= !v;
+                        }
+                    }
+                )*
+                if rem == 0 && !out.is_empty() {
+                    Some(out)
+                } else {
+                    None
+                }
+            }
+
         }
 
         impl crate::visit::DefDefault for #name {
@@ -901,6 +931,14 @@ pub fn derive_def_flags(input: TokenStream) -> TokenStream {
 
             fn set_i32(&mut self, value: i32) {
                 self.0 = value;
+            }
+
+            fn symbol(&self) -> Option<&'static str> {
+                (*self).symbol()
+            }
+
+            fn decompose_symbols(&self) -> Option<Vec<&'static str>> {
+                (*self).decompose_symbols()
             }
         }
 

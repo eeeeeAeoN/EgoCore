@@ -126,6 +126,31 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # C++ data model + compiler port. Uses the root CMake presets, not cargo.
+  cpp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset release
+      - name: Build
+        run: cmake --build --preset release --parallel
+      - name: Test
+        run: ctest --preset release
+
+  # The MSBuild path: CMake's VS 2022 generator drives MSBuild, and the same
+  # presets are what a developer uses on Windows.
+  cpp-msbuild:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset vs2022
+      - name: Build
+        run: cmake --build --preset vs2022-release --parallel
+      - name: Test
+        run: ctest --preset vs2022-release
+
   # Separate only so `contents: write` is not granted to the job that builds.
   # Downloads the artifact the `ci` job already produced — no nix, no rebuild.
   release:

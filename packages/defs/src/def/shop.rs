@@ -62,17 +62,17 @@ pub struct ShopDef {
     #[def("MaxTimeToSteal")]
     pub max_time_to_steal: f32,
     #[def("MinGoldForDonation")]
-    pub min_gold_for_donation: DefIndex,
+    pub min_gold_for_donation: i32,
     #[def("MaxGoldForDonation")]
-    pub max_gold_for_donation: DefIndex,
+    pub max_gold_for_donation: i32,
     #[def("MaxMoralityForDonation")]
     pub max_morality_for_donation: f32,
     #[def("LogarithmicPower")]
     pub logarithmic_power: f32,
     #[def("NumDaysToKeepSpecialItem")]
-    pub num_days_to_keep_special_item: DefIndex,
+    pub num_days_to_keep_special_item: i32,
     #[def("MinAmountBeforeSpecialItem")]
-    pub min_amount_before_special_item: DefIndex,
+    pub min_amount_before_special_item: i32,
     #[def("ProbabilityOfSpecialItemPerDay")]
     pub probability_of_special_item_per_day: f32,
     #[def("SpecialItemPriceMult")]

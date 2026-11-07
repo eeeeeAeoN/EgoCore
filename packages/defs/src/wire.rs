@@ -416,6 +416,29 @@ impl<K: PartialEq, V> VecMap<K, V> {
 }
 
 // ── def classes ───────────────────────────────────────────────────────────
+
+std::thread_local! {
+    static LENIENT_CONTROL_IDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with control-ID validation relaxed (accepting any 4-byte control ID
+/// and parsing values positionally, matching retail `game.exe`).
+pub fn with_lenient_control_ids<R>(f: impl FnOnce() -> R) -> R {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            LENIENT_CONTROL_IDS.with(|c| c.set(self.0));
+        }
+    }
+    let prev = LENIENT_CONTROL_IDS.with(|c| {
+        let p = c.get();
+        c.set(true);
+        p
+    });
+    let _guard = Guard(prev);
+    f()
+}
+
 /// Parse one field control: `u32 crc32(name)` (validated) then the value.
 pub fn parse_field<T: Wire>(cur: &mut &[u8], name: &'static str) -> Result<T, ParseControlError> {
     let id = take_le::<u32>(cur).map_err(|inner| ParseControlError {
@@ -424,7 +447,7 @@ pub fn parse_field<T: Wire>(cur: &mut &[u8], name: &'static str) -> Result<T, Pa
     })?;
 
     let expected = crc(name.as_bytes());
-    if id != expected {
+    if id != expected && !LENIENT_CONTROL_IDS.with(|c| c.get()) {
         return Err(ParseControlError {
             name,
             reason: ParseControlErrorReason::WrongId {
@@ -486,7 +509,7 @@ pub fn parse_field_tagged<T: TaggedWire>(
         reason: ParseControlErrorReason::MalformedId(inner),
     })?;
     let expected = crc(name.as_bytes());
-    if id != expected {
+    if id != expected && !LENIENT_CONTROL_IDS.with(|c| c.get()) {
         return Err(ParseControlError {
             name,
             reason: ParseControlErrorReason::WrongId {
@@ -694,5 +717,114 @@ mod tests {
         assert!(TestFlagsSmoke(3).contains(TestFlagsSmoke::FLAG_TWO));
         assert_eq!(TestFlagsSmoke::from_symbol("ONE"), Some(TestFlagsSmoke(1)));
         assert_eq!(TestFlagsSmoke::from_symbol("MISSING"), None);
+    }
+
+    #[test]
+    fn enum_slot_symbol() {
+        use crate::visit::EnumSlot;
+        let a = TestEnumSmoke::A;
+        let b = TestEnumSmoke::B;
+        let slot_a: &dyn EnumSlot = &a;
+        let slot_b: &dyn EnumSlot = &b;
+        assert_eq!(slot_a.symbol(), "VALUE_A");
+        assert_eq!(slot_b.symbol(), "VALUE_B");
+    }
+
+    #[test]
+    fn flags_slot_decompose_symbols() {
+        use crate::visit::FlagsSlot;
+
+        // Single flag
+        let f1 = TestFlagsSmoke::FLAG_ONE;
+        let slot1: &dyn FlagsSlot = &f1;
+        assert_eq!(f1.decompose_symbols(), Some(vec!["ONE"]));
+        assert_eq!(slot1.symbol(), Some("ONE"));
+        assert_eq!(slot1.decompose_symbols(), Some(vec!["ONE"]));
+
+        // Combined flags
+        let f_both = TestFlagsSmoke(3);
+        let slot_both: &dyn FlagsSlot = &f_both;
+        assert_eq!(f_both.decompose_symbols(), Some(vec!["ONE", "TWO"]));
+        assert_eq!(slot_both.symbol(), None);
+        assert_eq!(slot_both.decompose_symbols(), Some(vec!["ONE", "TWO"]));
+
+        // Empty flags (0)
+        let f_empty = TestFlagsSmoke(0);
+        let slot_empty: &dyn FlagsSlot = &f_empty;
+        assert_eq!(f_empty.decompose_symbols(), None);
+        assert_eq!(slot_empty.symbol(), None);
+        assert_eq!(slot_empty.decompose_symbols(), None);
+
+        // Unknown bit
+        let f_unk = TestFlagsSmoke(4);
+        let slot_unk: &dyn FlagsSlot = &f_unk;
+        assert_eq!(f_unk.decompose_symbols(), None);
+        assert_eq!(slot_unk.decompose_symbols(), None);
+
+        // Partial known + unknown bit
+        let f_mixed = TestFlagsSmoke(5);
+        let slot_mixed: &dyn FlagsSlot = &f_mixed;
+        assert_eq!(f_mixed.decompose_symbols(), None);
+        assert_eq!(slot_mixed.decompose_symbols(), None);
+    }
+
+    #[test]
+    fn lenient_control_ids_test() {
+        let mut buf = vec![0u8; field_size(&42i32)];
+        let mut out = &mut buf[..];
+        serialize_field(&mut out, "ActualField", &42i32).unwrap();
+
+        // Under strict mode, wrong field ID fails
+        let mut cur = &buf[..];
+        assert!(matches!(
+            parse_field::<i32>(&mut cur, "DifferentField"),
+            Err(ParseControlError {
+                reason: ParseControlErrorReason::WrongId { .. },
+                ..
+            })
+        ));
+
+        // Under lenient mode, wrong field ID is accepted and parses positionally
+        let mut cur = &buf[..];
+        let val = with_lenient_control_ids(|| {
+            parse_field::<i32>(&mut cur, "DifferentField").unwrap()
+        });
+        assert_eq!(val, 42);
+        assert!(cur.is_empty());
+
+        // Strict mode is restored after with_lenient_control_ids returns
+        let mut cur = &buf[..];
+        assert!(parse_field::<i32>(&mut cur, "DifferentField").is_err());
+
+        // Also test tagged field parsing under lenient mode
+        #[derive(Debug, PartialEq)]
+        struct DummyTagged(i32);
+        impl Wire for DummyTagged {
+            fn parse(cur: &mut &[u8]) -> Result<Self, ParseWireError> {
+                Ok(DummyTagged(i32::parse(cur)?))
+            }
+            fn serialize(&self, out: &mut &mut [u8]) -> Result<(), UnexpectedEnd> {
+                self.0.serialize(out)
+            }
+            fn wire_size(&self) -> usize {
+                self.0.wire_size()
+            }
+        }
+        impl TaggedWire for DummyTagged {
+            fn parse_tagged(cur: &mut &[u8], tag: i32) -> Result<Self, ParseWireError> {
+                let val = i32::parse(cur)?;
+                Ok(DummyTagged(val + tag))
+            }
+        }
+
+        let mut cur = &buf[..];
+        let tagged_val: DummyTagged = with_lenient_control_ids(|| {
+            parse_field_tagged(&mut cur, "DifferentTaggedField", 10).unwrap()
+        });
+        assert_eq!(tagged_val, DummyTagged(52));
+        assert!(cur.is_empty());
+
+        let mut cur = &buf[..];
+        assert!(parse_field_tagged::<DummyTagged>(&mut cur, "DifferentTaggedField", 10).is_err());
     }
 }

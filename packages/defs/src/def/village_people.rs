@@ -20,35 +20,35 @@ pub struct VillagePeopleDef {
     #[def("MaleShopKeeper")]
     pub male_shop_keeper: DefIndex,
     #[def("FemaleShopKeeper")]
-    pub female_shop_keeper: i32,
+    pub female_shop_keeper: DefIndex,
     #[def("MaleMarketTrader")]
     pub male_market_trader: DefIndex,
     #[def("FemaleMarketTrader")]
-    pub female_market_trader: i32,
+    pub female_market_trader: DefIndex,
     #[def("MaleBarman")]
     pub male_barman: DefIndex,
     #[def("FemaleBarman")]
-    pub female_barman: i32,
+    pub female_barman: DefIndex,
     #[def("MaleBarmaid")]
-    pub male_barmaid: i32,
+    pub male_barmaid: DefIndex,
     #[def("FemaleBarmaid")]
     pub female_barmaid: DefIndex,
     #[def("MaleWarehouseWorker")]
     pub male_warehouse_worker: DefIndex,
     #[def("FemaleWarehouseWorker")]
-    pub female_warehouse_worker: i32,
+    pub female_warehouse_worker: DefIndex,
     #[def("MaleServant")]
-    pub male_servant: i32,
+    pub male_servant: DefIndex,
     #[def("FemaleServant")]
     pub female_servant: DefIndex,
     #[def("MaleGoodApprentice")]
     pub male_good_apprentice: DefIndex,
     #[def("FemaleGoodApprentice")]
-    pub female_good_apprentice: i32,
+    pub female_good_apprentice: DefIndex,
     #[def("MaleEvilApprentice")]
     pub male_evil_apprentice: DefIndex,
     #[def("FemaleEvilApprentice")]
-    pub female_evil_apprentice: i32,
+    pub female_evil_apprentice: DefIndex,
     #[def("MaleUnemployed")]
     pub male_unemployed: DefIndex,
     #[def("FemaleUnemployed")]

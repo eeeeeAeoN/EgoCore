@@ -74,12 +74,15 @@ pub trait EnumSlot {
     fn get_i32(&self) -> i32;
     /// Set from a wire/text value; `Err` carries an out-of-table value.
     fn set_i32(&mut self, value: i32) -> Result<(), i32>;
+    fn symbol(&self) -> &'static str;
 }
 
 /// A def flags value viewed as its wire `i32` (total — any value is valid).
 pub trait FlagsSlot {
     fn get_i32(&self) -> i32;
     fn set_i32(&mut self, value: i32);
+    fn symbol(&self) -> Option<&'static str>;
+    fn decompose_symbols(&self) -> Option<Vec<&'static str>>;
 }
 
 /// A typed, mutable handle to one def field.

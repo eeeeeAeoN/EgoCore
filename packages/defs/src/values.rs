@@ -65,6 +65,7 @@ pub struct WoundMorphsMorphsEntry {
 #[derive(Debug, Clone, PartialEq, WireStruct)]
 pub struct WoundMorphs {
     pub morphs: Vec<WoundMorphsMorphsEntry>,
+    #[def(default = 28_011_758)]
     pub trailing_u32: u32,
 }
 
@@ -228,6 +229,7 @@ pub struct ExpressionSetExpressionsEntry {
 #[derive(Debug, Clone, PartialEq, WireStruct)]
 pub struct ExpressionSet {
     pub expressions: Vec<ExpressionSetExpressionsEntry>,
+    #[def(default = 28_011_826)]
     pub trailing_u32: u32,
 }
 
@@ -671,6 +673,7 @@ pub struct TextureMorphsMorphsEntry {
 #[derive(Debug, Clone, PartialEq, WireStruct)]
 pub struct TextureMorphs {
     pub morphs: Vec<TextureMorphsMorphsEntry>,
+    #[def(default = 28_011_707)]
     pub trailing_u32: u32,
 }
 
@@ -702,6 +705,7 @@ pub struct ParticleMorphsMorphsEntry {
 #[derive(Debug, Clone, PartialEq, WireStruct)]
 pub struct ParticleMorphs {
     pub morphs: Vec<ParticleMorphsMorphsEntry>,
+    #[def(default = 28_011_708)]
     pub trailing_u32: u32,
 }
 

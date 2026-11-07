@@ -1,5 +1,5 @@
 use crate::DefStruct;
-use crate::def::{wire::DefIndex, wire::DefString};
+use crate::def::wire::DefString;
 
 #[derive(Debug, Clone, PartialEq, DefStruct)]
 pub struct TrophyDef {
@@ -8,13 +8,13 @@ pub struct TrophyDef {
     #[def("TimeBonusPerWitness")]
     pub time_bonus_per_witness: f32,
     #[def("RenownGainedPerWitnessAhead")]
-    pub renown_gained_per_witness_ahead: DefIndex,
+    pub renown_gained_per_witness_ahead: i32,
     #[def("EvilTrophy")]
     pub evil_trophy: bool,
     #[def("FakeTrophy")]
     pub fake_trophy: bool,
     #[def("EmoteIconForAvailableWitness")]
-    pub emote_icon_for_available_witness: DefIndex,
+    pub emote_icon_for_available_witness: i32,
     #[def("ShowTrophyAnimName")]
     pub show_trophy_anim_name: DefString,
     #[def("GameDebugTextScale", default = 1.0)]

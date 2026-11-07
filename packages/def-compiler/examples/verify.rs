@@ -472,6 +472,9 @@ const ARTIFACT_FRAGMENTS: &[&str] = &[
 ];
 
 fn is_artifact_leaf(path: &str) -> bool {
+    if std::env::var_os("STRICT").is_some() {
+        return false;
+    }
     ARTIFACT_FRAGMENTS.iter().any(|f| path.contains(f))
 }
 
@@ -559,7 +562,7 @@ impl BinLedger {
                 .entry(format!("{tag}.{field}"))
                 .or_default() += 1;
         }
-        let cap = if class == Class::Bug { 40 } else { 4 };
+        let cap = if class == Class::Bug { 100000 } else { 4 };
         if self.subdef_samples.iter().filter(|s| s.0 == class).count() < cap {
             self.subdef_samples.push((
                 class,
@@ -679,8 +682,21 @@ impl BinLedger {
                 .filter(|s| s.0 == Class::Bug)
                 .collect();
             if !sub_bugs.is_empty() {
+                let mut hist: std::collections::BTreeMap<String, (usize, String)> = Default::default();
+                for (_c, tag, parent, detail) in sub_bugs.iter() {
+                    let path = detail.split(" :: ").next().unwrap_or("").to_string();
+                    let key = format!("<{tag}> {}", path.split('[').next().unwrap_or(""));
+                    let e = hist.entry(key).or_insert((0, format!("{parent}: {detail}")));
+                    e.0 += 1;
+                }
+                let mut v: Vec<_> = hist.into_iter().collect();
+                v.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+                let _ = writeln!(s, "     -- sub-def Bug HISTOGRAM:");
+                for (k, (n, ex)) in v {
+                    let _ = writeln!(s, "        {n:4} {k}\n              e.g. {ex}");
+                }
                 let _ = writeln!(s, "     -- sub-def Bug samples:");
-                for (_c, tag, parent, detail) in sub_bugs.iter().take(15) {
+                for (_c, tag, parent, detail) in sub_bugs.iter() {
                     let _ = writeln!(s, "        {parent} <{tag}> :: {detail}");
                 }
             }
@@ -998,7 +1014,9 @@ fn dump_subdef(
 
 fn load(dir: &str, bin: &str) -> (DefBinary, Names) {
     let names = Names::load(&Path::new(dir).join("names.bin")).unwrap();
-    let b = DefBinary::load_with_names(&Path::new(dir).join(format!("{bin}.bin")), &names).unwrap();
+    let b = defs::wire::with_lenient_control_ids(|| {
+        DefBinary::load_with_names(&Path::new(dir).join(format!("{bin}.bin")), &names)
+    }).unwrap();
     (b, names)
 }
 

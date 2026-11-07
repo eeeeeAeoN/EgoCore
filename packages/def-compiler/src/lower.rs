@@ -31,6 +31,8 @@ use defs::{
         RandomAppearanceMorphBodyParts1MeshesEntryTextureMorphsEntriesEntry,
         RandomAppearanceMorphBodyParts2MeshesEntry,
         RandomAppearanceMorphBodyParts2MeshesEntryTextureMorphsEntriesEntry,
+        RandomAppearanceMorphGeneralTextureMorphsEntriesEntry,
+        RandomAppearanceMorphSkeletalMorphsEntry,
         ReactionFrequencyTraitsArray, ReactionFrequencyTraitsArrayTraitsEntry, ReactionMatchList,
         ReactionMatchListElementsEntry, ReplaceableMeshDef, ReplaceableMeshesEntry, ScriptDef,
         SoundMapF0Entry, SoundMapF0EntryValue, SoundMapF1Entry, Span, Spanned, SpecialEffectsDef,
@@ -2027,10 +2029,13 @@ fn build_tex_morphs(mesh_id: i32, calls: &[TexMeshCall]) -> Vec<(u32, [u8; 8])> 
         return Vec::new();
     }
     let total = items.len();
-    // Groups of `original`, sorted ascending by texture id.
-    let mut origins: Vec<i32> = items.iter().map(|it| it.0).collect();
-    origins.sort_unstable();
-    origins.dedup();
+    // Groups of `original` in appearance order (preserving authored statement order).
+    let mut origins: Vec<i32> = Vec::new();
+    for it in &items {
+        if !origins.contains(&it.0) {
+            origins.push(it.0);
+        }
+    }
     let mut out: Vec<(u32, [u8; 8])> = Vec::new();
     let mut prev: Option<(usize, bool)> = None; // (previous group size, any N>=1)
     for &g in &origins {
@@ -2067,12 +2072,14 @@ fn build_random_appearance_morph<'a>(
     mut ram: RandomAppearanceMorph,
     body: Body<'a>,
     symbols: &SymbolTable,
+    names: &RefCell<NamesBuilder>,
 ) -> (RandomAppearanceMorph, Vec<&'a Spanned<Statement>>) {
     let eval = Evaluator::new(symbols);
     let mut filtered = Vec::new();
     // Collected `AddTextureToMesh(mesh, N, original, replace0[, replace1…])` calls,
     // in text order, for post-processing into per-mesh texture-morph maps.
     let mut tex_calls: Vec<TexMeshCall> = Vec::new();
+    let mut tex_all_calls: Vec<TexMeshCall> = Vec::new();
     let mut max_n = 0i32;
     for stmt in body {
         if let Statement::MethodCall(mc) = &stmt.value
@@ -2127,7 +2134,33 @@ fn build_random_appearance_morph<'a>(
                     });
                     continue;
                 }
-                "AddTextureToAll" | "AddSkeletalMorph" => continue, // consume (not yet modeled)
+                "AddSkeletalMorph" => {
+                    let key = ev(0);
+                    let filename = match a.get(1).map(|e| &e.value) {
+                        Some(Expr::String(s)) => s.clone(),
+                        Some(Expr::Symbol(id)) => id.clone(),
+                        _ => String::new(),
+                    };
+                    let bone_or_morph_index = names.borrow_mut().intern(&filename) as i32;
+                    let allow_variation = a.get(2).and_then(|e| eval.bool(e).ok()).unwrap_or(false);
+                    ram.skeletal_morphs.push(RandomAppearanceMorphSkeletalMorphsEntry {
+                        key,
+                        morph_id: key,
+                        bone_or_morph_index,
+                        allow_variation,
+                    });
+                    continue;
+                }
+                "AddTextureToAll" => {
+                    let original = ev(0);
+                    tex_all_calls.push(TexMeshCall {
+                        mesh_id: -1,
+                        n: 0,
+                        original,
+                        replacements: a.iter().skip(1).map(|e| eval.i32(e).unwrap_or(0)).collect(),
+                    });
+                    continue;
+                }
                 _ => {}
             }
         }
@@ -2143,6 +2176,13 @@ fn build_random_appearance_morph<'a>(
                     .into_iter()
                     .map(|(key, morph)| E { key, morph })
                     .collect();
+                me.texture_morphs.trailing = tex_calls
+                    .iter()
+                    .filter(|c| c.mesh_id == me.mesh_id)
+                    .map(|c| c.n)
+                    .max()
+                    .unwrap_or(0)
+                    .max(0) as u32;
             }
         }};
     }
@@ -2160,6 +2200,14 @@ fn build_random_appearance_morph<'a>(
     );
     // MaxTextureGroupID — the largest N (texture group) any AddTextureToMesh used.
     ram.final_trailing = max_n.max(0) as u32;
+    if !tex_all_calls.is_empty() {
+        ram.general_texture_morphs.entries = build_tex_morphs(-1, &tex_all_calls)
+            .into_iter()
+            .map(|(key, morph)| RandomAppearanceMorphGeneralTextureMorphsEntriesEntry { key, morph })
+            .collect();
+        ram.general_texture_morphs.trailing = 0;
+        ram.general_texture_morphs.dirty = 0;
+    }
     (ram, filtered)
 }
 
@@ -2410,7 +2458,7 @@ fn lower_creature_def(
 ) -> Result<DefBody, LowerError> {
     let base = base_or_default!(base_opt, CreatureDef);
     let (ram, filtered) =
-        build_random_appearance_morph(base.random_appearance_morph.clone(), body, symbols);
+        build_random_appearance_morph(base.random_appearance_morph.clone(), body, symbols, names);
     // `Expressions.Add(EXPRESSION_X, ANIM_X)` → `CExpressionSet.Expressions`,
     // a `CVectorMap<EExpressionType, CEntry{Type, AnimIndex}>` sorted by
     // key (expression_set.hpp). Wire entry = [key][Type][AnimIndex]; key ==
@@ -2516,7 +2564,9 @@ fn lower_creature_def(
         lower_generic::<CreatureDef>(&base, Body::Refs(&filtered2), symbols, def_indices, names)?;
     lowered.random_appearance_morph = ram;
     lowered.expressions.expressions = exprs;
+    lowered.expressions.trailing_u32 = 28_011_826;
     lowered.wound_morphs.morphs = wounds;
+    lowered.wound_morphs.trailing_u32 = 28_011_758;
     Ok(DefBody::CreatureDef(lowered))
 }
 
@@ -2631,8 +2681,11 @@ fn lower_hero_morph_def(
     let mut lowered =
         lower_generic::<HeroMorphDef>(&base, Body::Refs(&filtered), symbols, def_indices, names)?;
     lowered.texture_morphs.morphs = tex_morphs;
+    lowered.texture_morphs.trailing_u32 = 28_011_707;
     lowered.particle_morphs.morphs = part_morphs;
+    lowered.particle_morphs.trailing_u32 = 28_011_708;
     lowered.idle_particle_morphs.morphs = idle_part_morphs;
+    lowered.idle_particle_morphs.trailing_u32 = 28_011_708;
     Ok(DefBody::HeroMorphDef(lowered))
 }
 

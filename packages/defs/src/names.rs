@@ -165,7 +165,10 @@ mod tests {
     #[test]
     fn roundtrip_names_bin() {
         // Load the real OG retail names.bin and verify byte-exact roundtrip.
-        let path = Path::new(env!("HOME")).join("Fable/data/CompiledDefs/names.bin");
+        let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) else {
+            return;
+        };
+        let path = Path::new(&home).join("Fable/data/CompiledDefs/names.bin");
         if !path.exists() {
             return; // skip if data not available
         }

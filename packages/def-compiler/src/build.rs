@@ -524,7 +524,13 @@ struct Built {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn game_file_scope(corpus: &[ParsedFile]) -> Vec<&ParsedFile> {
-    corpus.iter().collect()
+    corpus
+        .iter()
+        .filter(|pf| {
+            let p = pf.path.replace('\\', "/");
+            !p.contains("/FrontEndDefs/") && !p.contains("/ScriptDefs/")
+        })
+        .collect()
 }
 
 /// Retail's explicit frontend file list first, in its own order, then any other
