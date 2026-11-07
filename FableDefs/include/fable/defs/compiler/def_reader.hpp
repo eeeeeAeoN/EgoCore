@@ -649,6 +649,58 @@ bool read_value(T &value, Reader &reader, Value &out) {
             if (!add_f32("Height", value.Height)) return false;
         }
         return true;
+    } else if constexpr (std::is_same_v<U, ::fable::defs::CParticleMorphs::CEntry>) {
+        // Wire layout is MorphType + a 32-byte payload: Blending is stored as
+        // an i32 in the retail format, not as the C++ model's bool.
+        std::int32_t morph_type = 0;
+        std::int32_t blending = 0;
+        std::int32_t location = 0;
+        std::int32_t location_name = 0;
+        std::int32_t location_index = 0;
+        std::int32_t particle_index = 0;
+        std::int32_t second_particle_index = 0;
+        std::uint32_t start_bits = 0;
+        std::uint32_t end_bits = 0;
+        if (!reader.i32(morph_type) || !reader.i32(blending) ||
+            !reader.i32(location) || !reader.i32(location_name) ||
+            !reader.i32(location_index) || !reader.i32(particle_index) ||
+            !reader.i32(second_particle_index) || !reader.f32_bits(start_bits) ||
+            !reader.f32_bits(end_bits)) {
+            return false;
+        }
+        value.MorphType = static_cast<EHeroMorphType>(morph_type);
+        value.Blending = blending != 0;
+        value.Location = static_cast<EMeshLocationPoint>(location);
+        value.LocationName.TablePos = location_name;
+        value.LocationIndex = location_index;
+        value.ParticleIndex = particle_index;
+        value.SecondParticleIndex = second_particle_index;
+        std::memcpy(&value.StartAtMorphStrength, &start_bits, sizeof(start_bits));
+        std::memcpy(&value.EndAtMorphStrength, &end_bits, sizeof(end_bits));
+
+        out.kind = ValueKind::Struct;
+        out.fields.emplace_back("MorphType", Value{ValueKind::Enum, morph_type, 0, false,
+                                                   {}, {}, {}, {}, {}, {}, 0, {}});
+        out.fields.emplace_back("Blending", Value{ValueKind::Bool, 0, 0, blending != 0,
+                                                  {}, {}, {}, {}, {}, {}, 0, {}});
+        out.fields.emplace_back("Location", Value{ValueKind::Enum, location, 0, false,
+                                                  {}, {}, {}, {}, {}, {}, 0, {}});
+        out.fields.emplace_back("LocationName", Value{ValueKind::DefString, location_name, 0,
+                                                      false, {}, {}, {}, {}, {}, {}, 0, {}});
+        out.fields.emplace_back("LocationIndex", Value{ValueKind::Int, location_index, 0, false,
+                                                       {}, {}, {}, {}, {}, {}, 0, {}});
+        out.fields.emplace_back("ParticleIndex", Value{ValueKind::Int, particle_index, 0, false,
+                                                       {}, {}, {}, {}, {}, {}, 0, {}});
+        out.fields.emplace_back("SecondParticleIndex",
+                                Value{ValueKind::Int, second_particle_index, 0, false, {}, {}, {},
+                                      {}, {}, {}, 0, {}});
+        out.fields.emplace_back("StartAtMorphStrength",
+                                Value{ValueKind::Float, 0, start_bits, false, {}, {}, {}, {}, {},
+                                      {}, 0, {}});
+        out.fields.emplace_back("EndAtMorphStrength",
+                                Value{ValueKind::Float, 0, end_bits, false, {}, {}, {}, {}, {},
+                                      {}, 0, {}});
+        return true;
     } else if constexpr (::fable::defs::is_model_class<U>::value) {
         if constexpr (::fable::defs::has_transfer<U>::value) {
             return detail::read_controls(value, reader, out);

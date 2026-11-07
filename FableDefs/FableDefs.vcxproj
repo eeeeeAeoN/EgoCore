@@ -106,6 +106,7 @@
     <ClInclude Include="include\fable\defs\compiler\decompiler.hpp" />
     <ClInclude Include="include\fable\defs\compiler\definitions.hpp" />
     <ClInclude Include="include\fable\defs\compiler\diagnostic.hpp" />
+    <ClInclude Include="include\fable\defs\compiler\header_resolver.hpp" />
     <ClInclude Include="include\fable\defs\compiler\inflate.hpp" />
     <ClInclude Include="include\fable\defs\compiler\lexer.hpp" />
     <ClInclude Include="include\fable\defs\compiler\lower.hpp" />
@@ -113,6 +114,7 @@
     <ClInclude Include="include\fable\defs\compiler\model_registry.hpp" />
     <ClInclude Include="include\fable\defs\compiler\names.hpp" />
     <ClInclude Include="include\fable\defs\compiler\parser.hpp" />
+    <ClInclude Include="include\fable\defs\compiler\reference_fields.hpp" />
     <ClInclude Include="include\fable\defs\compiler\symbols.hpp" />
     <ClInclude Include="include\fable\defs\compiler\type_registry.hpp" />
     <ClInclude Include="include\fable\defs\compiler\type_traits.hpp" />
@@ -127,6 +129,7 @@
     <ClCompile Include="src\decompiler.cpp" />
     <ClCompile Include="src\definitions.cpp" />
     <ClCompile Include="src\diagnostic.cpp" />
+    <ClCompile Include="src\header_resolver.cpp" />
     <ClCompile Include="src\inflate.cpp" />
     <ClCompile Include="src\lexer.cpp" />
     <ClCompile Include="src\lower.cpp" />

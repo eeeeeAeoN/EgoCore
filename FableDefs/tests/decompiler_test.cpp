@@ -46,9 +46,12 @@ void test_build_and_decompile() {
     fs::remove_all(corpus);
     fs::remove_all(out_a);
     fs::remove_all(out_b);
+    write_file(corpus / "test.h",
+               "enum EEngineGraphicType { ENGINE_GRAPHIC_STATIC_MESH = 1 };\n");
     write_file(corpus / "objects.def",
                "#definition OBJECT TEST_OBJECT\n"
                "    Health 5;\n"
+               "    Graphic.Type ENGINE_GRAPHIC_STATIC_MESH;\n"
                "    Graphic.BankIndex 7;\n"
                "#end_definition\n");
     const auto report = build_directory(corpus, out_a);
@@ -61,16 +64,19 @@ void test_build_and_decompile() {
     std::string text;
     std::string error;
     DecompileStats stats;
-    CHECK(decompile_binary_to_text(out_a.string(), "game", text, stats, error));
+    CHECK(decompile_binary_to_text(out_a.string(), "game", corpus.string(), text, stats,
+                                   error));
     CHECK(stats.definitions == 1);
     CHECK(text.find("#definition OBJECT TEST_OBJECT") != std::string::npos);
     CHECK(text.find("Health 5") != std::string::npos);
+    CHECK(text.find("Graphic.Type ENGINE_GRAPHIC_STATIC_MESH") != std::string::npos);
     CHECK(text.find("Graphic.BankIndex 7") != std::string::npos);
 
     // A second build with one changed field must be detected by the diff.
     write_file(corpus / "objects.def",
                "#definition OBJECT TEST_OBJECT\n"
                "    Health 6;\n"
+               "    Graphic.Type ENGINE_GRAPHIC_STATIC_MESH;\n"
                "    Graphic.BankIndex 7;\n"
                "#end_definition\n");
     const auto changed = build_directory(corpus, out_b);
@@ -82,8 +88,8 @@ void test_build_and_decompile() {
 
     std::string diff;
     DecompileStats diff_stats;
-    CHECK(diff_binaries_to_text(out_a.string(), out_b.string(), diff, diff_stats,
-                                error));
+    CHECK(diff_binaries_to_text(out_a.string(), out_b.string(), corpus.string(), diff,
+                                diff_stats, error));
     CHECK(diff_stats.modified == 1);
     CHECK(diff.find("Health 6") != std::string::npos);
     CHECK(diff.find("Health 5") == std::string::npos);

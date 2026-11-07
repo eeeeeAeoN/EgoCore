@@ -15,10 +15,12 @@ void usage(std::ostream &out) {
     out << "Usage: fable-def-decompiler <command> [options]\n"
            "\n"
            "Commands:\n"
-           "  dump <bin-dir> <out.def> [--binary game|frontend|script]\n"
+           "  dump <bin-dir> <defs-dir> <out.def> [--binary game|frontend|script]\n"
            "                  Decompile one compiled binary to .def text\n"
-           "  diff <orig-dir> <mod-dir> <out.def>\n"
+           "  diff <orig-dir> <mod-dir> <defs-dir> <out.def>\n"
            "                  Emit definitions that differ between two builds\n"
+           "  patch <orig-dir> <mod-dir> <defs-dir>\n"
+           "                  Patch changed definitions into the .def sources\n"
            "\n"
            "A bin-dir contains names.bin and game.bin/frontend.bin/script.bin.\n";
 }
@@ -60,16 +62,18 @@ int main(int argc, char **argv) {
     std::string binary = "game";
     std::string original_dir;
     std::string modified_dir;
+    std::string defs_dir;
 
     const std::string command = args[0];
     if (command == "dump") {
-        if (args.size() < 3) {
+        if (args.size() < 4) {
             usage(std::cerr);
             return 2;
         }
         original_dir = args[1];
-        out_path = args[2];
-        for (std::size_t i = 3; i < args.size(); ++i) {
+        defs_dir = args[2];
+        out_path = args[3];
+        for (std::size_t i = 4; i < args.size(); ++i) {
             if (args[i] == "--binary" && i + 1 < args.size()) {
                 binary = args[++i];
             } else {
@@ -78,13 +82,22 @@ int main(int argc, char **argv) {
             }
         }
     } else if (command == "diff") {
+        if (args.size() != 5) {
+            usage(std::cerr);
+            return 2;
+        }
+        original_dir = args[1];
+        modified_dir = args[2];
+        defs_dir = args[3];
+        out_path = args[4];
+    } else if (command == "patch") {
         if (args.size() != 4) {
             usage(std::cerr);
             return 2;
         }
         original_dir = args[1];
         modified_dir = args[2];
-        out_path = args[3];
+        defs_dir = args[3];
     } else {
         usage(std::cerr);
         return 2;
@@ -95,15 +108,18 @@ int main(int argc, char **argv) {
     DecompileStats stats;
     bool ok = false;
     if (command == "dump") {
-        ok = decompile_binary_to_text(original_dir, binary, text, stats, error);
+        ok = decompile_binary_to_text(original_dir, binary, defs_dir, text, stats, error);
+    } else if (command == "diff") {
+        ok = diff_binaries_to_text(original_dir, modified_dir, defs_dir, text, stats,
+                                   error);
     } else {
-        ok = diff_binaries_to_text(original_dir, modified_dir, text, stats, error);
+        ok = patch_binaries(original_dir, modified_dir, defs_dir, stats, error);
     }
     if (!ok) {
         std::cerr << "fable-def-decompiler: " << error << "\n";
         return 1;
     }
-    if (!write_text(fs::path(out_path), text, error)) {
+    if (command != "patch" && !write_text(fs::path(out_path), text, error)) {
         std::cerr << "fable-def-decompiler: " << error << "\n";
         return 1;
     }

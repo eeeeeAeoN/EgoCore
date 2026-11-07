@@ -29,8 +29,8 @@ cmake --build --preset release
 ctest --preset release
 
 build/release/bin/fable-defc build <Defs-dir> <out-dir>
-build/release/bin/fable-def-decompiler dump <bin-dir> <out.def>
-build/release/bin/fable-def-decompiler diff <orig-dir> <mod-dir> <out.def>
+build/release/bin/fable-def-decompiler dump <bin-dir> <defs-dir> <out.def>
+build/release/bin/fable-def-decompiler diff <orig-dir> <mod-dir> <defs-dir> <out.def>
 ```
 
 Debug and Visual Studio presets are also available in `CMakePresets.json`.
@@ -64,11 +64,14 @@ including zlib-compressed chunks. It currently provides:
 - binary container and `names.bin` loading
 - typed `DefBody` parsing through the generated C++ model
 - generic `.def` text emission against each type's NULLDEF defaults
+- header/enum symbol resolution (`enum` tables and field-domain training)
+- special reconstruction for animations, creature morphs, hero morphs,
+  components, weapon trails, appearance graphics, sound maps and special effects
 - named-definition diffing between two compiled builds
+- in-place patching of existing `.def` files with `specialises` preserved
 
-Still to port from the upstream Rust decompiler: header-driven symbol
-resolution (texture, mesh, sound, enum names), the special animation/morph
-statement reconstruction, and in-place patching of the existing `.def` files.
+Still missing relative to the upstream Rust decompiler: a few remaining
+bespoke statement forms, and EgoCore UI integration.
 
 ## License
 

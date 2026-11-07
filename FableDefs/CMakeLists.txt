@@ -16,6 +16,7 @@ add_library(FableDefs STATIC
     src/def_reader.cpp
     src/decompiler.cpp
     src/diagnostic.cpp
+    src/header_resolver.cpp
     src/inflate.cpp
     src/lexer.cpp
     src/lower.cpp
