@@ -259,12 +259,7 @@ public:
                         std::ifstream hdrIn(g_ActiveModAssets[matchedKey].HeaderPath, std::ios::binary);
                         hdrIn.read((char*)metaData.data(), entry.InfoSize);
 
-                        if (metaData.size() >= sizeof(CGraphicHeader)) {
-                            if (lowerBankName == "graphics.big" || lowerBankName == "xboxgraphics.big") {
-                                CGraphicHeader* hdr = (CGraphicHeader*)metaData.data();
-                                hdr->MipSize0 = 0;
-                            }
-                        }
+
                     }
                     else { entry.InfoSize = 0; metaData.clear(); }
                     g_ActiveModAssets[matchedKey].IsHandled = true;
@@ -429,6 +424,13 @@ public:
                                     std::vector<uint8_t> newPayload;
                                     size_t offset = 0;
                                     bool meshChanged = false;
+                                    std::vector<int32_t> allLODTextureIDs;
+
+                                    auto addTextureID = [&](int32_t id) {
+                                        if (id > 0 && std::find(allLODTextureIDs.begin(), allLODTextureIDs.end(), id) == allLODTextureIDs.end()) {
+                                            allLODTextureIDs.push_back(id);
+                                        }
+                                    };
 
                                     for (uint32_t lod = 0; lod < meshContext.EntryMeta.LODCount; lod++) {
                                         uint32_t sz = meshContext.EntryMeta.LODSizes[lod];
@@ -437,6 +439,15 @@ public:
                                             C3DMeshContent lodMesh;
 
                                             if (lodMesh.Parse(slice, entry.Type)) {
+                                                if (lod == 0) {
+                                                    // Recover accurate bounds from LOD 0 header if previously corrupted
+                                                    memcpy(meshContext.EntryMeta.BoundingSphereCenter, lodMesh.BoundingSphereCenter, 12);
+                                                    meshContext.EntryMeta.BoundingSphereRadius = lodMesh.BoundingSphereRadius;
+                                                    memcpy(meshContext.EntryMeta.BoundingBoxMin, lodMesh.BoundingBoxMin, 12);
+                                                    memcpy(meshContext.EntryMeta.BoundingBoxMax, lodMesh.BoundingBoxMax, 12);
+                                                }
+
+                                                bool lodChanged = false;
                                                 for (size_t mIdx = 0; mIdx < lodMesh.Materials.size(); mIdx++) {
                                                     auto& mat = lodMesh.Materials[mIdx];
                                                     std::string baseKey = std::to_string(lod) + "," + std::to_string(mIdx) + ",";
@@ -454,19 +465,20 @@ public:
                                                                 outID = g_LiveBankIDs[targetTex];
                                                                 mat.UseFilenames = false;
                                                                 meshChanged = true;
+                                                                lodChanged = true;
                                                             }
                                                             else if (g_LiveBankIDs.count(altSlash)) {
                                                                 outID = g_LiveBankIDs[altSlash];
                                                                 mat.UseFilenames = false;
                                                                 meshChanged = true;
+                                                                lodChanged = true;
                                                             }
                                                             else if (g_LiveBankIDs.count(altSlashFwd)) {
                                                                 outID = g_LiveBankIDs[altSlashFwd];
                                                                 mat.UseFilenames = false;
                                                                 meshChanged = true;
+                                                                lodChanged = true;
                                                             }
-
-
                                                         }
                                                     };
 
@@ -475,33 +487,38 @@ public:
                                                     applyTex("Reflect", mat.ReflectionMapID);
                                                     applyTex("Illum", mat.IlluminationMapID);
                                                     applyTex("Decal", mat.DecalID);
+
+                                                    addTextureID(mat.DiffuseMapID);
+                                                    addTextureID(mat.BumpMapID);
+                                                    addTextureID(mat.ReflectionMapID);
+                                                    addTextureID(mat.IlluminationMapID);
+                                                    addTextureID(mat.DecalID);
                                                 }
 
-                                                if (meshChanged) {
+                                                if (lodChanged) {
                                                     std::vector<uint8_t> compiled = MeshCompiler::CompileSingleLOD(lodMesh);
                                                     meshContext.EntryMeta.LODSizes[lod] = (uint32_t)compiled.size();
                                                     newPayload.insert(newPayload.end(), compiled.begin(), compiled.end());
                                                 }
-                                                else { newPayload.insert(newPayload.end(), slice.begin(), slice.end()); }
+                                                else {
+                                                    newPayload.insert(newPayload.end(), slice.begin(), slice.end());
+                                                }
                                             }
-                                            else { newPayload.insert(newPayload.end(), slice.begin(), slice.end()); }
+                                            else {
+                                                newPayload.insert(newPayload.end(), slice.begin(), slice.end());
+                                            }
                                         }
                                         offset += sz;
                                     }
 
-                                    if (meshChanged && !newPayload.empty()) {
-                                        meshContext.EntryMeta.TextureIDs.clear();
-                                        C3DMeshContent lod0;
-                                        if (lod0.Parse(std::vector<uint8_t>(newPayload.begin(), newPayload.begin() + meshContext.EntryMeta.LODSizes[0]), entry.Type)) {
-                                            for (const auto& mat : lod0.Materials) {
-                                                auto addTex = [&](int32_t id) {
-                                                    if (id > 0 && std::find(meshContext.EntryMeta.TextureIDs.begin(), meshContext.EntryMeta.TextureIDs.end(), id) == meshContext.EntryMeta.TextureIDs.end()) {
-                                                        meshContext.EntryMeta.TextureIDs.push_back(id);
-                                                    }
-                                                    };
-                                                addTex(mat.DiffuseMapID); addTex(mat.BumpMapID); addTex(mat.ReflectionMapID); addTex(mat.IlluminationMapID); addTex(mat.DecalID);
-                                            }
-                                        }
+                                    // Preserve any trailing ghost LOD or auxiliary chunk (shadow LOD / helpers)
+                                    if (offset < buffer.size()) {
+                                        newPayload.insert(newPayload.end(), buffer.begin() + offset, buffer.end());
+                                    }
+
+                                    bool texturesMismatch = (allLODTextureIDs != meshContext.EntryMeta.TextureIDs);
+                                    if ((meshChanged || texturesMismatch) && !newPayload.empty()) {
+                                        meshContext.EntryMeta.TextureIDs = allLODTextureIDs;
                                         buffer = newPayload;
                                         entry.Size = (uint32_t)buffer.size();
                                         psb.MetaList[i] = meshContext.SerializeEntryMetadata();
@@ -1114,6 +1131,11 @@ public:
                             offset += sz;
                         }
 
+                        // Preserve any trailing ghost LOD or auxiliary chunk (shadow LOD / helpers)
+                        if (offset < finalResourceData.size()) {
+                            finalPayload.insert(finalPayload.end(), finalResourceData.begin() + offset, finalResourceData.end());
+                        }
+
                         if (success && !finalPayload.empty()) {
                             finalResourceData = finalPayload;
                             targetBank->SubheaderCache[entryIndex] = meshContext.SerializeEntryMetadata();
@@ -1241,12 +1263,7 @@ public:
                 if (hdrFile.is_open()) {
                     std::vector<uint8_t> metaData = targetBank->SubheaderCache[entryIndex];
 
-                    if (metaData.size() >= sizeof(CGraphicHeader)) {
-                        if (targetBank->Type == EBankType::Graphics || targetBank->Type == EBankType::XboxGraphics) {
-                            CGraphicHeader* hdr = (CGraphicHeader*)metaData.data();
-                            hdr->MipSize0 = 0;
-                        }
-                    }
+
 
                     hdrFile.write((const char*)metaData.data(), metaData.size());
                     hdrFile.close();

@@ -56,7 +56,6 @@ namespace WADBackend {
         std::string iniContent;
         bool foundWad = false;
         bool foundWorld = false;
-        bool foundGtg = false;
 
         std::ifstream iniIn(iniPath);
         if (iniIn.is_open()) {
@@ -71,10 +70,6 @@ namespace WADBackend {
                     foundWorld = true;
                     iniContent += "UseCompiledWorldFiles FALSE;\n";
                 }
-                else if (line.find("UseCompiledGlobalThings") != std::string::npos) {
-                    foundGtg = true;
-                    iniContent += "UseCompiledGlobalThings FALSE;\n";
-                }
                 else {
                     iniContent += line + "\n";
                 }
@@ -84,7 +79,6 @@ namespace WADBackend {
 
         if (!foundWad) iniContent += "UseLevelWAD FALSE;\n";
         if (!foundWorld) iniContent += "UseCompiledWorldFiles FALSE;\n";
-        if (!foundGtg) iniContent += "UseCompiledGlobalThings FALSE;\n";
 
         std::ofstream iniOut(iniPath);
         if (iniOut.is_open()) iniOut << iniContent;
