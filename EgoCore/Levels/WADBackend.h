@@ -7,6 +7,7 @@
 #include <atomic>
 #include <mutex>
 #include <algorithm>
+#include <functional>
 #include "ConfigBackend.h"
 #include "imgui.h"
 
@@ -22,6 +23,7 @@ namespace WADBackend {
     inline std::mutex g_UnpackStatusMutex;
     inline std::string g_UnpackStatus = "";
     inline std::string g_TargetGameRoot = "";
+    inline std::function<void(const std::string&)> g_OnWadPromptCompleted = nullptr;
 
     inline void SetUnpackStatus(const std::string& status) {
         std::lock_guard<std::mutex> lock(g_UnpackStatusMutex);
@@ -41,12 +43,14 @@ namespace WADBackend {
         return !fs::exists(finalAlbionDir) && fs::exists(wadPath);
     }
 
-    inline void TriggerPrompt(const std::string& gameRoot) {
+    inline bool TriggerPrompt(const std::string& gameRoot) {
         if (!g_AppConfig.DisableWadPrompt && RequiresUnpack(gameRoot)) {
             g_TargetGameRoot = gameRoot;
             g_ShowWadPrompt = true;
             g_IsManualUnpack = false;
+            return true;
         }
+        return false;
     }
 
     inline void PatchUserstIni(const std::string& gameRoot) {
@@ -315,7 +319,12 @@ namespace WADBackend {
                         g_AppConfig.DisableWadPrompt = true;
                         SaveConfig();
                     }
+                    bool isManual = g_IsManualUnpack;
+                    std::string targetRoot = g_TargetGameRoot;
                     ImGui::CloseCurrentPopup();
+                    if (!isManual && g_OnWadPromptCompleted) {
+                        g_OnWadPromptCompleted(targetRoot);
+                    }
                 }
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(4);
@@ -360,7 +369,12 @@ namespace WADBackend {
 
                 if (ImGui::Button("OK", ImVec2(closeBtnWidth, 28))) {
                     g_UnpackFinished = false;
+                    bool isManual = g_IsManualUnpack;
+                    std::string targetRoot = g_TargetGameRoot;
                     ImGui::CloseCurrentPopup();
+                    if (!isManual && g_OnWadPromptCompleted) {
+                        g_OnWadPromptCompleted(targetRoot);
+                    }
                 }
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(4);

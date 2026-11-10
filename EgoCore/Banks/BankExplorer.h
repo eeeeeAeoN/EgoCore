@@ -293,6 +293,19 @@ inline void CheckModEnvironmentAndFSE(const std::string& gameRoot) {
     }
 }
 
+inline void TriggerStartupChecks(const std::string& gameRoot) {
+    if (gameRoot.empty() || !fs::exists(gameRoot)) return;
+
+    WADBackend::g_OnWadPromptCompleted = [](const std::string& root) {
+        std::string target = root.empty() ? g_AppConfig.GameRootPath : root;
+        CheckModEnvironmentAndFSE(target);
+    };
+
+    if (!WADBackend::TriggerPrompt(gameRoot)) {
+        CheckModEnvironmentAndFSE(gameRoot);
+    }
+}
+
 inline void DrawEnvironmentModals() {
     if (g_TriggerModEnvModal) {
         ImGui::OpenPopup("Fix Modding Environment");
@@ -358,6 +371,7 @@ inline void DrawEnvironmentModals() {
 
         if (ImGui::Button("Yes, Fix Environment", ImVec2(180, 28))) {
             ApplyModEnvironmentFix(g_AppConfig.GameRootPath);
+            LoadSystemBinaries(g_AppConfig.GameRootPath);
             ImGui::CloseCurrentPopup();
 
             CheckModEnvironmentAndFSE(g_AppConfig.GameRootPath);
@@ -374,12 +388,13 @@ inline void DrawEnvironmentModals() {
 
         if (ImGui::Button("Not Now", ImVec2(110, 28))) {
             ImGui::CloseCurrentPopup();
-
-            static bool s_SkippedEnvThisSession = false;
-            if (!s_SkippedEnvThisSession) {
-                s_SkippedEnvThisSession = true;
-                if (!g_AppConfig.FseSetup && !fs::exists(fs::path(g_AppConfig.GameRootPath) / "FableScriptExtender.dll")) {
+            if (!g_AppConfig.FseSetup) {
+                if (!fs::exists(fs::path(g_AppConfig.GameRootPath) / "FableScriptExtender.dll")) {
                     g_TriggerFSEModal = true;
+                }
+                else {
+                    g_AppConfig.FseSetup = true;
+                    SaveConfig();
                 }
             }
         }
@@ -1246,8 +1261,7 @@ static void DrawBankExplorer() {
         ModPackageTracker::LoadMarkedState();
 
         if (g_AppConfig.IsConfigured) {
-            CheckModEnvironmentAndFSE(g_AppConfig.GameRootPath);
-            WADBackend::TriggerPrompt(g_AppConfig.GameRootPath);
+            TriggerStartupChecks(g_AppConfig.GameRootPath);
             LoadSystemBinaries(g_AppConfig.GameRootPath);
             CheckFSEInstalled(g_AppConfig.GameRootPath);
 
@@ -1856,9 +1870,9 @@ static void DrawBankExplorer() {
                     g_AppConfig.FseSetup = false;
                     SaveConfig();
 
-                    CheckModEnvironmentAndFSE(root);
+                    TriggerStartupChecks(root);
                     LoadSystemBinaries(root);
-                    WADBackend::TriggerPrompt(root);
+                    CheckFSEInstalled(root);
 
                     PerformAutoLoad();
 
@@ -2114,10 +2128,9 @@ static void DrawBankExplorer() {
                     g_AppConfig.FseSetup = false;
                     SaveConfig();
 
-                    CheckModEnvironmentAndFSE(root);
-                    WADBackend::TriggerPrompt(root);
-
+                    TriggerStartupChecks(root);
                     LoadSystemBinaries(root);
+                    CheckFSEInstalled(root);
                     PerformAutoLoad();
                 }
             }
