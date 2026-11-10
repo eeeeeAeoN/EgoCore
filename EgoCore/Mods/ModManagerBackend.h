@@ -1154,69 +1154,89 @@ public:
 
         if (g_AppConfig.ModSystemDirty && hasActiveAssetMods) {
             SetLaunchStatus("Patching banks...");
-
-            if (neededBankFiles.count("effects.big")) {
-                neededBankFiles.insert("graphics.big");
-                neededBankFiles.insert("textures.big");
-            }
-            if (neededBankFiles.count("graphics.big")) {
-                neededBankFiles.insert("textures.big");
-            }
-            if (neededBankFiles.count("xboxeffects.big")) {
-                neededBankFiles.insert("xboxgraphics.big");
-            }
-            if (neededBankFiles.count("xboxgraphics.big")) {
-                neededBankFiles.insert("textures.big");
-            }
-
-            EnsureNeededBanksAreLoaded(neededBankFiles);
-            LoadHeadersFromDir(g_AppConfig.GameRootPath);
-
-            // 2. SORT BANKS: Force Textures -> Graphics -> Effects
-            std::sort(g_OpenBanks.begin(), g_OpenBanks.end(), [](const LoadedBank& a, const LoadedBank& b) {
-                auto getOrder = [](const std::string& name) {
-                    std::string n = name; std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-                    if (n.find("textures") != std::string::npos) return 0;
-                    if (n.find("graphics") != std::string::npos) return 1;
-                    if (n.find("effects") != std::string::npos) return 2;
-                    return 3;
-                    };
-                int orderA = getOrder(a.FileName);
-                int orderB = getOrder(b.FileName);
-                if (orderA != orderB) return orderA < orderB;
-                return a.FileName < b.FileName;
-                });
-
+            // Per-mod sequential patching: lowest priority mod first (g_LoadedMods[0] = highest priority).
+            // Each mod's banks are patched, recompiled (reloaded) and have their enums synced BEFORE the
+            // next mod is applied, so cross-bank dependencies (.texmap graphics->textures, IDs) resolve
+            // against the real state left by the previous mod.
             g_LiveBankIDs.clear();
-
             bool anyBankPatched = false;
-            for (auto& bank : g_OpenBanks) {
-                std::string bankFileName = fs::path(bank.FullPath).filename().string();
-                std::transform(bankFileName.begin(), bankFileName.end(), bankFileName.begin(), ::tolower);
+            bool firstPass = true;
 
-                if (neededBankFiles.find(bankFileName) != neededBankFiles.end()) {
-                    if (bank.Type == EBankType::Audio) {
-                        bank.ModifiedEntryData.clear();
-                        ImplantAudioMods(&bank);
-                        if (bank.IsDirty) {
-                            SaveAudioBank(&bank);
-                            bank.IsDirty = false;
-                            anyBankPatched = true;
-                        }
-                        SyncBankEnums(&bank);
-                    }
-                    else {
-                        if (ModBankPatcher::PatchBankForLaunch(&bank)) {
-                            ReloadBankInPlace(&bank);
+            for (int mi = (int)g_LoadedMods.size() - 1; mi >= 0; --mi) {
+                const ModEntry& curMod = g_LoadedMods[mi];
+                if (!curMod.IsEnabled || !curMod.IsAssetMod) continue;
+
+                std::set<std::string> modBanks;
+                BuildNeedListForMod(curMod, modBanks);
+                if (modBanks.empty()) continue;
+
+                if (modBanks.count("effects.big")) { modBanks.insert("graphics.big"); modBanks.insert("textures.big"); }
+                if (modBanks.count("graphics.big")) modBanks.insert("textures.big");
+                if (modBanks.count("xboxeffects.big")) modBanks.insert("xboxgraphics.big");
+                if (modBanks.count("xboxgraphics.big")) modBanks.insert("textures.big");
+
+                SetLaunchStatus("Patching banks for " + curMod.Name + "...");
+                ModBankPatcher::BuildMasterModIndex(std::vector<ModEntry>{ curMod });
+
+                EnsureNeededBanksAreLoaded(modBanks);
+                LoadHeadersFromDir(g_AppConfig.GameRootPath);
+
+                // Force Textures -> Graphics -> Effects
+                std::sort(g_OpenBanks.begin(), g_OpenBanks.end(), [](const LoadedBank& a, const LoadedBank& b) {
+                    auto getOrder = [](const std::string& name) {
+                        std::string n = name; std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                        if (n.find("textures") != std::string::npos) return 0;
+                        if (n.find("graphics") != std::string::npos) return 1;
+                        if (n.find("effects") != std::string::npos) return 2;
+                        return 3;
+                        };
+                    int orderA = getOrder(a.FileName);
+                    int orderB = getOrder(b.FileName);
+                    if (orderA != orderB) return orderA < orderB;
+                    return a.FileName < b.FileName;
+                    });
+
+                for (auto& bank : g_OpenBanks) {
+                    std::string bankFileName = fs::path(bank.FullPath).filename().string();
+                    std::transform(bankFileName.begin(), bankFileName.end(), bankFileName.begin(), ::tolower);
+
+                    if (modBanks.find(bankFileName) != modBanks.end()) {
+                        if (bank.Type == EBankType::Audio) {
+                            bank.ModifiedEntryData.clear();
+                            ImplantAudioMods(&bank);
+                            if (bank.IsDirty) {
+                                SaveAudioBank(&bank);
+                                bank.IsDirty = false;
+                                anyBankPatched = true;
+                            }
                             SyncBankEnums(&bank);
-                            anyBankPatched = true;
+                        }
+                        else {
+                            // First pass reads the pristine .tmp backup; later passes read the bank as left by the previous mod.
+                            std::string passSrc;
+                            if (!firstPass) {
+                                passSrc = bank.FullPath + ".pass";
+                                std::error_code ec;
+                                fs::copy_file(bank.FullPath, passSrc, fs::copy_options::overwrite_existing, ec);
+                                if (ec) passSrc.clear();
+                            }
+                            bool patched = ModBankPatcher::PatchBankForLaunch(&bank, passSrc);
+                            if (!passSrc.empty()) { std::error_code ec; fs::remove(passSrc, ec); }
+                            if (patched) {
+                                ReloadBankInPlace(&bank);
+                                SyncBankEnums(&bank);
+                                anyBankPatched = true;
+                            }
                         }
                     }
+                    else if (firstPass) {
+                        ReloadBankInPlace(&bank);
+                    }
                 }
-                else {
-                    ReloadBankInPlace(&bank);
-                }
+                firstPass = false;
             }
+            // Restore the full merged index (used by loose asset deployment).
+            ModBankPatcher::BuildMasterModIndex(g_LoadedMods);
             if (anyBankPatched) {
                 g_AppConfig.DefSystemDirty = true;
             }

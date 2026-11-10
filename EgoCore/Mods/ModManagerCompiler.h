@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include <string>
 #include <vector>
 #include <map>
@@ -154,8 +155,8 @@ public:
         std::vector<std::string> ModResPath;
     };
 
-    static bool PatchBankForLaunch(LoadedBank* bank) {
-        std::string tmpPath = bank->FullPath + ".tmp";
+    static bool PatchBankForLaunch(LoadedBank* bank, const std::string& sourceOverride = "") {
+        std::string tmpPath = sourceOverride.empty() ? (bank->FullPath + ".tmp") : sourceOverride;
         if (!fs::exists(tmpPath)) return false;
 
         std::ifstream in(tmpPath, std::ios::binary);
@@ -299,10 +300,14 @@ public:
             for (auto& psb : subBanks) { if (psb.Info.Name == sbName) { targetPSB = &psb; break; } }
             if (!targetPSB) continue;
 
+            std::set<uint32_t> usedIDs;
+            for (auto& psbU : subBanks) for (auto& eU : psbU.Entries) usedIDs.insert(eU.ID);
             for (auto& item : pendingList) {
+                if (item.ResolvedID != 0 && usedIDs.count(item.ResolvedID)) item.ResolvedID = 0; // ID taken by an earlier mod/vanilla
                 if (item.ResolvedID == 0) {
                     highestID++;
                     item.ResolvedID = highestID;
+                    usedIDs.insert(highestID);
                 } else if (item.ResolvedID > highestID) {
                     highestID = item.ResolvedID;
                 }
