@@ -60,20 +60,6 @@ struct ModAssetOverride {
 
 inline std::map<std::string, uint32_t> g_LiveBankIDs;
 
-inline std::string SanitizeForEnum(const std::string& name, bool forceUpper = true) {
-    size_t first = name.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return "UNKNOWN_ENTRY";
-    size_t last = name.find_last_not_of(" \t\r\n");
-    std::string out = name.substr(first, last - first + 1);
-    for (char& c : out) {
-        if (!std::isalnum((unsigned char)c)) c = '_';
-        else if (forceUpper) c = (char)std::toupper((unsigned char)c);
-    }
-    if (!out.empty() && std::isdigit((unsigned char)out[0])) out = "_" + out;
-    if (out.empty()) out = "UNKNOWN_ENTRY";
-    return out;
-}
-
 class ModBankPatcher {
 public:
     static inline std::map<std::string, ModAssetOverride> g_ActiveModAssets;
@@ -369,7 +355,12 @@ public:
                         g_LiveBankIDs[normUpper] = entry.ID;
                     }
 
-                    std::string sanitized = SanitizeForEnum(entry.Name, true);
+                    std::string sanitized = entry.Name;
+                    for (char& c : sanitized) {
+                        if (!std::isalnum(c)) c = '_';
+                        else c = (char)std::toupper(c);
+                    }
+                    if (!sanitized.empty() && std::isdigit(sanitized[0])) sanitized = "_" + sanitized;
                     g_LiveBankIDs[sanitized] = entry.ID;
                 }
             }
@@ -726,7 +717,14 @@ public:
     }
 
     static std::string SanitizeForEnum(const std::string& name, bool forceUpper = true) {
-        return ::SanitizeForEnum(name, forceUpper);
+        std::string out = name;
+        for (char& c : out) {
+            if (!std::isalnum(c)) c = '_';
+            else if (forceUpper) c = (char)std::toupper(c);
+        }
+        if (!out.empty() && std::isdigit(out[0])) out = "_" + out;
+        if (out.empty()) out = "UNKNOWN_ENTRY";
+        return out;
     }
 
     static void GenerateEnumHeaders(const std::string& modName, const std::vector<StagedModPackageEntry>& entries) {
