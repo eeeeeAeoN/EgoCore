@@ -15,7 +15,7 @@ if errorlevel 1 (
 if not exist "lib" mkdir lib
 
 echo Compiling source files...
-cl.exe /nologo /c /O2 /std:c++20 /EHsc /MD /W3 /Iinclude ^
+cl.exe /nologo /c /O2 /Oi /Ot /MP /std:c++20 /EHsc /MD /W3 /Iinclude ^
     src\bbb_archive.cpp ^
     src\bank_resolver.cpp ^
     src\background_tree.cpp ^

@@ -44,10 +44,10 @@ namespace STBBackend {
     inline float g_FgDistance = 74.0f;
     inline float g_LodDistanceScale = 1.0f;
     inline int g_MaxLodBand = 7;
-    inline bool g_ShareLodBands = true;
+    inline bool g_ShareLodBands = false;
     inline bool g_EnableRangeCompression = true;
     inline bool g_OutputIsm = true;
-    inline bool g_HighQualityDxt = false;
+    inline bool g_HighQualityDxt = true;
     inline bool g_GenerateMipmaps = false;
 
     inline void SetStatus(float progress, const std::string& status) {
@@ -81,10 +81,10 @@ namespace STBBackend {
             g_FgDistance = 74.0f;
             g_LodDistanceScale = 1.0f;
             g_MaxLodBand = 7;
-            g_ShareLodBands = true;
+            g_ShareLodBands = false;
             g_EnableRangeCompression = true;
             g_OutputIsm = true;
-            g_HighQualityDxt = false;
+            g_HighQualityDxt = true;
             g_GenerateMipmaps = false;
             break;
         case 1: // High Quality (Modern PC / Denser Meshes)
@@ -107,7 +107,7 @@ namespace STBBackend {
             g_EnableRangeCompression = true;
             g_OutputIsm = true;
             g_HighQualityDxt = true;
-            g_GenerateMipmaps = true;
+            g_GenerateMipmaps = false;
             break;
         case 3: // Fast / Draft (Quick Compilation Test)
             g_MeshDetail = 1.0f;
@@ -194,30 +194,36 @@ namespace STBBackend {
 
         // If an STBconfig.ini exists in Data\Levels, pre-populate parameters from it
         if (!g_TargetGameRoot.empty()) {
+            egostb::CompilerConfig cfg;
+            cfg.meshDetail = g_MeshDetail;
+            cfg.fgDistanceThreshold = g_FgDistance;
+            cfg.lodDistanceScale = g_LodDistanceScale;
+            cfg.maxLodBand = g_MaxLodBand;
+            cfg.shareLodBands = g_ShareLodBands;
+            cfg.enableRangeCompression = g_EnableRangeCompression;
+            cfg.outputIsm = g_OutputIsm;
+            cfg.highQualityDxt = g_HighQualityDxt;
+            cfg.generateMipmaps = g_GenerateMipmaps;
+
+            bool loadedCustom = false;
             std::string iniCandidate = g_TargetGameRoot + "\\Data\\Levels\\STBconfig.ini";
-            if (fs::exists(iniCandidate)) {
-                egostb::CompilerConfig cfg;
-                cfg.meshDetail = g_MeshDetail;
-                cfg.fgDistanceThreshold = g_FgDistance;
-                cfg.lodDistanceScale = g_LodDistanceScale;
-                cfg.maxLodBand = g_MaxLodBand;
-                cfg.shareLodBands = g_ShareLodBands;
-                cfg.enableRangeCompression = g_EnableRangeCompression;
-                cfg.outputIsm = g_OutputIsm;
-                cfg.highQualityDxt = g_HighQualityDxt;
-                cfg.generateMipmaps = g_GenerateMipmaps;
-                if (egostb::StbCompiler::loadConfigFile(iniCandidate, cfg)) {
-                    g_MeshDetail = cfg.meshDetail;
-                    g_FgDistance = cfg.fgDistanceThreshold;
-                    g_LodDistanceScale = cfg.lodDistanceScale;
-                    g_MaxLodBand = cfg.maxLodBand;
-                    g_ShareLodBands = cfg.shareLodBands;
-                    g_EnableRangeCompression = cfg.enableRangeCompression;
-                    g_OutputIsm = cfg.outputIsm;
-                    g_HighQualityDxt = cfg.highQualityDxt;
-                    g_GenerateMipmaps = cfg.generateMipmaps;
-                    g_CurrentPreset = 4; // Custom
-                }
+            if (fs::exists(iniCandidate) && egostb::StbCompiler::loadConfigFile(iniCandidate, cfg)) {
+                loadedCustom = true;
+            }
+            if (egostb::StbCompiler::applyActiveModsFromIni(g_TargetGameRoot, cfg)) {
+                loadedCustom = true;
+            }
+            if (loadedCustom) {
+                g_MeshDetail = cfg.meshDetail;
+                g_FgDistance = cfg.fgDistanceThreshold;
+                g_LodDistanceScale = cfg.lodDistanceScale;
+                g_MaxLodBand = cfg.maxLodBand;
+                g_ShareLodBands = cfg.shareLodBands;
+                g_EnableRangeCompression = cfg.enableRangeCompression;
+                g_OutputIsm = cfg.outputIsm;
+                g_HighQualityDxt = cfg.highQualityDxt;
+                g_GenerateMipmaps = cfg.generateMipmaps;
+                g_CurrentPreset = 4; // Custom
             }
         }
 
@@ -516,12 +522,6 @@ namespace STBBackend {
                 }
                 ImGui::SameLine();
                 HelpMarker("Uses optimal perceptual cluster-fit compression instead of fast bounding-box.");
-
-                if (ImGui::Checkbox("Generate complete mipmap chains", &g_GenerateMipmaps)) {
-                    g_CurrentPreset = 4;
-                }
-                ImGui::SameLine();
-                HelpMarker("Generates complete mipmaps for baked patch CTextures to eliminate distant shimmering.");
 
                 ImGui::Columns(1);
                 ImGui::Dummy(ImVec2(0, 16));

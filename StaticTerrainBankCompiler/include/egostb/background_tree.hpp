@@ -5,6 +5,7 @@
 #include "egostb/water_utils.hpp"
 #include <cstdint>
 #include <vector>
+#include <array>
 #include <memory>
 
 namespace egostb {
@@ -20,6 +21,17 @@ struct BgLodInfo {
     int32_t fileBlockSize = 0;
     int32_t offsetIntoFileBlock = 0;
     std::vector<uint8_t> compressedFrame; // uLen (4) + cLen (4) + LZO data
+};
+
+struct BgBandSpec {
+    bool valid = false;
+    bool needed = true;
+    int texW = 64;
+    int texH = 64;
+    int lockGridSpacingX = 1;
+    int lockGridSpacingY = 1;
+    std::vector<float> uvTableU;
+    std::vector<float> uvTableV;
 };
 
 struct BgTreeNode {
@@ -38,6 +50,7 @@ struct BgTreeNode {
 
     BgAABB aabb;
 
+    std::array<BgBandSpec, 8> bandSpecs{};
     std::vector<BgLodInfo> lodInfo; // from firstNonSplitBand to lastBand
 
     std::unique_ptr<BgTreeNode> leftChild;
@@ -119,11 +132,12 @@ inline float findFurthestDistanceToObservingMapSet(
 
 struct BgTreeSettings {
     float meshDetail = 2.0f;
+    float proceduralTextureDetail = 3.0f;
     float lodDistanceScale = 1.0f;
     int textureScale = 1;
     bool generateMipmaps = false;
-    bool highQualityDxt = false;
-    bool shareLodBands = true;
+    bool highQualityDxt = true;
+    bool shareLodBands = false;
     int maxLodBand = 7;
     bool enableRangeCompression = true;
 };
@@ -147,6 +161,9 @@ public:
         int mapX = 0, mapY = 0, width = 0, height = 0;
         std::vector<float> unitSizeHor;
         std::vector<float> unitSizeVert;
+        int vertStride = 0;
+        std::vector<float> vertMinZ;
+        std::vector<float> vertMaxZ;
     };
 
     static TopologyGrid buildTopologyGrid(
@@ -206,7 +223,11 @@ public:
         const EngineLandscapeLODMap* pLodMap = nullptr,
         const WaterShoreCalculator* pWaterContext = nullptr,
         const BgTreeSettings& settings = BgTreeSettings{},
-        const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+        const std::vector<WorldWaterNeighbor>* neighbors = nullptr,
+        int lockedSpacingX = 0,
+        int lockedSpacingY = 0,
+        const std::vector<float>* uvTableU = nullptr,
+        const std::vector<float>* uvTableV = nullptr
     );
 };
 

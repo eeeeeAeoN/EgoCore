@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "fable/defs/compiler/build.hpp"
 #include "fable/defs/compiler/build_index.hpp"
 #include "fable/defs/compiler/build_pipeline.hpp"
 #include "fable/defs/compiler/definitions.hpp"
@@ -176,6 +177,11 @@ int run_build(const fs::path &root, const fs::path &out_dir,
         std::replace(normalized.begin(), normalized.end(), '\\', '/');
         parsed.push_back(ParsedFile{std::move(normalized), std::move(ast)});
     }
+    std::string embedded_log;
+    errors += inject_embedded_headers(symbols, files, redefined, next_file, embedded_log);
+    if (!embedded_log.empty()) {
+        std::cerr << embedded_log;
+    }
     if (errors != 0) {
         std::cerr << "cannot build with " << errors << " parse/symbol error(s)\n";
         return 1;
@@ -234,6 +240,11 @@ int run_lower(const fs::path &root, const std::string &class_name,
                       << "\n";
         }
         asts.push_back(std::move(ast));
+    }
+    std::string embedded_log;
+    errors += inject_embedded_headers(symbols, files, redefined, next_file, embedded_log);
+    if (!embedded_log.empty()) {
+        std::cerr << embedded_log;
     }
     if (errors != 0) {
         std::cerr << "cannot lower with " << errors << " parse/symbol error(s)\n";

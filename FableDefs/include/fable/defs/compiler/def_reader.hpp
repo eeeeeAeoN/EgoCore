@@ -23,7 +23,7 @@
 
 namespace fable::defs::compiler {
 
-enum class ValueKind {
+enum class DecodedValueKind {
     Int,
     Float,
     Bool,
@@ -41,17 +41,17 @@ enum class ValueKind {
     Opaque,
 };
 
-struct Value {
-    ValueKind kind = ValueKind::Int;
+struct DecodedValue {
+    DecodedValueKind kind = DecodedValueKind::Int;
     std::int64_t integer = 0;
     std::uint32_t f32_bits = 0;
     bool boolean = false;
     std::string text;
     std::u16string wide;
     std::vector<std::uint8_t> bytes;
-    std::vector<Value> list;
-    std::vector<std::pair<Value, Value>> map;
-    std::vector<std::pair<std::string, Value>> fields;
+    std::vector<DecodedValue> list;
+    std::vector<std::pair<DecodedValue, DecodedValue>> map;
+    std::vector<std::pair<std::string, DecodedValue>> fields;
     std::uint32_t tag = 0;
     std::string type_name;
 };
@@ -59,7 +59,7 @@ struct Value {
 struct ParsedEntry {
     std::string def_type;
     bool is_template = false;
-    std::vector<std::pair<std::string, Value>> fields;
+    std::vector<std::pair<std::string, DecodedValue>> fields;
 };
 
 class Reader {
@@ -151,13 +151,13 @@ private:
 };
 
 template <class T>
-bool read_value(T &value, Reader &reader, Value &out);
+bool read_value(T &value, Reader &reader, DecodedValue &out);
 
 namespace detail {
 
 struct ControlReaderVisitor {
     Reader &reader;
-    Value &out;
+    DecodedValue &out;
     bool ok = true;
 
     template <class F>
@@ -167,7 +167,7 @@ struct ControlReaderVisitor {
             ok = false;
             return;
         }
-        Value child;
+        DecodedValue child;
         if (!read_value(field, reader, child)) {
             ok = false;
             return;
@@ -183,8 +183,8 @@ struct ControlReaderVisitor {
             ok = false;
             return;
         }
-        Value child;
-        child.kind = ValueKind::Bool;
+        DecodedValue child;
+        child.kind = DecodedValueKind::Bool;
         child.boolean = value != 0;
         out.fields.emplace_back(name, std::move(child));
     }
@@ -192,7 +192,7 @@ struct ControlReaderVisitor {
 
 struct BareReaderVisitor {
     Reader &reader;
-    Value &out;
+    DecodedValue &out;
     bool ok = true;
 
     template <class F>
@@ -200,7 +200,7 @@ struct BareReaderVisitor {
         if (!ok) {
             return;
         }
-        Value child;
+        DecodedValue child;
         if (!read_value(field, reader, child)) {
             ok = false;
             return;
@@ -215,16 +215,16 @@ struct BareReaderVisitor {
             ok = false;
             return;
         }
-        Value child;
-        child.kind = ValueKind::Bool;
+        DecodedValue child;
+        child.kind = DecodedValueKind::Bool;
         child.boolean = value != 0;
         out.fields.emplace_back(name, std::move(child));
     }
 };
 
 template <class T>
-bool read_controls(T &value, Reader &reader, Value &out) {
-    out.kind = ValueKind::Struct;
+bool read_controls(T &value, Reader &reader, DecodedValue &out) {
+    out.kind = DecodedValueKind::Struct;
     out.fields.clear();
     ControlReaderVisitor visitor{reader, out};
     ::fable::defs::visit_model_fields(value, visitor);
@@ -232,8 +232,8 @@ bool read_controls(T &value, Reader &reader, Value &out) {
 }
 
 template <class T>
-bool read_bare(T &value, Reader &reader, Value &out) {
-    out.kind = ValueKind::Struct;
+bool read_bare(T &value, Reader &reader, DecodedValue &out) {
+    out.kind = DecodedValueKind::Struct;
     out.fields.clear();
     BareReaderVisitor visitor{reader, out};
     ::fable::defs::visit_model_fields(value, visitor);
@@ -241,12 +241,12 @@ bool read_bare(T &value, Reader &reader, Value &out) {
 }
 
 template <class T>
-bool read_vector(T &, Reader &reader, Value &out) {
+bool read_vector(T &, Reader &reader, DecodedValue &out) {
     std::uint32_t count = 0;
     if (!reader.u32(count)) {
         return false;
     }
-    out.kind = ValueKind::List;
+    out.kind = DecodedValueKind::List;
     out.list.clear();
     out.list.reserve(count);
     using Element = typename T::value_type;
@@ -256,15 +256,15 @@ bool read_vector(T &, Reader &reader, Value &out) {
             if (!reader.u8(byte)) {
                 return false;
             }
-            Value item;
-            item.kind = ValueKind::Bool;
+            DecodedValue item;
+            item.kind = DecodedValueKind::Bool;
             item.boolean = byte != 0;
             out.list.push_back(std::move(item));
         }
     } else {
         for (std::uint32_t i = 0; i < count; ++i) {
             Element element{};
-            Value item;
+            DecodedValue item;
             if (!read_value(element, reader, item)) {
                 return false;
             }
@@ -277,50 +277,50 @@ bool read_vector(T &, Reader &reader, Value &out) {
 } // namespace detail
 
 template <class T>
-bool read_value(T &value, Reader &reader, Value &out) {
+bool read_value(T &value, Reader &reader, DecodedValue &out) {
     using U = std::remove_cv_t<std::remove_reference_t<T>>;
     if constexpr (std::is_same_v<U, bool>) {
         std::uint8_t byte = 0;
         if (!reader.u8(byte)) return false;
-        out.kind = ValueKind::Bool;
+        out.kind = DecodedValueKind::Bool;
         out.boolean = byte != 0;
         return true;
     } else if constexpr (std::is_same_v<U, CDefString>) {
         std::int32_t raw = 0;
         if (!reader.i32(raw)) return false;
         value.TablePos = raw;
-        out.kind = ValueKind::DefString;
+        out.kind = DecodedValueKind::DefString;
         out.integer = raw;
         return true;
     } else if constexpr (std::is_same_v<U, CDefIndex>) {
         std::int32_t raw = 0;
         if (!reader.i32(raw)) return false;
         value.Val = raw;
-        out.kind = ValueKind::DefIndex;
+        out.kind = DecodedValueKind::DefIndex;
         out.integer = raw;
         return true;
     } else if constexpr (std::is_same_v<U, std::string>) {
         if (!reader.cstr(value)) return false;
-        out.kind = ValueKind::String;
+        out.kind = DecodedValueKind::String;
         out.text = value;
         return true;
     } else if constexpr (std::is_same_v<U, std::u16string>) {
         if (!reader.wstr(value)) return false;
-        out.kind = ValueKind::WString;
+        out.kind = DecodedValueKind::WString;
         out.wide = value;
         return true;
     } else if constexpr (std::is_enum_v<U>) {
         std::int32_t raw = 0;
         if (!reader.i32(raw)) return false;
         value = static_cast<U>(raw);
-        out.kind = ValueKind::Enum;
+        out.kind = DecodedValueKind::Enum;
         out.integer = raw;
         return true;
     } else if constexpr (std::is_floating_point_v<U>) {
         std::uint32_t raw = 0;
         if (!reader.f32_bits(raw)) return false;
         std::memcpy(&value, &raw, sizeof(value));
-        out.kind = ValueKind::Float;
+        out.kind = DecodedValueKind::Float;
         out.f32_bits = raw;
         return true;
     } else if constexpr (std::is_integral_v<U>) {
@@ -328,19 +328,19 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::uint8_t raw = 0;
             if (!reader.u8(raw)) return false;
             value = static_cast<U>(raw);
-            out.kind = ValueKind::Int;
+            out.kind = DecodedValueKind::Int;
             out.integer = static_cast<std::int64_t>(value);
         } else if constexpr (std::is_same_v<U, std::uint16_t> || std::is_same_v<U, std::int16_t>) {
             std::uint16_t raw = 0;
             if (!reader.u16(raw)) return false;
             value = static_cast<U>(raw);
-            out.kind = ValueKind::Int;
+            out.kind = DecodedValueKind::Int;
             out.integer = static_cast<std::int64_t>(value);
         } else {
             std::uint32_t raw = 0;
             if (!reader.u32(raw)) return false;
             value = static_cast<U>(raw);
-            out.kind = ValueKind::Int;
+            out.kind = DecodedValueKind::Int;
             out.integer = static_cast<std::int64_t>(value);
         }
         return true;
@@ -350,13 +350,13 @@ bool read_value(T &value, Reader &reader, Value &out) {
                          ::fable::defs::compiler::detail::IsSet<U>::value) {
         std::uint32_t count = 0;
         if (!reader.u32(count)) return false;
-        out.kind = ValueKind::List;
+        out.kind = DecodedValueKind::List;
         out.list.clear();
         out.list.reserve(count);
         using Element = typename U::value_type;
         for (std::uint32_t i = 0; i < count; ++i) {
             Element element{};
-            Value item;
+            DecodedValue item;
             if (!read_value(element, reader, item)) return false;
             out.list.push_back(std::move(item));
         }
@@ -365,7 +365,7 @@ bool read_value(T &value, Reader &reader, Value &out) {
                          ::fable::defs::compiler::detail::IsMultiMap<U>::value) {
         std::uint32_t count = 0;
         if (!reader.u32(count)) return false;
-        out.kind = ValueKind::Map;
+        out.kind = DecodedValueKind::Map;
         out.map.clear();
         out.map.reserve(count);
         using Key = typename U::key_type;
@@ -373,8 +373,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
         for (std::uint32_t i = 0; i < count; ++i) {
             Key key{};
             Mapped mapped{};
-            Value key_value;
-            Value mapped_value;
+            DecodedValue key_value;
+            DecodedValue mapped_value;
             if (!read_value(key, reader, key_value) ||
                 !read_value(mapped, reader, mapped_value)) {
                 return false;
@@ -384,21 +384,21 @@ bool read_value(T &value, Reader &reader, Value &out) {
         }
         return true;
     } else if constexpr (::fable::defs::compiler::detail::IsPair<U>::value) {
-        Value first;
-        Value second;
+        DecodedValue first;
+        DecodedValue second;
         if (!read_value(value.first, reader, first) ||
             !read_value(value.second, reader, second)) {
             return false;
         }
-        out.kind = ValueKind::Struct;
+        out.kind = DecodedValueKind::Struct;
         out.fields.emplace_back("first", std::move(first));
         out.fields.emplace_back("second", std::move(second));
         return true;
     } else if constexpr (std::is_array_v<U>) {
-        out.kind = ValueKind::List;
+        out.kind = DecodedValueKind::List;
         out.list.clear();
         for (auto &element : value) {
-            Value item;
+            DecodedValue item;
             if (!read_value(element, reader, item)) return false;
             out.list.push_back(std::move(item));
         }
@@ -413,13 +413,13 @@ bool read_value(T &value, Reader &reader, Value &out) {
         std::uint32_t tag = 0;
         if (!reader.u32(tag)) return false;
         value.Tag = tag;
-        out.kind = ValueKind::Variant;
+        out.kind = DecodedValueKind::Variant;
         out.tag = tag;
         out.type_name = "CAnimationComponent";
         const auto add_i32 = [&](const char *name, std::int32_t &slot) {
             if (!reader.i32(slot)) return false;
-            Value child;
-            child.kind = ValueKind::Int;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Int;
             child.integer = slot;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -428,8 +428,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::uint8_t byte = 0;
             if (!reader.u8(byte)) return false;
             slot = byte != 0;
-            Value child;
-            child.kind = ValueKind::Bool;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Bool;
             child.boolean = slot;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -438,8 +438,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::uint32_t raw = 0;
             if (!reader.f32_bits(raw)) return false;
             std::memcpy(&slot, &raw, sizeof(slot));
-            Value child;
-            child.kind = ValueKind::Float;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Float;
             child.f32_bits = raw;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -448,8 +448,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::int32_t raw = 0;
             if (!reader.i32(raw)) return false;
             slot.TablePos = raw;
-            Value child;
-            child.kind = ValueKind::DefString;
+            DecodedValue child;
+            child.kind = DecodedValueKind::DefString;
             child.integer = raw;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -481,8 +481,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::vector<std::uint8_t> bytes;
             if (!reader.u32(length) || !reader.bytes(length, bytes)) return false;
             value.ResponseAnimName.assign(bytes.begin(), bytes.end());
-            Value child;
-            child.kind = ValueKind::PString;
+            DecodedValue child;
+            child.kind = DecodedValueKind::PString;
             child.bytes = std::move(bytes);
             out.fields.emplace_back("ResponseAnimName", std::move(child));
             return true;
@@ -496,17 +496,17 @@ bool read_value(T &value, Reader &reader, Value &out) {
         if (!reader.u32(tag) || !reader.i32(reaction)) return false;
         value.Tag = tag;
         value.ReactionType = reaction;
-        out.kind = ValueKind::Variant;
+        out.kind = DecodedValueKind::Variant;
         out.tag = tag;
         out.type_name = "CReactionMatchEntry";
-        Value reaction_value;
-        reaction_value.kind = ValueKind::Int;
+        DecodedValue reaction_value;
+        reaction_value.kind = DecodedValueKind::Int;
         reaction_value.integer = reaction;
         out.fields.emplace_back("ReactionType", std::move(reaction_value));
         const auto add_i32 = [&](const char *name, std::int32_t &slot) {
             if (!reader.i32(slot)) return false;
-            Value child;
-            child.kind = ValueKind::Int;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Int;
             child.integer = slot;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -515,8 +515,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::uint32_t raw = 0;
             if (!reader.f32_bits(raw)) return false;
             std::memcpy(&slot, &raw, sizeof(slot));
-            Value child;
-            child.kind = ValueKind::Float;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Float;
             child.f32_bits = raw;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -566,23 +566,23 @@ bool read_value(T &value, Reader &reader, Value &out) {
         std::uint32_t type = 0;
         if (!reader.u32(type)) return false;
         value.Type = type;
-        out.kind = ValueKind::Variant;
+        out.kind = DecodedValueKind::Variant;
         out.tag = type;
         out.type_name = "CReactionFrequencyTraits";
         const auto add_f32 = [&](const char *name, float &slot) {
             std::uint32_t raw = 0;
             if (!reader.f32_bits(raw)) return false;
             std::memcpy(&slot, &raw, sizeof(slot));
-            Value child;
-            child.kind = ValueKind::Float;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Float;
             child.f32_bits = raw;
             out.fields.emplace_back(name, std::move(child));
             return true;
         };
         const auto add_u32 = [&](const char *name, std::uint32_t &slot) {
             if (!reader.u32(slot)) return false;
-            Value child;
-            child.kind = ValueKind::Int;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Int;
             child.integer = slot;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -591,8 +591,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::uint8_t byte = 0;
             if (!reader.u8(byte)) return false;
             slot = byte != 0;
-            Value child;
-            child.kind = ValueKind::Bool;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Bool;
             child.boolean = slot;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -621,15 +621,15 @@ bool read_value(T &value, Reader &reader, Value &out) {
         std::uint32_t type = 0;
         if (!reader.u32(type)) return false;
         value.Type = type;
-        out.kind = ValueKind::Variant;
+        out.kind = DecodedValueKind::Variant;
         out.tag = type;
         out.type_name = "CPhysicalPrimitiveInit";
         const auto add_f32 = [&](const char *name, float &slot) {
             std::uint32_t raw = 0;
             if (!reader.f32_bits(raw)) return false;
             std::memcpy(&slot, &raw, sizeof(slot));
-            Value child;
-            child.kind = ValueKind::Float;
+            DecodedValue child;
+            child.kind = DecodedValueKind::Float;
             child.f32_bits = raw;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -638,8 +638,8 @@ bool read_value(T &value, Reader &reader, Value &out) {
             std::int32_t raw = 0;
             if (!reader.i32(raw)) return false;
             slot.TablePos = raw;
-            Value child;
-            child.kind = ValueKind::DefString;
+            DecodedValue child;
+            child.kind = DecodedValueKind::DefString;
             child.integer = raw;
             out.fields.emplace_back(name, std::move(child));
             return true;
@@ -682,27 +682,27 @@ bool read_value(T &value, Reader &reader, Value &out) {
         std::memcpy(&value.StartAtMorphStrength, &start_bits, sizeof(start_bits));
         std::memcpy(&value.EndAtMorphStrength, &end_bits, sizeof(end_bits));
 
-        out.kind = ValueKind::Struct;
-        out.fields.emplace_back("MorphType", Value{ValueKind::Enum, morph_type, 0, false,
+        out.kind = DecodedValueKind::Struct;
+        out.fields.emplace_back("MorphType", DecodedValue{DecodedValueKind::Enum, morph_type, 0, false,
                                                    {}, {}, {}, {}, {}, {}, 0, {}});
-        out.fields.emplace_back("Blending", Value{ValueKind::Bool, 0, 0, blending != 0,
+        out.fields.emplace_back("Blending", DecodedValue{DecodedValueKind::Bool, 0, 0, blending != 0,
                                                   {}, {}, {}, {}, {}, {}, 0, {}});
-        out.fields.emplace_back("Location", Value{ValueKind::Enum, location, 0, false,
+        out.fields.emplace_back("Location", DecodedValue{DecodedValueKind::Enum, location, 0, false,
                                                   {}, {}, {}, {}, {}, {}, 0, {}});
-        out.fields.emplace_back("LocationName", Value{ValueKind::DefString, location_name, 0,
+        out.fields.emplace_back("LocationName", DecodedValue{DecodedValueKind::DefString, location_name, 0,
                                                       false, {}, {}, {}, {}, {}, {}, 0, {}});
-        out.fields.emplace_back("LocationIndex", Value{ValueKind::Int, location_index, 0, false,
+        out.fields.emplace_back("LocationIndex", DecodedValue{DecodedValueKind::Int, location_index, 0, false,
                                                        {}, {}, {}, {}, {}, {}, 0, {}});
-        out.fields.emplace_back("ParticleIndex", Value{ValueKind::Int, particle_index, 0, false,
+        out.fields.emplace_back("ParticleIndex", DecodedValue{DecodedValueKind::Int, particle_index, 0, false,
                                                        {}, {}, {}, {}, {}, {}, 0, {}});
         out.fields.emplace_back("SecondParticleIndex",
-                                Value{ValueKind::Int, second_particle_index, 0, false, {}, {}, {},
+                                DecodedValue{DecodedValueKind::Int, second_particle_index, 0, false, {}, {}, {},
                                       {}, {}, {}, 0, {}});
         out.fields.emplace_back("StartAtMorphStrength",
-                                Value{ValueKind::Float, 0, start_bits, false, {}, {}, {}, {}, {},
+                                DecodedValue{DecodedValueKind::Float, 0, start_bits, false, {}, {}, {}, {}, {},
                                       {}, 0, {}});
         out.fields.emplace_back("EndAtMorphStrength",
-                                Value{ValueKind::Float, 0, end_bits, false, {}, {}, {}, {}, {},
+                                DecodedValue{DecodedValueKind::Float, 0, end_bits, false, {}, {}, {}, {}, {},
                                       {}, 0, {}});
         return true;
     } else if constexpr (::fable::defs::is_model_class<U>::value) {
@@ -712,7 +712,7 @@ bool read_value(T &value, Reader &reader, Value &out) {
             return detail::read_bare(value, reader, out);
         }
     } else {
-        out.kind = ValueKind::Opaque;
+        out.kind = DecodedValueKind::Opaque;
         out.type_name = "<unsupported>";
         return false;
     }

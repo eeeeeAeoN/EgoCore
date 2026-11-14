@@ -90,6 +90,43 @@ public:
         return "";
     }
 
+    static bool ModHasTerrainFadeIni(const ModEntry& mod) {
+        if (mod.IsCoreMod || mod.ModFolderPath.empty() || mod.ModFolderPath == g_AppConfig.GameRootPath) return false;
+        std::string iniPath = mod.ModFolderPath + "\\" + mod.Name + ".ini";
+        if (!fs::exists(iniPath)) return false;
+
+        std::ifstream file(iniPath);
+        if (!file.is_open()) return false;
+
+        std::string line;
+        std::string section;
+        while (std::getline(file, line)) {
+            std::string t = line;
+            t.erase(0, t.find_first_not_of(" \t\r\n"));
+            while (!t.empty() && (t.back() == ' ' || t.back() == '\t' || t.back() == '\r' || t.back() == '\n')) t.pop_back();
+            if (t.empty() || t[0] == ';' || t[0] == '#') continue;
+            if (t.front() == '[' && t.back() == ']') {
+                section = t.substr(1, t.size() - 2);
+                std::transform(section.begin(), section.end(), section.begin(), ::tolower);
+                continue;
+            }
+            if (section != "terrain") continue;
+            size_t eq = t.find('=');
+            if (eq == std::string::npos) continue;
+            std::string key = t.substr(0, eq);
+            while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+            if (key == "foregroundfadeend") {
+                std::string val = t.substr(eq + 1);
+                val.erase(0, val.find_first_not_of(" \t"));
+                try {
+                    if (std::stof(val) > 64.0f) return true;
+                } catch (...) {}
+            }
+        }
+        return false;
+    }
+
     static bool ModContainsEnumFadeDistances(const ModEntry& mod) {
         if (mod.IsCoreMod || mod.ModFolderPath.empty() || mod.ModFolderPath == g_AppConfig.GameRootPath) return false;
         try {
@@ -152,6 +189,11 @@ public:
                 mod.IsTngMod = false;
                 mod.IsFSEMod = false;
                 mod.HasFadeDistances = false;
+
+                if (mod.HasDll && ModHasTerrainFadeIni(mod)) {
+                    mod.HasFadeDistances = true;
+                    mod.IsTngMod = true;
+                }
 
                 // FSE detection: simple folder check (must have "FSE" directory)
                 if (fs::exists(mod.ModFolderPath + "\\FSE") && fs::is_directory(mod.ModFolderPath + "\\FSE")) {
@@ -1285,7 +1327,7 @@ public:
                     const auto& mod = *it;
                     if (!mod.IsEnabled || !mod.IsTngMod) continue;
 
-                    if (mod.HasFadeDistances || ModContainsEnumFadeDistances(mod) || mod.HasSTBConfig || !FindModSTBConfigFile(mod.ModFolderPath).empty()) {
+                    if (mod.HasFadeDistances || ModContainsEnumFadeDistances(mod) || (mod.HasDll && ModHasTerrainFadeIni(mod)) || mod.HasSTBConfig || !FindModSTBConfigFile(mod.ModFolderPath).empty()) {
                         stbCompilationNeeded = true;
                     }
 
@@ -1515,6 +1557,7 @@ public:
                 SetLaunchStatus("Recompiling STB (" + std::to_string(pct) + "%): " + status);
             };
 
+            UpdateGlobalModsIni();
             egostb::StbCompiler::compileWorld(stbConfig);
             stbCompilationNeeded = false;
         };
@@ -1842,7 +1885,7 @@ public:
             // WLD check
             bool hasWld = (!modLevelsDir.empty() && fs::exists(modLevelsDir + "\\FinalAlbion.wld")) ||
                           fs::exists(mod.ModFolderPath + "\\FinalAlbion.wld");
-            if (hasWld || mod.HasFadeDistances || ModContainsEnumFadeDistances(mod) || mod.HasSTBConfig || !FindModSTBConfigFile(mod.ModFolderPath).empty()) {
+            if (hasWld || mod.HasFadeDistances || ModContainsEnumFadeDistances(mod) || (mod.HasDll && ModHasTerrainFadeIni(mod)) || mod.HasSTBConfig || !FindModSTBConfigFile(mod.ModFolderPath).empty()) {
                 backupFile(levelsDir + "\\FinalAlbion.wld");
                 backupFile(levelsDir + "\\FinalAlbion_RT.stb");
                 backupFile(levelsDir + "\\FinalAlbion_RT.ism");

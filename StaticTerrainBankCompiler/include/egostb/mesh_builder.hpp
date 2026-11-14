@@ -98,7 +98,11 @@ public:
                 const std::vector<WorldWaterNeighbor>* neighbors = nullptr,
                 const PrecomputedWaterGrid* waterGrid = nullptr);
 
-    CompiledPatch buildPatch(int patchX, int patchY);
+    CompiledPatch buildPatch(int patchX, int patchY) const;
+    CompiledPatch buildPatchIfNeeded(
+        int patchX, int patchY,
+        const std::function<bool(const float[3], const float[3])>& neededPred) const;
+    void prepareCaches() const { ensureWaterGrid(); ensureWaterBodies(); }
 
     struct Vector3 {
         float x = 0.0f;

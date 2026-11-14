@@ -67,6 +67,14 @@ inline void inject_engine_enums(SymbolTable &symbols) {
     fallback("BLEND_ALPHA", 2);
     fallback("BLEND_SOLID", 3);
     fallback("BLEND_MULTIPLY", 4);
+    fallback("REVERB_ENVIRONMENT_NULL", 0);
+    fallback("REVERB_ENVIRONMENT_EXTERNAL", 1);
+    fallback("REVERB_ENVIRONMENT_CAVE", 2);
+    fallback("REVERB_ENVIRONMENT_HALL", 3);
+    fallback("REVERB_ENVIRONMENT_GUILD", 4);
+    fallback("REVERB_ENVIRONMENT_GUILD_SMALL", 5);
+    fallback("REVERB_ENVIRONMENT_SMALL_ROOM", 6);
+    fallback("REVERB_ENVIRONMENT_SCHOOL", 7);
 }
 
 } // namespace fable::defs::compiler

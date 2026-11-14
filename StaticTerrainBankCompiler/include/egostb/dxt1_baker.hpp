@@ -18,6 +18,14 @@ struct DecodedTexture;
 
 class Dxt1Baker {
 public:
+    // Pre-build and cache the foreground material/normal patch grid for a map in parallel.
+    static void prepareMapCache(
+        const LevData& lev,
+        const std::vector<ThemeMaterial>& materials,
+        int worldX = 3072, int worldY = 2816,
+        const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+    );
+
     // Bake a procedural background texture for a patch covering [mapX, mapX+width] x [mapY, mapY+height]
     // at resolution texWidth x texHeight.
     // Returns the 19-byte CTexture header followed by the raw DXT1 block data.
@@ -28,14 +36,17 @@ public:
         int texWidth, int texHeight,
         int worldX = 3072, int worldY = 2816,
         bool generateMipmaps = false,
-        bool highQualityDxt = false,
-        const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+        bool highQualityDxt = true,
+        const std::vector<WorldWaterNeighbor>* neighbors = nullptr,
+        const std::vector<float>* uvTableU = nullptr,
+        const std::vector<float>* uvTableV = nullptr
     );
 
     // Encode a buffer of RGBA or RGB pixels (width x height) into raw DXT1 block bytes
     static std::vector<uint8_t> encodeDXT1(const ColorRGB* pixels, int width, int height, bool highQuality = false);
 
     static void clearCache();
+    static void eraseMapCache(int worldX, int worldY, int width, int height, uint32_t checksum);
 
 private:
     static uint16_t toRGB565(uint8_t r, uint8_t g, uint8_t b);

@@ -92,6 +92,7 @@ private:
 
     std::map<SymDomain, EnumGroupTable> domains_;
     std::vector<EnumGroupTable> enum_groups_;
+    std::map<std::string, std::size_t> enum_key_groups_;
     std::map<std::pair<std::string, std::string>, std::pair<SymDomain, bool>>
         field_domains_;
 };

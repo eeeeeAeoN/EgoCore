@@ -232,10 +232,10 @@ struct GuiState {
     float lodDistanceScale = 1.0f;
     int textureScaleIndex = 0; // 0=1x, 1=2x, 2=4x
     int maxLodBand = 7;
-    bool shareLodBands = true;
+    bool shareLodBands = false;
     bool enableRangeCompression = true;
     bool outputIsm = true;
-    bool highQualityDxt = false;
+    bool highQualityDxt = true;
     bool generateMipmaps = false;
 
     int currentPreset = 0; // 0: Retail Default, 1: High Quality, 2: Ultra Visuals, 3: Fast Draft, 4: Custom
@@ -315,17 +315,17 @@ struct GuiState {
             lodDistanceScale = 1.0f;
             textureScaleIndex = 0; // 1x
             maxLodBand = 7;
-            shareLodBands = true;
+            shareLodBands = false;
             enableRangeCompression = true;
             outputIsm = true;
-            highQualityDxt = false;
+            highQualityDxt = true;
             generateMipmaps = false;
             break;
         case 1: // High Quality (Modern PC)
             meshDetail = 3.5f;
-            fgDistance = 120.0f;
-            lodDistanceScale = 1.5f;
-            textureScaleIndex = 1; // 2x
+            fgDistance = 138.0f;
+            lodDistanceScale = 2.0f;
+            textureScaleIndex = 0; // 1x (retail DXT header uint8_t dimension limit)
             maxLodBand = 7;
             shareLodBands = false;
             enableRangeCompression = true;
@@ -335,15 +335,15 @@ struct GuiState {
             break;
         case 2: // Ultra Visuals
             meshDetail = 5.0f;
-            fgDistance = 180.0f;
-            lodDistanceScale = 2.0f;
-            textureScaleIndex = 2; // 4x
+            fgDistance = 170.0f;
+            lodDistanceScale = 2.5f;
+            textureScaleIndex = 0; // 1x (retail DXT header uint8_t dimension limit)
             maxLodBand = 7;
             shareLodBands = false;
             enableRangeCompression = true;
             outputIsm = true;
             highQualityDxt = true;
-            generateMipmaps = true;
+            generateMipmaps = false;
             break;
         case 3: // Fast / Draft
             meshDetail = 1.0f;
@@ -639,8 +639,8 @@ int runCompilerGui() {
             HelpMarker("Convenient presets for retail accuracy, enhanced graphics, or faster builds.");
             const char* presets[] = {
                 "Retail Default (Original Game Accuracy)",
-                "High Quality (Modern PC / Denser Meshes & 2x Textures)",
-                "Ultra Visuals (4x Textures, Ultra Meshes, Mipmaps)",
+                "High Quality (Denser Meshes / 128m Fade Match)",
+                "Ultra Visuals (Ultra Meshes / 160m Fade Match)",
                 "Fast / Draft (Quick Compilation Test)",
                 "Custom (User Defined)"
             };
@@ -722,11 +722,6 @@ int runCompilerGui() {
                 state.currentPreset = 4;
             }
             ImGui::SameLine(); HelpMarker("Uses optimal perceptual cluster-fit compression instead of fast bounding-box.");
-
-            if (ImGui::Checkbox("Generate complete mipmap chains", &state.generateMipmaps)) {
-                state.currentPreset = 4;
-            }
-            ImGui::SameLine(); HelpMarker("Generates complete mipmaps for baked patch CTextures to eliminate distant shimmering.");
 
             ImGui::Columns(1);
         }

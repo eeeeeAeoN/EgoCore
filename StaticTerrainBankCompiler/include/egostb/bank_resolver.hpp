@@ -38,10 +38,17 @@ struct TextureBankEntry {
     uint8_t colourDepth = 0;
 };
 
-struct DecodedTexture {
+struct DecodedTextureMip {
     int width = 0;
     int height = 0;
     std::vector<uint8_t> rgb; // 3 bytes per pixel: R, G, B
+};
+
+struct DecodedTexture {
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> rgb;            // 3 bytes per pixel: R, G, B (mip 0)
+    std::vector<DecodedTextureMip> mips; // Mips 1..N downsampled via 2x2 box filter
 };
 
 class BankResolver {

@@ -6478,8 +6478,8 @@ public:
 class CWeaponTrailGraphicSet
 {
 public:
-	std::int32_t Attack;
-	std::int32_t Knockdown;
+	std::int32_t Attack = -1;
+	std::int32_t Knockdown = -1;
 };
 
 class CWeaponDef

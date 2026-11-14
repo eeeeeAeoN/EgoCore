@@ -1,6 +1,7 @@
 #include "egostb/range_compressor.hpp"
 #include <cstring>
 #include <algorithm>
+#include <bit>
 
 namespace egostb {
 
@@ -22,10 +23,14 @@ std::vector<uint8_t> RangeCompressor::compress(const void* input, int elementCou
         return out;
     }
 
-    // Buffer to hold compressed stream starting with 0x01
-    std::vector<uint8_t> out;
-    out.reserve(rawSize + 32);
-    out.push_back(1); // 0x01 = Range-compressed format
+    size_t maxOutCap = rawSize + static_cast<size_t>(elementSize) * 8 + 64;
+    static thread_local std::vector<uint8_t> tlsBuf;
+    if (tlsBuf.size() < maxOutCap) {
+        tlsBuf.resize(maxOutCap);
+    }
+    uint8_t* const bufStart = tlsBuf.data();
+    uint8_t* wp = bufStart;
+    *wp++ = 1; // 0x01 = Range-compressed format
 
     // Determine sub-blocks: break elementSize into chunks of 4, 2, or 1 byte
     int offset = 0;
@@ -41,101 +46,122 @@ std::vector<uint8_t> RangeCompressor::compress(const void* input, int elementCou
         uint32_t minVal = 0xFFFFFFFF;
         uint32_t maxVal = 0;
 
-        for (int i = 0; i < elementCount; ++i) {
-            const uint8_t* elemPtr = inBytes + i * elementSize + offset;
-            uint32_t val = 0;
-            if (blockSize == 4) {
-                std::memcpy(&val, elemPtr, 4);
-            } else if (blockSize == 2) {
-                uint16_t v16 = 0;
-                std::memcpy(&v16, elemPtr, 2);
-                val = v16;
-            } else {
-                val = *elemPtr;
+        const uint8_t* colPtr = inBytes + offset;
+        if (blockSize == 4) {
+            for (int i = 0; i < elementCount; ++i) {
+                uint32_t val = 0;
+                std::memcpy(&val, colPtr + static_cast<size_t>(i) * elementSize, 4);
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
             }
-
-            if (val < minVal) minVal = val;
-            if (val > maxVal) maxVal = val;
+        } else if (blockSize == 2) {
+            for (int i = 0; i < elementCount; ++i) {
+                uint16_t v16 = 0;
+                std::memcpy(&v16, colPtr + static_cast<size_t>(i) * elementSize, 2);
+                uint32_t val = v16;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+            }
+        } else {
+            for (int i = 0; i < elementCount; ++i) {
+                uint32_t val = colPtr[static_cast<size_t>(i) * elementSize];
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+            }
         }
 
-        uint8_t flags = 0;
+        uint8_t flags = 0x01; // has RangeBias
         if (blockSize == 4) flags |= 0x40;
         else if (blockSize == 2) flags |= 0x20;
 
         if (minVal == maxVal) {
             // Constant value: BitCount = 0, RangeBias = minVal
-            flags |= 0x01; // has RangeBias
-            out.push_back(flags);
-            out.push_back(0); // bit_count = 0
-            // Write RangeBias
+            *wp++ = flags;
+            *wp++ = 0; // bit_count = 0
             if (blockSize == 4) {
-                uint8_t b[4]; std::memcpy(b, &minVal, 4);
-                out.insert(out.end(), b, b + 4);
+                std::memcpy(wp, &minVal, 4); wp += 4;
             } else if (blockSize == 2) {
-                uint8_t b[2]; std::memcpy(b, &minVal, 2);
-                out.insert(out.end(), b, b + 2);
+                uint16_t v16 = static_cast<uint16_t>(minVal);
+                std::memcpy(wp, &v16, 2); wp += 2;
             } else {
-                out.push_back(static_cast<uint8_t>(minVal));
+                *wp++ = static_cast<uint8_t>(minVal);
             }
         } else {
             uint32_t range = maxVal - minVal;
-            int bitCount = 0;
-            while ((1ULL << bitCount) <= range && bitCount < 32) {
-                bitCount++;
-            }
+            int bitCount = static_cast<int>(std::bit_width(range));
 
-            flags |= 0x01; // has RangeBias
-            out.push_back(flags);
-            out.push_back(static_cast<uint8_t>(bitCount));
+            *wp++ = flags;
+            *wp++ = static_cast<uint8_t>(bitCount);
 
-            // Write RangeBias
             if (blockSize == 4) {
-                uint8_t b[4]; std::memcpy(b, &minVal, 4);
-                out.insert(out.end(), b, b + 4);
+                std::memcpy(wp, &minVal, 4); wp += 4;
             } else if (blockSize == 2) {
-                uint8_t b[2]; std::memcpy(b, &minVal, 2);
-                out.insert(out.end(), b, b + 2);
+                uint16_t v16 = static_cast<uint16_t>(minVal);
+                std::memcpy(wp, &v16, 2); wp += 2;
             } else {
-                out.push_back(static_cast<uint8_t>(minVal));
+                *wp++ = static_cast<uint8_t>(minVal);
             }
 
             // Bit-pack the values
             if (bitCount == 32) {
                 for (int i = 0; i < elementCount; ++i) {
-                    const uint8_t* elemPtr = inBytes + i * elementSize + offset;
                     uint32_t val = 0;
-                    std::memcpy(&val, elemPtr, 4);
+                    std::memcpy(&val, colPtr + static_cast<size_t>(i) * elementSize, 4);
                     val -= minVal;
-                    uint8_t b[4]; std::memcpy(b, &val, 4);
-                    out.insert(out.end(), b, b + 4);
+                    std::memcpy(wp, &val, 4);
+                    wp += 4;
                 }
             } else {
                 uint32_t accum = 0;
                 int bitsInAccum = 0;
+                const uint32_t mask = BlockSizeMasks[blockSize];
+                const int invShift = bitCount;
 
-                for (int i = 0; i < elementCount; ++i) {
-                    const uint8_t* elemPtr = inBytes + i * elementSize + offset;
-                    uint32_t val = 0;
-                    if (blockSize == 4) std::memcpy(&val, elemPtr, 4);
-                    else if (blockSize == 2) { uint16_t v = 0; std::memcpy(&v, elemPtr, 2); val = v; }
-                    else val = *elemPtr;
-
-                    val = (val - minVal) & BlockSizeMasks[blockSize];
-
-                    accum |= (val << bitsInAccum);
-                    bitsInAccum += bitCount;
-
-                    if (bitsInAccum >= 32) {
-                        uint8_t b[4]; std::memcpy(b, &accum, 4);
-                        out.insert(out.end(), b, b + 4);
-                        bitsInAccum -= 32;
-                        accum = (val >> (bitCount - bitsInAccum));
+                if (blockSize == 4) {
+                    for (int i = 0; i < elementCount; ++i) {
+                        uint32_t val = 0;
+                        std::memcpy(&val, colPtr + static_cast<size_t>(i) * elementSize, 4);
+                        val = (val - minVal) & mask;
+                        accum |= (val << bitsInAccum);
+                        bitsInAccum += invShift;
+                        if (bitsInAccum >= 32) {
+                            std::memcpy(wp, &accum, 4);
+                            wp += 4;
+                            bitsInAccum -= 32;
+                            accum = (bitsInAccum > 0) ? (val >> (invShift - bitsInAccum)) : 0;
+                        }
+                    }
+                } else if (blockSize == 2) {
+                    for (int i = 0; i < elementCount; ++i) {
+                        uint16_t v16 = 0;
+                        std::memcpy(&v16, colPtr + static_cast<size_t>(i) * elementSize, 2);
+                        uint32_t val = (static_cast<uint32_t>(v16) - minVal) & mask;
+                        accum |= (val << bitsInAccum);
+                        bitsInAccum += invShift;
+                        if (bitsInAccum >= 32) {
+                            std::memcpy(wp, &accum, 4);
+                            wp += 4;
+                            bitsInAccum -= 32;
+                            accum = (bitsInAccum > 0) ? (val >> (invShift - bitsInAccum)) : 0;
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < elementCount; ++i) {
+                        uint32_t val = (static_cast<uint32_t>(colPtr[static_cast<size_t>(i) * elementSize]) - minVal) & mask;
+                        accum |= (val << bitsInAccum);
+                        bitsInAccum += invShift;
+                        if (bitsInAccum >= 32) {
+                            std::memcpy(wp, &accum, 4);
+                            wp += 4;
+                            bitsInAccum -= 32;
+                            accum = (bitsInAccum > 0) ? (val >> (invShift - bitsInAccum)) : 0;
+                        }
                     }
                 }
 
                 if (bitsInAccum > 0) {
-                    uint8_t b[4]; std::memcpy(b, &accum, 4);
-                    out.insert(out.end(), b, b + 4);
+                    std::memcpy(wp, &accum, 4);
+                    wp += 4;
                 }
             }
         }
@@ -144,17 +170,19 @@ std::vector<uint8_t> RangeCompressor::compress(const void* input, int elementCou
     }
 
     // End marker: 0x80
-    out.push_back(0x80);
+    *wp++ = 0x80;
 
+    size_t compLen = static_cast<size_t>(wp - bufStart);
     // If compressed size is not smaller than raw, fallback to uncompressed format (0x00 + raw bytes)
-    if (out.size() >= rawSize + 1) {
-        out.clear();
-        out.reserve(rawSize + 1);
-        out.push_back(0); // 0x00 = Uncompressed raw stream
-        out.insert(out.end(), inBytes, inBytes + rawSize);
+    if (compLen >= rawSize + 1) {
+        std::vector<uint8_t> out;
+        out.resize(rawSize + 1);
+        out[0] = 0; // 0x00 = Uncompressed raw stream
+        std::memcpy(out.data() + 1, inBytes, rawSize);
+        return out;
     }
 
-    return out;
+    return std::vector<uint8_t>(bufStart, wp);
 }
 
 static int calcShuffleOperations(uint32_t shuffle_mask, uint32_t* mask_ops, uint32_t* shift_ops) {

@@ -13,7 +13,16 @@ LevData LevReader::loadFromFile(const std::string& path) {
         throw std::runtime_error("Failed to open .lev file: " + path);
     }
 
-    std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.seekg(0, std::ios::end);
+    std::streamoff fileSize = file.tellg();
+    if (fileSize < 0) {
+        throw std::runtime_error("Failed to determine .lev file size: " + path);
+    }
+    file.seekg(0, std::ios::beg);
+    std::vector<uint8_t> buffer(static_cast<size_t>(fileSize));
+    if (fileSize > 0 && !file.read(reinterpret_cast<char*>(buffer.data()), fileSize)) {
+        throw std::runtime_error("Failed to read .lev file: " + path);
+    }
     file.close();
 
     if (buffer.size() < 67639) {

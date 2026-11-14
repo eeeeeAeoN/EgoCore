@@ -80,6 +80,7 @@ BodyOutcome make_default_body(const std::string &type, NamesBuilder &names) {
 struct SubBlock {
     std::uint32_t name_crc = 0;
     std::string tag;
+    std::string owner_name;
     std::vector<Statement> body;
 };
 
@@ -97,6 +98,7 @@ std::vector<SubBlock> collect_sub_blocks(const Chain &chain) {
                 it->second.name_crc = name_crc;
                 it->second.tag = tagged.tag;
             }
+            it->second.owner_name = definition->name;
             it->second.body.insert(it->second.body.end(), tagged.body.begin(),
                                    tagged.body.end());
         }
@@ -135,6 +137,18 @@ BodyOutcome lower_subdef(const SubBlock &block, const DefinitionIndex &index,
     return out;
 }
 
+bool definition_sets_field(const Definition &def, std::string_view name) {
+    for (const Statement &stmt : def.body) {
+        if (stmt.kind == Statement::Kind::Field &&
+            stmt.field.path.segments.size() == 1 &&
+            stmt.field.path.segments[0].kind == PathSegment::Kind::Field &&
+            stmt.field.path.segments[0].field == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
 BodyOutcome lower_named(const Definition &definition, const DefinitionIndex &index,
                         const SymbolTable &symbols, NamesBuilder &names) {
     BodyOutcome out;
@@ -145,10 +159,21 @@ BodyOutcome lower_named(const Definition &definition, const DefinitionIndex &ind
     }
     const Chain &chain = std::get<Chain>(chain_result);
     Definition flattened = flatten_chain(chain);
+    const bool has_object_ancestor = std::any_of(
+        chain.begin(), chain.end(),
+        [](const Definition *d) { return d != nullptr && d->def_type == "OBJECT"; });
+    const bool sets_health = definition_sets_field(flattened, "Health");
 
     out.found = dispatch_class(definition.def_type, [&](auto value) {
         LowerStats lower_stats;
         lower_definition(flattened, value, symbols, lower_stats, nullptr, &index, &names);
+        if (has_object_ancestor && !sets_health) {
+            if constexpr (requires { value.Health == 0.0f; value.Health = 1.0f; }) {
+                if (value.Health == 0.0f) {
+                    value.Health = 1.0f;
+                }
+            }
+        }
         if (!lower_stats.errors.empty()) {
             out.error = lower_stats.errors.front().message;
         }
@@ -533,7 +558,7 @@ BinBuildStats build_one(const std::vector<ParsedFile> &files, const SymbolTable 
         entry.file_name_off = file_name_off;
         entry.counter = next_class_index(class_index, definition->def_type);
         entry.is_real = true;
-        entry.is_template = false;
+        entry.is_template = definition->is_template;
         entry.unknown_0 = 1;
         entry.has_subdefs = has_subdef_table(definition->def_type);
         entry.body = std::move(body.body);
@@ -581,7 +606,13 @@ BinBuildStats build_one(const std::vector<ParsedFile> &files, const SymbolTable 
             } else {
                 local_index = it->second;
             }
-            table.push_back(SubDefRecord{block.name_crc, local_index, owner_index});
+            std::uint32_t rec_owner_index = owner_index;
+            if (!block.owner_name.empty()) {
+                if (const auto resolved_owner = index.index_of(block.owner_name)) {
+                    rec_owner_index = *resolved_owner;
+                }
+            }
+            table.push_back(SubDefRecord{block.name_crc, local_index, rec_owner_index});
         }
         owner.subdefs = std::move(table);
     }

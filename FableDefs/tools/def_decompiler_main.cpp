@@ -17,6 +17,8 @@ void usage(std::ostream &out) {
            "Commands:\n"
            "  dump <bin-dir> <defs-dir> <out.def> [--binary game|frontend|script]\n"
            "                  Decompile one compiled binary to .def text\n"
+           "  folder <bin-dir> <out-dir> [--headers <defs-dir>] [--binary game|frontend|script|all]\n"
+           "                  Decompile binaries into heuristic .tpl/.def folder structure\n"
            "  diff <orig-dir> <mod-dir> <defs-dir> <out.def>\n"
            "                  Emit definitions that differ between two builds\n"
            "  patch <orig-dir> <mod-dir> <defs-dir>\n"
@@ -65,6 +67,48 @@ int main(int argc, char **argv) {
     std::string defs_dir;
 
     const std::string command = args[0];
+    if (command == "folder") {
+        if (args.size() < 3) {
+            usage(std::cerr);
+            return 2;
+        }
+        const std::string bin_dir = args[1];
+        const std::string folder_out = args[2];
+        std::string headers_dir;
+        std::string which_binary = "all";
+        for (std::size_t i = 3; i < args.size(); ++i) {
+            if (args[i] == "--headers" && i + 1 < args.size()) {
+                headers_dir = args[++i];
+            } else if (args[i] == "--binary" && i + 1 < args.size()) {
+                which_binary = args[++i];
+            } else {
+                std::cerr << "fable-def-decompiler: unknown option '" << args[i] << "'\n";
+                return 2;
+            }
+        }
+        FolderDecompileStats folder_stats;
+        std::string error;
+        const bool ok =
+            which_binary == "all"
+                ? decompile_directory_to_folder(bin_dir, headers_dir, folder_out,
+                                                folder_stats, error)
+                : decompile_binary_to_folder(bin_dir, which_binary, headers_dir,
+                                             folder_out, folder_stats, error);
+        if (!ok) {
+            std::cerr << "fable-def-decompiler: " << error << "\n";
+            return 1;
+        }
+        std::cerr << "files: " << folder_stats.files_written
+                  << ", entries: " << folder_stats.entries
+                  << ", definitions: " << folder_stats.definitions
+                  << " (" << folder_stats.templates << " templates, "
+                  << folder_stats.specialises_recovered << " specialises)\n";
+        for (const std::string &message : folder_stats.errors) {
+            std::cerr << "warning: " << message << "\n";
+        }
+        return 0;
+    }
+
     if (command == "dump") {
         if (args.size() < 4) {
             usage(std::cerr);

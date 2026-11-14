@@ -8,6 +8,7 @@
 #include "InputManager.h"
 #include "WADBackend.h"
 #include "STBBackend.h"
+#include "LargeAddressPatcher.h"
 #include <windows.h>
 #include <shellapi.h>
 #include <filesystem>
@@ -171,6 +172,7 @@ inline void DrawGoldModalHeader(const char* title, float headerHeight = 58.0f) {
 
 // --- This must be included here to avoid compiler errors. This is what happens when you make a project out of all headers. 
 #include "ModManagerUI.h"
+#include "../Definitions/DefDecompilerUI.h"
 
 inline EAppState g_CurrentAppState = EAppState::Setup;
 
@@ -214,6 +216,8 @@ inline void ApplyModEnvironmentFix(const std::string& gameRoot) {
                 fs::copy_options::overwrite_existing, ec);
         }
     }
+
+    LargeAddressPatcher::EnsureFableFolder4GB(gameRoot);
 
     g_AppConfig.ModEnvironmentSetup = true;
     SaveConfig();
@@ -1083,7 +1087,7 @@ static void DrawFrontendHub() {
         ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 0.90f), "AlbionSecrets");
         if (g_TitleFont) ImGui::PopFont();
 
-        const char* verStr = "10.11.26";
+        const char* verStr = "14.11.26";
         float verWidth = ImGui::CalcTextSize(verStr).x;
         float winWidth = ImGui::GetWindowWidth();
 
@@ -1285,6 +1289,7 @@ static void DrawBankExplorer() {
     DrawLaunchPopup();
     WADBackend::DrawWADModal();
     STBBackend::DrawSTBModal();
+    DefDecompilerUI::DrawAllModals();
 
     if (g_IsCompiling) { ImGui::OpenPopup("Compiling..."); }
 
@@ -1569,7 +1574,7 @@ static void DrawBankExplorer() {
         if (g_TitleFont) ImGui::PopFont();
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 0.9f), "Asset Bank Editor and Mod Manager for Fable");
 
-        ImGui::TextDisabled("Version: 10.11.26");
+        ImGui::TextDisabled("Version: 14.11.26");
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -2105,6 +2110,9 @@ static void DrawBankExplorer() {
             if (ImGui::MenuItem("Recompile Static Terrain Bank")) {
                 STBBackend::OpenRecompilePrompt(g_AppConfig.GameRootPath);
             }
+            if (ImGui::MenuItem("Decompile CompiledDefs")) {
+                DefDecompilerUI::OpenFolderModal();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Create Mod Package")) {
                 g_ShowModPackageWindow = true;
@@ -2230,7 +2238,7 @@ static void DrawBankExplorer() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 18.0f));
 
-    ImGui::SetNextWindowSize(ImVec2(480, 396), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(480, 450), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     if (ImGui::BeginPopupModal("General Settings", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar)) {
@@ -2273,6 +2281,28 @@ static void DrawBankExplorer() {
             SaveConfig();
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset viewport background color to default (#212121)");
+
+        ImGui::Dummy(ImVec2(0, 8));
+        {
+            static std::string s_LaaStatusMsg;
+            auto laaStatus = LargeAddressPatcher::CheckFableFolder(g_AppConfig.GameRootPath);
+            ImGui::Text("Fable.exe 4GB Memory Patch:");
+            ImGui::SameLine();
+            if (laaStatus == LargeAddressPatcher::Status::AlreadyPatched) {
+                ImGui::TextColored(ImVec4(0.45f, 0.90f, 0.45f, 1.0f), "Enabled (4GB LAA)");
+            } else if (laaStatus == LargeAddressPatcher::Status::NeedsPatch) {
+                ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.30f, 1.0f), "Not Applied (2GB limit)");
+                ImGui::SameLine();
+                if (ImGui::Button("Apply 4GB Patch")) {
+                    LargeAddressPatcher::EnsureFableFolder4GB(g_AppConfig.GameRootPath, &s_LaaStatusMsg);
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.70f, 0.70f, 0.75f, 1.0f), "Fable.exe not found");
+            }
+            if (!s_LaaStatusMsg.empty()) {
+                ImGui::TextWrapped("%s", s_LaaStatusMsg.c_str());
+            }
+        }
 
         ImGui::Dummy(ImVec2(0, 14));
         ImGui::Separator();

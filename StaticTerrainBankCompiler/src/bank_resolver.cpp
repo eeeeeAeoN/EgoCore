@@ -478,6 +478,41 @@ const DecodedTexture* BankResolver::getDecodedTexture(uint32_t id) const {
         }
     }
 
+    // Build complete box-filtered mip chain (levels 1..N down to 1x1) so procedural baking
+    // can match D3D9 GPU trilinear mipmap filtering rather than point-sampling mip 0.
+    {
+        int prevW = dec.width;
+        int prevH = dec.height;
+        const std::vector<uint8_t>* prevRgb = &dec.rgb;
+        while (prevW > 1 || prevH > 1) {
+            DecodedTextureMip mip;
+            mip.width = std::max(1, prevW / 2);
+            mip.height = std::max(1, prevH / 2);
+            mip.rgb.resize(static_cast<size_t>(mip.width) * mip.height * 3);
+
+            for (int y = 0; y < mip.height; ++y) {
+                int sy0 = std::min(y * 2, prevH - 1);
+                int sy1 = std::min(y * 2 + 1, prevH - 1);
+                const uint8_t* row0 = prevRgb->data() + static_cast<size_t>(sy0) * prevW * 3;
+                const uint8_t* row1 = prevRgb->data() + static_cast<size_t>(sy1) * prevW * 3;
+                uint8_t* dst = mip.rgb.data() + static_cast<size_t>(y) * mip.width * 3;
+                for (int x = 0; x < mip.width; ++x) {
+                    int sx0 = std::min(x * 2, prevW - 1) * 3;
+                    int sx1 = std::min(x * 2 + 1, prevW - 1) * 3;
+                    for (int c = 0; c < 3; ++c) {
+                        int sum = row0[sx0 + c] + row0[sx1 + c] + row1[sx0 + c] + row1[sx1 + c];
+                        dst[x * 3 + c] = static_cast<uint8_t>((sum + 2) >> 2);
+                    }
+                }
+            }
+
+            prevW = mip.width;
+            prevH = mip.height;
+            dec.mips.push_back(std::move(mip));
+            prevRgb = &dec.mips.back().rgb;
+        }
+    }
+
     m_decodedTextures[id] = std::move(dec);
     return &m_decodedTextures[id];
 }

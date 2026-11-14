@@ -1,6 +1,7 @@
 #pragma once
 #include "BankBackend.h"
 #include "ConfigBackend.h"
+#include "LargeAddressPatcher.h"
 #include "BinaryParser.h"
 #include "MeshProperties.h"
 #include "AnimProperties.h"
@@ -726,4 +727,5 @@ static void InitializeSetup(const std::string& selectedPath) {
     g_AppConfig.AutoLoadBanks = GetDefaultBanks(selectedPath);
     g_AppConfig.IsConfigured = true;
     SaveConfig();
+    LargeAddressPatcher::EnsureFableFolder4GB(selectedPath);
 }

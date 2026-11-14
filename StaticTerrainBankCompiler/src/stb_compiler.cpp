@@ -6,6 +6,7 @@
 #include "egostb/mesh_builder.hpp"
 #include "egostb/bank_resolver.hpp"
 #include "egostb/background_tree.hpp"
+#include "egostb/dxt1_baker.hpp"
 #include "egostb/local_detail_builder.hpp"
 #include "egostb/local_detail_manager.hpp"
 #include "egostb/ism_builder.hpp"
@@ -550,6 +551,56 @@ std::string StbCompiler::findGameRootFromIni(const std::string& explicitIni) {
     return "";
 }
 
+namespace {
+
+bool parseIniSection(const std::string& line, std::string& outSection) {
+    std::string t = trim(line);
+    if (t.size() >= 2 && t.front() == '[' && t.back() == ']') {
+        outSection = toLower(trim(t.substr(1, t.size() - 2)));
+        return true;
+    }
+    return false;
+}
+
+bool parseIniKeyValue(const std::string& line, std::string& outRawKey, std::string& outLowerKey, std::string& outValue) {
+    std::string t = trim(line);
+    if (t.empty() || t[0] == ';' || t[0] == '#' || t[0] == '[') {
+        return false;
+    }
+
+    size_t eqPos = t.find('=');
+    if (eqPos == std::string::npos) {
+        return false;
+    }
+
+    outRawKey = trim(t.substr(0, eqPos));
+    outLowerKey = toLower(outRawKey);
+    outValue = trim(t.substr(eqPos + 1));
+
+    // Strip inline comments if present
+    size_t commentPos = outValue.find_first_of(";#");
+    if (commentPos != std::string::npos) {
+        outValue = trim(outValue.substr(0, commentPos));
+    }
+
+    // Strip matching quotes if wrapped
+    if (outValue.size() >= 2 &&
+        ((outValue.front() == '"' && outValue.back() == '"') ||
+         (outValue.front() == '\'' && outValue.back() == '\''))) {
+        outValue = outValue.substr(1, outValue.size() - 2);
+    }
+    return !outLowerKey.empty();
+}
+
+bool parseIniBool(const std::string& valStr, bool current) {
+    std::string lowerVal = toLower(valStr);
+    if (lowerVal == "true" || lowerVal == "1" || lowerVal == "yes" || lowerVal == "on" || lowerVal == "enabled") return true;
+    if (lowerVal == "false" || lowerVal == "0" || lowerVal == "no" || lowerVal == "off" || lowerVal == "disabled") return false;
+    return current;
+}
+
+} // namespace
+
 bool StbCompiler::loadConfigFile(const std::string& iniPath, CompilerConfig& config) {
     if (!fs::exists(iniPath)) return false;
     std::ifstream file(iniPath);
@@ -557,35 +608,12 @@ bool StbCompiler::loadConfigFile(const std::string& iniPath, CompilerConfig& con
 
     std::string line;
     while (std::getline(file, line)) {
-        std::string t = trim(line);
-        if (t.empty() || t[0] == ';' || t[0] == '#' || t[0] == '[') {
+        std::string rawKey;
+        std::string key;
+        std::string valStr;
+        if (!parseIniKeyValue(line, rawKey, key, valStr)) {
             continue;
         }
-
-        size_t eqPos = t.find('=');
-        if (eqPos == std::string::npos) continue;
-
-        std::string key = toLower(trim(t.substr(0, eqPos)));
-        std::string valStr = trim(t.substr(eqPos + 1));
-
-        // Strip inline comments if present
-        size_t commentPos = valStr.find_first_of(";#");
-        if (commentPos != std::string::npos) {
-            valStr = trim(valStr.substr(0, commentPos));
-        }
-
-        // Strip quotes if wrapped
-        if (valStr.size() >= 2 && ((valStr.front() == '"' && valStr.back() == '"') || (valStr.front() == '\'' && valStr.back() == '\''))) {
-            valStr = valStr.substr(1, valStr.size() - 2);
-        }
-
-        std::string lowerVal = toLower(valStr);
-
-        auto parseBool = [&](bool current) -> bool {
-            if (lowerVal == "true" || lowerVal == "1" || lowerVal == "yes" || lowerVal == "on" || lowerVal == "enabled") return true;
-            if (lowerVal == "false" || lowerVal == "0" || lowerVal == "no" || lowerVal == "off" || lowerVal == "disabled") return false;
-            return current;
-        };
 
         try {
             if (key == "maxdetailerrorfactor" || key == "meshdetail" || key == "meshdetailfactor" || key == "detailerrorfactor") {
@@ -597,22 +625,135 @@ bool StbCompiler::loadConfigFile(const std::string& iniPath, CompilerConfig& con
             } else if (key == "maxlodband" || key == "maxlod") {
                 config.maxLodBand = std::clamp(std::stoi(valStr), 1, 7);
             } else if (key == "generateism" || key == "outputism" || key == "generateismfile") {
-                config.outputIsm = parseBool(config.outputIsm);
+                config.outputIsm = parseIniBool(valStr, config.outputIsm);
             } else if (key == "sharelodbands" || key == "sharelod" || key == "sharelodbands46") {
-                config.shareLodBands = parseBool(config.shareLodBands);
+                config.shareLodBands = parseIniBool(valStr, config.shareLodBands);
             } else if (key == "enablerangecompression" || key == "rangecompression") {
-                config.enableRangeCompression = parseBool(config.enableRangeCompression);
+                config.enableRangeCompression = parseIniBool(valStr, config.enableRangeCompression);
             } else if (key == "highqualitydxt1compression" || key == "highqualitydxt" || key == "highqualitydxt1") {
-                config.highQualityDxt = parseBool(config.highQualityDxt);
+                config.highQualityDxt = parseIniBool(valStr, config.highQualityDxt);
             } else if (key == "generatecompletemipmapchains" || key == "generatemipmaps" || key == "generatemipmapschains") {
-                config.generateMipmaps = parseBool(config.generateMipmaps);
+                config.generateMipmaps = false; // Mipmap chains are disabled to prevent retail engine crashes
             }
         } catch (...) {}
     }
     return true;
 }
 
-CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
+bool StbCompiler::applyActiveModsFromIni(
+    const std::string& fableRoot,
+    CompilerConfig& config,
+    const std::function<void(const std::string&)>& log) {
+    if (fableRoot.empty()) return false;
+
+    const fs::path rootPath(fableRoot);
+    const fs::path modsIniPath = rootPath / "Mods.ini";
+    if (!fs::exists(modsIniPath)) return false;
+
+    std::ifstream modsFile(modsIniPath);
+    if (!modsFile.is_open()) return false;
+
+    std::string modsDirSetting = "Mods";
+    std::vector<std::string> activeRelMods;
+    std::string section;
+    std::string line;
+    while (std::getline(modsFile, line)) {
+        if (parseIniSection(line, section)) {
+            continue;
+        }
+        std::string rawKey;
+        std::string key;
+        std::string valStr;
+        if (!parseIniKeyValue(line, rawKey, key, valStr)) {
+            continue;
+        }
+        if (section == "settings" && key == "modsdirectory" && !valStr.empty()) {
+            modsDirSetting = valStr;
+        } else if (section == "mods" && parseIniBool(valStr, false)) {
+            activeRelMods.push_back(rawKey);
+        }
+    }
+
+    if (activeRelMods.empty()) return false;
+
+    fs::path modsBasePath(modsDirSetting);
+    if (modsBasePath.is_relative()) {
+        modsBasePath = rootPath / modsBasePath;
+    }
+
+    float maxFadeEnd = 0.0f;
+    std::string matchedMod;
+    for (const auto& relMod : activeRelMods) {
+        fs::path dllPath = modsBasePath / fs::path(relMod);
+        if (toLower(dllPath.extension().string()) != ".dll") {
+            continue;
+        }
+        fs::path siblingIni = dllPath;
+        siblingIni.replace_extension(".ini");
+        if (!fs::exists(siblingIni)) {
+            continue;
+        }
+
+        std::ifstream iniFile(siblingIni);
+        if (!iniFile.is_open()) {
+            continue;
+        }
+
+        std::string iniSection;
+        std::string iniLine;
+        while (std::getline(iniFile, iniLine)) {
+            if (parseIniSection(iniLine, iniSection)) {
+                continue;
+            }
+            if (iniSection != "terrain") {
+                continue;
+            }
+            std::string rawKey;
+            std::string key;
+            std::string valStr;
+            if (!parseIniKeyValue(iniLine, rawKey, key, valStr)) {
+                continue;
+            }
+            if (key == "foregroundfadeend") {
+                try {
+                    float fadeEnd = std::stof(valStr);
+                    if (fadeEnd > maxFadeEnd) {
+                        maxFadeEnd = fadeEnd;
+                        matchedMod = siblingIni.filename().string();
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+
+    // Retail Fable.exe defaults to ForegroundFadeEnd=64.0m (matching STB 74.0m fgDistanceThreshold and 1.0x LOD bands).
+    if (maxFadeEnd <= 64.0f) {
+        return false;
+    }
+
+    const float requiredFg = maxFadeEnd + 10.0f;
+    const float requiredLodScale = maxFadeEnd / 64.0f;
+    bool adjusted = false;
+    if (config.fgDistanceThreshold < requiredFg) {
+        config.fgDistanceThreshold = requiredFg;
+        adjusted = true;
+    }
+    if (config.lodDistanceScale < requiredLodScale) {
+        config.lodDistanceScale = requiredLodScale;
+        adjusted = true;
+    }
+
+    if (adjusted && log) {
+        log("Mods.ini: Active terrain mod (" + matchedMod + ", ForegroundFadeEnd=" +
+            std::to_string(maxFadeEnd) + "m) raised floors -> Foreground Distance >= " +
+            std::to_string(config.fgDistanceThreshold) + "m, LOD Distance Scale >= " +
+            std::to_string(config.lodDistanceScale) + "x");
+    }
+    return adjusted;
+}
+
+CompileResult StbCompiler::compileWorld(const CompilerConfig& inConfig) {
+    CompilerConfig config = inConfig;
     auto startTime = std::chrono::high_resolution_clock::now();
     CompileResult result;
 
@@ -649,6 +790,9 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             fableRoot = ".";
         }
         log("Fable Root: " + fableRoot);
+        if (config.respectModsIni) {
+            applyActiveModsFromIni(fableRoot, config, log);
+        }
         log("STB Quality Settings:");
         log("  Mesh Detail Factor  : " + std::to_string(config.meshDetail));
         log("  Foreground Distance : " + std::to_string(config.fgDistanceThreshold) + " m");
@@ -1135,42 +1279,70 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
         log("HasSea Reg Defs : " + std::to_string(hasSeaSet.size()));
 
         std::vector<SeaMapInfo> allWorldMaps(numMaps);
-        for (size_t i = 0; i < numMaps; ++i) {
-            allWorldMaps[i].canonicalName = mapMetas[i].canonicalName;
-            allWorldMaps[i].tlx = mapMetas[i].mapX;
-            allWorldMaps[i].tly = mapMetas[i].mapY;
-            allWorldMaps[i].brx = mapMetas[i].mapX + mapMetas[i].width;
-            allWorldMaps[i].bry = mapMetas[i].mapY + mapMetas[i].height;
-            allWorldMaps[i].width = mapMetas[i].width;
-            allWorldMaps[i].height = mapMetas[i].height;
-            allWorldMaps[i].waterGrid.resize((mapMetas[i].width + 1) * (mapMetas[i].height + 1), 0);
-            for (int y = 0; y <= mapMetas[i].height; ++y) {
-                for (int x = 0; x <= mapMetas[i].width; ++x) {
-                    const auto& cell = mapMetas[i].lev.getCell(x, y);
-                    float depth = 0.0f;
-                    for (int t = 0; t < 3; ++t) {
-                        uint8_t thIdx = cell.themes[t];
-                        if (thIdx < mapMetas[i].lev.themePalette.size()) {
-                            const auto& tname = mapMetas[i].lev.themePalette[thIdx].name;
+        if (numMaps > 0) {
+            auto& tm = ThemeManager::instance();
+            std::atomic<size_t> nextMap{0};
+            unsigned int numWorkers = std::min<unsigned int>(
+                std::max(1u, std::thread::hardware_concurrency()),
+                static_cast<unsigned int>(numMaps)
+            );
+            std::vector<std::thread> workers;
+            workers.reserve(numWorkers);
+            for (unsigned int t = 0; t < numWorkers; ++t) {
+                workers.emplace_back([&]() {
+                    while (true) {
+                        size_t i = nextMap.fetch_add(1, std::memory_order_relaxed);
+                        if (i >= numMaps) break;
+
+                        allWorldMaps[i].canonicalName = mapMetas[i].canonicalName;
+                        allWorldMaps[i].tlx = mapMetas[i].mapX;
+                        allWorldMaps[i].tly = mapMetas[i].mapY;
+                        allWorldMaps[i].brx = mapMetas[i].mapX + mapMetas[i].width;
+                        allWorldMaps[i].bry = mapMetas[i].mapY + mapMetas[i].height;
+                        allWorldMaps[i].width = mapMetas[i].width;
+                        allWorldMaps[i].height = mapMetas[i].height;
+                        allWorldMaps[i].waterGrid.resize((mapMetas[i].width + 1) * (mapMetas[i].height + 1), 0);
+
+                        const auto& lev = mapMetas[i].lev;
+                        using ThemeDefPtr = decltype(tm.getTheme(std::string{}));
+                        std::vector<ThemeDefPtr> paletteDefs(lev.themePalette.size(), nullptr);
+                        for (size_t pi = 0; pi < lev.themePalette.size(); ++pi) {
+                            const auto& tname = lev.themePalette[pi].name;
                             if (!tname.empty()) {
-                                const auto* def = ThemeManager::instance().getTheme(tname);
-                                if (def && def->waterType > 0) {
-                                    float blend = 0.0f;
-                                    if (t == 0) blend = static_cast<float>(cell.blends[0]) / 255.0f;
-                                    else if (t == 1) blend = static_cast<float>(cell.blends[1]) / 255.0f;
-                                    else {
-                                        int rem = 255 - static_cast<int>(cell.blends[0]) - static_cast<int>(cell.blends[1]);
-                                        if (rem > 0) blend = static_cast<float>(rem) / 255.0f;
+                                paletteDefs[pi] = tm.getTheme(tname);
+                            }
+                        }
+
+                        for (int y = 0; y <= mapMetas[i].height; ++y) {
+                            for (int x = 0; x <= mapMetas[i].width; ++x) {
+                                const auto& cell = lev.getCell(x, y);
+                                float depth = 0.0f;
+                                for (int t = 0; t < 3; ++t) {
+                                    uint8_t thIdx = cell.themes[t];
+                                    if (thIdx < paletteDefs.size()) {
+                                        const auto* def = paletteDefs[thIdx];
+                                        if (def && def->waterType > 0) {
+                                            float blend = 0.0f;
+                                            if (t == 0) blend = static_cast<float>(cell.blends[0]) / 255.0f;
+                                            else if (t == 1) blend = static_cast<float>(cell.blends[1]) / 255.0f;
+                                            else {
+                                                int rem = 255 - static_cast<int>(cell.blends[0]) - static_cast<int>(cell.blends[1]);
+                                                if (rem > 0) blend = static_cast<float>(rem) / 255.0f;
+                                            }
+                                            depth += def->waterHeight * blend;
+                                        }
                                     }
-                                    depth += def->waterHeight * blend;
+                                }
+                                if (depth > 0.001f) {
+                                    allWorldMaps[i].waterGrid[y * (mapMetas[i].width + 1) + x] = 1;
                                 }
                             }
                         }
                     }
-                    if (depth > 0.001f) {
-                        allWorldMaps[i].waterGrid[y * (mapMetas[i].width + 1) + x] = 1;
-                    }
-                }
+                });
+            }
+            for (auto& w : workers) {
+                w.join();
             }
         }
 
@@ -1183,7 +1355,16 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
 
                 auto addMapToJob = [&](int mapIdx) {
                     if (mapIdx >= 1 && mapIdx <= static_cast<int>(numMaps)) {
-                        job.cutoutMaps.push_back(allWorldMaps[mapIdx - 1]);
+                        const auto& src = allWorldMaps[mapIdx - 1];
+                        SeaMapInfo cut;
+                        cut.canonicalName = src.canonicalName;
+                        cut.tlx = src.tlx;
+                        cut.tly = src.tly;
+                        cut.brx = src.brx;
+                        cut.bry = src.bry;
+                        cut.width = src.width;
+                        cut.height = src.height;
+                        job.cutoutMaps.push_back(std::move(cut));
                     }
                 };
                 for (int cm : r.containsMapIndices) addMapToJob(cm);
@@ -1193,6 +1374,8 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             }
         }
 
+        double secSea = 0.0, secShore = 0.0, secFg = 0.0, secBg = 0.0, secLd = 0.0, secWrite = 0.0;
+        auto seaT0 = std::chrono::high_resolution_clock::now();
         if (!seaJobs.empty()) {
             reportProgress(0.20f, "Generating " + std::to_string(seaJobs.size()) + " Sea Static Maps...");
             checkCancel();
@@ -1219,6 +1402,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             waterBank.extra = {0x08, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
             outArchive.entries.push_back(waterBank);
         }
+        secSea = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - seaT0).count();
 
         // 12. Initialize single multi-entry ISM Archive
         BBBArchive ismArchive;
@@ -1262,15 +1446,49 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
         // World-consistent shore/water bodies: gathered from every map once so that
         // vertices shared across a map seam receive identical shore data on both sides.
         std::shared_ptr<const std::vector<MeshBuilder::WaterBody>> worldWaterBodies;
+        auto shoreT0 = std::chrono::high_resolution_clock::now();
         {
+            std::vector<std::vector<MeshBuilder::ShorePoint>> collectedPerMap(finalMapOrder.size());
+            if (!finalMapOrder.empty()) {
+                std::atomic<size_t> nextShoreIdx{0};
+                unsigned int numThreads = std::min(
+                    std::max(1u, std::thread::hardware_concurrency()),
+                    static_cast<unsigned int>(finalMapOrder.size())
+                );
+                if (numThreads <= 1) {
+                    for (size_t orderIdx = 0; orderIdx < finalMapOrder.size(); ++orderIdx) {
+                        auto& m = mapMetas[finalMapOrder[orderIdx] - 1];
+                        if (m.levPath.empty()) continue;
+                        auto nb = buildNeighbors(m);
+                        MeshBuilder collector(m.lev, m.mapX, m.mapY, {}, &nb, &m.waterGrid);
+                        collectedPerMap[orderIdx] = collector.collectShorePoints();
+                    }
+                } else {
+                    std::vector<std::thread> workers;
+                    workers.reserve(numThreads);
+                    for (unsigned int t = 0; t < numThreads; ++t) {
+                        workers.emplace_back([&]() {
+                            while (true) {
+                                size_t orderIdx = nextShoreIdx.fetch_add(1, std::memory_order_relaxed);
+                                if (orderIdx >= finalMapOrder.size()) break;
+                                auto& m = mapMetas[finalMapOrder[orderIdx] - 1];
+                                if (m.levPath.empty()) continue;
+                                auto nb = buildNeighbors(m);
+                                MeshBuilder collector(m.lev, m.mapX, m.mapY, {}, &nb, &m.waterGrid);
+                                collectedPerMap[orderIdx] = collector.collectShorePoints();
+                            }
+                        });
+                    }
+                    for (auto& w : workers) w.join();
+                }
+            }
+
             std::vector<std::vector<MeshBuilder::ShorePoint>> perMapShore;
             std::vector<MeshBuilder::ShorePoint> runningUnsorted;
             for (size_t orderIdx = 0; orderIdx < finalMapOrder.size(); ++orderIdx) {
                 auto& m = mapMetas[finalMapOrder[orderIdx] - 1];
                 if (m.levPath.empty()) continue;
-                auto nb = buildNeighbors(m);
-                MeshBuilder collector(m.lev, m.mapX, m.mapY, {}, &nb, &m.waterGrid);
-                auto shorePts = collector.collectShorePoints();
+                auto shorePts = std::move(collectedPerMap[orderIdx]);
 
                 // Match CWaterGenerator::FindShorePointsInMap (0x2e07490):
                 // If a border shore point is already in runningUnsorted, erase it from
@@ -1319,6 +1537,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             worldWaterBodies = MeshBuilder::buildWorldWaterBodies(perMapShore);
             log("World water bodies: " + std::to_string(worldWaterBodies->size()));
         }
+        secShore = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - shoreT0).count();
         // 13. Pass 1: Compile each map in optimal Morton build order
         for (size_t orderIdx = 0; orderIdx < finalMapOrder.size(); ++orderIdx) {
             checkCancel();
@@ -1350,6 +1569,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             log("  Observing  : " + std::to_string(mapObservingBounds.size()) + " bounds");
 
             const auto& lev = meta.lev;
+            auto fgT0 = std::chrono::high_resolution_clock::now();
 
             std::vector<std::string> localPalette;
             auto themeMaterials = ThemeManager::instance().buildMaterials(lev, config.retailMode, localPalette);
@@ -1366,6 +1586,19 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             std::vector<WorldWaterNeighbor> neighbors = buildNeighbors(meta);
 
             if (numFgPatches > 0) {
+                MeshBuilder baseBuilder(lev, meta.mapX, meta.mapY, themeMaterials, &neighbors, &meta.waterGrid);
+                baseBuilder.setWorldWaterBodies(worldWaterBodies);
+                baseBuilder.prepareCaches();
+
+                auto neededPred = [&](const float minC[3], const float maxC[3]) {
+                    float minDist = findShortestDistanceToObservingMapSet(
+                        minC[0], minC[1], minC[2],
+                        maxC[0], maxC[1], maxC[2],
+                        mapObservingBounds
+                    );
+                    return minDist <= config.fgDistanceThreshold;
+                };
+
                 std::atomic<int> nextPatch{0};
                 unsigned int numThreads = std::min(
                     std::max(1u, std::thread::hardware_concurrency()),
@@ -1375,8 +1608,6 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
                 workers.reserve(numThreads);
                 for (unsigned int t = 0; t < numThreads; ++t) {
                     workers.emplace_back([&]() {
-                        MeshBuilder threadBuilder(lev, meta.mapX, meta.mapY, themeMaterials, &neighbors, &meta.waterGrid);
-                        threadBuilder.setWorldWaterBodies(worldWaterBodies);
                         while (true) {
                             int pIdx = nextPatch.fetch_add(1);
                             if (pIdx >= numFgPatches) break;
@@ -1384,32 +1615,26 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
                             int py = pIdx / patchGridW;
                             int px = pIdx % patchGridW;
 
-                            auto p = threadBuilder.buildPatch(px, py);
-
-                            float minDist = findShortestDistanceToObservingMapSet(
-                                p.minCoord[0], p.minCoord[1], p.minCoord[2],
-                                p.maxCoord[0], p.maxCoord[1], p.maxCoord[2],
-                                mapObservingBounds
-                            );
-                            bool patchNeeded = (minDist <= config.fgDistanceThreshold);
-                            p.fgNeeded = patchNeeded ? 1 : 0;
+                            auto p = baseBuilder.buildPatchIfNeeded(px, py, neededPred);
                             if (p.fgNeeded != 0) {
                                 mapNeedsForeground.store(true, std::memory_order_relaxed);
+
+                                auto uncomp = p.serializeUncompressed();
+                                auto comp = albion::lzo1x::compress(uncomp.data(), uncomp.size());
+
+                                std::vector<uint8_t> frame(8 + comp.size());
+                                uint32_t uLen = static_cast<uint32_t>(uncomp.size());
+                                uint32_t cLen = static_cast<uint32_t>(comp.size());
+                                std::memcpy(frame.data(), &uLen, 4);
+                                std::memcpy(frame.data() + 4, &cLen, 4);
+                                std::memcpy(frame.data() + 8, comp.data(), comp.size());
+
+                                p.dataSize = static_cast<uint32_t>(frame.size());
+                                compressedFgFrames[pIdx] = std::move(frame);
+                            } else {
+                                p.dataSize = 0;
                             }
-
-                            auto uncomp = p.serializeUncompressed();
-                            auto comp = albion::lzo1x::compress(uncomp.data(), uncomp.size());
-
-                            std::vector<uint8_t> frame(8 + comp.size());
-                            uint32_t uLen = static_cast<uint32_t>(uncomp.size());
-                            uint32_t cLen = static_cast<uint32_t>(comp.size());
-                            std::memcpy(frame.data(), &uLen, 4);
-                            std::memcpy(frame.data() + 4, &cLen, 4);
-                            std::memcpy(frame.data() + 8, comp.data(), comp.size());
-
-                            p.dataSize = static_cast<uint32_t>(frame.size());
                             fgPatches[pIdx] = std::move(p);
-                            compressedFgFrames[pIdx] = std::move(frame);
                         }
                     });
                 }
@@ -1461,7 +1686,10 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
                 log("  Foreground: " + std::to_string(numFgPatches) + " patches (needed: FALSE, culled to " + std::to_string(payload.size()) + " bytes)");
             }
 
+            secFg += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - fgT0).count();
+
             // B. Background: Generate LOD quadtree & LOD patches
+            auto bgT0 = std::chrono::high_resolution_clock::now();
             log("  Building background LOD quadtree...");
             BgTreeSettings bgSettings;
             bgSettings.meshDetail = config.meshDetail;
@@ -1481,6 +1709,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
                 &neighbors,
                 bgSettings
             );
+            Dxt1Baker::eraseMapCache(meta.mapX, meta.mapY, lev.width, lev.height, lev.checksum);
 
             log("  BG Tree: " + std::to_string(bgResult.totalNodes) + " nodes, " +
                 std::to_string(bgResult.totalPatches) + " LOD patches in " +
@@ -1494,6 +1723,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
                            bgResult.treeAndPatchData.end());
 
             log("  Map payload after BG Tree: " + std::to_string(payload.size()) + " bytes");
+            secBg += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - bgT0).count();
 
             // C. Append to single multi-entry ISM Archive
             BBBEntry ismEntry;
@@ -1509,6 +1739,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
             std::vector<uint8_t> localDetailQuadtree;
 
             if (config.retailMode) {
+                auto ldT0 = std::chrono::high_resolution_clock::now();
                 log("  Building LocalDetail clutter (standalone)...");
                 auto ldResult = invokeLdBuild(
                     lev,
@@ -1518,6 +1749,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
                     wldPath.parent_path().string(),
                     &mapObservingBounds
                 );
+                secLd += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - ldT0).count();
 
                 if (ldResult.hasData && !ldResult.payloadBytes.empty()) {
                     if (payload.size() < ldResult.payloadStartOffset) {
@@ -1645,6 +1877,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
         }
 
         // 14. Write single multi-entry ISM Archive (when config.outputIsm is true)
+        auto writeT0 = std::chrono::high_resolution_clock::now();
         fs::path outDir = fs::path(outStbPath).parent_path();
         if (!outDir.empty() && !fs::exists(outDir)) {
             fs::create_directories(outDir);
@@ -1666,6 +1899,7 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
         reportProgress(0.96f, "Writing Static Terrain Bank archive (.stb)...");
         checkCancel();
         outArchive.write(outStbPath);
+        secWrite = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - writeT0).count();
 
         auto endTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = endTime - startTime;
@@ -1689,6 +1923,11 @@ CompileResult StbCompiler::compileWorld(const CompilerConfig& config) {
         log("BG Nodes     : " + std::to_string(result.totalNodes));
         log("BG Patches   : " + std::to_string(result.totalPatches));
         log("Elapsed Time : " + std::to_string(result.durationSeconds) + " seconds");
+        double secSetup = std::max(0.0, result.durationSeconds - (secSea + secShore + secFg + secBg + secLd + secWrite));
+        log("Stage Times  : setup=" + std::to_string(secSetup) + "s, sea=" + std::to_string(secSea) +
+            "s, shore=" + std::to_string(secShore) + "s, fg=" + std::to_string(secFg) +
+            "s, bg=" + std::to_string(secBg) + "s, ld=" + std::to_string(secLd) +
+            "s, write=" + std::to_string(secWrite) + "s");
 
     } catch (const std::exception& ex) {
         result.success = false;

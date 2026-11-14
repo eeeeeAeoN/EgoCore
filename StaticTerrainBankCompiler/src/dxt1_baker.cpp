@@ -14,6 +14,8 @@
 #include <mutex>
 #include <memory>
 #include <unordered_map>
+#include <thread>
+#include <atomic>
 
 namespace egostb {
 
@@ -339,13 +341,15 @@ static void initFgPatch(
             }
         };
 
+        passes.reserve(8);
+        std::vector<ThemeMaterial> customMaterials;
+
         for (int y = 0; y <= 16; ++y) {
             for (int x = 0; x <= 16; ++x) {
                 const LevData* cellLev = &lev;
                 const auto& cell = peekCellWithNeighbors(lev, worldX, worldY, fgPatch.startX + x, fgPatch.startY + y, neighbors, &cellLev);
 
-                std::array<ThemeMaterial, 3> tempMaterials{};
-                std::vector<ThemeMaterial> resolvedMaterials = materials;
+                const std::vector<ThemeMaterial>* activeMaterials = &materials;
                 ThemeBlend blend;
                 for (size_t slot = 0; slot < 3; ++slot) {
                     uint8_t thIdx = cell.themes[slot];
@@ -362,6 +366,10 @@ static void initFgPatch(
                                 }
                             }
                             if (mappedIdx == 0) {
+                                if (customMaterials.empty()) {
+                                    customMaterials = materials;
+                                }
+                                activeMaterials = &customMaterials;
                                 const auto* def = ThemeManager::instance().getTheme(tName);
                                 if (def) {
                                     ThemeMaterial mat{};
@@ -377,9 +385,9 @@ static void initFgPatch(
                                     mat.cliff.textures[1] = getTex(def->cliffBackgroundTexture.empty() ? def->cliffBaseTexture : def->cliffBackgroundTexture);
                                     mat.cliff.textures[2] = getTex(def->cliffBumpMap);
                                     mat.cliff.selfIllumination = def->cliffSelfIllumination;
-                                    if (resolvedMaterials.size() < 250) {
-                                        mappedIdx = static_cast<uint8_t>(resolvedMaterials.size());
-                                        resolvedMaterials.push_back(mat);
+                                    if (customMaterials.size() < 250) {
+                                        mappedIdx = static_cast<uint8_t>(customMaterials.size());
+                                        customMaterials.push_back(mat);
                                     }
                                 }
                             }
@@ -392,7 +400,7 @@ static void initFgPatch(
                 unsigned stored = unsigned(cell.blends[0]) + unsigned(cell.blends[1]);
                 blend.strengths[2] = stored >= 255 ? 0 : (255 - stored);
 
-                for (const auto& contribution : buildThemeContributions(blend, resolvedMaterials)) {
+                for (const auto& contribution : buildThemeContributions(blend, *activeMaterials)) {
                     Pass& pass = getPass(contribution.material, contribution.mappingDirection);
                     pass.blend[size_t(y) * 17 + x] = contribution.blend;
                     addPolys(pass, x, y);
@@ -487,11 +495,205 @@ struct MapKeyHash {
 static std::mutex s_gridCacheMutex;
 static std::unordered_map<MapKey, std::shared_ptr<MapFgPatchGrid>, MapKeyHash> s_gridCache;
 
+static std::shared_ptr<MapFgPatchGrid> getOrBuildMapGrid(
+    const LevData& lev,
+    const std::vector<ThemeMaterial>& materials,
+    int worldX, int worldY,
+    const std::vector<WorldWaterNeighbor>* neighbors
+) {
+    MapKey key{worldX, worldY, lev.width, lev.height, lev.checksum};
+    {
+        std::lock_guard<std::mutex> lock(s_gridCacheMutex);
+        auto it = s_gridCache.find(key);
+        if (it != s_gridCache.end()) {
+            return it->second;
+        }
+    }
+
+    auto newGrid = std::make_shared<MapFgPatchGrid>();
+    int countX = std::max(1, (lev.width + 15) / 16);
+    int countY = std::max(1, (lev.height + 15) / 16);
+    newGrid->countX = countX;
+    newGrid->countY = countY;
+    int totalPatches = countX * countY;
+    newGrid->patches.resize(static_cast<size_t>(totalPatches));
+
+    unsigned int numThreads = std::min(
+        std::max(1u, std::thread::hardware_concurrency()),
+        static_cast<unsigned int>(totalPatches)
+    );
+    if (numThreads <= 1 || totalPatches < 4) {
+        for (int pIdx = 0; pIdx < totalPatches; ++pIdx) {
+            int fgy = pIdx / countX;
+            int fgx = pIdx % countX;
+            initFgPatch(newGrid->patches[static_cast<size_t>(pIdx)],
+                        fgx, fgy, lev, materials, worldX, worldY, neighbors);
+        }
+    } else {
+        std::atomic<int> nextPatch{0};
+        std::vector<std::thread> workers;
+        workers.reserve(numThreads);
+        for (unsigned int t = 0; t < numThreads; ++t) {
+            workers.emplace_back([&]() {
+                while (true) {
+                    int pIdx = nextPatch.fetch_add(1, std::memory_order_relaxed);
+                    if (pIdx >= totalPatches) break;
+                    int fgy = pIdx / countX;
+                    int fgx = pIdx % countX;
+                    initFgPatch(newGrid->patches[static_cast<size_t>(pIdx)],
+                                fgx, fgy, lev, materials, worldX, worldY, neighbors);
+                }
+            });
+        }
+        for (auto& w : workers) {
+            w.join();
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(s_gridCacheMutex);
+    auto [it, inserted] = s_gridCache.emplace(key, newGrid);
+    return it->second;
+}
+
+static float invertUvLockAxis(const std::vector<float>* uvTable, int dim, float t) {
+    if (!uvTable || static_cast<int>(uvTable->size()) != dim + 1 || dim <= 0) {
+        return t * static_cast<float>(dim);
+    }
+    const auto& tbl = *uvTable;
+    if (t <= tbl.front()) return 0.0f;
+    if (t >= tbl.back()) return static_cast<float>(dim);
+    auto it = std::upper_bound(tbl.begin() + 1, tbl.end(), t);
+    int hi = static_cast<int>(it - tbl.begin());
+    int lo = std::clamp(hi - 1, 0, dim - 1);
+    float u0 = tbl[lo];
+    float u1 = tbl[lo + 1];
+    float denom = u1 - u0;
+    float frac = (denom > 1e-7f) ? std::clamp((t - u0) / denom, 0.0f, 1.0f) : 0.5f;
+    return static_cast<float>(lo) + frac;
+}
+
+struct ColorRGBF {
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+};
+
+static ColorRGBF sampleMipLevelBilinearF(
+    const uint8_t* rgb, int w, int h, float uWrap, float vWrap
+) {
+    float tx = uWrap * static_cast<float>(w) - 0.5f;
+    float ty = vWrap * static_cast<float>(h) - 0.5f;
+    int x0 = static_cast<int>(std::floor(tx));
+    int y0 = static_cast<int>(std::floor(ty));
+    float fx = tx - static_cast<float>(x0);
+    float fy = ty - static_cast<float>(y0);
+
+    int x0_w, x1_w, y0_w, y1_w;
+    if ((w & (w - 1)) == 0 && (h & (h - 1)) == 0 && w > 0 && h > 0) {
+        int maskW = w - 1;
+        int maskH = h - 1;
+        x0_w = x0 & maskW;
+        x1_w = (x0 + 1) & maskW;
+        y0_w = y0 & maskH;
+        y1_w = (y0 + 1) & maskH;
+    } else {
+        x0_w = ((x0 % w) + w) % w;
+        x1_w = ((x0 + 1) % w + w) % w;
+        y0_w = ((y0 % h) + h) % h;
+        y1_w = ((y0 + 1) % h + h) % h;
+    }
+
+    const uint8_t* p00 = rgb + (static_cast<size_t>(y0_w) * w + x0_w) * 3;
+    const uint8_t* p10 = rgb + (static_cast<size_t>(y0_w) * w + x1_w) * 3;
+    const uint8_t* p01 = rgb + (static_cast<size_t>(y1_w) * w + x0_w) * 3;
+    const uint8_t* p11 = rgb + (static_cast<size_t>(y1_w) * w + x1_w) * 3;
+
+    float w00 = (1.0f - fx) * (1.0f - fy);
+    float w10 = fx * (1.0f - fy);
+    float w01 = (1.0f - fx) * fy;
+    float w11 = fx * fy;
+
+    return {
+        p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11,
+        p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11,
+        p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11
+    };
+}
+
+static ColorRGBF sampleDecodedTextureTrilinearF(
+    const DecodedTexture& dt,
+    float u, float v,
+    float dudx, float dvdx,
+    float dudy, float dvdy
+) {
+    float uWrap = u - std::floor(u);
+    float vWrap = v - std::floor(v);
+
+    int maxMip = static_cast<int>(dt.mips.size());
+    float sx1 = dudx * static_cast<float>(dt.width);
+    float sy1 = dvdx * static_cast<float>(dt.height);
+    float sx2 = dudy * static_cast<float>(dt.width);
+    float sy2 = dvdy * static_cast<float>(dt.height);
+    float rhoSq = std::max(sx1 * sx1 + sy1 * sy1, sx2 * sx2 + sy2 * sy2);
+    float lod = (rhoSq > 1.0f) ? (0.5f * std::log2(rhoSq)) : 0.0f;
+
+    // Vanilla RenderProceduralTexture (0x1249647) skips mip 0 when source FrameWidth > 256.
+    float minLod = (dt.width > 256 || dt.height > 256) ? 1.0f : 0.0f;
+    lod = std::clamp(lod, minLod, static_cast<float>(maxMip));
+
+    int m0 = static_cast<int>(std::floor(lod));
+    int m1 = std::min(m0 + 1, maxMip);
+    float frac = lod - static_cast<float>(m0);
+
+    auto getMip = [&](int level, int& outW, int& outH) -> const uint8_t* {
+        if (level <= 0 || dt.mips.empty()) {
+            outW = dt.width;
+            outH = dt.height;
+            return dt.rgb.data();
+        }
+        const auto& m = dt.mips[static_cast<size_t>(level - 1)];
+        outW = m.width;
+        outH = m.height;
+        return m.rgb.data();
+    };
+
+    int w0 = 0, h0 = 0;
+    const uint8_t* rgb0 = getMip(m0, w0, h0);
+    ColorRGBF c0 = sampleMipLevelBilinearF(rgb0, w0, h0, uWrap, vWrap);
+    if (frac <= 1e-3f || m1 == m0) {
+        return c0;
+    }
+
+    int w1 = 0, h1 = 0;
+    const uint8_t* rgb1 = getMip(m1, w1, h1);
+    ColorRGBF c1 = sampleMipLevelBilinearF(rgb1, w1, h1, uWrap, vWrap);
+    return {
+        c0.r + (c1.r - c0.r) * frac,
+        c0.g + (c1.g - c0.g) * frac,
+        c0.b + (c1.b - c0.b) * frac
+    };
+}
+
 } // anonymous namespace
+
+void Dxt1Baker::prepareMapCache(
+    const LevData& lev,
+    const std::vector<ThemeMaterial>& materials,
+    int worldX, int worldY,
+    const std::vector<WorldWaterNeighbor>* neighbors
+) {
+    (void)getOrBuildMapGrid(lev, materials, worldX, worldY, neighbors);
+}
 
 void Dxt1Baker::clearCache() {
     std::lock_guard<std::mutex> lock(s_gridCacheMutex);
     s_gridCache.clear();
+}
+
+void Dxt1Baker::eraseMapCache(int worldX, int worldY, int width, int height, uint32_t checksum) {
+    MapKey key{worldX, worldY, width, height, checksum};
+    std::lock_guard<std::mutex> lock(s_gridCacheMutex);
+    s_gridCache.erase(key);
 }
 
 uint16_t Dxt1Baker::toRGB565(uint8_t r, uint8_t g, uint8_t b) {
@@ -512,43 +714,106 @@ std::vector<uint8_t> Dxt1Baker::encodeDXT1(const ColorRGB* pixels, int width, in
     size_t outSize = static_cast<size_t>(blocksX) * blocksY * 8;
     std::vector<uint8_t> out(outSize, 0);
 
+    struct SolidDxtEntry {
+        uint32_t rgba = 0;
+        uint64_t block = 0;
+        bool valid = false;
+    };
+    thread_local SolidDxtEntry s_solidDxtCache[256];
+
+    const bool aligned4 = (width >= 4 && height >= 4 && (width & 3) == 0 && (height & 3) == 0);
     size_t outOffset = 0;
     for (int by = 0; by < blocksY; ++by) {
+        const int y0 = by * 4;
         for (int bx = 0; bx < blocksX; ++bx) {
+            const int x0 = bx * 4;
             if (highQuality) {
                 unsigned char blockRgba[64];
-                for (int py = 0; py < 4; ++py) {
-                    int y = std::min(by * 4 + py, height - 1);
-                    for (int px = 0; px < 4; ++px) {
-                        int x = std::min(bx * 4 + px, width - 1);
-                        ColorRGB col = pixels[y * width + x];
-                        int idx = (py * 4 + px) * 4;
-                        blockRgba[idx + 0] = col.r;
-                        blockRgba[idx + 1] = col.g;
-                        blockRgba[idx + 2] = col.b;
-                        blockRgba[idx + 3] = 255;
+                if (aligned4) {
+                    for (int py = 0; py < 4; ++py) {
+                        const ColorRGB* row = pixels + static_cast<size_t>(y0 + py) * width + x0;
+                        unsigned char* dst = blockRgba + py * 16;
+                        for (int px = 0; px < 4; ++px) {
+                            dst[px * 4 + 0] = row[px].r;
+                            dst[px * 4 + 1] = row[px].g;
+                            dst[px * 4 + 2] = row[px].b;
+                            dst[px * 4 + 3] = 255;
+                        }
+                    }
+                } else {
+                    for (int py = 0; py < 4; ++py) {
+                        int y = std::min(y0 + py, height - 1);
+                        for (int px = 0; px < 4; ++px) {
+                            int x = std::min(x0 + px, width - 1);
+                            ColorRGB col = pixels[y * width + x];
+                            int idx = (py * 4 + px) * 4;
+                            blockRgba[idx + 0] = col.r;
+                            blockRgba[idx + 1] = col.g;
+                            blockRgba[idx + 2] = col.b;
+                            blockRgba[idx + 3] = 255;
+                        }
                     }
                 }
-                stb_compress_dxt_block(out.data() + outOffset, blockRgba, 0, STB_DXT_HIGHQUAL);
+
+                uint32_t p32[16];
+                std::memcpy(p32, blockRgba, 64);
+                const uint32_t firstPx = p32[0];
+                bool allSame = true;
+                for (int k = 1; k < 16; ++k) {
+                    if (p32[k] != firstPx) {
+                        allSame = false;
+                        break;
+                    }
+                }
+                if (allSame) {
+                    SolidDxtEntry& cached = s_solidDxtCache[(firstPx * 2654435761u) >> 24];
+                    if (cached.valid && cached.rgba == firstPx) {
+                        std::memcpy(out.data() + outOffset, &cached.block, 8);
+                    } else {
+                        stb_compress_dxt_block(out.data() + outOffset, blockRgba, 0, STB_DXT_HIGHQUAL);
+                        cached.rgba = firstPx;
+                        std::memcpy(&cached.block, out.data() + outOffset, 8);
+                        cached.valid = true;
+                    }
+                } else {
+                    stb_compress_dxt_block(out.data() + outOffset, blockRgba, 0, STB_DXT_HIGHQUAL);
+                }
                 outOffset += 8;
             } else {
                 ColorRGB block[16];
                 int rMin = 255, gMin = 255, bMin = 255;
                 int rMax = 0, gMax = 0, bMax = 0;
 
-                for (int py = 0; py < 4; ++py) {
-                    int y = std::min(by * 4 + py, height - 1);
-                    for (int px = 0; px < 4; ++px) {
-                        int x = std::min(bx * 4 + px, width - 1);
-                        ColorRGB col = pixels[y * width + x];
-                        block[py * 4 + px] = col;
+                if (aligned4) {
+                    for (int py = 0; py < 4; ++py) {
+                        const ColorRGB* row = pixels + static_cast<size_t>(y0 + py) * width + x0;
+                        ColorRGB* bDst = block + py * 4;
+                        for (int px = 0; px < 4; ++px) {
+                            const ColorRGB col = row[px];
+                            bDst[px] = col;
+                            if (col.r < rMin) rMin = col.r;
+                            if (col.r > rMax) rMax = col.r;
+                            if (col.g < gMin) gMin = col.g;
+                            if (col.g > gMax) gMax = col.g;
+                            if (col.b < bMin) bMin = col.b;
+                            if (col.b > bMax) bMax = col.b;
+                        }
+                    }
+                } else {
+                    for (int py = 0; py < 4; ++py) {
+                        int y = std::min(y0 + py, height - 1);
+                        for (int px = 0; px < 4; ++px) {
+                            int x = std::min(x0 + px, width - 1);
+                            ColorRGB col = pixels[y * width + x];
+                            block[py * 4 + px] = col;
 
-                        if (col.r < rMin) rMin = col.r;
-                        if (col.r > rMax) rMax = col.r;
-                        if (col.g < gMin) gMin = col.g;
-                        if (col.g > gMax) gMax = col.g;
-                        if (col.b < bMin) bMin = col.b;
-                        if (col.b > bMax) bMax = col.b;
+                            if (col.r < rMin) rMin = col.r;
+                            if (col.r > rMax) rMax = col.r;
+                            if (col.g < gMin) gMin = col.g;
+                            if (col.g > gMax) gMax = col.g;
+                            if (col.b < bMin) bMin = col.b;
+                            if (col.b > bMax) bMax = col.b;
+                        }
                     }
                 }
 
@@ -581,7 +846,7 @@ std::vector<uint8_t> Dxt1Baker::encodeDXT1(const ColorRGB* pixels, int width, in
                 uint32_t indices = 0;
                 for (int p = 0; p < 16; ++p) {
                     const auto& col = block[p];
-                    int bestDist = 1e9;
+                    int bestDist = 0x7fffffff;
                     int bestIdx = 0;
                     for (int k = 0; k < 4; ++k) {
                         int dr = int(col.r) - int(pal[k].r);
@@ -663,50 +928,75 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
     int worldX, int worldY,
     bool generateMipmaps,
     bool highQualityDxt,
-    const std::vector<WorldWaterNeighbor>* neighbors
+    const std::vector<WorldWaterNeighbor>* neighbors,
+    const std::vector<float>* uvTableU,
+    const std::vector<float>* uvTableV
 ) {
     if (texWidth <= 0) texWidth = 64;
     if (texHeight <= 0) texHeight = 64;
 
-    MapKey key{worldX, worldY, lev.width, lev.height, lev.checksum};
-    std::shared_ptr<MapFgPatchGrid> grid;
-    {
-        std::lock_guard<std::mutex> lock(s_gridCacheMutex);
-        auto it = s_gridCache.find(key);
-        if (it != s_gridCache.end()) {
-            grid = it->second;
-        } else {
-            auto newGrid = std::make_shared<MapFgPatchGrid>();
-            int countX = std::max(1, (lev.width + 15) / 16);
-            int countY = std::max(1, (lev.height + 15) / 16);
-            newGrid->countX = countX;
-            newGrid->countY = countY;
-            newGrid->patches.resize(static_cast<size_t>(countX) * countY);
-
-            for (int fgy = 0; fgy < countY; ++fgy) {
-                for (int fgx = 0; fgx < countX; ++fgx) {
-                    initFgPatch(newGrid->patches[static_cast<size_t>(fgy) * countX + fgx],
-                                fgx, fgy, lev, materials, worldX, worldY, neighbors);
-                }
-            }
-
-            s_gridCache[key] = newGrid;
-            grid = newGrid;
-        }
-    }
-
+    std::shared_ptr<MapFgPatchGrid> grid = getOrBuildMapGrid(lev, materials, worldX, worldY, neighbors);
 
     int fgMinX = std::clamp(mapX >> 4, 0, grid->countX - 1);
     int fgMaxX = std::clamp(std::max(fgMinX, (mapX + patchW - 1) >> 4), 0, grid->countX - 1);
     int fgMinY = std::clamp(mapY >> 4, 0, grid->countY - 1);
     int fgMaxY = std::clamp(std::max(fgMinY, (mapY + patchH - 1) >> 4), 0, grid->countY - 1);
 
-    std::vector<ColorRGB> pixels(static_cast<size_t>(texWidth) * texHeight);
+    // Precompute grid coordinates at texel centers (tx + 0.5) / texWidth using inverse UVLock curve
+    static thread_local std::vector<float> gxOfTx, dgxOfTx, gyOfTy, dgyOfTy;
+    gxOfTx.resize(texWidth);
+    dgxOfTx.resize(texWidth);
+    for (int tx = 0; tx < texWidth; ++tx) {
+        float uPatch = (static_cast<float>(tx) + 0.5f) / static_cast<float>(texWidth);
+        gxOfTx[tx] = static_cast<float>(mapX) + invertUvLockAxis(uvTableU, patchW, uPatch);
+    }
+    if (texWidth == 1) {
+        dgxOfTx[0] = static_cast<float>(patchW);
+    } else {
+        for (int tx = 0; tx < texWidth; ++tx) {
+            if (tx == 0) dgxOfTx[tx] = gxOfTx[1] - gxOfTx[0];
+            else if (tx == texWidth - 1) dgxOfTx[tx] = gxOfTx[texWidth - 1] - gxOfTx[texWidth - 2];
+            else dgxOfTx[tx] = 0.5f * (gxOfTx[tx + 1] - gxOfTx[tx - 1]);
+        }
+    }
+
+    gyOfTy.resize(texHeight);
+    dgyOfTy.resize(texHeight);
+    for (int ty = 0; ty < texHeight; ++ty) {
+        float vPatch = (static_cast<float>(ty) + 0.5f) / static_cast<float>(texHeight);
+        gyOfTy[ty] = static_cast<float>(mapY) + invertUvLockAxis(uvTableV, patchH, vPatch);
+    }
+    if (texHeight == 1) {
+        dgyOfTy[0] = static_cast<float>(patchH);
+    } else {
+        for (int ty = 0; ty < texHeight; ++ty) {
+            if (ty == 0) dgyOfTy[ty] = gyOfTy[1] - gyOfTy[0];
+            else if (ty == texHeight - 1) dgyOfTy[ty] = gyOfTy[texHeight - 1] - gyOfTy[texHeight - 2];
+            else dgyOfTy[ty] = 0.5f * (gyOfTy[ty + 1] - gyOfTy[ty - 1]);
+        }
+    }
+
+    struct PixelGeo {
+        float cgx = 0.0f;
+        float cgy = 0.0f;
+        float w0 = 0.0f;
+        float w1 = 0.0f;
+        float w2 = 0.0f;
+        uint16_t patchIndex = 0;
+        uint8_t lx = 0;
+        uint8_t ly = 0;
+        uint8_t tri = 0;
+    };
+
+    const size_t numPixels = static_cast<size_t>(texWidth) * texHeight;
+    static thread_local std::vector<PixelGeo> geos;
+    static thread_local std::vector<float> hBuf;
+    static thread_local std::vector<ColorRGB> pixels;
+    geos.resize(numPixels);
+    hBuf.resize(numPixels);
 
     for (int ty = 0; ty < texHeight; ++ty) {
-        float vPatch = (texHeight > 1) ? (float(ty) / float(texHeight - 1)) : 0.0f;
-        float gy = mapY + vPatch * patchH;
-        float cgy = std::clamp(gy, 0.0f, float(lev.height));
+        float cgy = std::clamp(gyOfTy[ty], 0.0f, float(lev.height));
 
         int iy = static_cast<int>(std::floor(cgy));
         float fy = 0.0f;
@@ -720,9 +1010,7 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
         int fgY = std::clamp(iy >> 4, fgMinY, fgMaxY);
 
         for (int tx = 0; tx < texWidth; ++tx) {
-            float uPatch = (texWidth > 1) ? (float(tx) / float(texWidth - 1)) : 0.0f;
-            float gx = mapX + uPatch * patchW;
-            float cgx = std::clamp(gx, 0.0f, float(lev.width));
+            float cgx = std::clamp(gxOfTx[tx], 0.0f, float(lev.width));
 
             int ix = static_cast<int>(std::floor(cgx));
             float fx = 0.0f;
@@ -734,8 +1022,8 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
             }
 
             int fgX = std::clamp(ix >> 4, fgMinX, fgMaxX);
-
-            const auto& patch = grid->patches[static_cast<size_t>(fgY) * grid->countX + fgX];
+            size_t patchIndex = static_cast<size_t>(fgY) * grid->countX + fgX;
+            const auto& patch = grid->patches[patchIndex];
 
             int lx = std::clamp(ix - patch.startX, 0, 15);
             int ly = std::clamp(iy - patch.startY, 0, 15);
@@ -780,9 +1068,50 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
             size_t v1Idx = static_cast<size_t>(ly + c1y) * 17 + (lx + c1x);
             size_t v2Idx = static_cast<size_t>(ly + c2y) * 17 + (lx + c2x);
 
-            float h = w0 * patch.heights[v0Idx] + w1 * patch.heights[v1Idx] + w2 * patch.heights[v2Idx];
+            size_t pIdx = static_cast<size_t>(ty) * texWidth + tx;
+            hBuf[pIdx] = w0 * patch.heights[v0Idx] + w1 * patch.heights[v1Idx] + w2 * patch.heights[v2Idx];
+            geos[pIdx] = {
+                cgx, cgy, w0, w1, w2,
+                static_cast<uint16_t>(patchIndex),
+                static_cast<uint8_t>(lx),
+                static_cast<uint8_t>(ly),
+                static_cast<uint8_t>(tri)
+            };
+        }
+    }
 
-            size_t triIdx = static_cast<size_t>((lx * 16 + ly) * 2 + tri);
+    pixels.resize(numPixels);
+
+    for (int ty = 0; ty < texHeight; ++ty) {
+        const float dgy = dgyOfTy[ty];
+        int ym1 = std::max(0, ty - 1);
+        int yp1 = std::min(texHeight - 1, ty + 1);
+        float ySpan = static_cast<float>(std::max(1, yp1 - ym1));
+
+        for (int tx = 0; tx < texWidth; ++tx) {
+            const float dgx = dgxOfTx[tx];
+            size_t pIdx = static_cast<size_t>(ty) * texWidth + tx;
+            const auto& g = geos[pIdx];
+            const auto& patch = grid->patches[g.patchIndex];
+            const float h = hBuf[pIdx];
+
+            int odd = (g.lx ^ g.ly) & 1;
+            int tri = g.tri;
+            int c0x = s_kOffsets[odd][tri][0][0];
+            int c0y = s_kOffsets[odd][tri][0][1];
+            int c1x = s_kOffsets[odd][tri][1][0];
+            int c1y = s_kOffsets[odd][tri][1][1];
+            int c2x = s_kOffsets[odd][tri][2][0];
+            int c2y = s_kOffsets[odd][tri][2][1];
+
+            size_t v0Idx = static_cast<size_t>(g.ly + c0y) * 17 + (g.lx + c0x);
+            size_t v1Idx = static_cast<size_t>(g.ly + c1y) * 17 + (g.lx + c1x);
+            size_t v2Idx = static_cast<size_t>(g.ly + c2y) * 17 + (g.lx + c2x);
+            size_t triIdx = static_cast<size_t>((int(g.lx) * 16 + int(g.ly)) * 2 + tri);
+
+            float dhdx = 0.0f;
+            float dhdy = 0.0f;
+            bool hasDh = false;
 
             float curR = 0.0f, curG = 0.0f, curB = 0.0f;
             bool hasDrawn = false;
@@ -791,61 +1120,66 @@ std::vector<uint8_t> Dxt1Baker::bakeTexture(
                 const auto& pass = patch.orderedPasses[p];
                 if (!pass.triangles[triIdx]) continue;
 
+                float alpha = 0.0f;
                 if (p == 0 || !hasDrawn) {
-                    float dirAlpha = w0 * pass.dirAlpha[v0Idx] + w1 * pass.dirAlpha[v1Idx] + w2 * pass.dirAlpha[v2Idx];
-                    if (dirAlpha <= 0.0f) continue;
+                    alpha = g.w0 * pass.dirAlpha[v0Idx] + g.w1 * pass.dirAlpha[v1Idx] + g.w2 * pass.dirAlpha[v2Idx];
+                } else {
+                    alpha = g.w0 * pass.combinedAlpha[v0Idx] + g.w1 * pass.combinedAlpha[v1Idx] + g.w2 * pass.combinedAlpha[v2Idx];
+                }
+                if (alpha <= 0.0f) continue;
 
-                    float uTex = 0.0f;
-                    float vTex = 0.0f;
-                    if (pass.direction == 0) {
-                        uTex = cgx * 0.015625f;
-                        vTex = cgy * 0.015625f;
-                    } else if (pass.direction == 1 || pass.direction == 2) {
-                        uTex = cgx * 0.015625f;
+                float uTex = 0.0f, vTex = 0.0f;
+                float dudx = 0.0f, dvdx = 0.0f, dudy = 0.0f, dvdy = 0.0f;
+                if (pass.direction == 0) {
+                    uTex = g.cgx * 0.015625f;
+                    vTex = g.cgy * 0.015625f;
+                    dudx = dgx * 0.015625f;
+                    dvdy = dgy * 0.015625f;
+                } else {
+                    if (!hasDh) {
+                        int xm1 = std::max(0, tx - 1);
+                        int xp1 = std::min(texWidth - 1, tx + 1);
+                        float xSpan = static_cast<float>(std::max(1, xp1 - xm1));
+                        dhdx = (hBuf[static_cast<size_t>(ty) * texWidth + xp1] -
+                                hBuf[static_cast<size_t>(ty) * texWidth + xm1]) / xSpan;
+                        dhdy = (hBuf[static_cast<size_t>(yp1) * texWidth + tx] -
+                                hBuf[static_cast<size_t>(ym1) * texWidth + tx]) / ySpan;
+                        hasDh = true;
+                    }
+                    if (pass.direction == 1 || pass.direction == 2) {
+                        uTex = g.cgx * 0.015625f;
                         vTex = -h * 0.015625f;
+                        dudx = dgx * 0.015625f;
+                        dvdx = -dhdx * 0.015625f;
+                        dvdy = -dhdy * 0.015625f;
                     } else {
-                        uTex = cgy * 0.015625f;
+                        uTex = g.cgy * 0.015625f;
                         vTex = -h * 0.015625f;
+                        dudy = dgy * 0.015625f;
+                        dvdx = -dhdx * 0.015625f;
+                        dvdy = -dhdy * 0.015625f;
                     }
+                }
 
-                    ColorRGB texColor{0, 0, 0};
-                    if (pass.decodedTexture && pass.decodedTexture->width > 0 && pass.decodedTexture->height > 0 && !pass.decodedTexture->rgb.empty()) {
-                        texColor = sampleDecodedTextureBilinear(*pass.decodedTexture, uTex, vTex);
-                    }
+                ColorRGBF texColor{0.0f, 0.0f, 0.0f};
+                if (pass.decodedTexture && pass.decodedTexture->width > 0 && pass.decodedTexture->height > 0 && !pass.decodedTexture->rgb.empty()) {
+                    texColor = sampleDecodedTextureTrilinearF(
+                        *pass.decodedTexture, uTex, vTex, dudx, dvdx, dudy, dvdy);
+                }
 
+                if (p == 0 || !hasDrawn) {
                     curR = texColor.r;
                     curG = texColor.g;
                     curB = texColor.b;
                     hasDrawn = true;
                 } else {
-                    float alpha = w0 * pass.combinedAlpha[v0Idx] + w1 * pass.combinedAlpha[v1Idx] + w2 * pass.combinedAlpha[v2Idx];
-                    if (alpha <= 0.0f) continue;
-
-                    float uTex = 0.0f;
-                    float vTex = 0.0f;
-                    if (pass.direction == 0) {
-                        uTex = cgx * 0.015625f;
-                        vTex = cgy * 0.015625f;
-                    } else if (pass.direction == 1 || pass.direction == 2) {
-                        uTex = cgx * 0.015625f;
-                        vTex = -h * 0.015625f;
-                    } else {
-                        uTex = cgy * 0.015625f;
-                        vTex = -h * 0.015625f;
-                    }
-
-                    ColorRGB texColor{0, 0, 0};
-                    if (pass.decodedTexture && pass.decodedTexture->width > 0 && pass.decodedTexture->height > 0 && !pass.decodedTexture->rgb.empty()) {
-                        texColor = sampleDecodedTextureBilinear(*pass.decodedTexture, uTex, vTex);
-                    }
-
                     curR = curR * (1.0f - alpha) + texColor.r * alpha;
                     curG = curG * (1.0f - alpha) + texColor.g * alpha;
                     curB = curB * (1.0f - alpha) + texColor.b * alpha;
                 }
             }
 
-            pixels[static_cast<size_t>(ty) * texWidth + tx] = {
+            pixels[pIdx] = {
                 static_cast<uint8_t>(std::clamp(static_cast<int>(curR + 0.5f), 0, 255)),
                 static_cast<uint8_t>(std::clamp(static_cast<int>(curG + 0.5f), 0, 255)),
                 static_cast<uint8_t>(std::clamp(static_cast<int>(curB + 0.5f), 0, 255))

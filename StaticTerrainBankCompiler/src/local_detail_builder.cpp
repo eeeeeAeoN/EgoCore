@@ -549,20 +549,65 @@ struct PlacementGrid {
         float y = 0;
     };
 
+    static constexpr int GRID_K = 128;
+    static constexpr float GRID_INV_CELL = 4.0f; // GRID_K / 32.0f
+
     std::vector<Element> cellElements[32][32];
     std::vector<Point> quadTreePoints; // Points placed in this grid layer
+    std::array<int, GRID_K * GRID_K> gridHead;
+    std::vector<int> pointNext;
     std::vector<float> layerSpacings;  // Spacing from this layer to each layer 0..LayerID
     std::shared_ptr<PlacementGrid> baseLayer; // Pointer to layer - 1
 
+    PlacementGrid() {
+        gridHead.fill(-1);
+    }
+
+    void insertPoint(float x, float y) {
+        int idx = static_cast<int>(quadTreePoints.size());
+        quadTreePoints.push_back({x, y});
+        int gx = static_cast<int>(x * GRID_INV_CELL) & (GRID_K - 1);
+        int gy = static_cast<int>(y * GRID_INV_CELL) & (GRID_K - 1);
+        int cell = gy * GRID_K + gx;
+        pointNext.push_back(gridHead[cell]);
+        gridHead[cell] = idx;
+    }
+
     bool clipPoint(float x, float y, float r) const {
-        float rSq = r * r;
-        for (const auto& pt : quadTreePoints) {
-            float dx = std::abs(pt.x - x);
-            if (dx > 16.0f) dx = 32.0f - dx;
-            float dy = std::abs(pt.y - y);
-            if (dy > 16.0f) dy = 32.0f - dy;
-            if (dx * dx + dy * dy < rSq) {
-                return false;
+        if (quadTreePoints.empty()) return true;
+        const float rSq = r * r;
+        const int cr = static_cast<int>(std::floor(r * GRID_INV_CELL)) + 1;
+        if (quadTreePoints.size() < 32 || (2 * cr + 1) >= GRID_K) {
+            for (const auto& pt : quadTreePoints) {
+                float dx = std::abs(pt.x - x);
+                if (dx > 16.0f) dx = 32.0f - dx;
+                float dy = std::abs(pt.y - y);
+                if (dy > 16.0f) dy = 32.0f - dy;
+                if (dx * dx + dy * dy < rSq) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        const int cx = static_cast<int>(x * GRID_INV_CELL);
+        const int cy = static_cast<int>(y * GRID_INV_CELL);
+        const Point* pts = quadTreePoints.data();
+        for (int dyCell = -cr; dyCell <= cr; ++dyCell) {
+            const int rowBase = ((cy + dyCell) & (GRID_K - 1)) * GRID_K;
+            for (int dxCell = -cr; dxCell <= cr; ++dxCell) {
+                int idx = gridHead[rowBase + ((cx + dxCell) & (GRID_K - 1))];
+                while (idx >= 0) {
+                    const Point& pt = pts[idx];
+                    float dx = std::abs(pt.x - x);
+                    if (dx > 16.0f) dx = 32.0f - dx;
+                    float dy = std::abs(pt.y - y);
+                    if (dy > 16.0f) dy = 32.0f - dy;
+                    if (dx * dx + dy * dy < rSq) {
+                        return false;
+                    }
+                    idx = pointNext[idx];
+                }
             }
         }
         return true;
@@ -579,10 +624,10 @@ struct PlacementGrid {
         while (fails > 0) {
             fails--;
             v58 = GFROR13(9377 * v59 + 9439);
-            float x = static_cast<float>(std::fmod(static_cast<double>(v58), 2097152.0) * 0.0000152587890625);
+            float x = static_cast<float>(static_cast<double>(v58 & 0x1FFFFFu) * 0.0000152587890625);
             v58 = GFROR13(9377 * v58 + 9439);
             v59 = v58;
-            float y = static_cast<float>(std::fmod(static_cast<double>(v58), 2097152.0) * 0.0000152587890625);
+            float y = static_cast<float>(static_cast<double>(v58 & 0x1FFFFFu) * 0.0000152587890625);
 
             // Multi-layer clipping hierarchy: clip against this grid and all ancestor base layers
             // Matching lines 236-347 of STBfunctions25.txt
@@ -603,8 +648,8 @@ struct PlacementGrid {
             if (accepted) {
                 fails = 256;
 
-                // Add to spatial points for clipping subsequent darts in this layer
-                quadTreePoints.push_back({x, y});
+                // Add to spatial index & point list for clipping subsequent darts in this layer
+                insertPoint(x, y);
 
                 // Wrap-around offset calculation and cell indexing (STBfunctions25.txt:247-295)
                 int tx = static_cast<int>(x + 0.5f) & 0x1F;
@@ -982,41 +1027,75 @@ LocalDetailResult LocalDetailBuilder::build(
     const auto& dispTable = getGlobalDisplacementTable();
 
     std::vector<std::shared_ptr<PlacementGrid>> placementGrids;
-    for (auto& [genName, genRuntime] : builtPal.generatorRuntimes) {
-        std::vector<std::shared_ptr<PlacementGrid>> cachedGrids;
+    {
+        struct MissingGenJob {
+            std::string name;
+            LocalDetailGeneratorRuntime* runtime = nullptr;
+            std::vector<std::shared_ptr<PlacementGrid>> builtGrids;
+        };
+        std::vector<MissingGenJob> missingJobs;
+        std::unordered_map<std::string, std::vector<std::shared_ptr<PlacementGrid>>> resolvedMap;
+
         {
             std::lock_guard<std::mutex> lock(s_gridCacheMutex);
-            auto it = s_generatorGridCache.find(genName);
-            if (it != s_generatorGridCache.end()) {
-                cachedGrids = it->second;
+            for (auto& [genName, genRuntime] : builtPal.generatorRuntimes) {
+                auto it = s_generatorGridCache.find(genName);
+                if (it != s_generatorGridCache.end()) {
+                    resolvedMap.emplace(genName, it->second);
+                } else if (!genRuntime.layers.empty()) {
+                    missingJobs.push_back({genName, &genRuntime, {}});
+                }
             }
         }
 
-        if (cachedGrids.empty() && !genRuntime.layers.empty()) {
-            std::shared_ptr<PlacementGrid> prevGrid = nullptr;
+        if (!missingJobs.empty()) {
+            std::atomic<size_t> nextJob{0};
+            unsigned int numWorkers = std::min(
+                std::max(1u, std::thread::hardware_concurrency()),
+                static_cast<unsigned int>(missingJobs.size())
+            );
+            std::vector<std::thread> gridWorkers;
+            gridWorkers.reserve(numWorkers);
+            for (unsigned int t = 0; t < numWorkers; ++t) {
+                gridWorkers.emplace_back([&]() {
+                    while (true) {
+                        size_t idx = nextJob.fetch_add(1, std::memory_order_relaxed);
+                        if (idx >= missingJobs.size()) break;
+                        auto& job = missingJobs[idx];
+                        std::shared_ptr<PlacementGrid> prevGrid = nullptr;
+                        job.builtGrids.reserve(job.runtime->layers.size());
+                        for (size_t lIdx = 0; lIdx < job.runtime->layers.size(); ++lIdx) {
+                            const auto& layer = job.runtime->layers[lIdx];
+                            auto grid = std::make_shared<PlacementGrid>();
+                            std::vector<float> spacings = layer.spacingFromLayer;
+                            if (spacings.empty()) {
+                                spacings.push_back(layer.spacing);
+                            }
+                            grid->build(spacings, prevGrid);
+                            job.builtGrids.push_back(grid);
+                            prevGrid = grid;
+                        }
+                    }
+                });
+            }
+            for (auto& w : gridWorkers) w.join();
+
+            std::lock_guard<std::mutex> lock(s_gridCacheMutex);
+            for (auto& job : missingJobs) {
+                auto [it, inserted] = s_generatorGridCache.emplace(job.name, job.builtGrids);
+                resolvedMap.emplace(job.name, it->second);
+            }
+        }
+
+        for (auto& [genName, genRuntime] : builtPal.generatorRuntimes) {
+            auto it = resolvedMap.find(genName);
+            if (it == resolvedMap.end()) continue;
+            const auto& cachedGrids = it->second;
             for (size_t lIdx = 0; lIdx < genRuntime.layers.size(); ++lIdx) {
                 auto& layer = genRuntime.layers[lIdx];
-                auto grid = std::make_shared<PlacementGrid>();
-
-                std::vector<float> spacings = layer.spacingFromLayer;
-                if (spacings.empty()) {
-                    spacings.push_back(layer.spacing);
-                }
-                grid->build(spacings, prevGrid);
-
-                cachedGrids.push_back(grid);
-                prevGrid = grid;
+                layer.gridIndex = static_cast<int>(placementGrids.size());
+                placementGrids.push_back(cachedGrids[lIdx]);
             }
-            {
-                std::lock_guard<std::mutex> lock(s_gridCacheMutex);
-                s_generatorGridCache[genName] = cachedGrids;
-            }
-        }
-
-        for (size_t lIdx = 0; lIdx < genRuntime.layers.size(); ++lIdx) {
-            auto& layer = genRuntime.layers[lIdx];
-            layer.gridIndex = static_cast<int>(placementGrids.size());
-            placementGrids.push_back(cachedGrids[lIdx]);
         }
     }
 
@@ -1047,6 +1126,18 @@ LocalDetailResult LocalDetailBuilder::build(
         }
         target->instances.push_back(inst);
     };
+
+    // Pre-resolve theme palette slot -> generator runtime once per level
+    std::vector<const LocalDetailGeneratorRuntime*> slotGenerators(lev.themePalette.size(), nullptr);
+    for (size_t s = 0; s < lev.themePalette.size(); ++s) {
+        const auto* eth = ThemeManager::instance().getTheme(lev.themePalette[s].name);
+        if (eth && !eth->localDetailGeneratorDef.empty()) {
+            auto it = builtPal.generatorRuntimes.find(eth->localDetailGeneratorDef);
+            if (it != builtPal.generatorRuntimes.end()) {
+                slotGenerators[s] = &it->second;
+            }
+        }
+    }
 
     // 3. Build Leaf Nodes (16x16 cells each) for arbitrary map dimensions
     int numLeavesX = (lev.width + 15) / 16;
@@ -1101,18 +1192,14 @@ LocalDetailResult LocalDetailBuilder::build(
                 uint8_t blends[3] = {b0, b1, b2};
 
                 const LocalDetailGeneratorRuntime* themes[3] = {nullptr, nullptr, nullptr};
+                const int slotCount = static_cast<int>(slotGenerators.size());
                 for (int id = 0; id < 3; ++id) {
                     int tSlot = cell.themes[id];
-                    if (tSlot >= 0 && tSlot < static_cast<int>(lev.themePalette.size())) {
-                        const auto* eth = ThemeManager::instance().getTheme(lev.themePalette[tSlot].name);
-                        if (eth && !eth->localDetailGeneratorDef.empty()) {
-                            auto it = builtPal.generatorRuntimes.find(eth->localDetailGeneratorDef);
-                            if (it != builtPal.generatorRuntimes.end()) {
-                                themes[id] = &it->second;
-                            }
-                        }
+                    if (tSlot >= 0 && tSlot < slotCount) {
+                        themes[id] = slotGenerators[tSlot];
                     }
                 }
+                if (!themes[0] && !themes[1] && !themes[2]) continue;
 
                 int v8 = cx + worldX;
                 int world_y = cy + worldY;
@@ -1843,6 +1930,17 @@ for (auto& w : workers) {
 }
 }
 
+    std::vector<int> instCounts(builtPal.entries.size(), 0);
+    for (const auto& leaf : leaves) {
+        for (const auto& g : leaf.collections) {
+            for (const auto& inst : g.instances) {
+                if (inst.palIndex >= 0 && inst.palIndex < static_cast<int>(instCounts.size())) {
+                    instCounts[inst.palIndex]++;
+                }
+            }
+        }
+    }
+
     // Step 6b: Sequential insertion into quadtree
     for (auto& leaf : leaves) {
         if (!leaf.collections.empty()) {
@@ -1870,16 +1968,6 @@ for (auto& w : workers) {
     assignFileBlocks(&rootNode, blockMap, true);
 
     std::cout << "LocalDetail: blockMap has " << blockMap.size() << " file blocks (expected 63)" << std::endl;
-    std::vector<int> instCounts(builtPal.entries.size(), 0);
-    for (const auto& leaf : leaves) {
-        for (const auto& g : leaf.collections) {
-            for (const auto& inst : g.instances) {
-                if (inst.palIndex >= 0 && inst.palIndex < static_cast<int>(instCounts.size())) {
-                    instCounts[inst.palIndex]++;
-                }
-            }
-        }
-    }
     for (size_t i = 0; i < builtPal.entries.size(); ++i) {
         std::cout << "  Pal[" << i << "] " << builtPal.entries[i].name 
                   << " (mesh=" << builtPal.entries[i].data.meshBankIndex << "): " 

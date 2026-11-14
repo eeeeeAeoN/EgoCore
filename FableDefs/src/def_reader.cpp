@@ -12,7 +12,7 @@ bool parse_entry(const BinaryEntry &entry, ParsedEntry &out, std::string &error)
     auto parse = [&](auto value) {
         found = true;
         Reader reader(entry.body.data(), entry.body.size());
-        Value root;
+        DecodedValue root;
         if (!read_value(value, reader, root)) {
             error = "failed to read " + entry.def_name + " body";
             return;

@@ -9,6 +9,8 @@
 #include <map>
 #include <future>
 #include <thread>
+#include <atomic>
+#include <numeric>
 #include <cstring>
 #include <iostream>
 
@@ -519,15 +521,21 @@ BBBEntry SeaGenerator::generateSeaEntry(
         }
     }
 
-    // 5. Erase elements completely inside cutout boxes
-    for (const auto& box : job.cutoutMaps) {
+    // 5. Erase elements completely inside cutout boxes (single pass)
+    if (!job.cutoutMaps.empty() && !elements.empty()) {
         std::vector<CSeaQuadElement> kept;
         kept.reserve(elements.size());
         for (const auto& e : elements) {
-            if (e.startX >= box.tlx && e.endX <= box.brx && e.startY >= box.tly && e.endY <= box.bry) {
-                continue;
+            bool covered = false;
+            for (const auto& box : job.cutoutMaps) {
+                if (e.startX >= box.tlx && e.endX <= box.brx && e.startY >= box.tly && e.endY <= box.bry) {
+                    covered = true;
+                    break;
+                }
             }
-            kept.push_back(e);
+            if (!covered) {
+                kept.push_back(e);
+            }
         }
         elements = std::move(kept);
     }
@@ -649,35 +657,71 @@ BBBEntry SeaGenerator::generateSeaEntry(
         }
     }
 
-    // Merge edges between adjacent elements
-    for (size_t i = 0; i < elements.size(); ++i) {
-        for (size_t j = 0; j < elements.size(); ++j) {
-            if (i == j) continue;
-            auto& elemA = elements[i];
-            const auto& elemB = elements[j];
+    // Merge edges between adjacent elements using coordinate buckets (preserves ascending j order)
+    std::unordered_map<int, std::vector<size_t>> byEndX, byStartX, byEndY, byStartY;
+    byEndX.reserve(elements.size());
+    byStartX.reserve(elements.size());
+    byEndY.reserve(elements.size());
+    byStartY.reserve(elements.size());
+    for (size_t j = 0; j < elements.size(); ++j) {
+        byEndX[elements[j].endX].push_back(j);
+        byStartX[elements[j].startX].push_back(j);
+        byEndY[elements[j].endY].push_back(j);
+        byStartY[elements[j].startY].push_back(j);
+    }
 
-            if (elemA.startX == elemB.endX && elemA.startY <= elemB.endY && elemB.startY <= elemA.endY) {
-                if ((elemA.landscapeLipDirection == 2 || elemA.landscapeLipDirection == 0) &&
-                    elemB.landscapeLipDirection <= 1) {
-                    mergeElementEdgeVert(elemA.vertexListLeft, elemB.vertexListRight, vtxMgr.vertDefs);
+    for (size_t i = 0; i < elements.size(); ++i) {
+        auto& elemA = elements[i];
+
+        if (elemA.landscapeLipDirection == 2 || elemA.landscapeLipDirection == 0) {
+            auto it = byEndX.find(elemA.startX);
+            if (it != byEndX.end()) {
+                for (size_t j : it->second) {
+                    if (j == i) continue;
+                    const auto& elemB = elements[j];
+                    if (elemB.landscapeLipDirection <= 1 &&
+                        elemA.startY <= elemB.endY && elemB.startY <= elemA.endY) {
+                        mergeElementEdgeVert(elemA.vertexListLeft, elemB.vertexListRight, vtxMgr.vertDefs);
+                    }
                 }
             }
-            if (elemA.endX == elemB.startX && elemA.startY <= elemB.endY && elemB.startY <= elemA.endY) {
-                if (elemA.landscapeLipDirection <= 1 &&
-                    (elemB.landscapeLipDirection == 2 || elemB.landscapeLipDirection == 0)) {
-                    mergeElementEdgeVert(elemA.vertexListRight, elemB.vertexListLeft, vtxMgr.vertDefs);
+        }
+        if (elemA.landscapeLipDirection <= 1) {
+            auto it = byStartX.find(elemA.endX);
+            if (it != byStartX.end()) {
+                for (size_t j : it->second) {
+                    if (j == i) continue;
+                    const auto& elemB = elements[j];
+                    if ((elemB.landscapeLipDirection == 2 || elemB.landscapeLipDirection == 0) &&
+                        elemA.startY <= elemB.endY && elemB.startY <= elemA.endY) {
+                        mergeElementEdgeVert(elemA.vertexListRight, elemB.vertexListLeft, vtxMgr.vertDefs);
+                    }
                 }
             }
-            if (elemA.startY == elemB.endY && elemA.startX <= elemB.endX && elemB.startX <= elemA.endX) {
-                if ((elemA.landscapeLipDirection == 4 || elemA.landscapeLipDirection == 0) &&
-                    elemB.landscapeLipDirection <= 3 && elemB.landscapeLipDirection != 1 && elemB.landscapeLipDirection != 2) {
-                    mergeElementEdgeHor(elemA.vertexListTop, elemB.vertexListBottom, vtxMgr.vertDefs);
+        }
+        if (elemA.landscapeLipDirection == 4 || elemA.landscapeLipDirection == 0) {
+            auto it = byEndY.find(elemA.startY);
+            if (it != byEndY.end()) {
+                for (size_t j : it->second) {
+                    if (j == i) continue;
+                    const auto& elemB = elements[j];
+                    if (elemB.landscapeLipDirection <= 3 && elemB.landscapeLipDirection != 1 && elemB.landscapeLipDirection != 2 &&
+                        elemA.startX <= elemB.endX && elemB.startX <= elemA.endX) {
+                        mergeElementEdgeHor(elemA.vertexListTop, elemB.vertexListBottom, vtxMgr.vertDefs);
+                    }
                 }
             }
-            if (elemA.endY == elemB.startY && elemA.startX <= elemB.endX && elemB.startX <= elemA.endX) {
-                if (elemA.landscapeLipDirection <= 3 && elemA.landscapeLipDirection != 1 && elemA.landscapeLipDirection != 2 &&
-                    (elemB.landscapeLipDirection == 4 || elemB.landscapeLipDirection == 0)) {
-                    mergeElementEdgeHor(elemA.vertexListBottom, elemB.vertexListTop, vtxMgr.vertDefs);
+        }
+        if (elemA.landscapeLipDirection <= 3 && elemA.landscapeLipDirection != 1 && elemA.landscapeLipDirection != 2) {
+            auto it = byStartY.find(elemA.endY);
+            if (it != byStartY.end()) {
+                for (size_t j : it->second) {
+                    if (j == i) continue;
+                    const auto& elemB = elements[j];
+                    if ((elemB.landscapeLipDirection == 4 || elemB.landscapeLipDirection == 0) &&
+                        elemA.startX <= elemB.endX && elemB.startX <= elemA.endX) {
+                        mergeElementEdgeHor(elemA.vertexListBottom, elemB.vertexListTop, vtxMgr.vertDefs);
+                    }
                 }
             }
         }
@@ -831,9 +875,18 @@ std::vector<BBBEntry> SeaGenerator::generateAllSeas(
     }
 
     std::vector<BBBEntry> entries(jobs.size());
+    std::vector<size_t> jobOrder(jobs.size());
+    std::iota(jobOrder.begin(), jobOrder.end(), 0);
+    std::stable_sort(jobOrder.begin(), jobOrder.end(), [&](size_t a, size_t b) {
+        return jobs[a].cutoutMaps.size() > jobs[b].cutoutMaps.size();
+    });
 
-    auto worker = [&](size_t startIdx, size_t endIdx) {
-        for (size_t i = startIdx; i < endIdx; ++i) {
+    std::atomic<size_t> nextJobIdx{0};
+    auto worker = [&]() {
+        while (true) {
+            size_t orderPos = nextJobIdx.fetch_add(1, std::memory_order_relaxed);
+            if (orderPos >= jobOrder.size()) break;
+            size_t i = jobOrder[orderPos];
             uint32_t entryId = static_cast<uint32_t>(i + 1);
             entries[i] = generateSeaEntry(entryId, jobs[i], defConfig, allWorldMaps);
             if (logCallback) {
@@ -844,16 +897,11 @@ std::vector<BBBEntry> SeaGenerator::generateAllSeas(
         }
     };
 
+    const size_t actualThreads = std::min<size_t>(static_cast<size_t>(numThreads), jobs.size());
     std::vector<std::future<void>> futures;
-    size_t total = jobs.size();
-    size_t chunkSize = (total + numThreads - 1) / numThreads;
-
-    for (int t = 0; t < numThreads; ++t) {
-        size_t startIdx = t * chunkSize;
-        size_t endIdx = std::min(startIdx + chunkSize, total);
-        if (startIdx < endIdx) {
-            futures.push_back(std::async(std::launch::async, worker, startIdx, endIdx));
-        }
+    futures.reserve(actualThreads);
+    for (size_t t = 0; t < actualThreads; ++t) {
+        futures.push_back(std::async(std::launch::async, worker));
     }
 
     for (auto& f : futures) {

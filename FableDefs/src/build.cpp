@@ -1,13 +1,16 @@
 #include "fable/defs/compiler/build.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
 
+#include "embedded_headers.hpp"
 #include "fable/defs/compiler/diagnostic.hpp"
 #include "fable/defs/compiler/parser.hpp"
 #include "fable/defs/compiler/symbols.hpp"
@@ -67,6 +70,54 @@ std::string render_parse_error(const ParseError &error, const std::string &text,
 } // namespace
 
 namespace fable::defs::compiler {
+
+std::size_t inject_embedded_headers(
+    SymbolTable &symbols, const std::vector<fs::path> &disk_files,
+    std::vector<Redefinition> &redefined, std::uint32_t &next_file,
+    std::string &error_log) {
+    std::set<std::string> seen_disk_headers;
+    for (const fs::path &path : disk_files) {
+        if (path.extension().string() == ".h") {
+            std::string lower_name = path.filename().string();
+            std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            seen_disk_headers.insert(std::move(lower_name));
+        }
+    }
+
+    std::ostringstream log;
+    std::size_t errors = 0;
+    std::size_t embedded_count = 0;
+    const EmbeddedHeader *embedded = embedded_non_retail_headers(embedded_count);
+    for (std::size_t i = 0; i < embedded_count; ++i) {
+        std::string lower_name(embedded[i].name);
+        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (seen_disk_headers.count(lower_name) != 0) {
+            continue;
+        }
+        std::string text(embedded[i].content);
+        ParseResult result = parse_source(text, FileId{next_file++});
+        if (auto *parse_error = std::get_if<ParseError>(&result)) {
+            ++errors;
+            append_line(log, "error: embedded header " + std::string(embedded[i].name) +
+                                 ": " + render_parse_error(*parse_error, text,
+                                                           fs::path(embedded[i].name)));
+            continue;
+        }
+        SourceAst &ast = std::get<SourceAst>(result);
+        if (auto symbol_error = symbols.evaluate_items(ast.items, redefined)) {
+            ++errors;
+            append_line(log, "error: embedded header " + std::string(embedded[i].name) +
+                                 ": " + render_parse_error(
+                                     ParseError{symbol_error->span,
+                                                symbol_error->message},
+                                     text, fs::path(embedded[i].name)));
+        }
+    }
+    error_log += log.str();
+    return errors;
+}
 
 DirectoryBuild build_directory(const fs::path &input, const fs::path &output) {
     DirectoryBuild report;
@@ -139,6 +190,12 @@ DirectoryBuild build_directory(const fs::path &input, const fs::path &output) {
         std::string normalized = path.string();
         std::replace(normalized.begin(), normalized.end(), '\\', '/');
         parsed.push_back(ParsedFile{std::move(normalized), std::move(ast)});
+    }
+
+    std::string embedded_log;
+    errors += inject_embedded_headers(symbols, files, redefined, next_file, embedded_log);
+    if (!embedded_log.empty()) {
+        append_line(log, embedded_log);
     }
 
     if (errors != 0) {

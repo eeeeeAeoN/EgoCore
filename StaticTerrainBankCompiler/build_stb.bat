@@ -30,7 +30,7 @@ if not exist "lib\imgui.lib" (
     del imgui*.obj 2>nul
 )
 
-cl.exe /nologo /O2 /std:c++20 /EHsc /MD /Iinclude /Itools\imgui tools\compiler_main.cpp tools\gui.cpp lib\StaticTerrainBank.lib lib\imgui.lib /Fe:stb_compiler.exe
+cl.exe /nologo /O2 /Oi /Ot /MP /std:c++20 /EHsc /MD /Iinclude /Itools\imgui tools\compiler_main.cpp tools\gui.cpp lib\StaticTerrainBank.lib lib\imgui.lib /Fe:stb_compiler.exe
 if errorlevel 1 exit /b 1
 
 del *.obj 2>nul

@@ -23,13 +23,14 @@ static void printHelp() {
     std::cout << "  --lod-dist-scale <float>    Multiplier for background LOD band distance thresholds (default: 1.0).\n";
     std::cout << "                              e.g. 1.5 or 2.0 pushes LOD transitions further into distance.\n";
     std::cout << "  --tex-scale <1|2|4>         Baked background texture resolution multiplier (default: 1 -> 64/128).\n";
-    std::cout << "  --gen-mipmaps               Generate complete mipmap chains in patch CTextures (default: off).\n";
-    std::cout << "  --dxt-quality <fast|high>   DXT1 compression mode (default: fast).\n";
+    std::cout << "  --dxt-quality <fast|high>   DXT1 compression mode (default: high).\n";
     std::cout << "                              'high' uses optimal cluster fit with perceptual color weighting.\n";
-    std::cout << "  --no-lod-sharing            Bake unique meshes/textures for all LOD bands 1-7 (default: share 4-6).\n";
+    std::cout << "  --no-lod-sharing            Bake unique meshes/textures for all LOD bands 1-7 (default).\n";
+    std::cout << "  --lod-sharing               Share bands 4-6 geometry to reduce STB size.\n";
     std::cout << "  --max-lod-band <1-7>        Maximum LOD simplification band to generate (default: 7).\n";
     std::cout << "  --no-range-compression      Disable range compression for uncompressed raw streams (default: on).\n";
     std::cout << "  --no-ism                    Do not generate companion <wldStem>_RT.ism file (default: on).\n";
+    std::cout << "  --ignore-mods-ini           Ignore active fade-extender DLL INIs in <fableRoot>\\Mods.ini.\n";
     std::cout << "  -q, --quiet                 Quiet mode (reduced console output).\n";
     std::cout << "  -h, --help                  Show this help message.\n";
 }
@@ -61,13 +62,17 @@ int main(int argc, char* argv[]) {
         } else if (arg == "-q" || arg == "--quiet") {
             config.verbose = false;
         } else if (arg == "--gen-mipmaps" || arg == "--generate-mipmaps") {
-            config.generateMipmaps = true;
+            config.generateMipmaps = false; // Mipmap chains crash retail engine
         } else if (arg == "--no-lod-sharing" || arg == "--full-lods") {
             config.shareLodBands = false;
+        } else if (arg == "--lod-sharing") {
+            config.shareLodBands = true;
         } else if (arg == "--no-range-compression") {
             config.enableRangeCompression = false;
         } else if (arg == "--no-ism") {
             config.outputIsm = false;
+        } else if (arg == "--ignore-mods-ini") {
+            config.respectModsIni = false;
         } else if (arg == "--mesh-detail" && i + 1 < argc) {
             config.meshDetail = std::max(0.1f, static_cast<float>(std::atof(argv[++i])));
         } else if (arg == "--fg-distance" && i + 1 < argc) {

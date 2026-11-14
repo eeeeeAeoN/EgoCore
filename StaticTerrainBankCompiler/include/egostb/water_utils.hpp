@@ -186,10 +186,20 @@ inline PrecomputedWaterGrid buildWaterGrid(const LevData& lev) {
 
 inline const PrecomputedWaterGrid& getMapWaterGrid(const LevData& lev) {
     static thread_local uint32_t tl_cachedLevChecksum = 0;
+    static thread_local const HeightMapCell* tl_cachedCellsPtr = nullptr;
+    static thread_local int tl_cachedWidth = 0;
+    static thread_local int tl_cachedHeight = 0;
     static thread_local PrecomputedWaterGrid tl_cachedWaterGrid;
-    if (tl_cachedLevChecksum != lev.checksum || tl_cachedWaterGrid.cells.empty()) {
+    if (tl_cachedCellsPtr != lev.cells.data() ||
+        tl_cachedLevChecksum != lev.checksum ||
+        tl_cachedWidth != lev.width ||
+        tl_cachedHeight != lev.height ||
+        tl_cachedWaterGrid.cells.empty()) {
         tl_cachedWaterGrid = buildWaterGrid(lev);
         tl_cachedLevChecksum = lev.checksum;
+        tl_cachedCellsPtr = lev.cells.data();
+        tl_cachedWidth = lev.width;
+        tl_cachedHeight = lev.height;
     }
     return tl_cachedWaterGrid;
 }
@@ -312,7 +322,7 @@ public:
     void init(const LevData& lev, int worldX, int worldY, const std::vector<WorldWaterNeighbor>* neighbors = nullptr) {
         m_bodies.clear();
         m_hasAnyWater = false;
-        m_waterGrid = buildWaterGrid(lev);
+        m_waterGrid = getMapWaterGrid(lev);
         m_width = lev.width;
         m_height = lev.height;
         m_worldX = worldX;

@@ -173,6 +173,8 @@ static uint32_t calculatePackedNormal(
            ((static_cast<uint32_t>(iz) & 0x3FFu) << 22);
 }
 
+static float peekInterpolatedWaterHeight(const LevData& lev, int mapx, int mapy, int distance_to_look, bool* outFound = nullptr);
+
 BackgroundTreeBuilder::TopologyGrid BackgroundTreeBuilder::buildTopologyGrid(
     const LevData& lev, int mapX, int mapY, int width, int height
 ) {
@@ -206,7 +208,194 @@ BackgroundTreeBuilder::TopologyGrid BackgroundTreeBuilder::buildTopologyGrid(
             grid.unitSizeVert[(y - mapY) * width + (x - mapX)] = std::max(distAC, distBD);
         }
     }
+    grid.vertStride = width + 1;
+    grid.vertMinZ.resize(static_cast<size_t>(width + 1) * (height + 1));
+    grid.vertMaxZ.resize(static_cast<size_t>(width + 1) * (height + 1));
+    for (int y = 0; y <= height; ++y) {
+        for (int x = 0; x <= width; ++x) {
+            int gx = mapX + x;
+            int gy = mapY + y;
+            int cx = std::clamp(gx, 0, lev.gridWidth - 1);
+            int cy = std::clamp(gy, 0, lev.gridHeight - 1);
+            float h = lev.getCell(cx, cy).height;
+            float minZ = h;
+            float maxZ = h;
+            bool waterFound = false;
+            float wh = peekInterpolatedWaterHeight(lev, gx, gy, 1, &waterFound);
+            if (waterFound) {
+                if (wh < minZ) minZ = wh;
+                if (wh > maxZ) maxZ = wh;
+            }
+            size_t idx = static_cast<size_t>(y) * grid.vertStride + x;
+            grid.vertMinZ[idx] = minZ;
+            grid.vertMaxZ[idx] = maxZ;
+        }
+    }
     return grid;
+}
+
+struct SubPatchLODLockNode {
+    float uvLock = 0.0f;
+    bool split = false;
+    std::unique_ptr<SubPatchLODLockNode> left;
+    std::unique_ptr<SubPatchLODLockNode> right;
+
+    bool build(
+        float detailThreshold,
+        int textureSize,
+        const float* unitStrip,
+        int lockpos,
+        int lockrange,
+        float uvstart,
+        float uvrange,
+        int minLockRange,
+        int& outLockSpacingNeeded
+    ) {
+        int half = lockrange / 2;
+        int splitMid = lockpos + half;
+        int endPos = lockpos + lockrange;
+
+        float undividedLeft = 0.0f;
+        for (int i = lockpos; i < splitMid; ++i) {
+            if (unitStrip[i] > undividedLeft) undividedLeft = unitStrip[i];
+        }
+        float undividedRight = 0.0f;
+        for (int i = splitMid; i < endPos; ++i) {
+            if (unitStrip[i] > undividedRight) undividedRight = unitStrip[i];
+        }
+
+        float halfScaled = static_cast<float>(lockrange) * detailThreshold * 0.5f;
+        float leftCost = undividedLeft * halfScaled;
+        float rightCost = undividedRight * halfScaled;
+        float maxCost = std::max(leftCost, rightCost);
+        float texBudget = static_cast<float>(textureSize) * uvrange;
+
+        if (2.0f * maxCost < texBudget) {
+            outLockSpacingNeeded = lockrange;
+            return true;
+        }
+        if (lockrange == minLockRange || half <= 0) {
+            return false;
+        }
+
+        float dividedLeft = 0.0f;
+        for (int p = lockpos; p < splitMid; p += minLockRange) {
+            float localMax = 0.0f;
+            int stepEnd = std::min(splitMid, p + minLockRange);
+            for (int i = p; i < stepEnd; ++i) {
+                if (unitStrip[i] > localMax) localMax = unitStrip[i];
+            }
+            dividedLeft += static_cast<float>(minLockRange) * localMax;
+        }
+
+        float dividedRight = 0.0f;
+        for (int p = splitMid; p < endPos; p += minLockRange) {
+            float localMax = 0.0f;
+            int stepEnd = std::min(endPos, p + minLockRange);
+            for (int i = p; i < stepEnd; ++i) {
+                if (unitStrip[i] > localMax) localMax = unitStrip[i];
+            }
+            dividedRight += static_cast<float>(minLockRange) * localMax;
+        }
+
+        float dividedLeftScaled = dividedLeft * detailThreshold;
+        float dividedRightScaled = dividedRight * detailThreshold;
+        if (static_cast<float>(static_cast<int>(dividedLeftScaled + dividedRightScaled)) > texBudget) {
+            return false;
+        }
+
+        split = true;
+        float texSizeF = static_cast<float>(textureSize);
+        float halfBudget = texBudget * 0.5f;
+
+        if (halfBudget > leftCost) {
+            float uvLeft = leftCost / texSizeF;
+            float remUv = uvrange - uvLeft;
+            if (texSizeF * remUv >= dividedRightScaled) {
+                uvLock = uvstart + uvLeft;
+                right = std::make_unique<SubPatchLODLockNode>();
+                if (right->build(detailThreshold, textureSize, unitStrip, splitMid, half,
+                                 uvLock, remUv, minLockRange, outLockSpacingNeeded)) {
+                    if (!right->split) right.reset();
+                    return true;
+                }
+                right.reset();
+            }
+        } else if (halfBudget > rightCost) {
+            float uvRight = rightCost / texSizeF;
+            float leftUv = uvrange - uvRight;
+            if (dividedLeftScaled <= texSizeF * leftUv) {
+                uvLock = uvstart + leftUv;
+                left = std::make_unique<SubPatchLODLockNode>();
+                if (left->build(detailThreshold, textureSize, unitStrip, lockpos, half,
+                                uvstart, leftUv, minLockRange, outLockSpacingNeeded)) {
+                    if (!left->split) left.reset();
+                    return true;
+                }
+                left.reset();
+            }
+        }
+
+        float leftFrac = dividedLeftScaled / texSizeF;
+        float rightFrac = dividedRightScaled / texSizeF;
+        float leftUv = (leftFrac + uvrange - rightFrac) * 0.5f;
+        float rightUv = uvrange - leftUv;
+        uvLock = uvstart + leftUv;
+
+        left = std::make_unique<SubPatchLODLockNode>();
+        right = std::make_unique<SubPatchLODLockNode>();
+        int leftSpacing = 0;
+        int rightSpacing = 0;
+        if (left->build(detailThreshold, textureSize, unitStrip, lockpos, half,
+                        uvstart, leftUv, minLockRange, leftSpacing) &&
+            right->build(detailThreshold, textureSize, unitStrip, splitMid, half,
+                         uvLock, rightUv, minLockRange, rightSpacing)) {
+            outLockSpacingNeeded = std::min(leftSpacing, rightSpacing);
+            if (!left->split) left.reset();
+            if (!right->split) right.reset();
+            return true;
+        }
+
+        left.reset();
+        right.reset();
+        return false;
+    }
+};
+
+static void fillLinearUvLockTable(float* table, int startpos, int size, float uvstart, float uvrange) {
+    if (size <= 0) return;
+    float sizeF = static_cast<float>(size);
+    for (int p = 0; p < size; ++p) {
+        table[startpos + p] = static_cast<float>(p) * uvrange / sizeF + uvstart;
+    }
+}
+
+static void calculateUvLockTableRec(
+    const SubPatchLODLockNode* elem, float* table, int lockpos, int lockrange, float uvstart, float uvrange
+) {
+    if (elem && elem->split) {
+        int half = lockrange / 2;
+        if (elem->left) {
+            calculateUvLockTableRec(elem->left.get(), table, lockpos, half, uvstart, elem->uvLock - uvstart);
+        } else {
+            fillLinearUvLockTable(table, lockpos, half, uvstart, elem->uvLock - uvstart);
+        }
+        float rightRange = uvstart + uvrange - elem->uvLock;
+        if (elem->right) {
+            calculateUvLockTableRec(elem->right.get(), table, lockpos + half, half, elem->uvLock, rightRange);
+        } else {
+            fillLinearUvLockTable(table, lockpos + half, half, elem->uvLock, rightRange);
+        }
+    } else {
+        fillLinearUvLockTable(table, lockpos, lockrange, uvstart, uvrange);
+    }
+}
+
+static std::vector<float> buildUvLockTable(const SubPatchLODLockNode* root, int range) {
+    std::vector<float> table(static_cast<size_t>(range) + 1, 0.0f);
+    calculateUvLockTableRec(root, table.data(), 0, range, 0.0f, 1.0f);
+    table[range] = 1.0f;
+    return table;
 }
 
 static float getNodeCurvature(
@@ -257,8 +446,6 @@ static inline float getLodBandZ(int band, float scale = 1.0f) {
     return s_kBaseLODZBandsZ[band] * scale;
 }
 
-static float peekInterpolatedWaterHeight(const LevData& lev, int mapx, int mapy, int distance_to_look, bool* outFound = nullptr);
-
 std::unique_ptr<BgTreeNode> BackgroundTreeBuilder::buildTree(
     const TopologyGrid& grid,
     const LevData& lev,
@@ -280,28 +467,45 @@ std::unique_ptr<BgTreeNode> BackgroundTreeBuilder::buildTree(
     node->aabb.minY = static_cast<float>(worldY + mapY);
     node->aabb.maxX = static_cast<float>(worldX + mapX + width);
     node->aabb.maxY = static_cast<float>(worldY + mapY + height);
-    float minZ = 1e30f;
-    float maxZ = -1e30f;
-    for (int y = mapY; y <= mapY + height; ++y) {
-        for (int x = mapX; x <= mapX + width; ++x) {
-            int cx = std::clamp(x, 0, lev.gridWidth - 1);
-            int cy = std::clamp(y, 0, lev.gridHeight - 1);
-            float h = lev.getCell(cx, cy).height;
-            if (h < minZ) minZ = h;
-            if (h > maxZ) maxZ = h;
-            bool waterFound = false;
-            float wh = peekInterpolatedWaterHeight(lev, x, y, 1, &waterFound);
-            if (waterFound) {
-                if (wh < minZ) minZ = wh;
-                if (wh > maxZ) maxZ = wh;
-            }
-        }
-    }
-    node->aabb.minZ = minZ;
-    node->aabb.maxZ = maxZ;
 
     float maxDist = 1.0e30f;
-    if (observingMaps) {
+    if (observingMaps && !observingMaps->empty()) {
+        float minZ = 1e30f;
+        float maxZ = -1e30f;
+        if (grid.vertStride > 0 && !grid.vertMinZ.empty() &&
+            mapX >= grid.mapX && mapY >= grid.mapY &&
+            mapX + width <= grid.mapX + grid.width &&
+            mapY + height <= grid.mapY + grid.height) {
+            int gxStart = mapX - grid.mapX;
+            int gyStart = mapY - grid.mapY;
+            for (int y = gyStart; y <= gyStart + height; ++y) {
+                const float* rowMin = grid.vertMinZ.data() + static_cast<size_t>(y) * grid.vertStride;
+                const float* rowMax = grid.vertMaxZ.data() + static_cast<size_t>(y) * grid.vertStride;
+                for (int x = gxStart; x <= gxStart + width; ++x) {
+                    if (rowMin[x] < minZ) minZ = rowMin[x];
+                    if (rowMax[x] > maxZ) maxZ = rowMax[x];
+                }
+            }
+        } else {
+            for (int y = mapY; y <= mapY + height; ++y) {
+                for (int x = mapX; x <= mapX + width; ++x) {
+                    int cx = std::clamp(x, 0, lev.gridWidth - 1);
+                    int cy = std::clamp(y, 0, lev.gridHeight - 1);
+                    float h = lev.getCell(cx, cy).height;
+                    if (h < minZ) minZ = h;
+                    if (h > maxZ) maxZ = h;
+                    bool waterFound = false;
+                    float wh = peekInterpolatedWaterHeight(lev, x, y, 1, &waterFound);
+                    if (waterFound) {
+                        if (wh < minZ) minZ = wh;
+                        if (wh > maxZ) maxZ = wh;
+                    }
+                }
+            }
+        }
+        node->aabb.minZ = minZ;
+        node->aabb.maxZ = maxZ;
+
         float minDist = findShortestDistanceToObservingMapSet(
             node->aabb.minX, node->aabb.minY, node->aabb.minZ,
             node->aabb.maxX, node->aabb.maxY, node->aabb.maxZ,
@@ -320,131 +524,174 @@ std::unique_ptr<BgTreeNode> BackgroundTreeBuilder::buildTree(
         }
     }
 
-    int maxDim = std::max(width, height);
-    float maxC = getNodeCurvature(grid, mapX, mapY, width, height);
-
-    bool isLeafNode = false;
-    if (width <= 8 && height <= 8) {
-        isLeafNode = true;
-    } else if (width == 16 && height == 8) {
-        isLeafNode = true;
-    } else if (width == 8 && height == 16) {
-        isLeafNode = (maxC < 34.0f);
-    } else if (width <= 16 && height <= 16) {
-        if (maxC < 34.0f) {
-            isLeafNode = true;
+    // Build strip_unit_hor & strip_unit_ver (max surface stretch along each row/column)
+    std::vector<float> strip_unit_hor(width, 0.0f);
+    std::vector<float> strip_unit_ver(height, 0.0f);
+    int gOffX = mapX - grid.mapX;
+    int gOffY = mapY - grid.mapY;
+    for (int y = 0; y < height; ++y) {
+        const float* rowH = grid.unitSizeHor.data() + static_cast<size_t>(gOffY + y) * grid.width + gOffX;
+        const float* rowV = grid.unitSizeVert.data() + static_cast<size_t>(gOffY + y) * grid.width + gOffX;
+        float maxV = 0.0f;
+        for (int x = 0; x < width; ++x) {
+            if (rowH[x] > strip_unit_hor[x]) strip_unit_hor[x] = rowH[x];
+            if (rowV[x] > maxV) maxV = rowV[x];
         }
+        strip_unit_ver[y] = maxV;
     }
 
-    uint8_t naturalFirstNonSplitBand = 1;
-    if (node->firstBand >= 6) {
-        naturalFirstNonSplitBand = (maxDim <= 128) ? node->firstBand : 7;
-    } else if (isLeafNode) {
-        naturalFirstNonSplitBand = 1;
-    } else if (maxDim <= 16) {
-        naturalFirstNonSplitBand = (maxC >= 50.0f) ? 3 : 2;
-    } else if (maxDim <= 32) {
-        if (maxC > 70.0f) {
-            naturalFirstNonSplitBand = (width == 32 && height == 32) ? 7 : 3;
-        } else if (width == 32 && height == 32) {
-            naturalFirstNonSplitBand = (maxC > 34.0f) ? 3 : 2;
-        } else {
-            naturalFirstNonSplitBand = (maxC > 47.5f) ? 3 : 2;
-        }
-    } else if (maxDim <= 64) {
-        naturalFirstNonSplitBand = (maxC > 64.0f) ? 7 : 3;
-    } else {
-        naturalFirstNonSplitBand = 7;
-    }
+    // Vanilla CLandscapeBackgroundDynamicBuildTemplate::BuildTree (0x12bbd80)
+    int texW = 32;
+    int texH = 32;
+    bool hOk = false;
+    bool vOk = false;
+    node->firstNonSplitBand = 8;
 
-    if (isLeafNode || naturalFirstNonSplitBand <= node->firstBand) {
-        node->firstNonSplitBand = node->firstBand;
-        if (observingMaps) {
-            for (int band = node->lastBand; band >= node->firstBand; --band) {
-                if (band == node->lastBand || band == node->firstBand || maxDist > getLodBandZ(band, lodDistanceScale)) {
-                    node->firstNonSplitBand = static_cast<uint8_t>(band);
-                }
+    float texDetailSafe = std::max(0.01f, textureDetail);
+    int band = node->lastBand;
+    for (; band >= node->firstBand; --band) {
+        hOk = false;
+        vOk = false;
+        if (band == 1 && (width > 16 || height > 16)) {
+            break;
+        }
+
+        float vNeeded = std::max(48.0f * lodDistanceScale, getLodBandZ(band, lodDistanceScale));
+        float maxUnit = 800.0f / ((vNeeded + vNeeded) * texDetailSafe);
+
+        int lockSpacingX = width;
+        std::unique_ptr<SubPatchLODLockNode> uvU;
+        while (true) {
+            int minLockX = (band > 1) ? std::clamp((16 * std::max(width, height)) / texW, 1, width) : 1;
+            uvU = std::make_unique<SubPatchLODLockNode>();
+            if (uvU->build(maxUnit, texW, strip_unit_hor.data(), 0, width, 0.0f, 1.0f, minLockX, lockSpacingX)) {
+                hOk = true;
+                if (!uvU->split) uvU.reset();
+                break;
             }
+            uvU.reset();
+            if (texW >= 128) {
+                hOk = false;
+                break;
+            }
+            texW *= 2;
         }
+
+        int lockSpacingY = height;
+        std::unique_ptr<SubPatchLODLockNode> uvV;
+        while (true) {
+            int minLockY = (band > 1) ? std::clamp((16 * std::max(width, height)) / texH, 1, height) : 1;
+            uvV = std::make_unique<SubPatchLODLockNode>();
+            if (uvV->build(maxUnit, texH, strip_unit_ver.data(), 0, height, 0.0f, 1.0f, minLockY, lockSpacingY)) {
+                vOk = true;
+                if (!uvV->split) uvV.reset();
+                break;
+            }
+            uvV.reset();
+            if (texH >= 128) {
+                vOk = false;
+                break;
+            }
+            texH *= 2;
+        }
+
+        if (!hOk || !vOk) {
+            break;
+        }
+
+        bool needed = (!observingMaps || observingMaps->empty() ||
+                       band == node->lastBand || band == node->firstBand ||
+                       maxDist > getLodBandZ(band, lodDistanceScale));
+        auto& spec = node->bandSpecs[band];
+        spec.valid = true;
+        spec.needed = needed;
+        spec.texW = texW;
+        spec.texH = texH;
+        spec.lockGridSpacingX = lockSpacingX;
+        spec.lockGridSpacingY = lockSpacingY;
+        spec.uvTableU = buildUvLockTable(uvU.get(), width);
+        spec.uvTableV = buildUvLockTable(uvV.get(), height);
+
+        if (needed) {
+            node->firstNonSplitBand = static_cast<uint8_t>(band);
+        }
+    }
+
+    if (hOk && vOk && band < node->firstBand) {
         return node;
     }
 
-    node->firstNonSplitBand = naturalFirstNonSplitBand;
-
-    // Determine split direction
-    bool splitH = false; // true = Width / 2, false = Height / 2
-    if (width > 8 && height <= 8) {
-        splitH = true;
-    } else if (width <= 8 && height > 8) {
+    // Node must split (unless minimum dimension reached)
+    bool splitH = false;
+    if (width <= 16 && height > 16) {
         splitH = false;
-    } else if (width > 16 && height <= 16) {
+    } else if (height <= 16 && width > 16) {
         splitH = true;
-    } else if (width <= 16 && height > 16) {
-        splitH = false;
     } else {
-        std::vector<float> strip_unit_hor(width, 0.0f);
-        std::vector<float> strip_unit_ver(height, 0.0f);
-        for (int x = 0; x < width; ++x) {
-            float maxH = 0.0f;
-            for (int y = 0; y < height; ++y) {
-                float val = grid.unitSizeHor[(mapY + y) * grid.width + (mapX + x)];
-                if (val > maxH) maxH = val;
-            }
-            strip_unit_hor[x] = maxH;
-        }
-        for (int y = 0; y < height; ++y) {
-            float maxV = 0.0f;
-            for (int x = 0; x < width; ++x) {
-                float val = grid.unitSizeVert[(mapY + y) * grid.width + (mapX + x)];
-                if (val > maxV) maxV = val;
-            }
-            strip_unit_ver[y] = maxV;
-        }
+        bool canSplitH = (!hOk && width > 2);
+        bool canSplitV = (!vOk && height > 2);
+        if (canSplitH && canSplitV) {
+            float vNeeded = std::max(48.0f * lodDistanceScale, getLodBandZ(band, lodDistanceScale));
+            float maxUnit = 800.0f / ((vNeeded + vNeeded) * texDetailSafe);
 
-        float sumH = 0.0f;
-        for (float v : strip_unit_hor) sumH += v;
-        float sumV = 0.0f;
-        for (float v : strip_unit_ver) sumV += v;
+            int baseStep = std::max((16 * width) / texW, (16 * height) / texH);
+            int subStepU = std::clamp(baseStep, 1, width);
+            int subStepV = std::clamp(baseStep, 1, height);
 
-        if (width == 16 && height == 16 && sumH <= 40.0f && sumV > 40.0f) {
-            splitH = false;
-        } else if (width == 16 && height == 16 && sumV <= 40.0f && sumH > 40.0f) {
-            splitH = true;
-        } else {
-            int sub_step = std::max(1, (16 * width) / 128);
-
-            float u_needed = 0.0f;
-            for (int x = 0; x < width; x += sub_step) {
+            float uNeeded = 0.0f;
+            for (int x = 0; x < width; x += subStepU) {
                 float maxH = 0.0f;
-                int endX = std::min(width, x + sub_step);
+                int endX = std::min(width, x + subStepU);
                 for (int i = x; i < endX; ++i) {
                     if (strip_unit_hor[i] > maxH) maxH = strip_unit_hor[i];
                 }
-                u_needed += maxH * sub_step;
+                uNeeded += maxH * maxUnit * static_cast<float>(subStepU);
             }
 
-            float v_needed = 0.0f;
-            for (int y = 0; y < height; y += sub_step) {
+            float vNeedAcc = 0.0f;
+            for (int y = 0; y < height; y += subStepV) {
                 float maxV = 0.0f;
-                int endY = std::min(height, y + sub_step);
+                int endY = std::min(height, y + subStepV);
                 for (int j = y; j < endY; ++j) {
                     if (strip_unit_ver[j] > maxV) maxV = strip_unit_ver[j];
                 }
-                v_needed += maxV * sub_step;
+                vNeedAcc += maxV * maxUnit * static_cast<float>(subStepV);
             }
 
-            splitH = (v_needed < u_needed);
+            splitH = (vNeedAcc < uNeeded);
+        } else if (canSplitH) {
+            splitH = true;
+        } else if (canSplitV) {
+            splitH = false;
+        } else {
+            // Minimum 2x2 leaf fallback matching 0x12bbd80 LABEL_180+
+            for (int b = node->lastBand; b >= node->firstBand; --b) {
+                auto& spec = node->bandSpecs[b];
+                spec.valid = true;
+                spec.needed = (!observingMaps || observingMaps->empty() ||
+                               b == node->firstBand || b == node->lastBand ||
+                               maxDist > getLodBandZ(b, lodDistanceScale));
+                spec.texW = texW;
+                spec.texH = texH;
+                spec.lockGridSpacingX = width;
+                spec.lockGridSpacingY = height;
+                spec.uvTableU = buildUvLockTable(nullptr, width);
+                spec.uvTableV = buildUvLockTable(nullptr, height);
+            }
+            node->firstNonSplitBand = node->firstBand;
+            return node;
         }
     }
 
+    int childMaxBand = std::min<int>(node->firstNonSplitBand, maxLodBand);
     if (splitH) {
         int halfW = width / 2;
-        node->leftChild = buildTree(grid, lev, mapX, mapY, halfW, height, node->firstNonSplitBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
-        node->rightChild = buildTree(grid, lev, mapX + halfW, mapY, halfW, height, node->firstNonSplitBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
+        node->leftChild = buildTree(grid, lev, mapX, mapY, halfW, height, childMaxBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
+        node->rightChild = buildTree(grid, lev, mapX + halfW, mapY, halfW, height, childMaxBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
     } else {
         int halfH = height / 2;
-        node->leftChild = buildTree(grid, lev, mapX, mapY, width, halfH, node->firstNonSplitBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
-        node->rightChild = buildTree(grid, lev, mapX, mapY + halfH, width, halfH, node->firstNonSplitBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
+        node->leftChild = buildTree(grid, lev, mapX, mapY, width, halfH, childMaxBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
+        node->rightChild = buildTree(grid, lev, mapX, mapY + halfH, width, halfH, childMaxBand, textureDetail, maxPatchSize, observingMaps, worldX, worldY, lodDistanceScale);
     }
 
     return node;
@@ -1104,7 +1351,9 @@ static inline BgVertexRaw buildVertex(
     int mapX, int mapY,
     int patchW, int patchH,
     int subx, int suby,
-    const std::vector<WorldWaterNeighbor>* neighbors = nullptr
+    const std::vector<WorldWaterNeighbor>* neighbors = nullptr,
+    const std::vector<float>* uvTableU = nullptr,
+    const std::vector<float>* uvTableV = nullptr
 ) {
     int gx = mapX + subx;
     int gy = mapY + suby;
@@ -1114,8 +1363,15 @@ static inline BgVertexRaw buildVertex(
     v.y = static_cast<uint16_t>(worldY + gy);
     v.z = peekHeightWithNeighbors(lev, worldX, worldY, gx, gy, neighbors);
     v.normal = calculatePackedNormal(lev, gx, gy, worldX, worldY, neighbors);
-    v.u = static_cast<uint16_t>(std::nearbyint((subx * 255.0f) / patchW));
-    v.v = static_cast<uint16_t>(std::nearbyint((suby * 255.0f) / patchH));
+
+    float uVal = (uvTableU && subx >= 0 && subx < static_cast<int>(uvTableU->size()))
+                     ? (*uvTableU)[subx]
+                     : (static_cast<float>(subx) / static_cast<float>(std::max(1, patchW)));
+    float vVal = (uvTableV && suby >= 0 && suby < static_cast<int>(uvTableV->size()))
+                     ? (*uvTableV)[suby]
+                     : (static_cast<float>(suby) / static_cast<float>(std::max(1, patchH)));
+    v.u = static_cast<uint16_t>(std::clamp(static_cast<int>(uVal * 255.0f), 0, 255));
+    v.v = static_cast<uint16_t>(std::clamp(static_cast<int>(vVal * 255.0f), 0, 255));
     return v;
 }
 
@@ -1236,6 +1492,7 @@ static void buildSharedIndexBufferGenerationTables(
 // Matching BuildLODSubSectionBuffersTriangle (0x1247230)
 static void buildLODSubSectionBuffersTriangle(
     const LevData& lev,
+    const std::vector<WorldWaterNeighbor>* neighbors,
     const BackgroundTreeBuilder::EngineLandscapeLODMap* pLodMap,
     int worldX, int worldY,
     int mapX, int mapY, int patchW, int patchH, int lodBand,
@@ -1243,6 +1500,8 @@ static void buildLODSubSectionBuffersTriangle(
     std::vector<uint16_t>& ib,
     std::vector<int>& vertex_grid,
     EdgeMappers& mappers,
+    const std::vector<float>* uvTableU,
+    const std::vector<float>* uvTableV,
     int subx0, int suby0,
     int subx1, int suby1,
     int subx2, int suby2
@@ -1261,8 +1520,8 @@ static void buildLODSubSectionBuffersTriangle(
         }
         // Subdivide into 2 triangles
         buildLODSubSectionBuffersTriangle(
-            lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-            vb, ib, vertex_grid, mappers,
+            lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+            vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
             subx1, suby1, subx2, suby2, midX, midY
         );
         suby1 = suby0;
@@ -1277,7 +1536,7 @@ static void buildLODSubSectionBuffersTriangle(
         int gIdx = sx + sy * (patchW + 1);
         if (vertex_grid[gIdx] < 0) {
             int vIdx = static_cast<int>(vb.size());
-            vb.push_back(buildVertex(lev, worldX, worldY, mapX, mapY, patchW, patchH, sx, sy));
+            vb.push_back(buildVertex(lev, worldX, worldY, mapX, mapY, patchW, patchH, sx, sy, neighbors, uvTableU, uvTableV));
             vertex_grid[gIdx] = vIdx;
         }
         return vertex_grid[gIdx];
@@ -1366,6 +1625,7 @@ static void buildLODSubSectionBuffersTriangle(
 // Matching BuildLODSubSectionBuffersRectangle (0x1247dd0)
 static void buildLODSubSectionBuffersRectangle(
     const LevData& lev,
+    const std::vector<WorldWaterNeighbor>* neighbors,
     const BackgroundTreeBuilder::EngineLandscapeLODMap* pLodMap,
     int worldX, int worldY,
     int mapX, int mapY, int patchW, int patchH, int lodBand,
@@ -1374,14 +1634,17 @@ static void buildLODSubSectionBuffersRectangle(
     std::vector<uint16_t>& ib,
     std::vector<int>& vertex_grid,
     EdgeMappers& mappers,
+    const std::vector<float>* uvTableU,
+    const std::vector<float>* uvTableV,
     int subx, int suby, int width, int height
 ) {
     while (true) {
         while (width > height || width > lockedSpacingX) {
             width /= 2;
             buildLODSubSectionBuffersRectangle(
-                lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+                lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
                 lockedSpacingX, lockedSpacingY, vb, ib, vertex_grid, mappers,
+                uvTableU, uvTableV,
                 subx, suby, width, height
             );
             subx += width;
@@ -1391,8 +1654,9 @@ static void buildLODSubSectionBuffersRectangle(
         }
         height /= 2;
         buildLODSubSectionBuffersRectangle(
-            lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+            lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
             lockedSpacingX, lockedSpacingY, vb, ib, vertex_grid, mappers,
+            uvTableU, uvTableV,
             subx, suby, width, height
         );
         suby += height;
@@ -1401,24 +1665,24 @@ static void buildLODSubSectionBuffersRectangle(
     if (width == 1) {
         if (((subx ^ suby) & 1) != 0) {
             buildLODSubSectionBuffersTriangle(
-                lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-                vb, ib, vertex_grid, mappers,
+                lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+                vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
                 subx, suby, subx, suby + 1, subx + 1, suby
             );
             buildLODSubSectionBuffersTriangle(
-                lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-                vb, ib, vertex_grid, mappers,
+                lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+                vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
                 subx + 1, suby + 1, subx + 1, suby, subx, suby + 1
             );
         } else {
             buildLODSubSectionBuffersTriangle(
-                lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-                vb, ib, vertex_grid, mappers,
+                lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+                vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
                 subx, suby, subx, suby + 1, subx + 1, suby + 1
             );
             buildLODSubSectionBuffersTriangle(
-                lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-                vb, ib, vertex_grid, mappers,
+                lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+                vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
                 subx, suby, subx + 1, suby + 1, subx + 1, suby
             );
         }
@@ -1429,23 +1693,23 @@ static void buildLODSubSectionBuffersRectangle(
         int endY = suby + width;
 
         buildLODSubSectionBuffersTriangle(
-            lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-            vb, ib, vertex_grid, mappers,
+            lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+            vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
             endX, suby, subx, suby, midX, midY
         );
         buildLODSubSectionBuffersTriangle(
-            lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-            vb, ib, vertex_grid, mappers,
+            lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+            vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
             subx, endY, endX, endY, midX, midY
         );
         buildLODSubSectionBuffersTriangle(
-            lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-            vb, ib, vertex_grid, mappers,
+            lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+            vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
             subx, suby, subx, endY, midX, midY
         );
         buildLODSubSectionBuffersTriangle(
-            lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
-            vb, ib, vertex_grid, mappers,
+            lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+            vb, ib, vertex_grid, mappers, uvTableU, uvTableV,
             endX, endY, endX, suby, midX, midY
         );
     }
@@ -1592,7 +1856,11 @@ std::vector<uint8_t> BackgroundTreeBuilder::createPatchFrame(
     const EngineLandscapeLODMap* pLodMap,
     const WaterShoreCalculator* pWaterContext,
     const BgTreeSettings& settings,
-    const std::vector<WorldWaterNeighbor>* neighbors
+    const std::vector<WorldWaterNeighbor>* neighbors,
+    int lockedSpacingX,
+    int lockedSpacingY,
+    const std::vector<float>* uvTableU,
+    const std::vector<float>* uvTableV
 ) {
     std::vector<BgVertexRaw> vb;
     std::vector<uint16_t> ib;
@@ -1617,26 +1885,24 @@ std::vector<uint8_t> BackgroundTreeBuilder::createPatchFrame(
         for (int i = 0; i < totalVerts; ++i) {
             int sx = src_verts[i].x;
             int sy = src_verts[i].y;
-            vb[i] = buildVertex(lev, worldX, worldY, mapX, mapY, patchW, patchH, sx, sy, neighbors);
+            vb[i] = buildVertex(lev, worldX, worldY, mapX, mapY, patchW, patchH, sx, sy, neighbors, uvTableU, uvTableV);
             vertex_grid[sx + sy * (patchW + 1)] = i;
         }
     } else {
-        int lockedSpacingX = std::max(1, (16 * std::max(patchW, patchH)) / texW);
-        int lockedSpacingY = std::max(1, (16 * std::max(patchW, patchH)) / texH);
+        if (lockedSpacingX <= 0) {
+            lockedSpacingX = std::max(1, (16 * std::max(patchW, patchH)) / std::max(1, texW));
+        }
+        if (lockedSpacingY <= 0) {
+            lockedSpacingY = std::max(1, (16 * std::max(patchW, patchH)) / std::max(1, texH));
+        }
 
         buildLODSubSectionBuffersRectangle(
-            lev, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
+            lev, neighbors, pLodMap, worldX, worldY, mapX, mapY, patchW, patchH, lodBand,
             lockedSpacingX, lockedSpacingY,
             vb, ib, vertex_grid, mappers,
+            uvTableU, uvTableV,
             0, 0, patchW, patchH
         );
-
-        for (auto& v : vb) {
-            int gx = static_cast<int>(v.x) - worldX;
-            int gy = static_cast<int>(v.y) - worldY;
-            v.z = peekHeightWithNeighbors(lev, worldX, worldY, gx, gy, neighbors);
-            v.normal = calculatePackedNormal(lev, gx, gy, worldX, worldY, neighbors);
-        }
 
         polyCount = static_cast<uint16_t>(ib.size() / 3);
 
@@ -1743,7 +2009,8 @@ std::vector<uint8_t> BackgroundTreeBuilder::createPatchFrame(
     // 4. Procedural texture baking
     auto textureBytes = Dxt1Baker::bakeTexture(
         lev, materials, mapX, mapY, patchW, patchH, texW, texH, worldX, worldY,
-        settings.generateMipmaps, settings.highQualityDxt, neighbors
+        settings.generateMipmaps, settings.highQualityDxt, neighbors,
+        uvTableU, uvTableV
     );
 
     // 5. Edge strips (4 strips: Left, Right, Bottom, Top matching BuildEdgeStrips 0x1246c90)
@@ -2092,6 +2359,9 @@ void BackgroundTreeBuilder::generateNodePatches(
     struct PatchBuildTask {
         BgLodInfo* lodPtr = nullptr;
         int mapX = 0, mapY = 0, width = 0, height = 0, band = 0, texW = 0, texH = 0;
+        int lockedSpacingX = 0, lockedSpacingY = 0;
+        const std::vector<float>* uvTableU = nullptr;
+        const std::vector<float>* uvTableV = nullptr;
     };
 
     std::vector<PatchBuildTask> tasks;
@@ -2107,14 +2377,32 @@ void BackgroundTreeBuilder::generateNodePatches(
             int texScale = std::max(1, settings.textureScale);
             uint8_t lastSavedBand = 0;
             for (int band = n->firstNonSplitBand; band <= n->lastBand; ++band) {
+                const auto& spec = n->bandSpecs[band];
                 int texW = 128 * texScale;
                 int texH = 128 * texScale;
-                if (band == 1) { texW = 64 * texScale; texH = 64 * texScale; }
-                else if (band == 2 || band == 3) { texW = 128 * texScale; texH = 128 * texScale; }
-                else if (band == 7) { texW = 64 * texScale; texH = 32 * texScale; }
+                int lockX = 0;
+                int lockY = 0;
+                const std::vector<float>* uvU = nullptr;
+                const std::vector<float>* uvV = nullptr;
+
+                if (spec.valid) {
+                    texW = spec.texW * texScale;
+                    texH = spec.texH * texScale;
+                    lockX = spec.lockGridSpacingX;
+                    lockY = spec.lockGridSpacingY;
+                    uvU = spec.uvTableU.empty() ? nullptr : &spec.uvTableU;
+                    uvV = spec.uvTableV.empty() ? nullptr : &spec.uvTableV;
+                } else {
+                    if (band == 1) { texW = 64 * texScale; texH = 64 * texScale; }
+                    else if (band == 2 || band == 3) { texW = 128 * texScale; texH = 128 * texScale; }
+                    else if (band == 7) { texW = 64 * texScale; texH = 32 * texScale; }
+                }
+
+                bool shouldShare = settings.shareLodBands && lastSavedBand != 0 &&
+                                 ((band == 4 || band == 5 || band == 6) || (spec.valid && !spec.needed));
 
                 BgLodInfo lod;
-                if (settings.shareLodBands && lastSavedBand != 0 && (band == 4 || band == 5 || band == 6)) {
+                if (shouldShare) {
                     lod.optimizedBandRemap = lastSavedBand;
                     n->lodInfo.push_back(std::move(lod));
                 } else {
@@ -2124,7 +2412,7 @@ void BackgroundTreeBuilder::generateNodePatches(
                     tasks.push_back({
                         &n->lodInfo.back(),
                         n->mapX, n->mapY, n->width, n->height,
-                        band, texW, texH
+                        band, texW, texH, lockX, lockY, uvU, uvV
                     });
                 }
             }
@@ -2141,6 +2429,10 @@ void BackgroundTreeBuilder::generateNodePatches(
     setupMetadataAndCollectTasks(node);
 
     if (!tasks.empty()) {
+        // Pre-build foreground patch material/normal grid in parallel once per map
+        // to eliminate worker contention on s_gridCacheMutex.
+        Dxt1Baker::prepareMapCache(lev, materials, worldX, worldY, neighbors);
+
         std::atomic<size_t> nextTask{0};
         unsigned int numThreads = std::min(
             std::max(1u, std::thread::hardware_concurrency()),
@@ -2151,14 +2443,16 @@ void BackgroundTreeBuilder::generateNodePatches(
         for (unsigned int t = 0; t < numThreads; ++t) {
             workers.emplace_back([&]() {
                 while (true) {
-                    size_t idx = nextTask.fetch_add(1);
+                    size_t idx = nextTask.fetch_add(1, std::memory_order_relaxed);
                     if (idx >= tasks.size()) break;
                     const auto& task = tasks[idx];
                     task.lodPtr->compressedFrame = createPatchFrame(
                         lev, materials, worldX, worldY,
                         task.mapX, task.mapY, task.width, task.height,
                         task.band, task.texW, task.texH, pLodMap, &waterContext,
-                        settings, neighbors
+                        settings, neighbors,
+                        task.lockedSpacingX, task.lockedSpacingY,
+                        task.uvTableU, task.uvTableV
                     );
                 }
             });
@@ -2185,7 +2479,7 @@ BgTreeBuildResult BackgroundTreeBuilder::build(
     auto grid = buildTopologyGrid(lev, 0, 0, lev.width, lev.height);
     auto root = buildTreeSubdivideIntoPowersOf2(
         grid, lev, 0, 0, lev.width, lev.height,
-        settings.maxLodBand, settings.meshDetail, 256, observingMaps, worldX, worldY,
+        settings.maxLodBand, settings.proceduralTextureDetail, 256, observingMaps, worldX, worldY,
         settings.lodDistanceScale
     );
 

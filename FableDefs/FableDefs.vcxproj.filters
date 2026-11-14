@@ -124,6 +124,9 @@
     <ClCompile Include="src\diagnostic.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\embedded_headers.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\header_resolver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

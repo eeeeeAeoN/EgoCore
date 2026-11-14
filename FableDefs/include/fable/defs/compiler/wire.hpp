@@ -340,6 +340,18 @@ void write_value(const T &value, ByteWriter &out, WireStats &stats) {
         if (value.Type == 2) {
             out.f32(value.Height);
         }
+    } else if constexpr (std::is_same_v<U, ::fable::defs::CParticleMorphs::CEntry>) {
+        // MSVC stores a 4-byte padded pair (36-byte CEntry after the 4-byte key)
+        // on the wire where `bool Blending` occupies a full 32-bit slot.
+        out.i32(static_cast<std::int32_t>(value.MorphType));
+        out.i32(value.Blending ? 1 : 0);
+        out.i32(static_cast<std::int32_t>(value.Location));
+        out.i32(value.LocationName.TablePos);
+        out.i32(value.LocationIndex);
+        out.i32(value.ParticleIndex);
+        out.i32(value.SecondParticleIndex);
+        out.f32(value.StartAtMorphStrength);
+        out.f32(value.EndAtMorphStrength);
     } else if constexpr (::fable::defs::is_model_class<U>::value) {
         // `DefStruct` values carry field controls even when nested (e.g. a
         // `CUIStateDef` inside a vector); `WireStruct` values are bare members

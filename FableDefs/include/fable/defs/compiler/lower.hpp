@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -10,6 +11,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -55,6 +57,33 @@ std::optional<LowerError> evaluate_expr(const Expr &expr, const SymbolTable &sym
                                         const DefinitionIndex *definitions, Value &out);
 
 namespace detail {
+
+/// Decode synthetic `<prefix>_<crc>` fallback labels emitted by the decompiler
+/// back into raw CRC32 keys so headers-only round-trips preserve hashes.
+inline std::uint32_t resolve_string_crc(std::string_view text) {
+    const auto parse_suffix = [](std::string_view suffix, int base,
+                                 bool exact_len_8) -> std::optional<std::uint32_t> {
+        if (suffix.empty() || (exact_len_8 && suffix.size() != 8)) {
+            return std::nullopt;
+        }
+        std::uint32_t parsed = 0;
+        const char *begin = suffix.data();
+        const char *end = begin + suffix.size();
+        const auto [ptr, ec] = std::from_chars(begin, end, parsed, base);
+        if (ec == std::errc{} && ptr == end) {
+            return parsed;
+        }
+        return std::nullopt;
+    };
+    if (text.rfind("snd_", 0) == 0) {
+        if (const auto v = parse_suffix(text.substr(4), 10, false)) return *v;
+    } else if (text.rfind("eff_", 0) == 0) {
+        if (const auto v = parse_suffix(text.substr(4), 10, false)) return *v;
+    } else if (text.rfind("anim_", 0) == 0) {
+        if (const auto v = parse_suffix(text.substr(5), 16, true)) return *v;
+    }
+    return crc32(text);
+}
 
 template <class T>
 inline constexpr bool is_leaf_class_v =
@@ -578,7 +607,9 @@ void assign_constructor(T &field, const Expr &expr, Context &context) {
             }
             return value.kind == Value::Kind::Float
                        ? static_cast<std::int32_t>(value.floating)
-                       : static_cast<std::int32_t>(value.integer);
+                       : value.kind == Value::Kind::Bool
+                             ? (value.boolean ? 1 : 0)
+                             : static_cast<std::int32_t>(value.integer);
         };
         const auto arg_string_or_i32 = [&](std::size_t index) -> std::int32_t {
             if (index >= expr.arguments.size()) {
@@ -662,6 +693,11 @@ void assign_constructor(T &field, const Expr &expr, Context &context) {
         value.BlocksNavigation = args[3].kind == Value::Kind::Bool
                                      ? args[3].boolean
                                      : args[3].integer != 0;
+        // Retail CPersistTraits<CDegradableInfo>::TransferBinaryOut writes 28011747 (0x01ab6ce3).
+        value.Skip[0] = 0xe3;
+        value.Skip[1] = 0x6c;
+        value.Skip[2] = 0xab;
+        value.Skip[3] = 0x01;
         field = value;
         ++context.stats.applied;
     } else if constexpr (std::is_same_v<T, ::fable::defs::CPhysicalPrimitiveInit>) {
@@ -739,6 +775,27 @@ void assign_constructor(T &field, const Expr &expr, Context &context) {
         }
         field.IntValue = (channels[3] << 24) | (channels[0] << 16) |
                          (channels[1] << 8) | channels[2];
+        ++context.stats.applied;
+    } else if constexpr (std::is_same_v<T, ::fable::defs::CReverbEnvironmentEntry>) {
+        if (expr.kind != Expr::Kind::Constructor) {
+            ++context.stats.unsupported;
+            return;
+        }
+        ::fable::defs::CReverbEnvironmentEntry value{};
+        const std::size_t count = std::min<std::size_t>(expr.arguments.size(), 21);
+        for (std::size_t i = 0; i < count; ++i) {
+            Value arg;
+            if (evaluate_leaf(&expr.arguments[i], context, arg)) {
+                if (arg.kind == Value::Kind::Float) {
+                    value.Params[i] = static_cast<float>(arg.floating);
+                } else if (arg.kind == Value::Kind::Integer) {
+                    value.Params[i] = static_cast<float>(arg.integer);
+                } else if (arg.kind == Value::Kind::Bool) {
+                    value.Params[i] = arg.boolean ? 1.0f : 0.0f;
+                }
+            }
+        }
+        field = value;
         ++context.stats.applied;
     } else if constexpr (std::is_same_v<T, CComboMultiplierData>) {
         if (expr.kind != Expr::Kind::Constructor || expr.arguments.size() < 2) {
@@ -1090,7 +1147,7 @@ void apply_map(M &field, const std::vector<const Statement *> &statements,
                 }
             } else if constexpr (std::is_integral_v<Key> || std::is_enum_v<Key>) {
                 if (call.arguments[0].kind == Expr::Kind::String) {
-                    key = static_cast<Key>(crc32(call.arguments[0].text));
+                    key = static_cast<Key>(resolve_string_crc(call.arguments[0].text));
                     key_ok = true;
                 } else if (evaluate_leaf(&call.arguments[0], context, key_value) &&
                            assign_value(key, key_value, context.stats, context.names, context.definitions)) {
@@ -1439,8 +1496,9 @@ inline void apply_personality_traits(::fable::defs::COpinionPersonalityTraits &f
                                 : static_cast<float>(value.integer);
             std::uint32_t bits = 0;
             std::memcpy(&bits, &f, sizeof(bits));
+            const std::size_t slot = (i == 7) ? 7 : (i == 8) ? 6 : (i - 1);
             const std::size_t offset =
-                static_cast<std::size_t>(trait) * 36 + (i - 1) * 4;
+                static_cast<std::size_t>(trait) * 36 + slot * 4;
             for (std::size_t b = 0; b < 4; ++b) {
                 field.Data[offset + b] =
                     static_cast<std::uint8_t>(bits >> (b * 8));
@@ -1562,7 +1620,9 @@ inline void apply_texture_morphs(::fable::defs::CTextureMorphs &field,
             }
             return value.kind == Value::Kind::Float
                        ? static_cast<std::int32_t>(value.floating)
-                       : static_cast<std::int32_t>(value.integer);
+                       : value.kind == Value::Kind::Bool
+                             ? (value.boolean ? 1 : 0)
+                             : static_cast<std::int32_t>(value.integer);
         };
         ::fable::defs::CTextureMorphEntry entry;
         entry.MorphType = static_cast<EHeroMorphType>(eval_i32(1));
@@ -1585,8 +1645,15 @@ inline void apply_replaceable_meshes(::fable::defs::NGraphicAppearance::CReplace
         const MethodCall &call = statement->method_call;
         if (call.object.segments.size() != depth + 1 ||
             call.object.segments[0].kind != PathSegment::Kind::Field ||
-            call.object.segments[0].field != "Meshes" ||
-            (call.method != "Add" && call.method != "add") ||
+            call.object.segments[0].field != "Meshes") {
+            continue;
+        }
+        if (call.method == "clear" || call.method == "Clear") {
+            field.Vector.clear();
+            ++context.stats.applied;
+            continue;
+        }
+        if ((call.method != "Add" && call.method != "add") ||
             call.arguments.size() < 2) {
             continue;
         }
@@ -1626,7 +1693,9 @@ inline void apply_appearance_modifier_graphics(
             }
             return value.kind == Value::Kind::Float
                        ? static_cast<std::int32_t>(value.floating)
-                       : static_cast<std::int32_t>(value.integer);
+                       : value.kind == Value::Kind::Bool
+                             ? (value.boolean ? 1 : 0)
+                             : static_cast<std::int32_t>(value.integer);
         };
         const auto eval_f32 = [&](std::size_t index) -> float {
             Value value;
@@ -1678,7 +1747,9 @@ inline void apply_random_appearance_morph(
             }
             return value.kind == Value::Kind::Float
                        ? static_cast<std::int32_t>(value.floating)
-                       : static_cast<std::int32_t>(value.integer);
+                       : value.kind == Value::Kind::Bool
+                             ? (value.boolean ? 1 : 0)
+                             : static_cast<std::int32_t>(value.integer);
         };
         const auto eval_bool = [&](std::size_t index) -> bool {
             Value value;
@@ -1874,7 +1945,9 @@ inline void apply_skeletal_morphs(::fable::defs::CSkeletalMorphs &field,
             }
             return value.kind == Value::Kind::Float
                        ? static_cast<std::int32_t>(value.floating)
-                       : static_cast<std::int32_t>(value.integer);
+                       : value.kind == Value::Kind::Bool
+                             ? (value.boolean ? 1 : 0)
+                             : static_cast<std::int32_t>(value.integer);
         };
         const std::uint32_t key = static_cast<std::uint32_t>(eval_i32(0));
         ::fable::defs::CSkeletalMorphs::CEntry entry;
@@ -1891,9 +1964,9 @@ inline void apply_skeletal_morphs(::fable::defs::CSkeletalMorphs &field,
     }
 }
 
-inline void apply_particle_morph_names(::fable::defs::CParticleMorphs &,
-                                       const std::vector<const Statement *> &child,
-                                       std::size_t depth, Context &context) {
+inline void apply_particle_morphs(::fable::defs::CParticleMorphs &field,
+                                  const std::vector<const Statement *> &child,
+                                  std::size_t depth, Context &context) {
     for (const Statement *statement : child) {
         if (statement->kind != Statement::Kind::MethodCall) {
             continue;
@@ -1905,14 +1978,60 @@ inline void apply_particle_morph_names(::fable::defs::CParticleMorphs &,
              call.object.segments[0].field != "IdleParticleMorphs")) {
             continue;
         }
-        // The location-name argument is a names.bin string even though the
-        // particle entry itself is not modeled yet.
-        const std::size_t index = call.method == "AddBlend" ? 6 : 5;
-        if (context.names != nullptr && call.arguments.size() > index &&
-            call.arguments[index].kind == Expr::Kind::String) {
-            context.names->intern(call.arguments[index].text);
+        const bool is_blend = call.method == "AddBlend" || call.method == "addblend";
+        const bool is_add = call.method == "Add" || call.method == "add";
+        if ((!is_add && !is_blend) || call.arguments.size() < (is_blend ? 8u : 7u)) {
+            continue;
         }
+        const auto eval_i32 = [&](std::size_t index) -> std::int32_t {
+            Value value;
+            if (index < call.arguments.size()) {
+                evaluate_leaf(&call.arguments[index], context, value);
+            }
+            return value.kind == Value::Kind::Float
+                       ? static_cast<std::int32_t>(value.floating)
+                       : value.kind == Value::Kind::Bool
+                             ? (value.boolean ? 1 : 0)
+                             : static_cast<std::int32_t>(value.integer);
+        };
+        const auto eval_f32 = [&](std::size_t index) -> float {
+            Value value;
+            if (index < call.arguments.size()) {
+                evaluate_leaf(&call.arguments[index], context, value);
+            }
+            return value.kind == Value::Kind::Float
+                       ? static_cast<float>(value.floating)
+                       : static_cast<float>(value.integer);
+        };
+        const auto key = static_cast<::fable::defs::EHeroMorphType>(eval_i32(0));
+        ::fable::defs::CParticleMorphs::CEntry entry{};
+        entry.MorphType = key;
+        entry.Blending = is_blend;
+        entry.ParticleIndex = eval_i32(1);
+        std::size_t idx = 2;
+        if (is_blend) {
+            entry.SecondParticleIndex = eval_i32(idx++);
+        }
+        entry.StartAtMorphStrength = eval_f32(idx++);
+        entry.EndAtMorphStrength = eval_f32(idx++);
+        entry.Location = static_cast<::fable::defs::EMeshLocationPoint>(eval_i32(idx++));
+        if (context.names != nullptr && idx < call.arguments.size() &&
+            call.arguments[idx].kind == Expr::Kind::String) {
+            entry.LocationName.TablePos = static_cast<std::int32_t>(
+                context.names->intern(call.arguments[idx].text));
+        } else {
+            entry.LocationName.TablePos = -1;
+        }
+        ++idx;
+        entry.LocationIndex = eval_i32(idx);
+        field.Morphs.emplace_back(key, entry);
+        ++context.stats.applied;
     }
+    std::stable_sort(field.Morphs.begin(), field.Morphs.end(),
+                     [](const auto &a, const auto &b) {
+                         return static_cast<std::int32_t>(a.first) <
+                                static_cast<std::int32_t>(b.first);
+                     });
 }
 
 inline void apply_reaction_matches(::fable::defs::CReactionMatchList &field,
@@ -1940,7 +2059,9 @@ inline void apply_reaction_matches(::fable::defs::CReactionMatchList &field,
             }
             return value.kind == Value::Kind::Float
                        ? static_cast<std::int32_t>(value.floating)
-                       : static_cast<std::int32_t>(value.integer);
+                       : value.kind == Value::Kind::Bool
+                             ? (value.boolean ? 1 : 0)
+                             : static_cast<std::int32_t>(value.integer);
         };
         const auto eval_f32 = [&](const std::vector<Expr> &args,
                                   std::size_t index) -> float {
@@ -2003,12 +2124,17 @@ inline void apply_reaction_matches(::fable::defs::CReactionMatchList &field,
             const double y_centre = renown_min + (renown_max - renown_min) * 0.5;
             entry.XAxisOpinionType = 0;
             entry.YAxisOpinionType = 1;
+            // Retail stores XCentre/YCentre as float first before computing the inverse radii.
             entry.XCentre = static_cast<float>(x_centre);
-            entry.NegInvXRadius = static_cast<float>(1.0 / (x_centre - morality_min));
-            entry.PosInvXRadius = static_cast<float>(1.0 / (morality_max - x_centre));
+            entry.NegInvXRadius =
+                static_cast<float>(1.0 / (static_cast<double>(entry.XCentre) - morality_min));
+            entry.PosInvXRadius =
+                static_cast<float>(1.0 / (morality_max - static_cast<double>(entry.XCentre)));
             entry.YCentre = static_cast<float>(y_centre);
-            entry.NegInvYRadius = static_cast<float>(1.0 / (y_centre - renown_min));
-            entry.PosInvYRadius = static_cast<float>(1.0 / (renown_max - y_centre));
+            entry.NegInvYRadius =
+                static_cast<float>(1.0 / (static_cast<double>(entry.YCentre) - renown_min));
+            entry.PosInvYRadius =
+                static_cast<float>(1.0 / (renown_max - static_cast<double>(entry.YCentre)));
             entry.ScarinessShift = eval_f32(a, 4);
             entry.AgreeablenessShift = eval_f32(a, 5);
             entry.AttractivenessShift = eval_f32(a, 6);
@@ -2016,6 +2142,125 @@ inline void apply_reaction_matches(::fable::defs::CReactionMatchList &field,
             continue;
         }
         field.Elements.push_back(entry);
+        ++context.stats.applied;
+    }
+}
+
+inline void apply_frequency_traits(::fable::defs::CReactionFrequencyTraitsArray &field,
+                                   const std::vector<const Statement *> &child,
+                                   std::size_t depth, Context &context) {
+    constexpr std::size_t kReactionCount = 79;
+    constexpr double kConstantFps = 15.0;
+    const auto fill_linear = [](::fable::defs::CReactionFrequencyTraits &t, float min_secs,
+                                float max_secs) {
+        const float min_frames = static_cast<float>(kConstantFps * static_cast<double>(min_secs));
+        const float max_frames = static_cast<float>(kConstantFps * static_cast<double>(max_secs));
+        t.Type = 1;
+        t.MinWait = min_frames;
+        t.WaitRange = max_frames - min_frames;
+    };
+    const auto fill_periodic = [](::fable::defs::CReactionFrequencyTraits &t, float ru,
+                                  float sh, float lf, float hf) {
+        t.Type = 2;
+        t.LowFreqPerMin = lf;
+        t.HighLowFreqInterval = hf - lf;
+        t.FramesPerMinute = 60u * 15u;
+        t.RampUpTimeFrames =
+            static_cast<std::uint32_t>(static_cast<std::int64_t>(kConstantFps * ru));
+        t.CutoffIntervalFrames = static_cast<std::uint32_t>(
+            static_cast<std::int64_t>((static_cast<double>(ru) + static_cast<double>(sh)) * kConstantFps));
+    };
+    const auto fill_controlled_count = [](::fable::defs::CReactionFrequencyTraits &t,
+                                          std::uint32_t max_count, float min_gap_secs,
+                                          float recharge_secs, bool allow_repeats) {
+        const float mc_f = static_cast<float>(max_count);
+        t.Type = 3;
+        t.AllowIndividualRepeats = allow_repeats;
+        t.MinGapFrames = static_cast<std::uint32_t>(
+            static_cast<std::int64_t>(kConstantFps * static_cast<double>(min_gap_secs)));
+        t.CurrentAvailableCount = mc_f;
+        t.MaxCount = mc_f;
+        t.CountRechargePerFrame =
+            recharge_secs <= 0.0f
+                ? mc_f
+                : static_cast<float>(static_cast<double>(mc_f) /
+                                     (static_cast<double>(recharge_secs) * kConstantFps));
+        t.InvMaxCount = static_cast<float>(1.0 / static_cast<double>(mc_f));
+    };
+
+    for (const Statement *statement : child) {
+        if (statement->kind != Statement::Kind::MethodCall) {
+            continue;
+        }
+        const MethodCall &call = statement->method_call;
+        if (call.object.segments.size() != depth + 1 ||
+            call.object.segments[0].kind != PathSegment::Kind::Field ||
+            call.object.segments[0].field != "Frequency" ||
+            (call.method != "Set" && call.method != "set") ||
+            call.arguments.size() < 2 ||
+            call.arguments[1].kind != Expr::Kind::Constructor) {
+            continue;
+        }
+        Value reaction;
+        evaluate_leaf(&call.arguments[0], context, reaction);
+        const std::int64_t raw_index = reaction.integer;
+        if (raw_index < 0 || static_cast<std::size_t>(raw_index) >= kReactionCount) {
+            continue;
+        }
+        const std::size_t index = static_cast<std::size_t>(raw_index);
+        const Expr &ctor = call.arguments[1];
+        const auto &a = ctor.arguments;
+        const auto eval_f32 = [&](std::size_t arg_idx) -> float {
+            Value value;
+            if (arg_idx < a.size()) {
+                evaluate_leaf(&a[arg_idx], context, value);
+            }
+            return value.kind == Value::Kind::Float
+                       ? static_cast<float>(value.floating)
+                       : static_cast<float>(value.integer);
+        };
+        const auto eval_u32 = [&](std::size_t arg_idx) -> std::uint32_t {
+            Value value;
+            if (arg_idx < a.size()) {
+                evaluate_leaf(&a[arg_idx], context, value);
+            }
+            return value.kind == Value::Kind::Float
+                       ? static_cast<std::uint32_t>(value.floating)
+                       : static_cast<std::uint32_t>(value.integer);
+        };
+        const auto eval_bool = [&](std::size_t arg_idx, bool fallback) -> bool {
+            if (arg_idx >= a.size()) {
+                return fallback;
+            }
+            Value value;
+            evaluate_leaf(&a[arg_idx], context, value);
+            return value.kind == Value::Kind::Bool ? value.boolean : value.integer != 0;
+        };
+
+        auto &low = field.Traits[index];
+        auto &high = field.Traits[kReactionCount + index];
+        if (ctor.text == "Linear") {
+            const float min_wait = eval_f32(0);
+            const float max_wait = eval_f32(1);
+            fill_linear(low, min_wait, max_wait);
+            fill_linear(high, 0.2f * min_wait, max_wait * 0.2f);
+        } else if (ctor.text == "PeriodicFrequency") {
+            const float ru = eval_f32(0);
+            const float sh = eval_f32(1);
+            const float lf = eval_f32(2);
+            const float hf = eval_f32(3);
+            fill_periodic(low, ru, sh, lf, hf);
+            fill_periodic(high, 0.2f * ru, 0.2f * sh, lf * 5.0f, hf + hf);
+        } else if (ctor.text == "ControlledCount") {
+            const std::uint32_t max_count = eval_u32(0);
+            const float min_gap = eval_f32(1);
+            const float recharge = eval_f32(2);
+            const bool allow_rep = eval_bool(3, true);
+            fill_controlled_count(low, max_count, min_gap, recharge, allow_rep);
+            fill_controlled_count(high, 5u * max_count, 0.2f * min_gap, recharge * 0.2f, allow_rep);
+        } else {
+            continue;
+        }
         ++context.stats.applied;
     }
 }
@@ -2093,6 +2338,12 @@ public:
                 apply_reaction_matches(field, child, depth_, context_);
                 handled = true;
             }
+        } else if constexpr (std::is_same_v<U, ::fable::defs::CReactionFrequencyTraitsArray>) {
+            std::vector<const Statement *> freq_stmts = children(statements_, depth_, "Frequency");
+            if (has_method_work(freq_stmts, depth_)) {
+                apply_frequency_traits(field, freq_stmts, depth_, context_);
+                handled = true;
+            }
         } else if constexpr (std::is_same_v<U, ::fable::defs::CAppearanceModifierGraphics>) {
             if (has_method_work(child, depth_)) {
                 apply_appearance_modifier_graphics(field, child, depth_, context_);
@@ -2110,7 +2361,7 @@ public:
             }
         } else if constexpr (std::is_same_v<U, ::fable::defs::CParticleMorphs>) {
             if (has_method_work(child, depth_)) {
-                apply_particle_morph_names(field, child, depth_, context_);
+                apply_particle_morphs(field, child, depth_, context_);
                 handled = true;
             }
         } else if constexpr (std::is_same_v<U, ::fable::defs::CTextureMorphs>) {
@@ -2399,7 +2650,7 @@ void build_sound_map(T &out, const Definition &definition, const SymbolTable &sy
                 call.arguments[0].kind != Expr::Kind::String) {
                 continue;
             }
-            const std::uint32_t key = crc32(call.arguments[0].text);
+            const std::uint32_t key = detail::resolve_string_crc(call.arguments[0].text);
             auto eval_i32 = [&](std::size_t index) -> std::int32_t {
                 if (index >= call.arguments.size()) {
                     return 0;
@@ -2588,12 +2839,14 @@ inline void build_animation_set(::fable::defs::CAnimationSet &set,
             bool ok = false;
             const std::string key = eval_string(args[0], ok);
             if (ok) {
-                const std::uint32_t crc = crc32(key);
-                auto it = std::find_if(set.Anims.begin(), set.Anims.end(),
-                                       [&](const auto &entry) { return entry.first == crc; });
-                if (it != set.Anims.end()) {
-                    set.Anims.erase(it);
-                }
+                const std::uint32_t crc = detail::resolve_string_crc(key);
+                set.Anims.erase(
+                    std::remove_if(set.Anims.begin(), set.Anims.end(),
+                                   [&](const auto &entry) {
+                                       return entry.first == crc &&
+                                              entry.second.GroupName.TablePos == current_group;
+                                   }),
+                    set.Anims.end());
             }
             continue;
         }
@@ -2691,10 +2944,10 @@ inline void build_animation_set(::fable::defs::CAnimationSet &set,
         }
         std::stable_sort(entry.Components.begin(), entry.Components.end(),
                          [](const auto &a, const auto &b) { return a.Tag < b.Tag; });
-        set.Anims.emplace_back(crc32(key), std::move(entry));
+        set.Anims.emplace_back(detail::resolve_string_crc(key), std::move(entry));
     }
-    std::sort(set.Anims.begin(), set.Anims.end(),
-              [](const auto &a, const auto &b) { return a.first < b.first; });
+    std::stable_sort(set.Anims.begin(), set.Anims.end(),
+                     [](const auto &a, const auto &b) { return a.first < b.first; });
 }
 
 template <class T>

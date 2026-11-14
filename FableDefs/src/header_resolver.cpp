@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "embedded_headers.hpp"
 #include "fable/defs/compiler/parser.hpp"
 
 namespace fable::defs::compiler {
@@ -80,88 +81,6 @@ void collect_files(const fs::path &root, const fs::path &current,
     (void)root;
 }
 
-void collect_expr_symbols(const Expr &expr, std::vector<std::string> &out,
-                          bool &is_bitor) {
-    if (expr.kind == Expr::Kind::Symbol) {
-        if (expr.text != "NULL" && expr.text != "TRUE" && expr.text != "FALSE" &&
-            expr.text != "BTRUE" && expr.text != "BFALSE") {
-            out.push_back(expr.text);
-        }
-    } else if (expr.kind == Expr::Kind::BitOr) {
-        is_bitor = true;
-        for (const Expr &term : expr.terms) {
-            collect_expr_symbols(term, out, is_bitor);
-        }
-    }
-}
-
-using Votes = std::map<std::pair<std::string, std::string>,
-                       std::map<std::size_t, std::size_t>>;
-
-void record_symbol_votes(const std::string &scope, const std::string &key,
-                         const Expr &expr,
-                         const std::map<std::string, std::vector<std::size_t>> &groups,
-                         Votes &votes, std::set<std::pair<std::string, std::string>> &bitor_seen) {
-    std::vector<std::string> symbols;
-    bool is_bitor = false;
-    collect_expr_symbols(expr, symbols, is_bitor);
-    if (symbols.empty()) {
-        return;
-    }
-    if (is_bitor) {
-        bitor_seen.insert({scope, key});
-        bitor_seen.insert({"*", key});
-    }
-    for (const std::string &symbol : symbols) {
-        const auto found = groups.find(symbol);
-        if (found == groups.end()) {
-            continue;
-        }
-        for (std::size_t group : found->second) {
-            ++votes[{scope, key}][group];
-            ++votes[{"*", key}][group];
-        }
-    }
-}
-
-void train_from_statement(
-    const std::string &scope, const Statement &statement,
-    const std::map<std::string, std::vector<std::size_t>> &groups, Votes &votes,
-    std::set<std::pair<std::string, std::string>> &bitor_seen) {
-    if (statement.kind == Statement::Kind::Field) {
-        std::string last_field;
-        for (const PathSegment &segment : statement.field.path.segments) {
-            if (segment.kind == PathSegment::Kind::Field) {
-                last_field = segment.field;
-            } else if (!last_field.empty()) {
-                record_symbol_votes(scope, last_field + "[key]", segment.index, groups,
-                                    votes, bitor_seen);
-            }
-        }
-        if (!last_field.empty()) {
-            record_symbol_votes(scope, last_field, statement.field.expr, groups, votes,
-                                bitor_seen);
-        }
-    } else if (statement.kind == Statement::Kind::MethodCall) {
-        if (statement.method_call.object.segments.empty()) {
-            return;
-        }
-        const PathSegment &object = statement.method_call.object.segments.back();
-        if (object.kind == PathSegment::Kind::Field &&
-            statement.method_call.method == "Add" &&
-            statement.method_call.arguments.size() == 1) {
-            record_symbol_votes(scope, object.field,
-                                statement.method_call.arguments.front(), groups, votes,
-                                bitor_seen);
-        }
-    } else if (statement.kind == Statement::Kind::TaggedBlock && statement.tagged_block) {
-        for (const Statement &child : statement.tagged_block->body) {
-            train_from_statement(statement.tagged_block->tag, child, groups, votes,
-                                 bitor_seen);
-        }
-    }
-}
-
 } // namespace
 
 void EnumGroupTable::insert(std::int32_t value, std::string name) {
@@ -229,72 +148,99 @@ std::optional<std::string> EnumGroupTable::resolve(std::int32_t value,
 
 HeaderResolver HeaderResolver::build(const std::string &target_defs_directory) {
     HeaderResolver resolver;
-    if (target_defs_directory.empty()) {
-        return resolver;
-    }
-    const fs::path root(target_defs_directory);
-
-    std::string selected_set;
-    for (const char *candidate : {"RetailHeaders", "DevHeaders"}) {
-        if (fs::is_directory(root / candidate)) {
-            selected_set = candidate;
-            break;
-        }
-    }
-
-    std::vector<fs::path> header_files;
-    collect_files(root, root, ".h", header_files);
-    std::sort(header_files.begin(), header_files.end());
-
     std::vector<std::pair<std::string, SourceAst>> parsed_headers;
     SymbolTable symbols;
-    const std::string root_prefix = normalize(root);
-    for (const fs::path &path : header_files) {
-        const std::string full = normalize(path);
-        std::string relative = full;
-        if (relative.rfind(root_prefix, 0) == 0) {
-            relative = relative.substr(root_prefix.size());
-        }
-        if (relative.empty()) {
-            relative = "/";
-        } else if (relative.front() != '/') {
-            relative.insert(relative.begin(), '/');
-        }
-        const std::string lower = [&] {
-            std::string out = relative;
-            std::transform(out.begin(), out.end(), out.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return out;
-        }();
-        if (lower.find("/xbox/") != std::string::npos ||
-            lower.find("scriptdialoguesnds2") != std::string::npos) {
-            continue;
-        }
-        if (!selected_set.empty()) {
-            for (const char *other : {"RetailHeaders", "DevHeaders"}) {
-                if (selected_set != other &&
-                    lower.find(std::string("/") + other + "/") != std::string::npos) {
-                    goto skip_header;
-                }
+    std::set<std::string> seen_disk_headers;
+
+    if (!target_defs_directory.empty()) {
+        const fs::path root(target_defs_directory);
+
+        std::string selected_set;
+        for (const char *candidate : {"RetailHeaders", "DevHeaders"}) {
+            if (fs::is_directory(root / candidate)) {
+                selected_set = candidate;
+                break;
             }
         }
 
-        {
-            std::string text;
-            if (!read_text(path, text)) {
+        std::vector<fs::path> header_files;
+        collect_files(root, root, ".h", header_files);
+        std::sort(header_files.begin(), header_files.end());
+
+        const std::string root_prefix = normalize(root);
+        for (const fs::path &path : header_files) {
+            const std::string full = normalize(path);
+            std::string relative = full;
+            if (relative.rfind(root_prefix, 0) == 0) {
+                relative = relative.substr(root_prefix.size());
+            }
+            if (relative.empty()) {
+                relative = "/";
+            } else if (relative.front() != '/') {
+                relative.insert(relative.begin(), '/');
+            }
+            const std::string lower = [&] {
+                std::string out = relative;
+                std::transform(out.begin(), out.end(), out.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return out;
+            }();
+            if (lower.find("/xbox/") != std::string::npos ||
+                lower.find("scriptdialoguesnds2") != std::string::npos) {
                 continue;
             }
-            ParseResult parsed = parse_source(text, FileId::anonymous());
-            if (auto *error = std::get_if<ParseError>(&parsed)) {
-                (void)error;
-                continue;
+            if (!selected_set.empty()) {
+                for (const char *other : {"RetailHeaders", "DevHeaders"}) {
+                    if (selected_set != other &&
+                        lower.find(std::string("/") + other + "/") != std::string::npos) {
+                        goto skip_header;
+                    }
+                }
             }
-            SourceAst ast = std::move(std::get<SourceAst>(parsed));
-            std::vector<Redefinition> redefined;
-            (void)symbols.evaluate_items(ast.items, redefined);
-            parsed_headers.emplace_back(relative.substr(1), std::move(ast));
+
+            {
+                std::string text;
+                if (!read_text(path, text)) {
+                    continue;
+                }
+                ParseResult parsed = parse_source(text, FileId::anonymous());
+                if (auto *error = std::get_if<ParseError>(&parsed)) {
+                    (void)error;
+                    continue;
+                }
+                std::string lower_base = path.filename().string();
+                std::transform(lower_base.begin(), lower_base.end(), lower_base.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                seen_disk_headers.insert(std::move(lower_base));
+                SourceAst ast = std::move(std::get<SourceAst>(parsed));
+                std::vector<Redefinition> redefined;
+                (void)symbols.evaluate_items(ast.items, redefined);
+                parsed_headers.emplace_back(relative.substr(1), std::move(ast));
+            }
+        skip_header:;
         }
-    skip_header:;
+    }
+
+    std::size_t embedded_count = 0;
+    const EmbeddedHeader *embedded = embedded_non_retail_headers(embedded_count);
+    for (std::size_t i = 0; i < embedded_count; ++i) {
+        std::string lower_name(embedded[i].name);
+        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower_name.find("scriptdialoguesnds2") != std::string::npos ||
+            seen_disk_headers.count(lower_name) != 0) {
+            continue;
+        }
+        std::string text(embedded[i].content);
+        ParseResult parsed = parse_source(text, FileId::anonymous());
+        if (auto *error = std::get_if<ParseError>(&parsed)) {
+            (void)error;
+            continue;
+        }
+        SourceAst ast = std::move(std::get<SourceAst>(parsed));
+        std::vector<Redefinition> redefined;
+        (void)symbols.evaluate_items(ast.items, redefined);
+        parsed_headers.emplace_back(std::string(embedded[i].name), std::move(ast));
     }
 
     // Engine fallbacks that no text header declares.
@@ -316,81 +262,53 @@ HeaderResolver HeaderResolver::build(const std::string &target_defs_directory) {
         resolver.domains_[SymDomain::named(SymDomain::Kind::Blend)] = std::move(blend);
     }
 
-    std::map<std::string, std::vector<std::size_t>> symbol_groups;
+    {
+        EnumGroupTable reverb;
+        for (const auto &[name, value] : std::vector<std::pair<std::string, std::int32_t>>{
+                 {"REVERB_ENVIRONMENT_NULL", 0},
+                 {"REVERB_ENVIRONMENT_EXTERNAL", 1},
+                 {"REVERB_ENVIRONMENT_CAVE", 2},
+                 {"REVERB_ENVIRONMENT_HALL", 3},
+                 {"REVERB_ENVIRONMENT_GUILD", 4},
+                 {"REVERB_ENVIRONMENT_GUILD_SMALL", 5},
+                 {"REVERB_ENVIRONMENT_SMALL_ROOM", 6},
+                 {"REVERB_ENVIRONMENT_SCHOOL", 7}}) {
+            if (!symbols.lookup(name)) {
+                symbols.insert(name, value);
+            }
+            reverb.insert(value, name);
+        }
+        resolver.enum_key_groups_["atmos_types.h::EReverbEnvironmentType"] =
+            resolver.enum_groups_.size();
+        resolver.enum_groups_.push_back(std::move(reverb));
+    }
+
     for (const auto &[relative, ast] : parsed_headers) {
         resolver.collect_enum_items(relative, ast.items, symbols);
     }
-    // Rebuild the symbol-group index from the enum tables.
-    for (std::size_t gid = 0; gid < resolver.enum_groups_.size(); ++gid) {
-        for (const auto &[value, name] : resolver.enum_groups_[gid].val_to_sym) {
-            (void)value;
-            symbol_groups[name].push_back(gid);
-        }
-    }
 
-    std::vector<SourceAst> parsed_defs;
-    std::vector<fs::path> def_files;
-    collect_files(root, root, ".def", def_files);
-    collect_files(root, root, ".tpl", def_files);
-    std::sort(def_files.begin(), def_files.end());
-    parsed_defs.reserve(def_files.size());
-    for (const fs::path &path : def_files) {
-        const std::string filename = path.filename().string();
-        if (filename.rfind("z_mod_decompiled", 0) == 0 ||
-            filename.find("_deprecated.") != std::string::npos) {
-            continue;
-        }
-        std::string text;
-        if (!read_text(path, text)) {
-            continue;
-        }
-        ParseResult parsed = parse_source(text, FileId::anonymous());
-        if (std::holds_alternative<ParseError>(parsed)) {
-            continue;
-        }
-        SourceAst ast = std::move(std::get<SourceAst>(parsed));
-        std::vector<Redefinition> redefined;
-        (void)symbols.evaluate_items(ast.items, redefined);
-        parsed_defs.push_back(std::move(ast));
-    }
-
-    // Enums may also be declared in .def files.
-    for (const SourceAst &ast : parsed_defs) {
-        resolver.collect_enum_items("defs", ast.items, symbols);
-    }
-    symbol_groups.clear();
-    for (std::size_t gid = 0; gid < resolver.enum_groups_.size(); ++gid) {
-        for (const auto &[value, name] : resolver.enum_groups_[gid].val_to_sym) {
-            (void)value;
-            symbol_groups[name].push_back(gid);
-        }
-    }
-
-    Votes votes;
-    std::set<std::pair<std::string, std::string>> bitor_seen;
-    for (const SourceAst &ast : parsed_defs) {
-        for (const auto &item : ast.items) {
-            if (item.kind != Item::Kind::Definition) {
-                continue;
-            }
-            const Definition &definition = item.definition.value;
-            for (const Statement &statement : definition.body) {
-                train_from_statement(definition.def_type, statement, symbol_groups, votes,
-                                     bitor_seen);
+    struct HardcodedFieldDomain {
+        const char *scope;
+        const char *field_name;
+        const char *enum_key;
+        SymDomain::Kind named_kind;
+        bool has_named;
+        bool is_bitflags;
+    };
+    static const HardcodedFieldDomain kFieldDomains[] = {
+#include "field_domains.inc"
+    };
+    for (const auto &entry : kFieldDomains) {
+        if (entry.has_named) {
+            resolver.field_domains_[{entry.scope, entry.field_name}] = {
+                SymDomain::named(entry.named_kind), entry.is_bitflags};
+        } else {
+            const auto it = resolver.enum_key_groups_.find(entry.enum_key);
+            if (it != resolver.enum_key_groups_.end()) {
+                resolver.field_domains_[{entry.scope, entry.field_name}] = {
+                    SymDomain::enum_group(it->second), entry.is_bitflags};
             }
         }
-    }
-    for (const auto &[key, counts] : votes) {
-        const auto best = std::max_element(
-            counts.begin(), counts.end(),
-            [](const auto &a, const auto &b) { return a.second < b.second; });
-        if (best == counts.end()) {
-            continue;
-        }
-        const bool is_bitflags =
-            bitor_seen.count(key) != 0 || bitor_seen.count({"*", key.second}) != 0;
-        resolver.field_domains_[key] = {
-            SymDomain::enum_group(best->first), is_bitflags};
     }
     return resolver;
 }
@@ -489,8 +407,29 @@ void HeaderResolver::record_enum(const std::string &relative_path, const EnumDec
         named(SymDomain::Kind::DamageAttribute);
     }
 
-    EnumGroupTable group;
-    const std::size_t gid = enum_groups_.size();
+    std::string base_lower = lower;
+    if (const auto slash = base_lower.find_last_of("/\\"); slash != std::string::npos) {
+        base_lower = base_lower.substr(slash + 1);
+    }
+
+    std::size_t gid = enum_groups_.size();
+    bool existing = false;
+    std::string enum_key;
+    if (!enum_name.empty()) {
+        enum_key = base_lower + "::" + enum_name;
+        const auto it = enum_key_groups_.find(enum_key);
+        if (it != enum_key_groups_.end()) {
+            gid = it->second;
+            existing = true;
+        }
+    }
+    if (!existing) {
+        enum_groups_.emplace_back();
+        if (!enum_name.empty()) {
+            enum_key_groups_.emplace(std::move(enum_key), gid);
+        }
+    }
+    EnumGroupTable &group = enum_groups_[gid];
     for (const EnumVariant &variant : decl.variants) {
         const std::string &name = variant.name.value;
         if (!is_valid_identifier(name)) {
@@ -506,8 +445,6 @@ void HeaderResolver::record_enum(const std::string &relative_path, const EnumDec
             domains_[*named_domain].insert(v, name);
         }
     }
-    (void)gid;
-    enum_groups_.push_back(std::move(group));
 }
 
 std::string HeaderResolver::resolve_domain(SymDomain domain,

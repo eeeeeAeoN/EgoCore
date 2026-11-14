@@ -15,6 +15,7 @@
 #include <string>
 
 #include "fable/defs/compiler/build.hpp"
+#include "fable/defs/compiler/decompiler.hpp"
 
 namespace NativeDefs {
 
@@ -39,6 +40,55 @@ namespace NativeDefs {
         if (pos == std::string::npos) return "";
         const std::size_t end = log.find('\n', pos);
         return log.substr(pos, end == std::string::npos ? end : end - pos);
+    }
+
+    // Decompile one compiled binary directory (names.bin + <binary>.bin) to .def text.
+    inline bool DecompileBinary(const std::string& binDir,
+                                const std::string& binaryName,
+                                const std::string& defsDir,
+                                std::string& outText,
+                                fable::defs::compiler::DecompileStats& outStats,
+                                std::string& outError) {
+        return fable::defs::compiler::decompile_binary_to_text(
+            binDir, binaryName, defsDir, outText, outStats, outError);
+    }
+
+    // Decompile compiled definitions (`all` or one of `game` / `frontend` / `script`)
+    // into heuristic .tpl / .def files under outDir matching vanilla layout.
+    inline bool DecompileToFolder(const std::string& binDir,
+                                  const std::string& binaryName,
+                                  const std::string& headersDir,
+                                  const std::string& outDir,
+                                  fable::defs::compiler::FolderDecompileStats& outStats,
+                                  std::string& outError) {
+        if (binaryName.empty() || binaryName == "all") {
+            return fable::defs::compiler::decompile_directory_to_folder(
+                binDir, headersDir, outDir, outStats, outError);
+        }
+        return fable::defs::compiler::decompile_binary_to_folder(
+            binDir, binaryName, headersDir, outDir, outStats, outError);
+    }
+
+    // Compare two compiled binary directories and emit modified/added definitions.
+    inline bool DiffBinaries(const std::string& origDir,
+                             const std::string& modDir,
+                             const std::string& defsDir,
+                             std::string& outText,
+                             fable::defs::compiler::DecompileStats& outStats,
+                             std::string& outError) {
+        return fable::defs::compiler::diff_binaries_to_text(
+            origDir, modDir, defsDir, outText, outStats, outError);
+    }
+
+    // Patch modified definitions into existing .def files and write newly added
+    // definitions to z_mod_decompiled.def.
+    inline bool PatchBinaries(const std::string& origDir,
+                              const std::string& modDir,
+                              const std::string& defsDir,
+                              fable::defs::compiler::DecompileStats& outStats,
+                              std::string& outError) {
+        return fable::defs::compiler::patch_binaries(
+            origDir, modDir, defsDir, outStats, outError);
     }
 
 } // namespace NativeDefs

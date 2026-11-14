@@ -24,11 +24,12 @@ struct CompilerConfig {
     float fgDistanceThreshold = 74.0f;  // Maximum distance (meters) to include full foreground patches (default 74.0).
     float lodDistanceScale = 1.0f;      // Multiplier for background LOD band distance thresholds (default 1.0).
     int textureScale = 1;               // Texture resolution multiplier for baked background patches (default 1 -> 64/128).
-    bool generateMipmaps = false;       // If true, generate complete mipmap chain for patch CTextures (default false).
-    bool highQualityDxt = false;        // If true, use high quality cluster fit for DXT1 encoding (default false).
-    bool shareLodBands = true;          // If true, bands 4, 5, 6 share lastSavedBand (default true). If false, generate unique patches for all bands.
+    bool generateMipmaps = false;       // Disabled by default (complete mipmaps crash the game).
+    bool highQualityDxt = true;         // If true, use high quality cluster fit for DXT1 encoding (default true).
+    bool shareLodBands = false;         // If true, bands 4, 5, 6 share lastSavedBand. If false (default), generate unique patches for all bands.
     int maxLodBand = 7;                 // Max LOD band to generate (1..7, default 7).
     bool enableRangeCompression = true; // If false, write uncompressed raw streams (0x00) for VB/IB.
+    bool respectModsIni = true;         // Inspect <fableRoot>\Mods.ini and raise fgDistanceThreshold/lodDistanceScale for active fade-extender DLL mods.
 };
 
 struct CompileResult {
@@ -52,6 +53,13 @@ public:
 
     // Load compiler parameters from an STBconfig.ini file into config
     static bool loadConfigFile(const std::string& iniPath, CompilerConfig& config);
+
+    // Inspect <fableRoot>/Mods.ini for active DLL fade-extender mods (reading sibling <stem>.ini)
+    // and raise fgDistanceThreshold / lodDistanceScale floors if ForegroundFadeEnd > 64.0m.
+    static bool applyActiveModsFromIni(
+        const std::string& fableRoot,
+        CompilerConfig& config,
+        const std::function<void(const std::string&)>& log = nullptr);
 };
 
 } // namespace egostb

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <cstdint>
 #include <iostream>
 #include <fstream>
@@ -222,8 +223,7 @@ MeshBuilder::Vector3 MeshBuilder::buildMapDirMask(int gx, int gy) const {
     return sum;
 }
 
-bool MeshBuilder::directionActive(uint8_t direction, int gx, int gy) const {
-    const auto normal = buildMapDirMask(gx, gy);
+static bool directionActiveFromNormal(uint8_t direction, const MeshBuilder::Vector3& normal) {
     const float topness = std::clamp(
         (std::asin(std::clamp(normal.z, -1.0f, 1.0f)) /
              (3.14159265358979323846f * 0.5f) - 0.5f) * 4.0f,
@@ -247,6 +247,10 @@ bool MeshBuilder::directionActive(uint8_t direction, int gx, int gy) const {
         1.0f - 2.0f * (std::acos(dot) / (3.14159265358979323846f * 0.5f) - 0.25f),
         0.0f, 1.0f);
     return (1.0f - topness) * sideness > 0.0f;
+}
+
+bool MeshBuilder::directionActive(uint8_t direction, int gx, int gy) const {
+    return directionActiveFromNormal(direction, buildMapDirMask(gx, gy));
 }
 
 const HeightMapCell& MeshBuilder::peekCell(int gx, int gy, const LevData** outLev) const {
@@ -278,22 +282,18 @@ float MeshBuilder::peekLandscapeHeight(int gx, int gy) const {
     return static_cast<float>(static_cast<int>(h * 128.0f)) * 0.0078125f;
 }
 
-static MeshBuilder::WaterGridCell makeWaterCellFromLev(const LevData& lev, int lx, int ly, const PrecomputedWaterGrid* extGrid = nullptr) {
+static MeshBuilder::WaterGridCell makeWaterCellFromDefs(
+    const LevData& lev,
+    int lx, int ly,
+    const EngineThemeDef* def0,
+    const EngineThemeDef* def1,
+    const EngineThemeDef* def2,
+    const PrecomputedWaterGrid* extGrid)
+{
     MeshBuilder::WaterGridCell wc;
     if (lx < 0 || lx >= lev.width || ly < 0 || ly >= lev.height) return wc;
     const HeightMapCell& cell = lev.getCell(lx, ly);
     float qh = static_cast<float>(static_cast<int>(cell.height * 128.0f)) * 0.0078125f;
-
-    auto getDef = [&](uint8_t thIdx) -> const EngineThemeDef* {
-        if (thIdx < lev.themePalette.size() && !lev.themePalette[thIdx].name.empty()) {
-            return ThemeManager::instance().getTheme(lev.themePalette[thIdx].name);
-        }
-        return nullptr;
-    };
-
-    const EngineThemeDef* def0 = getDef(cell.themes[0]);
-    const EngineThemeDef* def1 = getDef(cell.themes[1]);
-    const EngineThemeDef* def2 = getDef(cell.themes[2]);
 
     // hasWaterFast (0x2d5d620): check slot 0, slot 1 (if slot 0 valid), slot 2 (if slot 0 & 1 valid)
     if (def0 && def0->waterType > 0) {
@@ -342,14 +342,51 @@ static MeshBuilder::WaterGridCell makeWaterCellFromLev(const LevData& lev, int l
     return wc;
 }
 
+static MeshBuilder::WaterGridCell makeWaterCellFromLev(const LevData& lev, int lx, int ly, const PrecomputedWaterGrid* extGrid = nullptr) {
+    if (lx < 0 || lx >= lev.width || ly < 0 || ly >= lev.height) return {};
+    const HeightMapCell& cell = lev.getCell(lx, ly);
+
+    auto getDef = [&](uint8_t thIdx) -> const EngineThemeDef* {
+        if (thIdx < lev.themePalette.size() && !lev.themePalette[thIdx].name.empty()) {
+            return ThemeManager::instance().getTheme(lev.themePalette[thIdx].name);
+        }
+        return nullptr;
+    };
+
+    return makeWaterCellFromDefs(
+        lev, lx, ly,
+        getDef(cell.themes[0]),
+        getDef(cell.themes[1]),
+        getDef(cell.themes[2]),
+        extGrid);
+}
+
 const MeshBuilder::WaterGrid& MeshBuilder::ensureWaterGrid() const {
     if (!m_internalWaterGridComputed) {
         m_internalWaterGrid.width = m_lev.width;
         m_internalWaterGrid.height = m_lev.height;
         m_internalWaterGrid.cells.resize(m_lev.width * m_lev.height);
+
+        std::vector<const EngineThemeDef*> paletteDefs(m_lev.themePalette.size(), nullptr);
+        auto& tm = ThemeManager::instance();
+        for (size_t i = 0; i < m_lev.themePalette.size(); ++i) {
+            if (!m_lev.themePalette[i].name.empty()) {
+                paletteDefs[i] = tm.getTheme(m_lev.themePalette[i].name);
+            }
+        }
+        auto getPalDef = [&](uint8_t thIdx) -> const EngineThemeDef* {
+            return (thIdx < paletteDefs.size()) ? paletteDefs[thIdx] : nullptr;
+        };
+
         for (int y = 0; y < m_lev.height; ++y) {
             for (int x = 0; x < m_lev.width; ++x) {
-                m_internalWaterGrid.cells[y * m_lev.width + x] = makeWaterCellFromLev(m_lev, x, y, m_waterGrid);
+                const HeightMapCell& cell = m_lev.getCell(x, y);
+                m_internalWaterGrid.cells[y * m_lev.width + x] = makeWaterCellFromDefs(
+                    m_lev, x, y,
+                    getPalDef(cell.themes[0]),
+                    getPalDef(cell.themes[1]),
+                    getPalDef(cell.themes[2]),
+                    m_waterGrid);
             }
         }
         m_internalWaterGridComputed = true;
@@ -604,11 +641,14 @@ std::vector<MeshBuilder::ShorePoint> MeshBuilder::collectShorePoints() const {
         return (count <= 0.0f) ? 0.0f : (sum / count);
     };
 
-    auto containsPoint = [&](int px, int py) {
-        for (const auto& pt : unsorted) {
-            if (pt.x == px && pt.y == py) return true;
+    auto packKey = [](int px, int py) -> uint64_t {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(px)) << 32) | static_cast<uint32_t>(py);
+    };
+    std::unordered_set<uint64_t> seenPoints;
+    auto tryAddPoint = [&](int px, int py, bool isBorder) {
+        if (seenPoints.insert(packKey(px, py)).second) {
+            unsorted.push_back({px, py, isBorder});
         }
-        return false;
     };
 
     for (int cy = 0; cy < h; ++cy) {
@@ -627,28 +667,18 @@ std::vector<MeshBuilder::ShorePoint> MeshBuilder::collectShorePoints() const {
                     }
                 }
                 if (anyWater) {
-                    int ptX = m_worldX + cx;
-                    int ptY = m_worldY + cy;
-                    if (!containsPoint(ptX, ptY)) {
-                        unsorted.push_back({ptX, ptY, false});
-                    }
+                    tryAddPoint(m_worldX + cx, m_worldY + cy, false);
                 }
             } else {
                 WaterGridCell wc = peekWaterCell(cx, cy);
                 if (wc.waterType == 7 || wc.hasDummyShorePoint) {
-                    int ptX = m_worldX + cx;
-                    int ptY = m_worldY + cy;
-                    if (!containsPoint(ptX, ptY)) {
-                        unsorted.push_back({ptX, ptY, false});
-                    }
+                    tryAddPoint(m_worldX + cx, m_worldY + cy, false);
                 } else if (cx == 0 || cx == w - 1 || cy == 0 || cy == h - 1) {
                     int ptX = m_worldX + cx;
                     int ptY = m_worldY + cy;
                     if (cx == w - 1) ++ptX;
                     else if (cy == h - 1) ++ptY;
-                    if (!containsPoint(ptX, ptY)) {
-                        unsorted.push_back({ptX, ptY, true});
-                    }
+                    tryAddPoint(ptX, ptY, true);
                 }
             }
         }
@@ -665,41 +695,67 @@ std::vector<MeshBuilder::WaterBody> MeshBuilder::sortShorePointsIntoWaterBodies(
     size_t firstUnused = 0;
     std::vector<WaterBody> bodies;
 
+    auto floorDiv32 = [](int v) -> int {
+        return (v >= 0) ? (v >> 5) : -(((-v) + 31) >> 5);
+    };
+    auto cellKey = [](int cx, int cy) -> uint64_t {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32) | static_cast<uint32_t>(cy);
+    };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> spatialGrid;
+    spatialGrid.reserve(unsorted.size() / 4 + 16);
+    for (size_t i = 0; i < unsorted.size(); ++i) {
+        spatialGrid[cellKey(floorDiv32(unsorted[i].x), floorDiv32(unsorted[i].y))].push_back(static_cast<uint32_t>(i));
+    }
+
     while (remaining > 0) {
         while (firstUnused < unsorted.size() && used[firstUnused]) {
             ++firstUnused;
         }
         if (firstUnused >= unsorted.size()) break;
 
+        auto packKey = [](int px, int py) -> uint64_t {
+            return (static_cast<uint64_t>(static_cast<uint32_t>(px)) << 32) | static_cast<uint32_t>(py);
+        };
         WaterBody body;
         body.points.push_back(unsorted[firstUnused]);
+        std::unordered_set<uint64_t> inBodySet;
+        inBodySet.insert(packKey(unsorted[firstUnused].x, unsorted[firstUnused].y));
         used[firstUnused] = 1;
         --remaining;
 
         auto findCloserThan = [&](const ShorePoint& cur, float radius) -> int {
             int bestIdx = -1;
-            float bestDist = 1e38f;
-            for (size_t i = 0; i < unsorted.size(); ++i) {
-                if (used[i]) continue;
-                if (unsorted[i].x == cur.x && unsorted[i].y == cur.y) {
-                    used[i] = 1;
-                    --remaining;
-                    continue;
-                }
-                float dx = static_cast<float>(cur.x - unsorted[i].x);
-                float dy = static_cast<float>(cur.y - unsorted[i].y);
-                float d = std::sqrt(dx * dx + dy * dy);
-                if (d <= radius && d < bestDist) {
-                    bool inBody = false;
-                    for (const auto& pt : body.points) {
-                        if (pt.x == unsorted[i].x && pt.y == unsorted[i].y) {
-                            inBody = true;
-                            break;
+            float bestDistSq = radius * radius;
+            bool hasBest = false;
+            const int rInt = static_cast<int>(std::ceil(radius));
+            const float radiusSq = radius * radius;
+            const int minCX = floorDiv32(cur.x - rInt);
+            const int maxCX = floorDiv32(cur.x + rInt);
+            const int minCY = floorDiv32(cur.y - rInt);
+            const int maxCY = floorDiv32(cur.y + rInt);
+            for (int cy = minCY; cy <= maxCY; ++cy) {
+                for (int cx = minCX; cx <= maxCX; ++cx) {
+                    auto it = spatialGrid.find(cellKey(cx, cy));
+                    if (it == spatialGrid.end()) continue;
+                    for (uint32_t idx : it->second) {
+                        if (used[idx]) continue;
+                        int dx = cur.x - unsorted[idx].x;
+                        int dy = cur.y - unsorted[idx].y;
+                        if (dx == 0 && dy == 0) {
+                            used[idx] = 1;
+                            --remaining;
+                            continue;
                         }
-                    }
-                    if (!inBody) {
-                        bestDist = d;
-                        bestIdx = static_cast<int>(i);
+                        if (std::abs(dx) > rInt || std::abs(dy) > rInt) continue;
+                        float dSq = static_cast<float>(dx * dx + dy * dy);
+                        if (dSq <= radiusSq &&
+                            (!hasBest || dSq < bestDistSq || (dSq == bestDistSq && static_cast<int>(idx) < bestIdx))) {
+                            if (inBodySet.find(packKey(unsorted[idx].x, unsorted[idx].y)) == inBodySet.end()) {
+                                bestDistSq = dSq;
+                                bestIdx = static_cast<int>(idx);
+                                hasBest = true;
+                            }
+                        }
                     }
                 }
             }
@@ -712,6 +768,7 @@ std::vector<MeshBuilder::WaterBody> MeshBuilder::sortShorePointsIntoWaterBodies(
             int bestIdx = findCloserThan(cur, maxDist);
             if (bestIdx >= 0) {
                 body.points.push_back(unsorted[bestIdx]);
+                inBodySet.insert(packKey(unsorted[bestIdx].x, unsorted[bestIdx].y));
                 used[bestIdx] = 1;
                 --remaining;
             } else {
@@ -726,6 +783,7 @@ std::vector<MeshBuilder::WaterBody> MeshBuilder::sortShorePointsIntoWaterBodies(
                         int midX = static_cast<int>(front.x + (cur.x - front.x) * 0.5);
                         int midY = static_cast<int>(front.y + (cur.y - front.y) * 0.5);
                         body.points.push_back({midX, midY, false});
+                        inBodySet.insert(packKey(midX, midY));
                     }
                 } else {
                     int gapIdx = findCloserThan(cur, maxDistWithGap);
@@ -733,7 +791,9 @@ std::vector<MeshBuilder::WaterBody> MeshBuilder::sortShorePointsIntoWaterBodies(
                         int midX = static_cast<int>(cur.x + (unsorted[gapIdx].x - cur.x) * 0.5);
                         int midY = static_cast<int>(cur.y + (unsorted[gapIdx].y - cur.y) * 0.5);
                         body.points.push_back({midX, midY, false});
+                        inBodySet.insert(packKey(midX, midY));
                         body.points.push_back(unsorted[gapIdx]);
+                        inBodySet.insert(packKey(unsorted[gapIdx].x, unsorted[gapIdx].y));
                         used[gapIdx] = 1;
                         --remaining;
                     } else {
@@ -917,7 +977,14 @@ bool MeshBuilder::constructVertexDistanceToShoreArray(
     return true;
 }
 
-CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
+CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) const {
+    return buildPatchIfNeeded(patchX, patchY, {});
+}
+
+CompiledPatch MeshBuilder::buildPatchIfNeeded(
+    int patchX, int patchY,
+    const std::function<bool(const float[3], const float[3])>& neededPred) const
+{
     CompiledPatch patch;
     int startX = patchX * 16;
     int startY = patchY * 16;
@@ -956,6 +1023,15 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
     patch.maxCoord[0] = static_cast<float>(m_worldX + startX + 16);
     patch.maxCoord[1] = static_cast<float>(m_worldY + startY + 16);
     patch.maxCoord[2] = maxZ;
+
+    if (neededPred && !neededPred(patch.minCoord, patch.maxCoord)) {
+        patch.fgNeeded = 0;
+        patch.hasWater = patchHasWater;
+        patch.filePos = 0;
+        patch.dataSize = 0;
+        return patch;
+    }
+
     patch.fgNeeded = 1;
     patch.hasWater = patchHasWater;
 
@@ -969,6 +1045,10 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
     };
 
     std::vector<Pass> passes;
+    std::array<Vector3, 17 * 17> cachedDirVecs{};
+    std::array<uint8_t, 17 * 17> cachedDirReady{};
+    std::array<uint32_t, 17 * 17> cachedNormals{};
+    std::array<uint8_t, 17 * 17> cachedNormalReady{};
 
     if (m_themeMaterials.empty()) {
         // Fallback: 1 default base layer
@@ -983,10 +1063,17 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
         // CEngineLandscapeMeshBuilder::BuildMapDirMask: per-vertex
         // "GetMappingDirectionBlend(dir) > 0" for all 5 mapping directions.
         std::array<std::array<bool, 5>, 17 * 17> dirMask{};
-        for (int y = 0; y <= 16; ++y)
-            for (int x = 0; x <= 16; ++x)
-                for (uint8_t d = 0; d < 5; ++d)
-                    dirMask[size_t(y) * 17 + x][d] = directionActive(d, startX + x, startY + y);
+        for (int y = 0; y <= 16; ++y) {
+            for (int x = 0; x <= 16; ++x) {
+                const size_t vi = size_t(y) * 17 + x;
+                const Vector3 dv = buildMapDirMask(startX + x, startY + y);
+                cachedDirVecs[vi] = dv;
+                cachedDirReady[vi] = 1;
+                for (uint8_t d = 0; d < 5; ++d) {
+                    dirMask[vi][d] = directionActiveFromNormal(d, dv);
+                }
+            }
+        }
 
         // CEngineLandscapeMeshBuilder::GetPassFromTexture: passes are created in
         // first-use order.
@@ -1138,17 +1225,25 @@ CompiledPatch MeshBuilder::buildPatch(int patchX, int patchY) {
         for (const auto& coord : topology.vertices) {
             int gx = startX + coord.first;
             int gy = startY + coord.second;
+            size_t vi = size_t(coord.second) * 17 + coord.first;
 
             CompiledVertex v;
             v.x = static_cast<uint16_t>(m_worldX + gx);
             v.y = static_cast<uint16_t>(m_worldY + gy);
             v.z = peekCell(gx, gy).height;
 
-            Vector3 norm = mapNormal(gx, gy);
-            v.normal = packNormal(norm);
-            v.blend = pass.blend[size_t(coord.second) * 17 + coord.first];
+            if (!cachedNormalReady[vi]) {
+                cachedNormals[vi] = packNormal(mapNormal(gx, gy));
+                cachedNormalReady[vi] = 1;
+            }
+            v.normal = cachedNormals[vi];
+            v.blend = pass.blend[vi];
 
-            Vector3 dir = buildMapDirMask(gx, gy);
+            if (!cachedDirReady[vi]) {
+                cachedDirVecs[vi] = buildMapDirMask(startX + coord.first, startY + coord.second);
+                cachedDirReady[vi] = 1;
+            }
+            const Vector3& dir = cachedDirVecs[vi];
             v.cliffU = packDirMaskByte(dir.x);
             v.cliffV = packDirMaskByte(dir.y);
 
