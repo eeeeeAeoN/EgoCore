@@ -99,6 +99,15 @@
     <ClInclude Include="Meshes\BBMParser.h">
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>
+    <ClInclude Include="Meshes\BoneConfigParser.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\BoneConfigUI.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="Meshes\MeshGizmo.h">
+      <Filter>Source Files\Meshes</Filter>
+    </ClInclude>
     <ClInclude Include="Meshes\MeshParser.h">
       <Filter>Source Files\Meshes</Filter>
     </ClInclude>

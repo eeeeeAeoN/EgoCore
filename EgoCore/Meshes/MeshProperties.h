@@ -3,7 +3,8 @@
 #include "BankBackend.h"
 #include "MeshRenderer.h"
 #include "AnimParser.h"
-#include "BoneConfigParser.h"
+#include "BoneConfigUI.h"
+#include "MeshGizmo.h"
 #include <functional>
 #include <d3d11.h>
 #include <map>
@@ -76,59 +77,9 @@ static bool g_ExportAnimation = true;
 static bool g_ShowExportPopup = false;
 static bool g_TriggerExportPopup = false;
 inline bool g_IsMeshViewportHovered = false;
-
-inline BoneConfigData g_CurrentBoneConfig;
-inline std::vector<std::string> g_BoneConfigFiles;
-inline bool g_BoneConfigFilesScanned = false;
-static bool s_ApplyBoneConfig = false;
-static std::string s_SelectedBoneConfig = "";
-
-inline void ScanBoneConfigFiles() {
-    g_BoneConfigFiles.clear();
-    g_BoneConfigFilesScanned = true;
-
-    if (g_AppConfig.GameRootPath.empty()) return;
-
-    fs::path bonesDir = fs::path(g_AppConfig.GameRootPath) / "Data" / "Bones";
-    std::error_code ec;
-    if (!fs::exists(bonesDir, ec) || !fs::is_directory(bonesDir, ec)) {
-        bonesDir = fs::path(g_AppConfig.GameRootPath) / "data" / "bones";
-        if (!fs::exists(bonesDir, ec) || !fs::is_directory(bonesDir, ec)) return;
-    }
-
-    for (const auto& entry : fs::directory_iterator(bonesDir, ec)) {
-        if (entry.is_regular_file(ec)) {
-            std::string ext = entry.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            if (ext == ".bncfg") {
-                g_BoneConfigFiles.push_back(entry.path().filename().string());
-            }
-        }
-    }
-
-    std::sort(g_BoneConfigFiles.begin(), g_BoneConfigFiles.end());
-}
-
-inline void LoadBoneConfigFile(const std::string& filename) {
-    if (filename.empty() || g_AppConfig.GameRootPath.empty()) {
-        g_CurrentBoneConfig = BoneConfigData();
-        return;
-    }
-
-    fs::path filePath = fs::path(g_AppConfig.GameRootPath) / "Data" / "Bones" / filename;
-    std::error_code ec;
-    if (!fs::exists(filePath, ec)) {
-        filePath = fs::path(g_AppConfig.GameRootPath) / "data" / "bones" / filename;
-    }
-
-    if (fs::exists(filePath, ec)) {
-        BoneConfigParser::Parse(filePath.string(), g_CurrentBoneConfig);
-        g_CurrentBoneConfig.FileName = filename;
-    }
-    else {
-        g_CurrentBoneConfig = BoneConfigData();
-    }
-}
+inline MeshGizmoState g_MeshGizmo;
+inline bool g_MeshEntryDirty = false;
+inline bool g_BoneConfigTabFocused = false;
 
 static const ImVec4 kImportIconTint = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
 static const ImVec4 kExportIconTint = ImVec4(0.45f, 0.70f, 0.95f, 1.0f);
@@ -510,6 +461,10 @@ inline void CheckMeshUpload(ID3D11Device* device) {
         g_PreviewGlobalTransforms.clear();
 
         bool resetCam = !g_PreserveCamera;
+        if (resetCam) {
+            g_MeshGizmo.ClearSelection();
+            g_MeshEntryDirty = false;
+        }
 
         if (g_BBMParser.IsParsed) {
             g_MeshRenderer.UploadBBM(device, g_BBMParser, resetCam);
@@ -620,7 +575,7 @@ inline void UpdateAnimationBones() {
 
     // 2. Fetch bone scaling factors from bncfg (default is 1.0)
     std::vector<XMFLOAT3> boneScales(boneCount, XMFLOAT3(1.0f, 1.0f, 1.0f));
-    bool isBoneConfigApplied = s_ApplyBoneConfig && g_CurrentBoneConfig.IsLoaded;
+    bool isBoneConfigApplied = g_ApplyBoneConfig && g_CurrentBoneConfig.IsLoaded;
 
     if (isBoneConfigApplied) {
         for (int i = 0; i < boneCount; i++) {
@@ -757,6 +712,121 @@ static ImVec4 UnpackBGRA(uint32_t bgra) {
     return ImVec4(r, g, b, a);
 }
 
+inline float* GetGizmoTargetPosPtr(EGizmoTargetKind kind, int index) {
+    if (index < 0) return nullptr;
+    switch (kind) {
+    case EGizmoTargetKind::BBMHelper:
+        if (g_BBMParser.IsParsed && index < (int)g_BBMParser.Helpers.size()) return &g_BBMParser.Helpers[index].Position.x;
+        break;
+    case EGizmoTargetKind::BBMDummy:
+        if (g_BBMParser.IsParsed && index < (int)g_BBMParser.Dummies.size()) return &g_BBMParser.Dummies[index].Transform[9];
+        break;
+    case EGizmoTargetKind::MeshHelper:
+        if (g_ActiveMeshContent.IsParsed && index < (int)g_ActiveMeshContent.Helpers.size()) return g_ActiveMeshContent.Helpers[index].Pos;
+        break;
+    case EGizmoTargetKind::MeshDummy:
+        if (g_ActiveMeshContent.IsParsed && index < (int)g_ActiveMeshContent.Dummies.size()) return &g_ActiveMeshContent.Dummies[index].Transform[9];
+        break;
+    case EGizmoTargetKind::MeshGenerator:
+        if (g_ActiveMeshContent.IsParsed && index < (int)g_ActiveMeshContent.Generators.size()) return &g_ActiveMeshContent.Generators[index].Transform[9];
+        break;
+    default:
+        break;
+    }
+    return nullptr;
+}
+
+inline void ValidateMeshGizmoSelection() {
+    if (!g_MeshGizmo.HasSelection()) return;
+    if (g_MeshGizmo.Kind == EGizmoTargetKind::Bone) {
+        if (g_BBMParser.IsParsed || !g_ShowSkeleton || g_MeshGizmo.Index >= g_ActiveMeshContent.BoneCount || g_MeshGizmo.Index >= (int)g_PreviewGlobalTransforms.size()) {
+            g_MeshGizmo.ClearSelection();
+        }
+        return;
+    }
+    if (!g_ShowHelpers || !GetGizmoTargetPosPtr(g_MeshGizmo.Kind, g_MeshGizmo.Index)) {
+        g_MeshGizmo.ClearSelection();
+    }
+}
+
+inline void ExtractBoneWorldAxes(int boneIdx, XMFLOAT3& outOrigin, XMFLOAT3 outAxes[3]) {
+    XMMATRIX m = g_PreviewGlobalTransforms[boneIdx];
+    outOrigin = XMFLOAT3(XMVectorGetX(m.r[3]), XMVectorGetY(m.r[3]), XMVectorGetZ(m.r[3]));
+    XMFLOAT3 defaults[3] = { {1,0,0}, {0,1,0}, {0,0,1} };
+    for (int a = 0; a < 3; ++a) {
+        XMVECTOR row = XMVectorSet(XMVectorGetX(m.r[a]), XMVectorGetY(m.r[a]), XMVectorGetZ(m.r[a]), 0.0f);
+        float lenSq = XMVectorGetX(XMVector3LengthSq(row));
+        if (lenSq > 1e-8f) {
+            row = XMVector3Normalize(row);
+            XMStoreFloat3(&outAxes[a], row);
+        }
+        else {
+            outAxes[a] = defaults[a];
+        }
+    }
+}
+
+inline void ApplyActiveMeshGizmoDrag(const ImVec2& pMin, float vw, float vh, const std::function<void()>& saveCallback) {
+    if (g_MeshGizmo.ActiveAxis == -1) return;
+    if (!ImGui::IsMouseDown(0)) {
+        g_MeshGizmo.ActiveAxis = -1;
+        return;
+    }
+
+    ImVec2 mousePos = ImGui::GetMousePos();
+    if (g_MeshGizmo.Kind == EGizmoTargetKind::Bone) {
+        if (!g_CurrentBoneConfig.IsLoaded || g_MeshGizmo.Index < 0 || g_MeshGizmo.Index >= g_ActiveMeshContent.BoneCount) {
+            g_MeshGizmo.ActiveAxis = -1;
+            return;
+        }
+        std::string boneName = (g_MeshGizmo.Index < (int)g_ActiveMeshContent.BoneNames.size()) ? g_ActiveMeshContent.BoneNames[g_MeshGizmo.Index] : "";
+        if (boneName.empty()) {
+            g_MeshGizmo.ActiveAxis = -1;
+            return;
+        }
+
+        XMFLOAT3 newScale = g_MeshGizmo.DragStartScale;
+        if (g_MeshGizmo.ActiveAxis == 3 || ImGui::GetIO().KeyShift) {
+            float deltaPx = (mousePos.x - g_MeshGizmo.DragStartMouse.x) - (mousePos.y - g_MeshGizmo.DragStartMouse.y);
+            float factor = (std::max)(0.05f, 1.0f + deltaPx * 0.005f);
+            newScale.x = (std::max)(0.05f, g_MeshGizmo.DragStartScale.x * factor);
+            newScale.y = (std::max)(0.05f, g_MeshGizmo.DragStartScale.y * factor);
+            newScale.z = (std::max)(0.05f, g_MeshGizmo.DragStartScale.z * factor);
+        }
+        else {
+            float deltaWorld = MeshGizmo::ComputeAxisDragDelta(g_MeshRenderer, g_MeshGizmo, g_MeshGizmo.ActiveAxis, pMin, vw, vh, mousePos);
+            float deltaScale = deltaWorld / (std::max)(0.05f, g_MeshGizmo.DragWorldLen);
+            float* startComp = &g_MeshGizmo.DragStartScale.x;
+            float* dstComp = &newScale.x;
+            dstComp[g_MeshGizmo.ActiveAxis] = (std::max)(0.05f, startComp[g_MeshGizmo.ActiveAxis] + deltaScale);
+        }
+
+        ApplyBoneScaleWithMirror(g_ActiveMeshContent, boneName, newScale);
+        UpdateAnimationBones();
+        return;
+    }
+
+    float* posPtr = GetGizmoTargetPosPtr(g_MeshGizmo.Kind, g_MeshGizmo.Index);
+    if (!posPtr || g_MeshGizmo.ActiveAxis < 0 || g_MeshGizmo.ActiveAxis > 2) {
+        g_MeshGizmo.ActiveAxis = -1;
+        return;
+    }
+
+    float deltaWorld = MeshGizmo::ComputeAxisDragDelta(g_MeshRenderer, g_MeshGizmo, g_MeshGizmo.ActiveAxis, pMin, vw, vh, mousePos);
+    if (!std::isfinite(deltaWorld)) return;
+
+    float oldAxisVal = posPtr[g_MeshGizmo.ActiveAxis];
+    float newAxisVal = (&g_MeshGizmo.DragStartPos.x)[g_MeshGizmo.ActiveAxis] + deltaWorld;
+    posPtr[g_MeshGizmo.ActiveAxis] = newAxisVal;
+
+    if (g_MeshGizmo.Kind == EGizmoTargetKind::BBMDummy && g_MeshGizmo.Index >= 0 && g_MeshGizmo.Index < (int)g_BBMParser.Dummies.size()) {
+        (&g_BBMParser.Dummies[g_MeshGizmo.Index].Position.x)[g_MeshGizmo.ActiveAxis] += (newAxisVal - oldAxisVal);
+    }
+
+    g_MeshEntryDirty = true;
+    if (saveCallback) saveCallback();
+}
+
 inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std::function<void()> lodControlsCallback = nullptr) {
     CheckMeshUpload(g_pd3dDevice);
 
@@ -869,7 +939,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         ImGui::EndPopup();
     }
 
-    static float rightPanelWidth = 373.0f;
+    static float rightPanelWidth = 410.0f;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float splitterWidth = 4.0f;
 
@@ -895,6 +965,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
     g_MeshRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
     if (g_ShowPhysicsOverlay) g_PhysicsOverlayRenderer.Resize(g_pd3dDevice, viewportWidth, avail.y);
+
+    ImVec2 pMinPre = ImGui::GetCursorScreenPos();
+    ValidateMeshGizmoSelection();
+    ApplyActiveMeshGizmoDrag(pMinPre, viewportWidth, avail.y, saveCallback);
 
     ID3D11DeviceContext* ctx;
     g_pd3dDevice->GetImmediateContext(&ctx);
@@ -941,24 +1015,53 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(pMin, pMax, true);
 
+    static ImVec2 s_TlMin(0, 0), s_TlMax(0, 0);
+    static ImVec2 s_TrMin(0, 0), s_TrMax(0, 0);
+    static ImVec2 s_BrMin(0, 0), s_BrMax(0, 0);
+    auto InRect = [](const ImVec2& pt, const ImVec2& rMin, const ImVec2& rMax) {
+        return pt.x >= rMin.x && pt.x <= rMax.x && pt.y >= rMin.y && pt.y <= rMax.y;
+    };
+    ImVec2 mousePos = ImGui::GetMousePos();
+    bool mouseInOverlay = InRect(mousePos, s_TlMin, s_TlMax) || InRect(mousePos, s_TrMin, s_TrMax) || InRect(mousePos, s_BrMin, s_BrMax);
+    bool allowViewportInput = g_IsMeshViewportHovered && !lodPopupOpen && !mouseInOverlay;
+
+    EGizmoTargetKind bestPickKind = EGizmoTargetKind::None;
+    int bestPickIndex = -1;
+    float bestPickDist = 10.0f;
+
+    auto DrawPointAndTrackPick = [&](EGizmoTargetKind kind, int idx, const XMFLOAT3& worldPos, bool isPhysics, ImU32 fillCol, float radius, const std::string& tooltip) {
+        ImVec2 scrPos;
+        if (!g_MeshRenderer.ProjectToScreen(worldPos, scrPos, viewportWidth, avail.y, isPhysics)) return false;
+        scrPos.x += pMin.x; scrPos.y += pMin.y;
+        dl->AddCircleFilled(scrPos, radius, fillCol);
+
+        bool isSelected = (g_MeshGizmo.Kind == kind && g_MeshGizmo.Index == idx);
+        if (isSelected) {
+            dl->AddCircle(scrPos, radius + 3.5f, IM_COL32(255, 225, 65, 255), 0, 2.0f);
+        }
+
+        float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
+        if (allowViewportInput && g_MeshGizmo.ActiveAxis == -1 && dist < bestPickDist) {
+            bestPickDist = dist;
+            bestPickKind = kind;
+            bestPickIndex = idx;
+        }
+        if (dist < 8.0f && g_MeshGizmo.ActiveAxis == -1 && !tooltip.empty()) {
+            if (!isSelected) dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
+            ImGui::SetTooltip("%s", tooltip.c_str());
+        }
+        return true;
+    };
+
     if (g_ShowSkeleton && !g_PreviewGlobalTransforms.empty()) {
-        ImVec2 mousePos = ImGui::GetMousePos();
         for (int i = 0; i < g_ActiveMeshContent.BoneCount; i++) {
             XMMATRIX globalMat = g_PreviewGlobalTransforms[i];
             XMFLOAT3 pos(XMVectorGetX(globalMat.r[3]), XMVectorGetY(globalMat.r[3]), XMVectorGetZ(globalMat.r[3]));
+            std::string boneName = (i < g_ActiveMeshContent.BoneNames.size()) ? g_ActiveMeshContent.BoneNames[i] : "Bone " + std::to_string(i);
 
             ImVec2 scrPos;
             if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
                 scrPos.x += pMin.x; scrPos.y += pMin.y;
-                dl->AddCircleFilled(scrPos, 3.0f, IM_COL32(0, 255, 0, 255));
-
-                float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                if (dist < 8.0f) {
-                    dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                    std::string boneName = (i < g_ActiveMeshContent.BoneNames.size()) ? g_ActiveMeshContent.BoneNames[i] : "Bone " + std::to_string(i);
-                    ImGui::SetTooltip("%s", boneName.c_str());
-                }
-
                 int parentIdx = g_ActiveMeshContent.Bones[i].ParentIndex;
                 if (parentIdx != -1 && parentIdx < g_ActiveMeshContent.BoneCount) {
                     XMMATRIX pMat = g_PreviewGlobalTransforms[parentIdx];
@@ -970,98 +1073,106 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     }
                 }
             }
+            DrawPointAndTrackPick(EGizmoTargetKind::Bone, i, pos, false, IM_COL32(0, 255, 0, 255), 3.0f, boneName);
         }
     }
 
     if (g_ShowHelpers) {
-        ImVec2 mousePos = ImGui::GetMousePos();
-
         if (g_BBMParser.IsParsed) {
-            for (int i = 0; i < g_BBMParser.Helpers.size(); i++) {
+            for (int i = 0; i < (int)g_BBMParser.Helpers.size(); i++) {
                 const auto& h = g_BBMParser.Helpers[i];
-                ImVec2 scrPos;
-                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Position.x, h.Position.y, h.Position.z), scrPos, viewportWidth, avail.y, true)) {
-                    scrPos.x += pMin.x; scrPos.y += pMin.y;
-                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
-
-                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                    if (dist < 8.0f) {
-                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                        ImGui::SetTooltip("%s", h.Name.c_str());
-                    }
-                }
+                DrawPointAndTrackPick(EGizmoTargetKind::BBMHelper, i, XMFLOAT3(h.Position.x, h.Position.y, h.Position.z), true, IM_COL32(0, 255, 255, 200), 4.0f, h.Name);
             }
-            for (int i = 0; i < g_BBMParser.Dummies.size(); i++) {
+            for (int i = 0; i < (int)g_BBMParser.Dummies.size(); i++) {
                 const auto& d = g_BBMParser.Dummies[i];
-                ImVec2 scrPos;
-                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]), scrPos, viewportWidth, avail.y, true)) {
-                    scrPos.x += pMin.x; scrPos.y += pMin.y;
-                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
-
-                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                    if (dist < 8.0f) {
-                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                        ImGui::SetTooltip("%s", d.Name.c_str());
-                    }
-                }
+                DrawPointAndTrackPick(EGizmoTargetKind::BBMDummy, i, XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]), true, IM_COL32(255, 0, 255, 200), 4.0f, d.Name);
             }
         }
 
-        for (int i = 0; i < g_ActiveMeshContent.Generators.size(); i++) {
+        for (int i = 0; i < (int)g_ActiveMeshContent.Generators.size(); i++) {
             const auto& gen = g_ActiveMeshContent.Generators[i];
-            XMFLOAT3 pos = XMFLOAT3(gen.Transform[9], gen.Transform[10], gen.Transform[11]);
-
-            ImVec2 scrPos;
-            if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
-                scrPos.x += pMin.x; scrPos.y += pMin.y;
-
-                dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 0, 200));
-
-                float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                if (dist < 8.0f) {
-                    dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                    ImGui::SetTooltip("%s", gen.ObjectName.c_str());
-                }
-            }
+            DrawPointAndTrackPick(EGizmoTargetKind::MeshGenerator, i, XMFLOAT3(gen.Transform[9], gen.Transform[10], gen.Transform[11]), false, IM_COL32(255, 0, 0, 200), 4.0f, gen.ObjectName);
         }
 
         if (g_ActiveMeshContent.IsParsed) {
-            for (int i = 0; i < g_ActiveMeshContent.Helpers.size(); i++) {
+            for (int i = 0; i < (int)g_ActiveMeshContent.Helpers.size(); i++) {
                 const auto& h = g_ActiveMeshContent.Helpers[i];
-                ImVec2 scrPos;
-                if (g_MeshRenderer.ProjectToScreen(XMFLOAT3(h.Pos[0], h.Pos[1], h.Pos[2]), scrPos, viewportWidth, avail.y)) {
-                    scrPos.x += pMin.x; scrPos.y += pMin.y;
-                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(0, 255, 255, 200));
+                std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
+                if (name.empty()) name = "CRC: " + std::to_string(h.NameCRC);
+                DrawPointAndTrackPick(EGizmoTargetKind::MeshHelper, i, XMFLOAT3(h.Pos[0], h.Pos[1], h.Pos[2]), false, IM_COL32(0, 255, 255, 200), 4.0f, name);
+            }
+            for (int i = 0; i < (int)g_ActiveMeshContent.Dummies.size(); i++) {
+                const auto& d = g_ActiveMeshContent.Dummies[i];
+                std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
+                if (name.empty()) name = "CRC: " + std::to_string(d.NameCRC);
+                DrawPointAndTrackPick(EGizmoTargetKind::MeshDummy, i, XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]), false, IM_COL32(255, 0, 255, 200), 4.0f, name);
+            }
+        }
+    }
 
-                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                    if (dist < 8.0f) {
-                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                        std::string name = g_ActiveMeshContent.GetNameFromCRC(h.NameCRC);
-                        if (name.empty()) name = "CRC: " + std::to_string(h.NameCRC);
-                        ImGui::SetTooltip("%s", name.c_str());
-                    }
+    // Draw 3-axis gizmo for currently selected point or bone
+    ValidateMeshGizmoSelection();
+    if (g_MeshGizmo.HasSelection()) {
+        if (g_MeshGizmo.Kind == EGizmoTargetKind::Bone) {
+            XMFLOAT3 originWorld, axesWorld[3];
+            ExtractBoneWorldAxes(g_MeshGizmo.Index, originWorld, axesWorld);
+            std::string bName = (g_MeshGizmo.Index < (int)g_ActiveMeshContent.BoneNames.size()) ? g_ActiveMeshContent.BoneNames[g_MeshGizmo.Index] : ("Bone " + std::to_string(g_MeshGizmo.Index));
+
+            char statusBuf[192] = "";
+            if (g_MeshGizmo.ActiveAxis != -1 || g_MeshGizmo.HoverAxis != -1) {
+                if (g_CurrentBoneConfig.IsLoaded) {
+                    XMFLOAT3 sc = g_CurrentBoneConfig.GetBoneScale(bName);
+                    snprintf(statusBuf, sizeof(statusBuf), "%s: %.2f, %.2f, %.2f", bName.c_str(), sc.x, sc.y, sc.z);
+                }
+                else {
+                    snprintf(statusBuf, sizeof(statusBuf), "%s (select/create .bncfg in Bones tab)", bName.c_str());
                 }
             }
-            for (int i = 0; i < g_ActiveMeshContent.Dummies.size(); i++) {
-                const auto& d = g_ActiveMeshContent.Dummies[i];
-                XMFLOAT3 pos = XMFLOAT3(d.Transform[9], d.Transform[10], d.Transform[11]);
 
-                ImVec2 scrPos;
-                if (g_MeshRenderer.ProjectToScreen(pos, scrPos, viewportWidth, avail.y)) {
-                    scrPos.x += pMin.x; scrPos.y += pMin.y;
-                    dl->AddCircleFilled(scrPos, 4.0f, IM_COL32(255, 0, 255, 200));
+            if (MeshGizmo::DrawAndUpdateAxisGizmo(dl, g_MeshRenderer, originWorld, axesWorld, pMin, viewportWidth, avail.y, false, true, allowViewportInput, g_MeshGizmo, statusBuf)) {
+                if (!g_CurrentBoneConfig.IsLoaded) {
+                    g_MeshGizmo.ActiveAxis = -1;
+                    g_BoneConfigStatus = "Create or select a .bncfg preset in Bones tab first.";
+                }
+                else {
+                    g_MeshGizmo.DragStartScale = g_CurrentBoneConfig.GetBoneScale(bName);
+                }
+            }
+        }
+        else {
+            float* posPtr = GetGizmoTargetPosPtr(g_MeshGizmo.Kind, g_MeshGizmo.Index);
+            if (posPtr) {
+                XMFLOAT3 originWorld(posPtr[0], posPtr[1], posPtr[2]);
+                XMFLOAT3 worldAxes[3] = { {1,0,0}, {0,1,0}, {0,0,1} };
+                bool isPhys = (g_MeshGizmo.Kind == EGizmoTargetKind::BBMHelper || g_MeshGizmo.Kind == EGizmoTargetKind::BBMDummy);
 
-                    float dist = sqrtf((mousePos.x - scrPos.x) * (mousePos.x - scrPos.x) + (mousePos.y - scrPos.y) * (mousePos.y - scrPos.y));
-                    if (dist < 8.0f) {
-                        dl->AddCircle(scrPos, 6.0f, IM_COL32(255, 255, 0, 255));
-                        std::string name = g_ActiveMeshContent.GetNameFromCRC(d.NameCRC);
-                        if (name.empty()) name = "CRC: " + std::to_string(d.NameCRC);
-                        ImGui::SetTooltip("%s", name.c_str());
-                    }
+                char statusBuf[128] = "";
+                if (g_MeshGizmo.ActiveAxis != -1) {
+                    snprintf(statusBuf, sizeof(statusBuf), "%.3f, %.3f, %.3f", originWorld.x, originWorld.y, originWorld.z);
+                }
+
+                if (MeshGizmo::DrawAndUpdateAxisGizmo(dl, g_MeshRenderer, originWorld, worldAxes, pMin, viewportWidth, avail.y, isPhys, false, allowViewportInput, g_MeshGizmo, statusBuf)) {
+                    g_MeshGizmo.DragStartPos = originWorld;
                 }
             }
         }
     }
+
+    // Handle clicking a point (or empty space to deselect) when not clicking a gizmo handle
+    if (allowViewportInput && g_MeshGizmo.ActiveAxis == -1 && g_MeshGizmo.HoverAxis == -1 && ImGui::IsMouseClicked(0)) {
+        if (bestPickKind != EGizmoTargetKind::None && bestPickIndex >= 0) {
+            g_MeshGizmo.Kind = bestPickKind;
+            g_MeshGizmo.Index = bestPickIndex;
+            g_MeshGizmo.ActiveAxis = -1;
+            if (bestPickKind == EGizmoTargetKind::Bone && bestPickIndex < (int)g_ActiveMeshContent.BoneNames.size()) {
+                g_SelectedBoneName = g_ActiveMeshContent.BoneNames[bestPickIndex];
+            }
+        }
+        else {
+            g_MeshGizmo.ClearSelection();
+        }
+    }
+
     dl->PopClipRect();
 
     // Top-left overlay
@@ -1146,6 +1257,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
     ImGui::EndGroup();
     ImGui::PopStyleVar();
+    s_TlMin = ImGui::GetItemRectMin();
+    s_TlMax = ImGui::GetItemRectMax();
 
     ImGui::SetCursorScreenPos(ImVec2(pMax.x - 24 - 10, pMin.y + 10));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, s_MeshOverlayAlpha);
@@ -1161,6 +1274,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         }
     }
     ImGui::PopStyleVar();
+    s_TrMin = ImGui::GetItemRectMin();
+    s_TrMax = ImGui::GetItemRectMax();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_ShowRightPanel ? "Collapse Info Panel" : "Expand Info Panel");
 
     // Bottom-right overlay
@@ -1197,6 +1312,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
         ImGui::PopStyleVar();
         ImVec2 brMin = ImGui::GetItemRectMin();
         ImVec2 brMax = ImGui::GetItemRectMax();
+        s_BrMin = brMin;
+        s_BrMax = brMax;
         s_BottomRightOverlayW = brMax.x - brMin.x;
         s_BottomRightOverlayH = brMax.y - brMin.y;
     }
@@ -1254,7 +1371,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     g_ActiveMeshContent.AutoCalculateBounds();
                     changed = true;
                 }
-                if (changed && saveCallback) saveCallback();
+                if (changed) { g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                 if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
                     ImGui::Separator();
@@ -1275,51 +1392,82 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     }
                 }
 
-                if (g_ActiveMeshContent.BoneCount > 0) {
+                if (tocChanged) { g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
+
+                if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
                     ImGui::Separator();
-                    ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "Bone Configuration (.bncfg)");
+                    if (ImGui::CollapsingHeader("LOD Sizes")) {
+                        uint32_t totalEntrySize = 0;
+                        for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODSizes.size(); i++) totalEntrySize += g_ActiveMeshContent.EntryMeta.LODSizes[i];
 
-                    if (!g_BoneConfigFilesScanned) {
-                        ScanBoneConfigFiles();
-                    }
-
-                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-
-                    std::string comboPreview = s_SelectedBoneConfig.empty() ? "No Bone Preset" : s_SelectedBoneConfig;
-                    if (ImGui::BeginCombo("##BoneConfigSelect", comboPreview.c_str())) {
-                        // Default "No Bone Preset" option
-                        bool isNoneSelected = s_SelectedBoneConfig.empty();
-                        if (ImGui::Selectable("No Bone Preset", isNoneSelected)) {
-                            s_SelectedBoneConfig = "";
-                            s_ApplyBoneConfig = false;
-                            g_CurrentBoneConfig = BoneConfigData();
+                        for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
+                            if (i < g_ActiveMeshContent.EntryMeta.LODSizes.size()) ImGui::Text("LOD %d Size: %d bytes", i, g_ActiveMeshContent.EntryMeta.LODSizes[i]);
+                            else ImGui::Text("LOD %d Size: -", i);
                         }
-                        if (isNoneSelected) {
-                            ImGui::SetItemDefaultFocus();
-                        }
-
-                        // Available .bncfg files
-                        for (const auto& file : g_BoneConfigFiles) {
-                            bool isSelected = (s_SelectedBoneConfig == file);
-                            if (ImGui::Selectable(file.c_str(), isSelected)) {
-                                s_SelectedBoneConfig = file;
-                                s_ApplyBoneConfig = true;
-                                LoadBoneConfigFile(s_SelectedBoneConfig);
-                            }
-                            if (isSelected) {
-                                ImGui::SetItemDefaultFocus();
-                            }
-                        }
-
-                        if (g_BoneConfigFiles.empty()) {
-                            ImGui::TextDisabled("No .bncfg files found in Data/Bones");
-                        }
-                        ImGui::EndCombo();
+                        ImGui::Text("Total Entry Size: %u bytes", totalEntrySize);
                     }
                 }
 
-                if (tocChanged && saveCallback) saveCallback();
+                if (g_ActiveMeshContent.IsParsed) {
+                    std::string primHeader = "Primitives (" + std::to_string(g_ActiveMeshContent.Primitives.size()) + ")###OverviewPrimitives";
+                    if (ImGui::CollapsingHeader(primHeader.c_str())) {
+                        for (size_t i = 0; i < g_ActiveMeshContent.Primitives.size(); i++) {
+                            auto& prim = g_ActiveMeshContent.Primitives[i];
+                            std::string headerName = "Primitive " + std::to_string(i);
+                            if (prim.ClothPrimitives.size() > 0) {
+                                headerName += " [CLOTH]";
+                            }
+
+                            ImGui::PushID((int)i);
+                            if (ImGui::TreeNodeEx(headerName.c_str(), ImGuiTreeNodeFlags_Framed)) {
+                                ImGui::Text("InitFlags:         0x%08X", prim.InitFlags);
+                                ImGui::Text("RepeatingMeshReps: %d", prim.RepeatingMeshReps);
+                                ImGui::Text("Vertex Stride:     %d bytes", prim.VertexStride);
+                                ImGui::Text("Buffer Type:       %u", prim.BufferType);
+                                ImGui::Text("Is Compressed:     %s", prim.IsCompressed ? "True" : "False");
+                                ImGui::Text("Material Index:    %d", prim.MaterialIndex);
+
+                                ImGui::Dummy(ImVec2(0, 5));
+                                ImGui::Text("Vertex Count:      %u", prim.VertexCount);
+                                ImGui::Text("Index Count:       %u", prim.IndexCount);
+                                ImGui::Text("Triangle Count:    %u", prim.TriangleCount);
+
+                                ImGui::Dummy(ImVec2(0, 5));
+                                ImGui::Text("Static Blocks:     %u", prim.StaticBlockCount);
+                                ImGui::Text("Animated Blocks:   %u", prim.AnimatedBlockCount);
+                                ImGui::Text("Cloth Primitives:  %zu", prim.ClothPrimitives.size());
+
+                                ImGui::Dummy(ImVec2(0, 5));
+                                ImGui::Text("Avg Texture Stretch:");
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(100);
+                                if (ImGui::DragFloat("##Stretch", &prim.AvgTextureStretch, 0.005f, 0.0f, 10.0f, "%.4f")) {
+                                    g_MeshEntryDirty = true;
+                                    if (saveCallback) saveCallback();
+                                }
+
+                                ImGui::TreePop();
+                            }
+                            ImGui::PopID();
+                        }
+                    }
+                }
+
                 ImGui::EndTabItem();
+            }
+
+            if (!g_BBMParser.IsParsed && g_ActiveMeshContent.BoneCount > 0 && ImGui::BeginTabItem("Bones")) {
+                g_BoneConfigTabFocused = true;
+                int selBone = (g_MeshGizmo.Kind == EGizmoTargetKind::Bone) ? g_MeshGizmo.Index : -1;
+                DrawBoneConfigTab(g_ActiveMeshContent, selBone, [&](int bIdx) {
+                    g_MeshGizmo.Kind = EGizmoTargetKind::Bone;
+                    g_MeshGizmo.Index = bIdx;
+                    g_MeshGizmo.ActiveAxis = -1;
+                });
+                ImGui::EndTabItem();
+            }
+            else {
+                g_BoneConfigTabFocused = false;
             }
 
             if (g_ActiveMeshContent.AnimatedFlag && ImGui::BeginTabItem("Animations")) {
@@ -1533,7 +1681,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 }
                             }
 
-                            if (changed && saveCallback) saveCallback();
+                            if (changed) { g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::PopID();
                         }
@@ -1570,6 +1718,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     if (g_BBMParser.IsParsed) {
                         CBBMParser::HelperPoint h = { "NewHelper", {0,0,0}, -1, 0 };
                         g_BBMParser.Helpers.push_back(h);
+                        g_MeshGizmo.Kind = EGizmoTargetKind::BBMHelper;
+                        g_MeshGizmo.Index = (int)g_BBMParser.Helpers.size() - 1;
+                        g_MeshGizmo.ActiveAxis = -1;
+                        g_MeshEntryDirty = true;
                         if (saveCallback) saveCallback();
                     }
                     else if (g_ActiveMeshContent.IsParsed) {
@@ -1578,6 +1730,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         g_ActiveMeshContent.Helpers.push_back(h);
                         g_ActiveMeshContent.HelperPointCount = (uint16_t)g_ActiveMeshContent.Helpers.size();
                         SortAndRepackGraphExtras();
+                        g_MeshGizmo.ClearSelection();
+                        g_MeshEntryDirty = true;
                         if (saveCallback) saveCallback();
                     }
                 }
@@ -1591,11 +1745,11 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
                             char nameBuf[128]; strncpy_s(nameBuf, h.Name.c_str(), 127);
                             ImGui::SetNextItemWidth(130);
-                            if (ImGui::InputText("##Name", nameBuf, 128)) { h.Name = nameBuf; }
-                            if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { h.Name = nameBuf; g_MeshEntryDirty = true; }
+                            if (ImGui::IsItemDeactivatedAfterEdit()) { g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine(); ImGui::SetNextItemWidth(140);
-                            if (ImGui::DragFloat3("##Pos", &h.Position.x, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::DragFloat3("##Pos", &h.Position.x, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
                             if (ImGui::Button((h.BoneIndex >= 0 ? "B:" + std::to_string(h.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
@@ -1604,7 +1758,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Assign bone to helper point");
 
                             ImGui::SameLine();
-                            if (ImGui::Button("X", ImVec2(20, 0))) { g_BBMParser.Helpers.erase(g_BBMParser.Helpers.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::Button("X", ImVec2(20, 0))) { g_BBMParser.Helpers.erase(g_BBMParser.Helpers.begin() + i); i--; g_MeshGizmo.ClearSelection(); g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
                             ImGui::PopID();
                         }
                     }
@@ -1621,15 +1775,18 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 std::string newStr = nameBuf;
                                 h.NameCRC = CalculateFableCRC(newStr);
                                 g_ActiveMeshContent.CRCNameMap[h.NameCRC] = newStr;
+                                g_MeshEntryDirty = true;
                             }
 
                             if (ImGui::IsItemDeactivatedAfterEdit()) {
                                 SortAndRepackGraphExtras();
+                                g_MeshGizmo.ClearSelection();
+                                g_MeshEntryDirty = true;
                                 if (saveCallback) saveCallback();
                             }
 
                             ImGui::SameLine(); ImGui::SetNextItemWidth(140);
-                            if (ImGui::DragFloat3("##Pos", h.Pos, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::DragFloat3("##Pos", h.Pos, 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
                             if (ImGui::Button((h.BoneIndex >= 0 ? "B:" + std::to_string(h.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
@@ -1642,7 +1799,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 g_ActiveMeshContent.Helpers.erase(g_ActiveMeshContent.Helpers.begin() + i);
                                 g_ActiveMeshContent.HelperPointCount = (uint16_t)g_ActiveMeshContent.Helpers.size();
                                 SortAndRepackGraphExtras();
-                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
+                                g_MeshGizmo.ClearSelection();
+                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback();
                             }
                             ImGui::PopID();
                         }
@@ -1659,6 +1817,10 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         d.Position = { 0,0,0 }; d.Direction = { 0,0,1 };
                         memset(d.Transform, 0, 48); d.Transform[0] = 1; d.Transform[4] = 1; d.Transform[8] = 1;
                         g_BBMParser.Dummies.push_back(d);
+                        g_MeshGizmo.Kind = EGizmoTargetKind::BBMDummy;
+                        g_MeshGizmo.Index = (int)g_BBMParser.Dummies.size() - 1;
+                        g_MeshGizmo.ActiveAxis = -1;
+                        g_MeshEntryDirty = true;
                         if (saveCallback) saveCallback();
                     }
                     else if (g_ActiveMeshContent.IsParsed) {
@@ -1668,6 +1830,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         g_ActiveMeshContent.Dummies.push_back(d);
                         g_ActiveMeshContent.DummyObjectCount = (uint16_t)g_ActiveMeshContent.Dummies.size();
                         SortAndRepackGraphExtras();
+                        g_MeshGizmo.ClearSelection();
+                        g_MeshEntryDirty = true;
                         if (saveCallback) saveCallback();
                     }
                 }
@@ -1681,11 +1845,17 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
                             char nameBuf[128]; strncpy_s(nameBuf, d.Name.c_str(), 127);
                             ImGui::SetNextItemWidth(130);
-                            if (ImGui::InputText("##Name", nameBuf, 128)) { d.Name = nameBuf; }
-                            if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { d.Name = nameBuf; g_MeshEntryDirty = true; }
+                            if (ImGui::IsItemDeactivatedAfterEdit()) { g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine(); ImGui::SetNextItemWidth(140);
-                            if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            float prevPos[3] = { d.Transform[9], d.Transform[10], d.Transform[11] };
+                            if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) {
+                                d.Position.x += d.Transform[9] - prevPos[0];
+                                d.Position.y += d.Transform[10] - prevPos[1];
+                                d.Position.z += d.Transform[11] - prevPos[2];
+                                g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback();
+                            }
 
                             ImGui::SameLine();
                             if (ImGui::Button((d.BoneIndex >= 0 ? "B:" + std::to_string(d.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
@@ -1694,7 +1864,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Assign bone to dummy object");
 
                             ImGui::SameLine();
-                            if (ImGui::Button("X", ImVec2(20, 0))) { g_BBMParser.Dummies.erase(g_BBMParser.Dummies.begin() + i); i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::Button("X", ImVec2(20, 0))) { g_BBMParser.Dummies.erase(g_BBMParser.Dummies.begin() + i); i--; g_MeshGizmo.ClearSelection(); g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
                             ImGui::PopID();
                         }
                     }
@@ -1710,15 +1880,18 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 std::string newStr = nameBuf;
                                 d.NameCRC = CalculateFableCRC(newStr);
                                 g_ActiveMeshContent.CRCNameMap[d.NameCRC] = newStr;
+                                g_MeshEntryDirty = true;
                             }
 
                             if (ImGui::IsItemDeactivatedAfterEdit()) {
                                 SortAndRepackGraphExtras();
+                                g_MeshGizmo.ClearSelection();
+                                g_MeshEntryDirty = true;
                                 if (saveCallback) saveCallback();
                             }
 
                             ImGui::SameLine(); ImGui::SetNextItemWidth(140);
-                            if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::DragFloat3("##Pos", &d.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
                             if (ImGui::Button((d.BoneIndex >= 0 ? "B:" + std::to_string(d.BoneIndex) : "NoBone").c_str(), ImVec2(55, 0))) {
@@ -1731,7 +1904,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 g_ActiveMeshContent.Dummies.erase(g_ActiveMeshContent.Dummies.begin() + i);
                                 g_ActiveMeshContent.DummyObjectCount = (uint16_t)g_ActiveMeshContent.Dummies.size();
                                 SortAndRepackGraphExtras();
-                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
+                                g_MeshGizmo.ClearSelection();
+                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback();
                             }
                             ImGui::PopID();
                         }
@@ -1749,6 +1923,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         g_ActiveMeshContent.Generators.push_back(g);
                         g_ActiveMeshContent.MeshGeneratorCount = (uint16_t)g_ActiveMeshContent.Generators.size();
                         SortAndRepackGraphExtras();
+                        g_MeshGizmo.ClearSelection();
+                        g_MeshEntryDirty = true;
                         if (saveCallback) saveCallback();
                     }
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add Generator");
@@ -1760,19 +1936,22 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
                             char nameBuf[128]; strncpy_s(nameBuf, gen.ObjectName.c_str(), 127);
                             ImGui::SetNextItemWidth(110);
-                            if (ImGui::InputText("##Name", nameBuf, 128)) { gen.ObjectName = nameBuf; }
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { gen.ObjectName = nameBuf; g_MeshEntryDirty = true; }
                             if (ImGui::IsItemDeactivatedAfterEdit()) {
                                 SortAndRepackGraphExtras();
+                                g_MeshGizmo.ClearSelection();
+                                g_MeshEntryDirty = true;
                                 if (saveCallback) saveCallback();
                             }
 
                             ImGui::SameLine(); ImGui::SetNextItemWidth(120);
-                            if (ImGui::DragFloat3("##Pos", &gen.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                            if (ImGui::DragFloat3("##Pos", &gen.Transform[9], 0.05f)) { g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine(); ImGui::SetNextItemWidth(45);
                             int tempBank = (int)gen.BankIndex;
                             if (ImGui::InputInt("##Bank", &tempBank, 0)) {
                                 gen.BankIndex = (uint32_t)(std::max)(0, tempBank);
+                                g_MeshEntryDirty = true;
                                 if (saveCallback) saveCallback();
                             }
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bank Index");
@@ -1788,7 +1967,8 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 g_ActiveMeshContent.Generators.erase(g_ActiveMeshContent.Generators.begin() + i);
                                 g_ActiveMeshContent.MeshGeneratorCount = (uint16_t)g_ActiveMeshContent.Generators.size();
                                 SortAndRepackGraphExtras();
-                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; if (saveCallback) saveCallback();
+                                g_MeshGizmo.ClearSelection();
+                                i--; g_MeshUploadNeeded = true; g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback();
                             }
                             ImGui::PopID();
                         }
@@ -1838,15 +2018,16 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
 
                             char nameBuf[128]; strncpy_s(nameBuf, v.Name.c_str(), 127);
                             ImGui::SetNextItemWidth(110);
-                            if (ImGui::InputText("##Name", nameBuf, 128)) { v.Name = nameBuf; }
-                            if (ImGui::IsItemDeactivatedAfterEdit()) { if (saveCallback) saveCallback(); }
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { v.Name = nameBuf; g_MeshEntryDirty = true; }
+                            if (ImGui::IsItemDeactivatedAfterEdit()) { g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine(); ImGui::SetNextItemWidth(80);
                             int tempID = (int)v.ID;
-                            if (ImGui::InputInt("ID", &tempID, 0)) { v.ID = (uint32_t)(std::max)(0, tempID); if (saveCallback) saveCallback(); }
+                            if (ImGui::InputInt("ID", &tempID, 0)) { v.ID = (uint32_t)(std::max)(0, tempID); g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
 
                             ImGui::SameLine();
                             if (ImGui::Button("X##DelVol", ImVec2(20, 0))) {
+                                g_MeshEntryDirty = true;
                                 ImGui::PopID();
                                 return true;
                             }
@@ -1868,6 +2049,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                 if (vState.IsBoxMode) {
                                     GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
                                     v.PlaneCount = (uint32_t)v.Planes.size();
+                                    g_MeshEntryDirty = true;
                                     if (saveCallback) saveCallback();
                                 }
                             }
@@ -1887,6 +2069,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                     GenerateBoxPlanes(vState.Center, vState.Size, vState.Rotation, v.Planes);
                                     v.PlaneCount = (uint32_t)v.Planes.size();
                                     g_PreserveCamera = true;
+                                    g_MeshEntryDirty = true;
                                     if (saveCallback) saveCallback();
                                 }
                             }
@@ -1896,6 +2079,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                         CBBMParser::BBMPlane p = { {0,1,0}, 0 };
                                         v.Planes.push_back(p);
                                         v.PlaneCount = (uint32_t)v.Planes.size();
+                                        g_MeshEntryDirty = true;
                                         if (saveCallback) saveCallback();
                                     }
                                     for (int pIdx = 0; pIdx < v.Planes.size(); pIdx++) {
@@ -1903,13 +2087,14 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                                         ImGui::PushID(pIdx);
                                         ImGui::Text("P%d", pIdx);
                                         ImGui::SameLine(); ImGui::SetNextItemWidth(110);
-                                        if (ImGui::DragFloat3("Normal", plane.Normal, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                                        if (ImGui::DragFloat3("Normal", plane.Normal, 0.05f)) { g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
                                         ImGui::SameLine(); ImGui::SetNextItemWidth(60);
-                                        if (ImGui::DragFloat("D", &plane.D, 0.05f)) { g_PreserveCamera = true; if (saveCallback) saveCallback(); }
+                                        if (ImGui::DragFloat("D", &plane.D, 0.05f)) { g_PreserveCamera = true; g_MeshEntryDirty = true; if (saveCallback) saveCallback(); }
                                         ImGui::SameLine();
                                         if (ImGui::Button("X", ImVec2(20, 0))) {
                                             v.Planes.erase(v.Planes.begin() + pIdx); pIdx--;
                                             v.PlaneCount = (uint32_t)v.Planes.size();
+                                            g_MeshEntryDirty = true;
                                             if (saveCallback) saveCallback();
                                         }
                                         ImGui::PopID();
@@ -2114,6 +2299,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             matObj.MapFlags = (matObj.MapFlags & ~0xF) | flags;
 
                             g_MeshUploadNeeded = true;
+                            g_MeshEntryDirty = true;
                             if (saveCallback) saveCallback();
                         }
 
@@ -2167,7 +2353,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             ImGui::SameLine(100);
                             char nameBuf[128]; strncpy_s(nameBuf, m.Name.c_str(), 127);
                             ImGui::SetNextItemWidth(150);
-                            if (ImGui::InputText("##Name", nameBuf, 128)) m.Name = nameBuf;
+                            if (ImGui::InputText("##Name", nameBuf, 128)) { m.Name = nameBuf; g_MeshEntryDirty = true; }
 
                             DrawTexRow("Diffuse", m.DiffuseMapID, i, 0, m);
                             DrawTexRow("Bump", m.BumpMapID, i, 1, m);
@@ -2181,6 +2367,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             ImGui::SetNextItemWidth(90);
                             if (ImGui::InputInt("##mapflags_int", &m.MapFlags)) {
                                 g_MeshUploadNeeded = true;
+                                g_MeshEntryDirty = true;
                                 if (saveCallback) saveCallback();
                             }
 
@@ -2191,14 +2378,15 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                             if (ImGui::SliderInt("##si_slider", &m.SelfIllumination, 0, 255)) {
                                 g_MeshUploadNeeded = true;
                                 g_PreserveCamera = true;
+                                g_MeshEntryDirty = true;
                                 if (saveCallback) saveCallback();
                             }
 
-                            ImGui::Checkbox("Two-Sided", &m.IsTwoSided);
-                            ImGui::Checkbox("Transparent", &m.IsTransparent);
-                            ImGui::Checkbox("Boolean Alpha", &m.BooleanAlpha);
-                            ImGui::Checkbox("Degenerate Triangles", &m.DegenerateTriangles);
-                            ImGui::Checkbox("Use Filenames", &m.UseFilenames);
+                            if (ImGui::Checkbox("Two-Sided", &m.IsTwoSided)) g_MeshEntryDirty = true;
+                            if (ImGui::Checkbox("Transparent", &m.IsTransparent)) g_MeshEntryDirty = true;
+                            if (ImGui::Checkbox("Boolean Alpha", &m.BooleanAlpha)) g_MeshEntryDirty = true;
+                            if (ImGui::Checkbox("Degenerate Triangles", &m.DegenerateTriangles)) g_MeshEntryDirty = true;
+                            if (ImGui::Checkbox("Use Filenames", &m.UseFilenames)) g_MeshEntryDirty = true;
 
                             ImGui::Separator();
                         }
@@ -2207,67 +2395,6 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                     }
                     ImGui::EndChild();
                 }
-                ImGui::EndTabItem();
-            }
-
-            if (g_ActiveMeshContent.IsParsed && ImGui::BeginTabItem("Primitives")) {
-                if (g_ActiveMeshContent.EntryMeta.HasData && g_ActiveMeshContent.EntryMeta.LODCount > 0) {
-                    uint32_t totalEntrySize = 0;
-                    for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODSizes.size(); i++) totalEntrySize += g_ActiveMeshContent.EntryMeta.LODSizes[i];
-
-                    for (uint32_t i = 0; i < g_ActiveMeshContent.EntryMeta.LODCount; i++) {
-                        if (i < g_ActiveMeshContent.EntryMeta.LODSizes.size()) ImGui::Text("LOD %d Size: %d bytes", i, g_ActiveMeshContent.EntryMeta.LODSizes[i]);
-                        else ImGui::Text("LOD %d Size: -", i);
-                    }
-                    ImGui::Text("Total Entry Size: %u bytes", totalEntrySize);
-                    ImGui::Separator();
-                }
-
-                ImGui::BeginChild("DebugPrimList", ImVec2(0, 0), true);
-
-                for (size_t i = 0; i < g_ActiveMeshContent.Primitives.size(); i++) {
-                    auto& prim = g_ActiveMeshContent.Primitives[i];
-                    std::string headerName = "Primitive " + std::to_string(i);
-
-                    if (prim.ClothPrimitives.size() > 0) {
-                        headerName += " [CLOTH]";
-                    }
-
-                    if (ImGui::CollapsingHeader(headerName.c_str())) {
-                        ImGui::Indent(15.0f);
-
-                        ImGui::Text("InitFlags:         0x%08X", prim.InitFlags);
-                        ImGui::Text("RepeatingMeshReps: %d", prim.RepeatingMeshReps);
-                        ImGui::Text("Vertex Stride:     %d bytes", prim.VertexStride);
-                        ImGui::Text("Buffer Type:       %u", prim.BufferType);
-                        ImGui::Text("Is Compressed:     %s", prim.IsCompressed ? "True" : "False");
-                        ImGui::Text("Material Index:    %d", prim.MaterialIndex);
-
-                        ImGui::Dummy(ImVec2(0, 5));
-                        ImGui::Text("Vertex Count:      %u", prim.VertexCount);
-                        ImGui::Text("Index Count:       %u", prim.IndexCount);
-                        ImGui::Text("Triangle Count:    %u", prim.TriangleCount);
-
-                        ImGui::Dummy(ImVec2(0, 5));
-                        ImGui::Text("Static Blocks:     %u", prim.StaticBlockCount);
-                        ImGui::Text("Animated Blocks:   %u", prim.AnimatedBlockCount);
-                        ImGui::Text("Cloth Primitives:  %zu", prim.ClothPrimitives.size());
-
-                        ImGui::Dummy(ImVec2(0, 5));
-                        ImGui::PushID((int)i);
-                        ImGui::Text("Avg Texture Stretch:");
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(100);
-                        if (ImGui::DragFloat("##Stretch", &prim.AvgTextureStretch, 0.005f, 0.0f, 10.0f, "%.4f")) {
-                            if (saveCallback) saveCallback();
-                        }
-                        ImGui::PopID();
-
-                        ImGui::Unindent(15.0f);
-                        ImGui::Separator();
-                    }
-                }
-                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
 
@@ -2449,6 +2576,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         else if (g_EditingTextureType == 2) m.ReflectBank = g_SelectedTextureID;
                         else if (g_EditingTextureType == 3) m.IllumBank = g_SelectedTextureID;
                         g_MeshUploadNeeded = true;
+                        g_MeshEntryDirty = true;
                         if (saveCallback) saveCallback();
                     }
                 }
@@ -2469,6 +2597,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                         m.MapFlags = (m.MapFlags & ~0xF) | flags;
 
                         g_MeshUploadNeeded = true;
+                        g_MeshEntryDirty = true;
                         if (saveCallback) saveCallback();
                     }
                 }
@@ -2619,6 +2748,7 @@ inline void DrawMeshProperties(std::function<void()> saveCallback = nullptr, std
                 g_ActiveMeshContent.EntryMeta.HasData = true;
                 g_ActiveMeshContent.EntryMeta.PhysicsIndex = g_SelectedPhysicsID;
                 g_LoadedOverlayID = -1;
+                g_MeshEntryDirty = true;
                 if (saveCallback) saveCallback();
             }
             g_ShowPhysicsSelectPopup = false;

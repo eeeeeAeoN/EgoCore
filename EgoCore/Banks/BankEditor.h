@@ -1573,6 +1573,30 @@ inline void SaveEntryChanges(LoadedBank* bank) {
         }
     }
     else if ((bank->Type == EBankType::Graphics || (bank->Type == EBankType::XboxGraphics && IsGraphicsSubBank(bank))) && IsSupportedMesh(e.Type)) {
+        bool savedBoneCfg = false;
+        std::string savedBoneFile;
+        std::string boneSaveErr;
+        if (g_BoneConfigDirty && g_CurrentBoneConfig.IsLoaded && !g_CurrentBoneConfig.FileName.empty()) {
+            if (SaveCurrentBoneConfigFile(&boneSaveErr)) {
+                savedBoneCfg = true;
+                savedBoneFile = g_CurrentBoneConfig.FileName;
+            }
+            else {
+                g_BankStatus = boneSaveErr.empty() ? "Failed to save .bncfg file." : boneSaveErr;
+                return;
+            }
+        }
+
+        if (g_BoneConfigTabFocused && !g_MeshEntryDirty && !bank->StagedEntries.count(bank->SelectedEntryIndex)) {
+            if (savedBoneCfg) {
+                g_BankStatus = "Saved bone config: " + savedBoneFile;
+            }
+            else {
+                g_BankStatus = "No bone config changes to save.";
+            }
+            return;
+        }
+
         if (g_ActiveMeshContent.IsParsed) {
             if (bank->StagedEntries.count(bank->SelectedEntryIndex)) {
                 staged = bank->StagedEntries[bank->SelectedEntryIndex];
@@ -1596,7 +1620,10 @@ inline void SaveEntryChanges(LoadedBank* bank) {
             if (bank->SelectedLOD < staged.MeshLODs.size()) {
                 staged.MeshLODs[bank->SelectedLOD] = std::make_shared<C3DMeshContent>(g_ActiveMeshContent);
             }
-            g_BankStatus = "Mesh LOD staged for compilation.";
+            g_MeshEntryDirty = false;
+            g_BankStatus = savedBoneCfg
+                ? ("Mesh LOD staged & saved " + savedBoneFile + ".")
+                : "Mesh LOD staged for compilation.";
         }
     }
     else if (bank->Type == EBankType::Textures || bank->Type == EBankType::Frontend || (bank->Type == EBankType::XboxGraphics && IsTextureSubBank(bank))) {

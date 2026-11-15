@@ -58,9 +58,12 @@
     <ClInclude Include="Lipsync\LipSyncProperties.h" />
     <ClInclude Include="Lipsync\SpeechAnalyzer.h" />
     <ClInclude Include="Meshes\BBMParser.h" />
+    <ClInclude Include="Meshes\BoneConfigParser.h" />
+    <ClInclude Include="Meshes\BoneConfigUI.h" />
     <ClInclude Include="Meshes\GltfExporter.h" />
     <ClInclude Include="Meshes\GltfMeshImporter.h" />
     <ClInclude Include="Meshes\MeshCompiler.h" />
+    <ClInclude Include="Meshes\MeshGizmo.h" />
     <ClInclude Include="Meshes\MeshParser.h" />
     <ClInclude Include="Meshes\MeshProperties.h" />
     <ClInclude Include="Meshes\MeshRenderer.h" />

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <memory>
@@ -6,22 +7,22 @@
 #include <cstring>
 
 
-struct C3DVector { float X, Y, Z; };
-struct CRGBColour { uint8_t B, G, R, A; };
+struct C3DVector { float X = 0.0f, Y = 0.0f, Z = 0.0f; };
+struct CRGBColour { uint8_t B = 255, G = 255, R = 255, A = 255; };
 
 struct COrbitData {
-    int32_t Type;
-    bool Enabled;
-    float Radius;
-    float Expand;
-    bool CycleFlag;
-    float CycleTime;
-    float SqueezeScale;
-    float SqueezeAngle;
-    float RotateSpeed;
-    float RotateStart;
-    float RotateSpeedRandom;
-    float RotateStartRandom;
+    int32_t Type = 0;
+    bool Enabled = false;
+    float Radius = 1.0f;
+    float Expand = 0.0f;
+    bool CycleFlag = false;
+    float CycleTime = 1.0f;
+    float SqueezeScale = 1.0f;
+    float SqueezeAngle = 0.0f;
+    float RotateSpeed = 1.0f;
+    float RotateStart = 0.0f;
+    float RotateSpeedRandom = 0.0f;
+    float RotateStartRandom = 0.0f;
 };
 
 class CParticleStream {
@@ -103,6 +104,10 @@ struct CPSCSplineBase {
     std::vector<uint32_t> PosParams;
 
     void ParseSplineBase(CParticleStream& stream) {
+        ControlPoints.clear();
+        RandomOffsets.clear();
+        PosParams.clear();
+
         uint32_t pointCount = stream.ReadULONG();
         for (uint32_t i = 0; i < pointCount; i++) {
             ControlPoints.push_back(stream.Read3DVector());
@@ -133,19 +138,19 @@ struct CPSCSplineBase {
 };
 
 struct CPSCRenderSprite : public CParticleComponent {
-    int32_t SpriteBankIndex, TrailBankIndex;
+    int32_t SpriteBankIndex = 0, TrailBankIndex = 0;
     CRGBColour StartColour, MidColour, EndColour;
 
-    uint32_t BlendMode, TrailBlendMode, BlendOp, TrailBlendOp;
-    uint32_t SpriteFlags, FadeInEndInteger, FadeOutBeginInteger;
-    uint32_t TrailLengthInteger, FlickerMinAlphaInteger, FlickerMinSizeInteger, NoCrossedSprites;
+    uint32_t BlendMode = 2, TrailBlendMode = 2, BlendOp = 0, TrailBlendOp = 0;
+    uint32_t SpriteFlags = 0, FadeInEndInteger = 0, FadeOutBeginInteger = 1000;
+    uint32_t TrailLengthInteger = 0, FlickerMinAlphaInteger = 1000, FlickerMinSizeInteger = 1000, NoCrossedSprites = 1;
 
-    float StartRenderSize, AlphaFadeMinimum, EndRenderSize;
-    float FlickerBias, AnimationTimeSecs, SizeFadeMinimum;
-    float TrailWidth, FlickerSpeed;
+    float StartRenderSize = 1.0f, AlphaFadeMinimum = 1.0f, EndRenderSize = 1.0f;
+    float FlickerBias = 0.0f, AnimationTimeSecs = 1.0f, SizeFadeMinimum = 1.0f;
+    float TrailWidth = 1.0f, FlickerSpeed = 1.0f;
 
-    bool UseStartColour, UseMidColour, UseEndColour;
-    bool AlphaFadeEnable, SizeFadeEnable, FlickerEnable, ForceAnimationTime;
+    bool UseStartColour = true, UseMidColour = false, UseEndColour = false;
+    bool AlphaFadeEnable = false, SizeFadeEnable = false, FlickerEnable = false, ForceAnimationTime = false;
 
     void Parse(CParticleStream& stream) override {
         SpriteBankIndex = stream.ReadSLONG();
@@ -187,28 +192,28 @@ struct CPSCRenderSprite : public CParticleComponent {
 };
 
 struct CPSCEmitterGeneric : public CParticleComponent {
-    uint32_t EmitterPosParam, DirectionParamName;
-    uint32_t NoParticlesToStart, NoParticlesToStartRand, EmitterType;
+    uint32_t EmitterPosParam = 0, DirectionParamName = 0;
+    uint32_t NoParticlesToStart = 0, NoParticlesToStartRand = 0, EmitterType = 0;
 
-    bool Solid, UseEmitterLifeSecs, UseEmitterTimelineSecs;
-    bool OrientationXY, OrientationXZ, OrientationYZ;
-    bool UseCustomDirection, UseOutwardDirection, UseParamDirection, OppositeDirection;
+    bool Solid = false, UseEmitterLifeSecs = false, UseEmitterTimelineSecs = false;
+    bool OrientationXY = true, OrientationXZ = false, OrientationYZ = false;
+    bool UseCustomDirection = false, UseOutwardDirection = false, UseParamDirection = false, OppositeDirection = false;
 
-    uint32_t AngularPerturbationInteger;
+    uint32_t AngularPerturbationInteger = 0;
 
-    C3DVector CustomDirection;
-    float ParticlesPerSecond, EmitterSize, RadialBias, MinSpeed;
+    C3DVector CustomDirection = { 0.0f, 0.0f, 1.0f };
+    float ParticlesPerSecond = 10.0f, EmitterSize = 1.0f, RadialBias = 0.0f, MinSpeed = 0.0f;
 
-    bool UseForwardDirection, UseRandom2DDirection;
+    bool UseForwardDirection = false, UseRandom2DDirection = false;
 
-    float EmitterTimelineSecs;
-    bool UseRandom3DDirection;
+    float EmitterTimelineSecs = 1.0f;
+    bool UseRandom3DDirection = false;
 
-    float EmitterLifeSecs, EmitterStartTime, MaxSpeed;
-    C3DVector NonUniformScaling;
+    float EmitterLifeSecs = 1.0f, EmitterStartTime = 0.0f, MaxSpeed = 1.0f;
+    C3DVector NonUniformScaling = { 1.0f, 1.0f, 1.0f };
 
-    bool HasSpline;
-    float SplineTension;
+    bool HasSpline = false;
+    float SplineTension = 0.0f;
     std::vector<C3DVector> SplineControlPoints;
 
     void Parse(CParticleStream& stream) override {
@@ -255,6 +260,7 @@ struct CPSCEmitterGeneric : public CParticleComponent {
         NonUniformScaling.Y = stream.ReadULONG() / 2047.0f * 20.0f - 10.0f;
         NonUniformScaling.Z = stream.ReadULONG() / 2047.0f * 20.0f - 10.0f;
 
+        SplineControlPoints.clear();
         HasSpline = stream.ReadEBOOL();
         if (HasSpline) {
             SplineTension = stream.ReadFloat();
@@ -267,19 +273,19 @@ struct CPSCEmitterGeneric : public CParticleComponent {
 };
 
 struct CPSCUpdateNormal : public CParticleComponent {
-    uint32_t FadeInEndInteger, FadeOutBeginInteger;
-    bool UseParticleLifeSecs, UseRandomRotationAxis, UseRandomInitialRotation, UseAccelerationParam;
-    bool StayWithEmitter, UseSystemLifeSecs, SystemAlphaFadeEnable, EmissionFadeEnable;
-    bool ParticleCollideWithGround, ParticleCollideWithAnything, ParticleDieOnCollision;
-    bool UseAllAttractors, RandomisePosEnable, RandomisePosDistVaryEnable;
-    bool SetOrientationFromDirection, SetOrientationFromGame, ParticleCreateDecal, ParticleCreateDecalEmitter;
+    uint32_t FadeInEndInteger = 0, FadeOutBeginInteger = 1000;
+    bool UseParticleLifeSecs = true, UseRandomRotationAxis = false, UseRandomInitialRotation = false, UseAccelerationParam = false;
+    bool StayWithEmitter = false, UseSystemLifeSecs = false, SystemAlphaFadeEnable = false, EmissionFadeEnable = false;
+    bool ParticleCollideWithGround = false, ParticleCollideWithAnything = false, ParticleDieOnCollision = false;
+    bool UseAllAttractors = false, RandomisePosEnable = false, RandomisePosDistVaryEnable = false;
+    bool SetOrientationFromDirection = false, SetOrientationFromGame = false, ParticleCreateDecal = false, ParticleCreateDecalEmitter = false;
     std::string DecalEmitterName;
-    float SystemLifeSecs, ParticleLifeSecs, WindFactor, GravityFactor, AirResistance, ParticleAccelerationScale;
-    float InitialRotationX, InitialRotationY, InitialRotationZ;
-    float RotationMinAngleSpeed, RotationMaxAngleSpeed, ParticleBounce;
-    float SystemAlphaFadeMinimum, RandomisePosDistVaryScale, EmissionFadeMinimum;
-    C3DVector ParticleSystemOffset, ParticleAcceleration, RotationAxis, RandomisePosSpeed, RandomisePosScale;
-    uint32_t AccelerationParam, OrientFromGameParam;
+    float SystemLifeSecs = 1.0f, ParticleLifeSecs = 1.0f, WindFactor = 0.0f, GravityFactor = 0.0f, AirResistance = 0.0f, ParticleAccelerationScale = 1.0f;
+    float InitialRotationX = 0.0f, InitialRotationY = 0.0f, InitialRotationZ = 0.0f;
+    float RotationMinAngleSpeed = 0.0f, RotationMaxAngleSpeed = 0.0f, ParticleBounce = 0.0f;
+    float SystemAlphaFadeMinimum = 1.0f, RandomisePosDistVaryScale = 1.0f, EmissionFadeMinimum = 1.0f;
+    C3DVector ParticleSystemOffset, ParticleAcceleration, RotationAxis = { 0.0f, 0.0f, 1.0f }, RandomisePosSpeed, RandomisePosScale;
+    uint32_t AccelerationParam = 0, OrientFromGameParam = 0;
 
     void Parse(CParticleStream& stream) override {
         FadeInEndInteger = stream.ReadULONG();
@@ -321,25 +327,25 @@ struct CPSCUpdateNormal : public CParticleComponent {
 };
 
 struct CPSCDecalRenderer : public CParticleComponent {
-    float DecalLifeSecs;
-    int32_t DecalBankIndex;
+    float DecalLifeSecs = 1.0f;
+    int32_t DecalBankIndex = 0;
     CRGBColour StartColour, MidColour, EndColour;
 
-    uint32_t BlendMode, BlendOp, SpriteAlignment, FadeInEndInteger, FadeOutBeginInteger;
-    uint32_t StartRenderSizeInteger, AlphaFadeMinimumInteger, EndRenderSizeInteger;
-    uint32_t AnimationTimeSecsInteger, SizeFadeMinimumInteger;
+    uint32_t BlendMode = 2, BlendOp = 0, SpriteAlignment = 0, FadeInEndInteger = 0, FadeOutBeginInteger = 1000;
+    uint32_t StartRenderSizeInteger = 102, AlphaFadeMinimumInteger = 127, EndRenderSizeInteger = 102;
+    uint32_t AnimationTimeSecsInteger = 148, SizeFadeMinimumInteger = 127;
 
-    bool UseStartColour, UseMidColour, UseEndColour;
-    bool AlphaFadeEnable, SizeFadeEnable, ForceAnimationTime;
+    bool UseStartColour = true, UseMidColour = false, UseEndColour = false;
+    bool AlphaFadeEnable = false, SizeFadeEnable = false, ForceAnimationTime = false;
 
-    uint32_t FlickerMinAlphaInteger, FlickerMinSizeInteger, FlickerBiasInteger, FlickerSpeedInteger;
+    uint32_t FlickerMinAlphaInteger = 1000, FlickerMinSizeInteger = 1000, FlickerBiasInteger = 128, FlickerSpeedInteger = 137;
 
-    bool FlickerEnable, PoolingEnable, PoolIncreaseAlphaEnable;
-    bool PoolIncreaseSizeEnable, PoolIncreaseLifeEnable;
+    bool FlickerEnable = false, PoolingEnable = false, PoolIncreaseAlphaEnable = false;
+    bool PoolIncreaseSizeEnable = false, PoolIncreaseLifeEnable = false;
 
-    float MaxPoolSize, MaxPoolAlpha, MaxPoolLife;
-    bool PoolIncreaseFrameEnable;
-    float PoolFrameIncreaseRate, StencilCubeWidth;
+    float MaxPoolSize = 1.0f, MaxPoolAlpha = 1.0f, MaxPoolLife = 1.0f;
+    bool PoolIncreaseFrameEnable = false;
+    float PoolFrameIncreaseRate = 0.0f, StencilCubeWidth = 1.0f;
 
     void Parse(CParticleStream& stream) override {
         DecalLifeSecs = stream.ReadFloat();
@@ -387,8 +393,8 @@ struct CPSCDecalRenderer : public CParticleComponent {
 };
 
 struct CPSCSpline : public CParticleComponent, public CPSCSplineBase {
-    bool SplineBounce, ScaleSplineSpeed;
-    float SplineAnimSpeed;
+    bool SplineBounce = false, ScaleSplineSpeed = false;
+    float SplineAnimSpeed = 1.0f;
 
     void Parse(CParticleStream& stream) override {
         SplineBounce = stream.ReadEBOOL();
@@ -399,23 +405,23 @@ struct CPSCSpline : public CParticleComponent, public CPSCSplineBase {
 };
 
 struct CPSCSingleSprite : public CParticleComponent, public CPSCSplineBase {
-    int32_t SpriteBankIndex;
+    int32_t SpriteBankIndex = 0;
     CRGBColour StartColour, MidColour, EndColour;
-    float AnimationTimeSecs, StartRenderSize, EndRenderSize;
-    int32_t SpriteAlignment, NoCrossedSprites;
-    float InitialAngle;
-    int32_t FadeInEndInteger, FadeOutBeginInteger;
-    float AlphaFadeMinimum, SizeFadeMinimum;
-    uint32_t PositionParam;
-    int32_t BlendMode, BlendOp, TrailBlendMode, TrailBlendOp, TrailBankIndex;
-    float TrailWidth;
-    int32_t MaxTrailLength, StayWithEmitterIntFactor;
+    float AnimationTimeSecs = 1.0f, StartRenderSize = 1.0f, EndRenderSize = 1.0f;
+    int32_t SpriteAlignment = 0, NoCrossedSprites = 1;
+    float InitialAngle = 0.0f;
+    int32_t FadeInEndInteger = 0, FadeOutBeginInteger = 1000;
+    float AlphaFadeMinimum = 1.0f, SizeFadeMinimum = 1.0f;
+    uint32_t PositionParam = 0;
+    int32_t BlendMode = 2, BlendOp = 0, TrailBlendMode = 2, TrailBlendOp = 0, TrailBankIndex = 0;
+    float TrailWidth = 1.0f;
+    int32_t MaxTrailLength = 0, StayWithEmitterIntFactor = 1000;
 
-    bool UseStartColour, UseMidColour, UseEndColour;
-    bool SelfIlluminating, AlphaFadeEnable, RotateAroundCentre;
-    bool FaceMe2D, FaceMe3D, CrossedSprites;
-    bool SizeFadeEnable, ForceAnimationTime, StayWithEmitter;
-    bool UsePosition, UseSplinePoints;
+    bool UseStartColour = true, UseMidColour = false, UseEndColour = false;
+    bool SelfIlluminating = false, AlphaFadeEnable = false, RotateAroundCentre = false;
+    bool FaceMe2D = false, FaceMe3D = true, CrossedSprites = false;
+    bool SizeFadeEnable = false, ForceAnimationTime = false, StayWithEmitter = false;
+    bool UsePosition = false, UseSplinePoints = false;
 
     void Parse(CParticleStream& stream) override {
         SpriteBankIndex = stream.ReadSLONG();
@@ -449,11 +455,16 @@ struct CPSCSingleSprite : public CParticleComponent, public CPSCSplineBase {
 };
 
 struct CPSCOrbit : public CParticleComponent {
-    uint32_t CentreParam;
+    uint32_t CentreParam = 0;
     std::vector<COrbitData> OrbitsData;
+
+    CPSCOrbit() {
+        OrbitsData.resize(3);
+    }
 
     void Parse(CParticleStream& stream) override {
         CentreParam = stream.ReadULONG();
+        OrbitsData.clear();
 
         for (int i = 0; i < 3; i++) {
             COrbitData orbit;
@@ -480,13 +491,14 @@ struct CPSCOrbit : public CParticleComponent {
 };
 
 struct CPSCAttractor : public CParticleComponent {
-    bool AttractorEnabled, AttractorUseParamPosition;
-    int32_t AttractorInfluenceFallOff;
-    uint32_t AttractorPositionParam, AttractorPositionParamName;
-    float AttractorInfluenceRadius, AttractorInfluenceForce;
+    bool AttractorEnabled = true, AttractorUseParamPosition = false;
+    int32_t AttractorInfluenceFallOff = 5;
+    uint32_t AttractorPositionParam = 0, AttractorPositionParamName = 0;
+    float AttractorInfluenceRadius = 1.0f, AttractorInfluenceForce = 1.0f;
     std::vector<C3DVector> AttractorUserPointsArray;
 
     void Parse(CParticleStream& stream) override {
+        AttractorUserPointsArray.clear();
         AttractorEnabled = stream.ReadEBOOL();
         AttractorUseParamPosition = stream.ReadEBOOL();
         AttractorInfluenceFallOff = stream.ReadSLONG();
@@ -503,17 +515,17 @@ struct CPSCAttractor : public CParticleComponent {
 };
 
 struct CPSCLight : public CParticleComponent {
-    uint32_t LightPositionParam;
-    float LightLifeSecs, LightRespawnDelaySecs, LightStartTime, LightTimelineSecs;
-    float LightStartRenderWorldRadius, LightEndRenderWorldRadius;
-    int32_t LightAttenuationFactor, LightFadeInEndInteger, LightFadeOutBeginInteger;
-    float LightWorldRadiusFadeMinimum;
+    uint32_t LightPositionParam = 0;
+    float LightLifeSecs = 1.0f, LightRespawnDelaySecs = 0.0f, LightStartTime = 0.0f, LightTimelineSecs = 1.0f;
+    float LightStartRenderWorldRadius = 1.0f, LightEndRenderWorldRadius = 1.0f;
+    int32_t LightAttenuationFactor = 1, LightFadeInEndInteger = 0, LightFadeOutBeginInteger = 1000;
+    float LightWorldRadiusFadeMinimum = 1.0f;
     CRGBColour LightColourFadeMinimum;
 
-    bool LightWorldRadiusFadeEnable, LightUseLifeSecs, LightEnabled, LightRespawns;
-    bool LightColourFadeEnable, LightUseStartColour, LightUseMidColour, LightUseEndColour;
+    bool LightWorldRadiusFadeEnable = false, LightUseLifeSecs = false, LightEnabled = true, LightRespawns = false;
+    bool LightColourFadeEnable = false, LightUseStartColour = true, LightUseMidColour = false, LightUseEndColour = false;
 
-    bool LightUseFadeColour, LightUseTimelineSecs, LightHasInitializedTime;
+    bool LightUseFadeColour = false, LightUseTimelineSecs = false, LightHasInitializedTime = false;
 
     CRGBColour LightStartColour, LightMidColour, LightEndColour;
 
@@ -547,31 +559,31 @@ struct CPSCLight : public CParticleComponent {
 };
 
 struct CPSCRenderMesh : public CParticleComponent {
-    int32_t BankIndex, TrailBankIndex;
+    int32_t BankIndex = 0, TrailBankIndex = 0;
     CRGBColour TrailStartColour, TrailMidColour, TrailEndColour;
     CRGBColour StartColour, MidColour, EndColour;
 
-    uint32_t BlendMode, TrailBlendMode, BlendOp, TrailBlendOp;
-    uint32_t FadeInEndInteger, FadeOutBeginInteger;
-    uint32_t TrailLengthInteger, FlickerMinAlphaInteger, FlickerMinSizeInteger;
+    uint32_t BlendMode = 2, TrailBlendMode = 2, BlendOp = 0, TrailBlendOp = 0;
+    uint32_t FadeInEndInteger = 0, FadeOutBeginInteger = 1000;
+    uint32_t TrailLengthInteger = 0, FlickerMinAlphaInteger = 1000, FlickerMinSizeInteger = 1000;
 
-    C3DVector StartRenderSize;
-    bool CentredOnPos, AlphaFadeEnable;
+    C3DVector StartRenderSize = { 1.0f, 1.0f, 1.0f };
+    bool CentredOnPos = false, AlphaFadeEnable = false;
 
-    C3DVector EndRenderSize;
-    bool SizeFadeEnable, FlickerEnable;
-    bool TrailUseStartColour, TrailUseMidColour, TrailUseEndColour, UseRenderSizeParam;
+    C3DVector EndRenderSize = { 1.0f, 1.0f, 1.0f };
+    bool SizeFadeEnable = false, FlickerEnable = false;
+    bool TrailUseStartColour = true, TrailUseMidColour = false, TrailUseEndColour = false, UseRenderSizeParam = false;
 
-    float FlickerBias, FlickerSpeed, AlphaFadeMinimum;
-    bool UseStartColour;
+    float FlickerBias = 0.0f, FlickerSpeed = 1.0f, AlphaFadeMinimum = 1.0f;
+    bool UseStartColour = true;
 
-    float SizeFadeMinimum;
-    bool UseMidColour;
+    float SizeFadeMinimum = 1.0f;
+    bool UseMidColour = false;
 
-    float TrailWidth;
-    bool UseEndColour;
+    float TrailWidth = 1.0f;
+    bool UseEndColour = false;
 
-    uint32_t RenderSizeParam;
+    uint32_t RenderSizeParam = 0;
 
     void Parse(CParticleStream& stream) override {
         BankIndex = stream.ReadSLONG();
@@ -651,6 +663,7 @@ struct CParticleSystem {
     std::vector<std::shared_ptr<CParticleComponent>> Components;
 
     void Parse(CParticleStream& stream) {
+        Components.clear();
         Name = stream.ReadString();
         Enabled = stream.ReadEBOOL();
         ScaleParticles = stream.ReadEBOOL();
@@ -683,18 +696,18 @@ struct CParticleSystem {
 struct CParticleEmitter {
     uint32_t Magic = 0x64;
     std::string Name;
-    bool Emitter2D, PreWaterEffect, WaterEffect, ZBufferWriteable;
-    bool ContinuousEmitter, IsScreenDisplacement, ReadZBuffer;
-    float MaxSpawnDistance, MaxDrawDistance;
-    float FadeOutStart, FadeInEnd, FadeInStart;
-    int32_t Priority;
-    bool DieIfOffscreen, OffscreenUpdate, ClipEffectToWeatherMask;
-    bool EnableDithering, CalcBoundingSphereOnceOnly;
+    bool Emitter2D = false, PreWaterEffect = false, WaterEffect = false, ZBufferWriteable = false;
+    bool ContinuousEmitter = true, IsScreenDisplacement = false, ReadZBuffer = true;
+    float MaxSpawnDistance = 100.0f, MaxDrawDistance = 100.0f;
+    float FadeOutStart = 80.0f, FadeInEnd = 0.0f, FadeInStart = 0.0f;
+    int32_t Priority = 0;
+    bool DieIfOffscreen = false, OffscreenUpdate = false, ClipEffectToWeatherMask = false;
+    bool EnableDithering = false, CalcBoundingSphereOnceOnly = false;
 
     std::vector<CParticleSystem> Systems;
 
     void Parse(CParticleStream& stream) {
-        Systems.clear(); // <--- ADD THIS FIX HERE
+        Systems.clear();
 
         Magic = stream.ReadULONG();
         Name = stream.ReadString();

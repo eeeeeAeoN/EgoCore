@@ -921,7 +921,8 @@ public:
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     }
 
-    bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH, bool isPhysics = false) {
+    XMMATRIX GetWorldViewProj(float screenW, float screenH, bool isPhysics = false) const {
+        if (screenW <= 0.0f || screenH <= 0.0f) return XMMatrixIdentity();
         XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(45.0f), screenW / screenH, 0.1f, 100000.0f);
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0, 0, -CamDist, 0), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 1, 0, 0));
         XMMATRIX world = XMMatrixTranslation(CenterOffset.x, CenterOffset.y, CenterOffset.z) * XMMatrixRotationX(CamRotX) * XMMatrixRotationY(CamRotY) * XMMatrixTranslation(CamPan.x, CamPan.y, 0);
@@ -930,7 +931,12 @@ public:
             world = XMMatrixRotationX(-XM_PIDIV2) * world;
         }
 
-        XMMATRIX wvp = world * view * proj;
+        return world * view * proj;
+    }
+
+    bool ProjectToScreen(const XMFLOAT3& worldPos, ImVec2& outPos, float screenW, float screenH, bool isPhysics = false) {
+        if (screenW <= 0.0f || screenH <= 0.0f) return false;
+        XMMATRIX wvp = GetWorldViewProj(screenW, screenH, isPhysics);
         XMVECTOR v = XMVectorSet(worldPos.x, worldPos.y, worldPos.z, 1.0f);
         XMVECTOR vClip = XMVector3TransformCoord(v, wvp);
 
@@ -941,6 +947,25 @@ public:
         if (z < 0.0f || z > 1.0f) return false;
         outPos.x = (x + 1.0f) * 0.5f * screenW;
         outPos.y = (1.0f - y) * 0.5f * screenH;
+        return true;
+    }
+
+    bool UnprojectRay(float localX, float localY, float screenW, float screenH, XMVECTOR& outOrigin, XMVECTOR& outDir, bool isPhysics = false) const {
+        if (screenW <= 0.0f || screenH <= 0.0f) return false;
+        XMMATRIX wvp = GetWorldViewProj(screenW, screenH, isPhysics);
+        XMVECTOR det;
+        XMMATRIX invWVP = XMMatrixInverse(&det, wvp);
+        if (fabsf(XMVectorGetX(det)) < 1e-12f) return false;
+
+        float ndcX = (localX / screenW) * 2.0f - 1.0f;
+        float ndcY = 1.0f - (localY / screenH) * 2.0f;
+        XMVECTOR nearPt = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 0.0f, 1.0f), invWVP);
+        XMVECTOR farPt = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 1.0f, 1.0f), invWVP);
+        XMVECTOR diff = XMVectorSubtract(farPt, nearPt);
+        if (XMVectorGetX(XMVector3LengthSq(diff)) < 1e-12f) return false;
+
+        outOrigin = nearPt;
+        outDir = XMVector3Normalize(diff);
         return true;
     }
 };
