@@ -7,6 +7,8 @@
 #include "fable/defs/compiler/build.hpp"
 #include "fable/defs/compiler/decompiler.hpp"
 #include "fable/defs/compiler/inflate.hpp"
+#include "fable/defs/compiler/manifest.hpp"
+#include "fable/defs/compiler/reference_fields.hpp"
 
 namespace fs = std::filesystem;
 using namespace fable::defs::compiler;
@@ -381,6 +383,142 @@ int main() {
         std::cerr << failures << " test(s) failed\n";
         return 1;
     }
+    {
+        using namespace fable::defs::compiler;
+        CHECK(GAME_BINARY_HEADER.file_indicator == 0xA6C69C21u);
+        CHECK(is_reference_field("Sprites"));
+        CHECK(is_reference_field("AttackPatterns"));
+        CHECK(is_reference_field("OnDeathObject"));
+        CHECK(!is_reference_field("ShapeChildren"));
+        CHECK(!is_reference_field("NonScrollingChildren"));
+
+        const fs::path root = fs::temp_directory_path() / "fable_defs_ui_refs_regression";
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        const fs::path corpus = root / "corpus";
+        const fs::path bin_out = root / "bin";
+        const fs::path rt_corpus = root / "rt_corpus";
+        const fs::path rt_bin = root / "rt_bin";
+
+        write_file(corpus / "RetailHeaders" / "meshdata.h",
+                   "enum EMeshType2 {\n"
+                   "    MESH_DUMMY_ONE = 1,\n"
+                   "    MESH_DUMMY_TWO = 2,\n"
+                   "    MESH_DUMMY_THREE = 3,\n"
+                   "};\n");
+        write_file(corpus / "RetailHeaders" / "pc" / "textures.h",
+                   "enum EEngineGraphic {\n"
+                   "    TEX_DUMMY_ONE = 1,\n"
+                   "    TEX_GAME_CURSOR = 2,\n"
+                   "    TEX_BIG_A_ONLY = 5448,\n"
+                   "};\n");
+        write_file(corpus / "RetailHeaders" / "pc" / "front_end_bank.h",
+                   "enum EFrontEndGraphicBank {\n"
+                   "    FE_BACKDROP = 1,\n"
+                   "    FE_CURSOR = 2,\n"
+                   "};\n");
+        write_file(corpus / "ui.def",
+                   "#definition UI UI_SCROLL_BAR\n"
+                   "    Type UI_TYPE_COMPOSITE;\n"
+                   "#end_definition\n"
+                   "#definition UI UI_SCROLL_OUTSIDE\n"
+                   "    Type UI_TYPE_COMPOSITE;\n"
+                   "#end_definition\n"
+                   "#definition UI UI_CELL_SPRITE\n"
+                   "    Type UI_TYPE_SPRITE;\n"
+                   "#end_definition\n"
+                   "#definition UI UI_LIST_BASE\n"
+                   "    Type UI_TYPE_LIST;\n"
+                   "    Children.Add(UI_CELL_SPRITE);\n"
+                   "    NonScrollingChildren.Add(0);\n"
+                   "    ShapeChildren.Add(0);\n"
+                   "    MeshIndex UI_SCROLL_BAR;\n"
+                   "    AnimationIndex UI_SCROLL_OUTSIDE;\n"
+                   "#end_definition\n"
+                   "#definition UI UI_LIST_CHILD specialises UI_LIST_BASE\n"
+                   "    MeshIndex UI_SCROLL_OUTSIDE;\n"
+                   "    AnimationIndex UI_SCROLL_BAR;\n"
+                   "#end_definition\n"
+                   "#definition UI UI_VIEWPORT specialises UI_LIST_BASE\n"
+                   "    Type UI_TYPE_SCROLLING_VIEWPORT;\n"
+                   "    MeshIndex UI_SCROLL_BAR;\n"
+                   "    AnimationIndex NULL;\n"
+                   "#end_definition\n"
+                   "#definition UI UI_TABLE\n"
+                   "    Type UI_TYPE_TABLE;\n"
+                   "    Sprites[TABLE_SPRITES_TOP_LEFT] UI_CELL_SPRITE;\n"
+                   "#end_definition\n"
+                   "#definition UI UI_CURSOR\n"
+                   "    Type UI_TYPE_MOUSE_POINTER;\n"
+                   "    MeshIndex TEX_GAME_CURSOR;\n"
+                   "    AnimationIndex TEX_GAME_CURSOR;\n"
+                   "#end_definition\n"
+                   "#definition ATTACK_PATTERN AP_BASIC\n"
+                   "    BaseTimeBetweenAttacks 10;\n"
+                   "#end_definition\n"
+                   "#definition COMBAT_TYPE CT_BASIC\n"
+                   "    AttackPatterns[CREATURE_TYPE_GUARD] AP_BASIC;\n"
+                   "#end_definition\n");
+        write_file(corpus / "FrontEndDefs" / "fe_ui.def",
+                   "#definition FRONT_END FRONT_END_DEFAULT\n"
+                   "    ErrorMessageBackgroundGraphic FE_BACKDROP;\n"
+                   "    ButtonABigGraphic TEX_BIG_A_ONLY;\n"
+                   "#end_definition\n"
+                   "#definition UI FE_SPRITE_ONE\n"
+                   "    Type UI_TYPE_SPRITE;\n"
+                   "    States[0].GraphicIndex FE_BACKDROP;\n"
+                   "#end_definition\n"
+                   "#definition UI FE_CURSOR_UI\n"
+                   "    Type UI_TYPE_MOUSE_POINTER;\n"
+                   "    MeshIndex FE_CURSOR;\n"
+                   "    AnimationIndex FE_CURSOR;\n"
+                   "#end_definition\n");
+
+        const DirectoryBuild built = build_directory(corpus, bin_out);
+        CHECK(built.ok);
+
+        std::string game_text;
+        DecompileStats game_stats;
+        std::string error;
+        CHECK(decompile_binary_to_text(bin_out.string(), "game", corpus.string(), game_text,
+                                       game_stats, error));
+        CHECK(game_text.find("MeshIndex UI_SCROLL_BAR;") != std::string::npos);
+        CHECK(game_text.find("AnimationIndex UI_SCROLL_OUTSIDE;") != std::string::npos);
+        CHECK(game_text.find("MeshIndex UI_SCROLL_OUTSIDE;") != std::string::npos);
+        CHECK(game_text.find("AnimationIndex UI_SCROLL_BAR;") != std::string::npos);
+        CHECK(game_text.find("AnimationIndex NULL;") != std::string::npos);
+        CHECK(game_text.find("NonScrollingChildren.Add(0);") != std::string::npos);
+        CHECK(game_text.find("ShapeChildren.Add(0);") != std::string::npos);
+        CHECK(game_text.find("NonScrollingChildren.Add(NULL)") == std::string::npos);
+        CHECK(game_text.find("ShapeChildren.Add(NULL)") == std::string::npos);
+        CHECK(game_text.find("Sprites[TABLE_SPRITES_TOP_LEFT] UI_CELL_SPRITE;") != std::string::npos);
+        CHECK(game_text.find("MeshIndex TEX_GAME_CURSOR;") != std::string::npos);
+        CHECK(game_text.find("AnimationIndex TEX_GAME_CURSOR;") != std::string::npos);
+        CHECK(game_text.find("AttackPatterns[CREATURE_TYPE_GUARD] AP_BASIC;") != std::string::npos);
+
+        std::string fe_text;
+        DecompileStats fe_stats;
+        CHECK(decompile_binary_to_text(bin_out.string(), "frontend", corpus.string(), fe_text,
+                                       fe_stats, error));
+        CHECK(fe_text.find("States[0].GraphicIndex FE_BACKDROP;") != std::string::npos);
+        CHECK(fe_text.find("ErrorMessageBackgroundGraphic FE_BACKDROP;") != std::string::npos);
+        CHECK(fe_text.find("ButtonABigGraphic TEX_BIG_A_ONLY;") != std::string::npos);
+        CHECK(fe_text.find("MeshIndex FE_CURSOR;") != std::string::npos);
+        CHECK(fe_text.find("AnimationIndex FE_CURSOR;") != std::string::npos);
+
+        // Verify recompile of decompiled outputs also succeeds cleanly.
+        write_file(rt_corpus / "RetailHeaders" / "meshdata.h",
+                   "enum EMeshType2 { MESH_DUMMY_ONE = 1, MESH_DUMMY_TWO = 2, MESH_DUMMY_THREE = 3, };\n");
+        write_file(rt_corpus / "RetailHeaders" / "pc" / "textures.h",
+                   "enum EEngineGraphic { TEX_DUMMY_ONE = 1, TEX_GAME_CURSOR = 2, TEX_BIG_A_ONLY = 5448, };\n");
+        write_file(rt_corpus / "RetailHeaders" / "pc" / "front_end_bank.h",
+                   "enum EFrontEndGraphicBank { FE_BACKDROP = 1, FE_CURSOR = 2, };\n");
+        write_file(rt_corpus / "game.def", game_text);
+        write_file(rt_corpus / "FrontEndDefs" / "fe.def", fe_text);
+        const DirectoryBuild rebuilt = build_directory(rt_corpus, rt_bin);
+        CHECK(rebuilt.ok);
+    }
+
     std::cout << "all decompiler tests passed\n";
     return 0;
 }

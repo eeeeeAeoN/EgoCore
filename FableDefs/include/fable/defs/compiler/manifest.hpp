@@ -304,7 +304,7 @@ inline constexpr const char *SCRIPT_NULLDEF_ENTRIES[] = {
 inline constexpr std::size_t SCRIPT_NULLDEF_COUNT = 3;
 
 inline constexpr BinaryHeaderInfo GAME_BINARY_HEADER = {
-    false, 0xC69C21A6, 0xA8E36C34,
+    false, 0xA6C69C21, 0xA8E36C34,
 };
 
 inline constexpr BinaryHeaderInfo FRONTEND_BINARY_HEADER = {

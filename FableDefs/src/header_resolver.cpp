@@ -447,14 +447,44 @@ void HeaderResolver::record_enum(const std::string &relative_path, const EnumDec
     }
 }
 
+SymDomain HeaderResolver::apply_frontend_remap(SymDomain domain,
+                                               bool is_frontend) const {
+    if (!is_frontend) {
+        return domain;
+    }
+    if (domain.kind == SymDomain::Kind::EnumGroup) {
+        const auto tex_it = enum_key_groups_.find("textures.h::EEngineGraphic");
+        const auto fe_it = enum_key_groups_.find("front_end_bank.h::EFrontEndGraphicBank");
+        if (tex_it != enum_key_groups_.end() && fe_it != enum_key_groups_.end() &&
+            domain.group == tex_it->second) {
+            domain.group = fe_it->second;
+        }
+    } else if (domain.kind == SymDomain::Kind::Particle) {
+        const auto fe_p = enum_key_groups_.find("particles_frontend.h::EFrontEndParticleEmitter");
+        if (fe_p != enum_key_groups_.end()) {
+            domain = SymDomain{SymDomain::Kind::EnumGroup, fe_p->second};
+        }
+    }
+    return domain;
+}
+
 std::string HeaderResolver::resolve_domain(SymDomain domain,
-                                           std::int32_t value) const {
+                                           std::int32_t value,
+                                           bool is_frontend) const {
+    const SymDomain original = domain;
+    domain = apply_frontend_remap(domain, is_frontend);
     const bool bitflags = domain.kind == SymDomain::Kind::AnimFlags ||
                           domain.kind == SymDomain::Kind::ObjectAugmentation ||
                           domain.kind == SymDomain::Kind::TargetingType;
     if (domain.kind == SymDomain::Kind::EnumGroup) {
         if (domain.group < enum_groups_.size()) {
             if (auto resolved = enum_groups_[domain.group].resolve(value, false)) {
+                return *resolved;
+            }
+        }
+        if (is_frontend && original.kind == SymDomain::Kind::EnumGroup &&
+            original.group != domain.group && original.group < enum_groups_.size()) {
+            if (auto resolved = enum_groups_[original.group].resolve(value, false)) {
                 return *resolved;
             }
         }
@@ -469,19 +499,47 @@ std::string HeaderResolver::resolve_domain(SymDomain domain,
     return std::to_string(value);
 }
 
+std::string HeaderResolver::resolve_group(const std::string &qualified_name,
+                                          std::int32_t value,
+                                          bool is_frontend) const {
+    if (is_frontend && qualified_name == "textures.h::EEngineGraphic") {
+        const auto fe_it = enum_key_groups_.find("front_end_bank.h::EFrontEndGraphicBank");
+        if (fe_it != enum_key_groups_.end() && fe_it->second < enum_groups_.size()) {
+            if (auto resolved = enum_groups_[fe_it->second].resolve(value, false)) {
+                return *resolved;
+            }
+        }
+    }
+    const auto it = enum_key_groups_.find(qualified_name);
+    if (it != enum_key_groups_.end() && it->second < enum_groups_.size()) {
+        if (auto resolved = enum_groups_[it->second].resolve(value, false)) {
+            return *resolved;
+        }
+    }
+    return std::to_string(value);
+}
+
 std::string HeaderResolver::resolve_field(const std::string &scope,
                                           const std::string &field_name,
-                                          std::int32_t value) const {
+                                          std::int32_t value,
+                                          bool is_frontend) const {
     auto found = field_domains_.find({scope, field_name});
     if (found == field_domains_.end()) {
         found = field_domains_.find({"*", field_name});
     }
     if (found != field_domains_.end()) {
-        const auto &[domain, configured_bitflags] = found->second;
+        const auto &[raw_domain, configured_bitflags] = found->second;
+        const SymDomain domain = apply_frontend_remap(raw_domain, is_frontend);
         const bool is_bitflags = configured_bitflags && field_name != "Type";
         if (domain.kind == SymDomain::Kind::EnumGroup) {
             if (domain.group < enum_groups_.size()) {
                 if (auto resolved = enum_groups_[domain.group].resolve(value, is_bitflags)) {
+                    return *resolved;
+                }
+            }
+            if (is_frontend && raw_domain.kind == SymDomain::Kind::EnumGroup &&
+                raw_domain.group != domain.group && raw_domain.group < enum_groups_.size()) {
+                if (auto resolved = enum_groups_[raw_domain.group].resolve(value, is_bitflags)) {
                     return *resolved;
                 }
             }
@@ -496,17 +554,17 @@ std::string HeaderResolver::resolve_field(const std::string &scope,
     }
 
     if (field_name == "Type" && scope == "CTargetingDef") {
-        return resolve_domain(SymDomain::named(SymDomain::Kind::TargetingType), value);
+        return resolve_domain(SymDomain::named(SymDomain::Kind::TargetingType), value, is_frontend);
     }
     if (field_name == "PhonemeAnim") {
-        return resolve_domain(SymDomain::named(SymDomain::Kind::Anim), value);
+        return resolve_domain(SymDomain::named(SymDomain::Kind::Anim), value, is_frontend);
     }
     if (value > 0) {
         if (field_name == "BodyParticleEffect" || field_name == "DeadBodyDecayEffect" ||
             field_name == "StunnedParticle" || field_name == "PointerParticleEffect" ||
             ends_with(field_name, "ParticleEffect") || ends_with(field_name, "Particle") ||
             ends_with(field_name, "ParticleEmitter")) {
-            return resolve_domain(SymDomain::named(SymDomain::Kind::Particle), value);
+            return resolve_domain(SymDomain::named(SymDomain::Kind::Particle), value, is_frontend);
         }
         if (field_name == "ThankingPhrase" || field_name == "IgnoringPhrase" ||
             field_name == "BeerRequestPhrase" || field_name == "InitialHawkingPhrase" ||
@@ -516,14 +574,14 @@ std::string HeaderResolver::resolve_field(const std::string &scope,
             field_name == "TitleText" || field_name == "DescriptionText" ||
             field_name == "EmptySlotName" || ends_with(field_name, "Phrase") ||
             ends_with(field_name, "TextID") || ends_with(field_name, "TextTag")) {
-            return resolve_domain(SymDomain::named(SymDomain::Kind::Text), value);
+            return resolve_domain(SymDomain::named(SymDomain::Kind::Text), value, is_frontend);
         }
         if (field_name == "PrimaryMesh" || field_name == "SecondaryMesh" ||
             field_name == "MeshIndex" || field_name == "MeshID") {
-            return resolve_domain(SymDomain::named(SymDomain::Kind::Mesh), value);
+            return resolve_domain(SymDomain::named(SymDomain::Kind::Mesh), value, is_frontend);
         }
         if (field_name == "EmoteIconForAvailableWitness") {
-            return resolve_domain(SymDomain::named(SymDomain::Kind::Texture), value);
+            return resolve_domain(SymDomain::named(SymDomain::Kind::Texture), value, is_frontend);
         }
     }
     return std::to_string(value);

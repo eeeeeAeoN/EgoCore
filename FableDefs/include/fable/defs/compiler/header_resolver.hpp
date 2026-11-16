@@ -75,9 +75,13 @@ class HeaderResolver {
 public:
     static HeaderResolver build(const std::string &target_defs_directory);
 
-    std::string resolve_domain(SymDomain domain, std::int32_t value) const;
+    std::string resolve_domain(SymDomain domain, std::int32_t value,
+                               bool is_frontend = false) const;
+    std::string resolve_group(const std::string &qualified_name,
+                              std::int32_t value,
+                              bool is_frontend = false) const;
     std::string resolve_field(const std::string &scope, const std::string &field_name,
-                              std::int32_t value) const;
+                              std::int32_t value, bool is_frontend = false) const;
     bool has_map_key_domain(const std::string &scope,
                             const std::string &field_name) const;
     std::string resolve_map_key(const std::string &scope,
@@ -85,6 +89,7 @@ public:
                                 std::int32_t value) const;
 
 private:
+    SymDomain apply_frontend_remap(SymDomain domain, bool is_frontend) const;
     void collect_enum_items(const std::string &relative_path,
                             const std::vector<Item> &items, const SymbolTable &symbols);
     void record_enum(const std::string &relative_path, const EnumDecl &decl,

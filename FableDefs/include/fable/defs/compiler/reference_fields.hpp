@@ -135,7 +135,8 @@ inline bool is_reference_field(std::string_view name) {
     if (name == "NextWeaponForBoss") return true;
     if (name == "NoWaterThemeDef") return true;
     if (name == "NodeDefIndex") return true;
-    if (name == "NonScrollingChildren") return true;
+    if (name == "AttackPatterns") return true;
+    if (name == "OnDeathObject") return true;
     if (name == "ObjectDef") return true;
     if (name == "ObjectFamilies") return true;
     if (name == "OpenerObject") return true;
@@ -163,7 +164,7 @@ inline bool is_reference_field(std::string_view name) {
     if (name == "SecondaryActiveCarrySlot") return true;
     if (name == "SecondaryMeleeWeaponDef") return true;
     if (name == "SecondaryShotType") return true;
-    if (name == "ShapeChildren") return true;
+    if (name == "Sprites") return true;
     if (name == "SheatheObject") return true;
     if (name == "Shot") return true;
     if (name == "ShotToAttach") return true;

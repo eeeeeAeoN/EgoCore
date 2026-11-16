@@ -35,6 +35,9 @@ struct Context {
     std::map<std::string, ParsedEntry> nulldefs;
     std::vector<ParsedEntry> entries;
     HeaderResolver headers;
+    bool is_frontend = false;
+    std::unordered_map<std::string, std::int32_t> ui_effective_type;
+    mutable std::int32_t active_ui_type = -1;
 };
 
 
@@ -165,6 +168,7 @@ bool build_context(const DefBinary &binary, const Names &names,
             context.crc_to_str[crc32(entry.file_name)] = entry.file_name;
         }
     }
+    context.is_frontend = context.nulldefs.count("FRONT_END") > 0;
     // Retail frontend.bin leaves uninitialized non-zero bytes in NULLDEF_CONTROL_SCHEME
     // booleans (CControlsDef::Alloc does not zero them); CControlsDef::Transfer defaults
     // all 6 booleans to false, matching retail game.bin's clean NULLDEF_CONTROL_SCHEME.
@@ -604,18 +608,36 @@ std::string quote(const std::string &value) {
     return out;
 }
 
+std::string resolve_ref(std::int64_t value, const Context &ctx) {
+    if (value == 0) {
+        return "NULL";
+    }
+    const auto it = ctx.idx_to_name.find(static_cast<std::int32_t>(value));
+    if (it != ctx.idx_to_name.end()) {
+        return valid_identifier(it->second) ? it->second : quote(it->second);
+    }
+    return std::to_string(value);
+}
+
 std::string resolve_integer(std::int64_t value, const std::string &field_name,
                             const std::string &scope, const Context &ctx) {
+    if ((scope == "UI" || scope == "CUIDef") &&
+        (field_name == "MeshIndex" || field_name == "AnimationIndex")) {
+        // CList (8) and CScrollingViewport (13) pass MeshIndex/AnimationIndex to CreateComponent.
+        if (ctx.active_ui_type == 8 || ctx.active_ui_type == 13) {
+            return resolve_ref(value, ctx);
+        }
+        // CMouseCursor (32) passes MeshIndex/AnimationIndex to SetGraphicIndex.
+        if (ctx.active_ui_type == 32) {
+            return ctx.headers.resolve_group("textures.h::EEngineGraphic",
+                                             static_cast<std::int32_t>(value),
+                                             ctx.is_frontend);
+        }
+    }
     std::string resolved = ctx.headers.resolve_field(
-        scope, field_name, static_cast<std::int32_t>(value));
+        scope, field_name, static_cast<std::int32_t>(value), ctx.is_frontend);
     if (resolved == std::to_string(value) && is_reference_field(field_name)) {
-        if (value == 0) {
-            return "NULL";
-        }
-        const auto it = ctx.idx_to_name.find(static_cast<std::int32_t>(value));
-        if (it != ctx.idx_to_name.end()) {
-            return valid_identifier(it->second) ? it->second : quote(it->second);
-        }
+        return resolve_ref(value, ctx);
     }
     return resolved;
 }
@@ -694,7 +716,8 @@ std::string format_expr(const DecodedValue &value, const std::string &field_name
     case DecodedValueKind::DefIndex:
         if (is_scalar_def_index(field_name)) {
             return ctx.headers.resolve_field(scope, field_name,
-                                             static_cast<std::int32_t>(value.integer));
+                                             static_cast<std::int32_t>(value.integer),
+                                             ctx.is_frontend);
         }
         if (value.integer == 0) {
             return "NULL";
@@ -1936,15 +1959,15 @@ void emit_engine_graphic(const std::string &path, const DecodedValue &value, con
             if (bank > 0) {
                 if (type == 1 || type == 2) {
                     expr = ctx.headers.resolve_domain(
-                        SymDomain::named(SymDomain::Kind::Texture), bank);
+                        SymDomain::named(SymDomain::Kind::Texture), bank, ctx.is_frontend);
                 } else if (type == 3) {
                     expr = ctx.headers.resolve_domain(
-                        SymDomain::named(SymDomain::Kind::Particle), bank);
+                        SymDomain::named(SymDomain::Kind::Particle), bank, ctx.is_frontend);
                 } else if (type == 4 || type == 5) {
                     expr = ctx.headers.resolve_domain(
-                        SymDomain::named(SymDomain::Kind::Mesh), bank);
+                        SymDomain::named(SymDomain::Kind::Mesh), bank, ctx.is_frontend);
                 } else {
-                    expr = std::to_string(bank);
+                    expr = ctx.headers.resolve_field(scope, "BankIndex", bank, ctx.is_frontend);
                 }
             } else {
                 expr = std::to_string(bank);
@@ -3058,9 +3081,55 @@ void unlower_body(const ParsedEntry &entry, const ParsedEntry *base,
     }
 }
 
+std::int32_t resolve_effective_ui_type(const std::string &def_name,
+                                         const ParsedEntry &entry,
+                                         const Context &ctx,
+                                         const std::map<std::string, std::string> &parents) {
+    std::set<std::string> visited;
+    std::string current_name = def_name;
+    const ParsedEntry *current = &entry;
+    for (int depth = 0; depth < 32 && current != nullptr; ++depth) {
+        for (const auto &[fname, fval] : current->fields) {
+            if (fname == "Type" &&
+                (fval.kind == DecodedValueKind::Int ||
+                 fval.kind == DecodedValueKind::Enum ||
+                 fval.kind == DecodedValueKind::Flags)) {
+                return static_cast<std::int32_t>(fval.integer);
+            }
+        }
+        if (!visited.insert(current_name).second) {
+            break;
+        }
+        const auto pit = parents.find(current_name);
+        if (pit == parents.end()) {
+            break;
+        }
+        current_name = pit->second;
+        const auto eit = ctx.name_to_entry_idx.find(current_name);
+        if (eit == ctx.name_to_entry_idx.end() || eit->second >= ctx.entries.size()) {
+            break;
+        }
+        current = &ctx.entries[eit->second];
+    }
+    return 4; // UI_TYPE_COMPOSITE default in CUIDef::Transfer.
+}
+
+struct ScopedActiveUiType {
+    const Context &ctx;
+    std::int32_t previous;
+    ScopedActiveUiType(const Context &c, std::int32_t next)
+        : ctx(c), previous(c.active_ui_type) {
+        ctx.active_ui_type = next;
+    }
+    ~ScopedActiveUiType() { ctx.active_ui_type = previous; }
+};
+
 void emit_definition(const BinaryEntry &binary_entry, const ParsedEntry &entry,
                      const Context &ctx, const std::map<std::string, std::string> &parents,
                      std::string &out) {
+    const bool is_ui = entry.def_type == "UI" || entry.def_type == "CUIDef";
+    ScopedActiveUiType ui_scope(
+        ctx, is_ui ? resolve_effective_ui_type(binary_entry.file_name, entry, ctx, parents) : -1);
     out += entry.is_template ? "#definition_template " : "#definition ";
     out += entry.def_type;
     out.push_back(' ');
@@ -3147,6 +3216,9 @@ bool decompile_binary_to_text(const std::string &directory, const std::string &b
     }
     Context ctx;
     build_context(defs, names, HeaderResolver::build(defs_directory), defs_directory, ctx, stats);
+    if (binary == "frontend") {
+        ctx.is_frontend = true;
+    }
     const auto parents = build_merged_parent_map(defs, defs_directory);
     out.clear();
     stats.entries = defs.entries.size();
@@ -3180,6 +3252,9 @@ bool decompile_binary_to_folder(const std::string &directory,
     Context ctx;
     build_context(defs, names, HeaderResolver::build(headers_directory), headers_directory,
                   ctx, local_stats);
+    if (binary == "frontend") {
+        ctx.is_frontend = true;
+    }
     stats.errors.insert(stats.errors.end(), local_stats.errors.begin(),
                         local_stats.errors.end());
     const auto parents = build_merged_parent_map(defs, headers_directory);
